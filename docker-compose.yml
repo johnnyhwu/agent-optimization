@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: agentopt_db
+    environment:
+      POSTGRES_USER: agentopt
+      POSTGRES_PASSWORD: agentopt
+      POSTGRES_DB: agentopt
+    ports:
+      - "5432:5432"
+    volumes:
+      - agentopt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentopt -d agentopt"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  agentopt_pgdata:
