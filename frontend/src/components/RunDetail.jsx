@@ -3,11 +3,13 @@ import { api } from "../api.js";
 import QuestionList from "./QuestionList.jsx";
 import SpanList from "./SpanList.jsx";
 import SpanDetail from "./SpanDetail.jsx";
+import { useToast } from "./Toast.jsx";
 
 // Bottom tier (§6.13): three columns. Left = question list (per-mode incorrect),
 // middle = trace + diagnosis + caveat, right = span detail. Clicking a question
 // auto-selects the top suspect. Diagnosis is read from DB (§6.12).
 export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
+  const toast = useToast();
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
   const [onlyWrong, setOnlyWrong] = useState(false);
@@ -45,8 +47,11 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
     try {
       await api.reDiagnose(evalSet.id, activeResult.id);
       await pick(activeResult); // reload trace+analysis
+      toast.success("Diagnosis regenerated");
     } catch (e) {
-      setError(e.status === 403 ? "Re-diagnose is owner-only." : e.message);
+      const msg = e.status === 403 ? "Re-diagnose is owner-only." : e.message;
+      setError(msg);
+      toast.error(msg);
     } finally {
       setReDiagnosing(false);
     }
@@ -59,7 +64,7 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
   return (
     <div>
       {error && <div className="error">{error}</div>}
-      <p className="muted" style={{ margin: "0 0 10px" }}>
+      <p className="detail-meta">
         {runIds.length} run(s) · incorrect mode: <strong>{mode === "last_n" ? `last-${lastN}` : mode}</strong>
       </p>
       <div className="three">

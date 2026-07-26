@@ -118,8 +118,37 @@ async def seed() -> None:
         old_ids = (
             await session.scalars(select(EvalSet.id).where(EvalSet.name == SET_NAME))
         ).all()
-        for oid in old_ids:
-            await session.execute(delete(EvalSet).where(EvalSet.id == oid))
+        if old_ids:
+            # question_results.question_pk -> questions.id has no ON DELETE CASCADE
+            # (the app never deletes questions from a locked set), so clean up
+            # children explicitly in FK-safe order rather than relying on cascade.
+            run_ids = (
+                await session.scalars(select(Run.id).where(Run.eval_set_id.in_(old_ids)))
+            ).all()
+            q_ids = (
+                await session.scalars(select(Question.id).where(Question.eval_set_id.in_(old_ids)))
+            ).all()
+            if run_ids:
+                qr_ids = (
+                    await session.scalars(
+                        select(QuestionResult.id).where(QuestionResult.run_id.in_(run_ids))
+                    )
+                ).all()
+                if qr_ids:
+                    await session.execute(
+                        delete(SpanAnalysis).where(SpanAnalysis.question_result_id.in_(qr_ids))
+                    )
+                await session.execute(
+                    delete(QuestionResult).where(QuestionResult.run_id.in_(run_ids))
+                )
+            if q_ids:
+                await session.execute(
+                    delete(QuestionSkill).where(QuestionSkill.question_pk.in_(q_ids))
+                )
+            await session.execute(delete(Run).where(Run.eval_set_id.in_(old_ids)))
+            await session.execute(delete(Question).where(Question.eval_set_id.in_(old_ids)))
+            await session.execute(delete(EvalSetRole).where(EvalSetRole.eval_set_id.in_(old_ids)))
+            await session.execute(delete(EvalSet).where(EvalSet.id.in_(old_ids)))
         await session.commit()
 
         es = EvalSet(
@@ -134,6 +163,8 @@ async def seed() -> None:
         session.add_all([
             EvalSetRole(eval_set_id=es.id, user_subject=OWNER, role="owner"),
             EvalSetRole(eval_set_id=es.id, user_subject=VIEWER, role="viewer"),
+            # carol is pre-shared as a viewer to demo the sharing feature.
+            EvalSetRole(eval_set_id=es.id, user_subject="carol", role="viewer"),
         ])
 
         qmap: dict[str, Question] = {}

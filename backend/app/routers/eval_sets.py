@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_subject, require_owner, require_reader
@@ -17,7 +17,14 @@ from app.models import (
     Run,
 )
 from app.routers._helpers import load_run_verdicts
-from app.schemas import EvalSetCard, EvalSetCreate, EvalSetUpdate, QuestionOut
+from app.schemas import (
+    EvalSetCard,
+    EvalSetCreate,
+    EvalSetUpdate,
+    QuestionOut,
+    RolesUpdate,
+    ShareEntry,
+)
 from app.services.aggregation import regression_summary
 from app.services.upload import parse_jsonl
 
@@ -37,17 +44,35 @@ async def _build_card(session: AsyncSession, es: EvalSet, subject: str) -> EvalS
     newest_first = list(reversed(runs))
     verdicts = await load_run_verdicts(session, newest_first)
     reg = regression_summary(verdicts)
-    role = await session.scalar(
-        select(EvalSetRole.role).where(
-            EvalSetRole.eval_set_id == es.id, EvalSetRole.user_subject == subject
+    role_rows = (
+        await session.execute(
+            select(EvalSetRole.user_subject, EvalSetRole.role)
+            .where(EvalSetRole.eval_set_id == es.id)
+            .order_by(EvalSetRole.role.asc(), EvalSetRole.user_subject.asc())
         )
-    )
+    ).all()
+    roles = [ShareEntry(subject=s, role=r) for s, r in role_rows]
+    my_role = next((r.role for r in roles if r.subject == subject), None)
     return EvalSetCard(
         id=es.id, name=es.name, description=es.description, metadata=es.meta,
         version=es.version, created_at=es.created_at, updated_at=es.updated_at,
         run_count=len(runs), latest_pass_rate=latest, trend=trend,
-        regressed=reg["regressed"], improved=reg["improved"], my_role=role,
+        regressed=reg["regressed"], improved=reg["improved"], my_role=my_role,
+        roles=roles,
     )
+
+
+def _clean_shares(shares: list[ShareEntry], creator: str) -> dict[str, str]:
+    """Normalize a share list into {subject: role}, always keeping the creator as
+    owner and dropping empty/invalid rows."""
+    desired: dict[str, str] = {}
+    for s in shares:
+        subj = (s.subject or "").strip()
+        if not subj or s.role not in ("owner", "viewer"):
+            continue
+        desired[subj] = s.role
+    desired[creator] = "owner"  # creator/actor can never lock themselves out
+    return desired
 
 
 @router.post("", status_code=201)
@@ -69,7 +94,9 @@ async def create_eval_set(
     session.add(es)
     await session.flush()  # get es.id
 
-    session.add(EvalSetRole(eval_set_id=es.id, user_subject=subject, role="owner"))
+    # Creator is owner; apply any additional share grants.
+    for subj, role in _clean_shares(payload.shares, subject).items():
+        session.add(EvalSetRole(eval_set_id=es.id, user_subject=subj, role=role))
     for pq in parsed.questions:
         q = Question(
             eval_set_id=es.id, question_id=pq.question_id, question=pq.question,
@@ -149,19 +176,21 @@ async def update_eval_set(
     session: AsyncSession = Depends(get_session),
 ):
     """Optimistic-locked edit of name/description/metadata (§6.16)."""
-    values: dict = {"version": EvalSet.version + 1}
+    # Use mapped-attribute keys (not string column names): the DB column is
+    # "metadata", which collides with SQLAlchemy's reserved MetaData attr — the
+    # ORM attribute for it is `EvalSet.meta`.
+    values: dict = {EvalSet.version: EvalSet.version + 1, EvalSet.updated_at: func.now()}
     if payload.name is not None:
-        values["name"] = payload.name
+        values[EvalSet.name] = payload.name
     if payload.description is not None:
-        values["description"] = payload.description
+        values[EvalSet.description] = payload.description
     if payload.metadata is not None:
-        values["metadata"] = payload.metadata
-    values["updated_at"] = func.now()
+        values[EvalSet.meta] = payload.metadata
 
     res = await session.execute(
         update(EvalSet)
         .where(EvalSet.id == eval_set_id, EvalSet.version == payload.version)
-        .values(**values)
+        .values(values)
         .returning(EvalSet.id)
     )
     if res.first() is None:
@@ -171,6 +200,29 @@ async def update_eval_set(
         )
     await session.commit()
     es = await session.get(EvalSet, eval_set_id)
+    return await _build_card(session, es, subject)
+
+
+@router.put("/{eval_set_id}/roles", response_model=EvalSetCard)
+async def update_roles(
+    eval_set_id: uuid.UUID,
+    payload: RolesUpdate,
+    subject: str = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Replace the share list (owner-only). The acting owner always stays an owner,
+    so a set can never end up with zero owners / lock its editor out."""
+    es = await session.get(EvalSet, eval_set_id)
+    if es is None:
+        raise HTTPException(status_code=404, detail="eval set not found")
+
+    desired = _clean_shares(payload.shares, subject)
+    await session.execute(
+        delete(EvalSetRole).where(EvalSetRole.eval_set_id == eval_set_id)
+    )
+    for subj, role in desired.items():
+        session.add(EvalSetRole(eval_set_id=eval_set_id, user_subject=subj, role=role))
+    await session.commit()
     return await _build_card(session, es, subject)
 
 

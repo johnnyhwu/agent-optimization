@@ -34,6 +34,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/users")
+async def users(subject: str = Depends(current_subject)):
+    """Fake user directory for the login switch + share pickers (§6.16)."""
+    return {"users": settings.known_users, "current": subject}
+
+
 @app.get("/me")
 async def me(
     subject: str = Depends(current_subject),

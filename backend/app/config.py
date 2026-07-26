@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # eval_set from the `eval_set_roles` table using this subject.
     fake_user_subject: str = "alice"
 
+    # Fake user directory: the selectable identities for the login switch and the
+    # share pickers. A real deployment would replace this with the org's directory.
+    known_users: list[str] = ["alice", "bob", "carol", "dave"]
+
     frontend_origin: str = "http://localhost:5173"
 
     # §6.7: only a single span's over-long input/output body is truncated (head+tail
