@@ -7,6 +7,19 @@
 
 ---
 
+> ## ⚑ 目前狀態（2026-07，重要）
+> **Stage 1 的 POC 已經實作完成並可端到端執行**。§1–§5 為原始背景與設計推理、§6 為分階段
+> 藍圖與 Stage 1 定案、§7–§8 為驗收與開放問題，皆保留作為設計脈絡。**若你只想知道「現在到底
+> 做了什麼」，請直接看新增的 §9「Stage 1 POC 實作現況（As-Built）」**——那一節自包含地描述已落地
+> 的技術棧、DB schema、API、權限/分享、前端、以及與本設計文件的所有差異。
+>
+> 一句話總結 POC 性質：**真實的 React UI + 真實的 app-DB schema + 真實的 orchestration/權限/樂觀鎖
+> 邏輯；但所有外部依賴（A2A agent、LLM judge、LLM 診斷、Langfuse 取 trace）皆以「假資料層」樁接
+> （stub），並模擬真實延遲**。目的先證明 UI + 資料流 + schema，尚未串接任何真實外部系統。
+> §6 各節中若與 §9 衝突，以 §9（實作現況）為準。
+
+---
+
 ## 1. 背景情境
 
 ### 1.1 現有的 Agent
@@ -330,10 +343,18 @@ LLM 診斷輸出的 `caveat` 欄位（懷疑錯不在單一 span、或不在 ski
      card 本身存 key-value。
   2. 首頁可依這些 key **篩選要顯示的 card** 或**決定排序鍵**（預設日期排序）。
 
+> **（實作現況，見 §9）**：POC **未建 `eval_set_metadata_keys` 表**——metadata 存在 `eval_sets.metadata`
+> 這個單一 JSONB 欄位裡，「既有 key 自動帶出」改由 `GET /eval-sets/metadata/keys` **掃描 JSONB** 提供。
+> 「依 metadata 篩選 / 排序」尚未實作（留待後續）。**新增功能**：上傳時 owner 可直接選擇要把此 eval set
+> **分享**給誰（見 §6.16 與 §9 的分享說明）。
+
 ## 6.11 上傳資料結構契約（CSV / JSONL，定案）
 
 支援 **CSV** 與 **JSONL** 兩種上傳格式（spec 兩者都定義，實作先做一種）。CSV 若含長 reasoning /
 逗號 / 換行，須用標準 CSV quoting。欄位：
+
+> **（實作現況，見 §9）**：POC **只實作 JSONL**（每行一個 JSON 物件，欄位名同下表；`skill` 為
+> `list[str]`）。CSV 上傳留待後續。下面關於 `question_id`、題目鎖定、改題快照的規則**皆已如實作實作**。
 
 | 欄位 | 必填 | 說明 |
 |---|---|---|
@@ -530,6 +551,16 @@ pk (eval_set_id, user_subject)
   viewer。
 - 一個 eval set **可指派多個 owner**。
 
+> **（實作現況，見 §9）**：
+> - 統一授權以 **FastAPI 依賴** `require_owner` / `require_reader` 實作（等同「統一 guard」，但技術上
+>   是 dependency 而非 middleware）。寫操作與 re-diagnose 驗 owner；讀 + 觸發 run 驗 owner 或 viewer。
+> - **登入為假的（fake login）**：沒有真的 key-lock service。目前使用者身分來自 `X-User-Subject`
+>   header（或 SSE 用的 `?subject=` query，或設定檔預設值），可在 UI 右上角下拉切換，方便測試
+>   owner/viewer 權限。使用者名單來自 `GET /users`（設定檔 `known_users`，POC 為 alice/bob/carol/dave）。
+> - **新增：分享管理**。owner 可在**上傳當下**指定分享對象（subject + role），也可事後用**每張 card 的
+>   config（齒輪）按鈕**編輯名稱 / 描述 / metadata / **分享名單**。後端以 `PUT /eval-sets/{id}/roles`
+>   整批覆寫分享名單（owner-only；且**操作者本人一定保留 owner**，不會把自己鎖在外面）。
+
 **多 owner 並發寫 → 樂觀鎖（optimistic locking）**
 - Stage 1 **不做**即時協作編輯（OT/CRDT）——與 Stage 1 不成比例。用樂觀鎖即可。
 - 每個可獨立編輯的實體帶 `version`（`questions`、`eval_sets`）。前端開編輯時記住當下 version，
@@ -545,6 +576,11 @@ pk (eval_set_id, user_subject)
 ## 7. 端到端驗證流程
 
 ### 7.1 Stage 1 驗收清單
+
+> **（實作現況，見 §9）**：以下 1–10 項在 POC 中**皆已實作並以 Playwright + curl 端到端驗證通過**，
+> 唯二例外是與 Langfuse 真實串接有關的部分：POC **不寫入 Langfuse Dataset**（第 1 項末句不適用），
+> trace 也是**假造**的（correlation_id 有存進 `question_results` 並用來取回假 trace，但不是真 Langfuse）。
+
 1. **上傳**：上傳一個小 eval set（CSV 或 JSONL，含 reasoning desc + skill）→ questions 建好、
    未提供的 `question_id` 由系統生成且 immutable → 對應 Langfuse Dataset 出現。
 2. **鎖定規則**：嘗試新增/刪除該 set 的題目 → 被擋（只能另建新 set）；透過介面改一題文字 →
@@ -607,3 +643,163 @@ pk (eval_set_id, user_subject)
 > 補：以下原不在此清單、討論後於 Stage 1 定案——LLM input/output 契約(§6.9)、上傳介面與自訂
 > metadata key(§6.10)、CSV/JSONL 結構與 question_id 穩定鍵(§6.11)、診斷生成/快取流程(§6.12)、
 > 三層前端架構含多選 run 三 mode 與麵包屑(§6.13)、caveat 跨階段訊號(§6.8)。
+
+---
+
+## 9. Stage 1 POC 實作現況（As-Built）
+
+> 本節描述**已經寫進 codebase 且可執行**的東西，是本文件目前最權威的「現況」來源。與 §6 藍圖若有
+> 出入，以本節為準。
+
+### 9.1 交付形態與技術棧
+- **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`（Postgres）。
+- **Backend**：FastAPI（async）+ SQLAlchemy 2（async, `asyncpg`）+ Alembic（migration 用 sync
+  `psycopg`）+ Pydantic v2。run 進度用 **SSE**（`sse-starlette`）即時推送。
+- **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
+- **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
+- **上傳格式**：只做 **JSONL**（避開 CSV quoting；CSV 留待後續）。
+
+### 9.2 真實 vs 假造的邊界（最重要）
+所有外部依賴都以「假資料層」樁接，藏在**四個 Python Protocol seam 後面**，每個假實作都標了
+`# REPLACE WITH REAL IMPL`，換成真實只需改一個檔（`backend/app/integrations/`）：
+
+| Seam（Protocol） | 介面 | 假實作行為（模擬延遲） |
+|---|---|---|
+| `AgentClient` | `call(question, correlation_id) -> AgentResponse` | 睡 1–3s；回假 response |
+| `JudgeClient` | `judge(response, ground_truth) -> Verdict(verdict,score,comment)` | 睡 0.5–1s；二元判定 |
+| `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace（練 §6.12 非同步 ingestion）|
+| `DiagnosisClient` | `diagnose(trace, gt_reasoning, verdict) -> dict` | 睡 2–4s；回 §6.9 的 JSON |
+
+- **所有延遲/計時參數集中在單一檔** `backend/app/fake_config.py`（agent/judge/diagnosis 的 min/max、
+  trace not-ready poll 次數、poll backoff `[0.5,1,2,4]`、poll 上限 8 次）。
+- **假造範圍**：A2A agent、LLM judge、LLM 診斷、Langfuse 取 trace **全部是假的**。**app DB、
+  orchestration、樂觀鎖、權限、SSE、三層 UI、診斷落庫與讀取都是真的**。
+- **可控觸發（demo/測試用）**：假層會辨識題目文字裡的標記——`⟦timeout⟧`→該題 agent「逾時」變
+  `failed`；`⟦wrong⟧`→judge 判 incorrect；`⟦caveat⟧`（放 reasoning 內）→診斷帶 caveat。其餘題目
+  以文字 hash 決定約 30% incorrect。
+
+### 9.3 專案結構（關鍵檔案）
+```
+backend/
+  alembic/versions/0001_stage1_schema.py   # §6.14 的 7 張表（唯一 migration）
+  app/
+    config.py           # 設定：DB URL、fake_user_subject、known_users、span 截斷長度
+    fake_config.py      # ★ 唯一的延遲/計時設定檔
+    db.py  models.py    # async engine；7 張表的 ORM（EvalSet.metadata 因保留字→ORM 屬性叫 meta）
+    schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares) / RolesUpdate / *Card ...
+    auth.py             # current_subject + require_owner / require_reader 依賴
+    integrations/       # ★ 四個 seam：base.py(Protocol) + fake.py(假實作)
+    orchestrator.py     # §6.15 run 流程（背景 asyncio task）
+    sse.py              # 每個 run 的 in-memory 進度 pub/sub
+    services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
+    routers/            # eval_sets / questions / runs / results / diagnosis
+    seed.py             # 假資料（見 §9.11 種的內容）
+  sample_eval_set.jsonl
+frontend/src/
+  App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
+  components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor
+                        # RunHistory/RunProgress(SSE)/RunDetail/QuestionList/SpanList/SpanDetail
+                        # Breadcrumb/Modal/Toast/ThemeToggle/icons
+```
+
+### 9.4 App DB Schema（如實作，對照 §6.14）
+- **完全照 §6.14 建 7 張表**：`eval_sets / questions / question_skills / runs / question_results /
+  span_analyses / eval_set_roles`。UUID 主鍵用 `gen_random_uuid()`（migration 先 `CREATE EXTENSION
+  pgcrypto`）。`questions` 與 `eval_sets` 各有 `version` 供樂觀鎖。
+- **metadata 用單一 JSONB**（`eval_sets.metadata`），**未建** §6.10 提的 `eval_set_metadata_keys` 表。
+- **實作註**：`question_results.question_pk -> questions.id` 這條 FK **沒有 ON DELETE CASCADE**（刻意——
+  鎖定的 set 本就不刪題）；seed 清理舊資料時是**依 FK 順序手動刪子表**，非靠 cascade。
+
+### 9.5 API 端點清單（實際存在）
+```
+GET  /health
+GET  /users                                  # 假使用者名單 + 目前身分
+GET  /me                                     # 目前 subject 與其在各 set 的角色
+POST /eval-sets                              # 上傳(JSONL)；建立者=owner；可帶 shares
+GET  /eval-sets                             # 我有權限的 set 卡片（含 run 數/通過率/趨勢/regression/roles）
+GET  /eval-sets/metadata/keys               # 掃 JSONB 得既有 metadata key
+GET  /eval-sets/{id}                        # 單一 card
+PATCH/eval-sets/{id}                        # 改 name/description/metadata（樂觀鎖→409）owner
+PUT  /eval-sets/{id}/roles                  # 整批覆寫分享名單 owner-only（操作者保留 owner）
+GET  /eval-sets/{id}/questions              # 題目清單
+PATCH/eval-sets/{id}/questions/{qpk}        # 改題（樂觀鎖→409；question_id 不變）owner
+POST /eval-sets/{id}/runs                   # 觸發 run（owner 或 viewer）
+GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count）
+GET  /eval-sets/{id}/runs/{run_id}/progress # SSE 即時進度
+GET  /eval-sets/{id}/results                # 左欄題目清單；?run_ids=..&mode=union|intersection|last_n&last_n=
+GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓(假)trace(截斷) + 讀 DB 的診斷
+POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
+```
+
+### 9.6 Orchestrator（如實作，對照 §6.15）
+`POST /runs` 建立 `runs`(status=running) 後，開一個背景 asyncio task 跑 `orchestrator.run_eval`：
+run 開始**讀定 question 快照** → 每題：生 correlation_id → 假 agent → 假 judge → 寫
+`question_results` → poll（backoff）等 trace ready → 標 `trace_ready` → 若 incorrect：抓+截斷 trace →
+假診斷 → 寫 `span_analyses`（含 caveat）→ 每題透過 SSE 推進度。**任一題失敗標 `status=failed`，run
+續跑**（部分完成）。完成時算好 `pass_rate/total_count/correct_count` 存回 `runs`。
+
+### 9.7 診斷 I/O 契約（如實作，對照 §6.9）
+假診斷器輸出**強制 JSON**：`overall_diagnosis`（白話總結）、`suspects[]`（每個含
+`span_index / confidence(high|medium|low) / reason / evidence`，第一名排最前，前端預設跳它）、
+`caveat`（可選，懷疑非單一 span 或非 skill 可控）。整包存進 `span_analyses.raw_llm_output`(JSONB)，
+`caveat` 另存獨立欄。前端讀 DB 直接 render，不重跑（§6.12 快取）。
+
+### 9.8 權限、登入、分享（如實作，對照 §6.16）——**含新增功能**
+- **角色**：owner（全寫 + 讀 + 跑 run + re-diagnose）、viewer（讀 + 跑 run；不可寫、不可 re-diagnose）。
+  以 `eval_set_roles`（subject→role）為準；guard 用 `require_owner` / `require_reader` 依賴。
+- **樂觀鎖 409**：`questions`、`eval_sets` 各帶 `version`；`UPDATE ... WHERE id AND version` 未命中回
+  **409**。衝突粒度=單列。已驗證兩人改同題→後者 409。
+- **假登入**：`X-User-Subject` header（SSE 用 `?subject=`）或設定檔預設；UI 右上角下拉切換身分。
+- **★ 新增：分享（§6.10/§6.16 的延伸）**
+  - 上傳時 `EvalSetCreate.shares`（`[{subject, role}]`）直接建對應 `eval_set_roles`。
+  - 每張 card 有 **config 齒輪**（僅 owner 見）：一個對話框可改 name/description/metadata **與分享名單**。
+  - `PUT /eval-sets/{id}/roles` **整批覆寫**分享名單；**操作者本人永遠保留 owner**（不可自我鎖出、
+    保證至少一個 owner）。viewer 呼叫→403。
+  - card 回傳 `roles`（分享名單）供 config 對話框顯示；首頁 card 顯示「N members」。
+
+### 9.9 前端三層 UI（如實作，對照 §6.13）——**含新增功能**
+- **三層下鑽**都做了：首頁 card（run 數 / 最近通過率 / 趨勢小折線 / regression 摘要數）→ 某 set 的
+  run 歷史（多選 run + union/intersection/last-N 三種 incorrect mode）→ 三欄詳情（左題目清單可篩
+  「只看錯的」；中 span 列表 + 頂部 `overall_diagnosis` + caveat 橫幅 + suspect 標 confidence，自動選
+  第一名 suspect；右 span 的 input/output/token + 該 span 的 reason+evidence 或「未被標為可疑」）。
+- **麵包屑 + 一鍵回上層**：已做。
+- **★ 新增（回應「太像玩具」的回饋）**：整套現代化 CSS 設計系統（陰影/圓角/字級/焦點框）、卡片
+  hover 浮起、清單進場、**對話框 pop-in 動畫**、進度條 shimmer、**Toast** 提示（存檔/衝突/錯誤）；
+  **light/dark 主題切換**（右上角，首次進站前套用避免閃爍，存 localStorage，預設跟隨作業系統）；
+  **每張 card 的 config 齒輪**（見 §9.8）。
+
+### 9.10 截斷 / 快取 / 進度（如實作）
+- **§6.7 截斷**：只截**單一 span 過長的 input/output body**（保留頭尾、中間省略），**絕不砍 span**；
+  門檻 `config.span_body_max_chars`（預設 800）。截斷在「檢視時抓 trace」當下套用。
+- **§6.12 快取**：診斷在 run 當下（trace ready 後）生成並落庫；事後點開**直接讀 DB**；唯一重算入口是
+  owner 手動 re-diagnose。
+- **進度**：SSE（`sse.py` 的 in-memory pub/sub，單程序 POC）。
+
+### 9.11 seed 假資料（`python -m app.seed`）
+一個 eval set「Billing Agent Regression Suite」，角色 alice=owner、bob=viewer、carol=viewer（示範分享）；
+5 題、3 個 run，通過率 0.8→0.6→0.4（可見的退步趨勢），使三種 incorrect mode 明顯不同（union / 
+intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷、一題 trace 「生成中」狀態、以及一個
+超長 span body 觸發 §6.7 截斷。
+
+### 9.12 與本設計文件（§1–§8）的差異總表
+| 主題 | 原文件說 | 實作現況 |
+|---|---|---|
+| 上傳格式 | CSV + JSONL 皆定義 | **只做 JSONL** |
+| metadata keys | 需 `eval_set_metadata_keys` 表 | **未建表**，單一 JSONB + 掃描取 key |
+| metadata 篩選/排序 | 首頁可依 key 篩選/排序 | **尚未做** |
+| 授權 | 「統一 middleware」 | 以 **FastAPI 依賴**（require_owner/reader）實作，效果等同 |
+| 登入 | key-lock service token | **假登入**（header/query/設定檔 + UI 切換）|
+| 分享 | 只提「可多 owner」 | **新增完整分享 UI/API**：上傳選分享對象、card config 改分享名單、`PUT /roles` |
+| Langfuse | 讀 trace / 寫 dataset+score | **完全樁接**：不寫 Langfuse，trace 為假；correlation_id 有存但指向假 trace |
+| UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
+| 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |
+
+### 9.13 如何執行
+- 一鍵：`SEED=1 ./scripts/dev.sh`（起 Postgres → 裝依賴 → migrate → seed → 起 backend:8000 + 
+  frontend:5173）。或用 `make` 分項（`make db/setup/migrate/seed/backend/frontend`）。
+- 需 **Python 3.10–3.13**（3.14 尚無部分套件 wheel）；`dev.sh` 會自動挑合適的直譯器。
+- 詳見 repo 根目錄 `README.md`。
+
+### 9.14 明確「尚未做」（維持 Stage 2/3 邊界）
+per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill override 重跑、寫回 agent server、
+真實 Langfuse/A2A/LLM 串接、CSV 上傳、多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
