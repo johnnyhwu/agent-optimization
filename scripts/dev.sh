@@ -4,10 +4,24 @@
 #   ./scripts/dev.sh            # up everything (idempotent); Ctrl-C stops backend+frontend
 #   SEED=1 ./scripts/dev.sh     # also (re)run the seed script after migrating
 #
-# Requires: docker (compose), python3, node/npm.
+# Requires: docker (compose), Python 3.10-3.13, node/npm.
+# (The pinned deps have no wheels for Python 3.14 yet and can't build from source
+#  against it — pyo3<=0.22 caps at 3.13 — so we build the venv with a supported
+#  interpreter. Override with PYTHON_BIN=/path/to/python if you want a specific one.)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
+
+# Pick a CPython in [3.10, 3.13]. Honors PYTHON_BIN if it points at a supported one.
+py_minor() { "$1" -c 'import sys; print(sys.version_info[1])' 2>/dev/null || echo 99; }
+py_ok() { local m; m="$(py_minor "$1")"; [ "$m" != 99 ] && [ "$m" -ge 10 ] && [ "$m" -le 13 ]; }
+pick_python() {
+  if [ -n "${PYTHON_BIN:-}" ] && py_ok "$PYTHON_BIN"; then echo "$PYTHON_BIN"; return 0; fi
+  for cand in python3.12 python3.11 python3.13 python3.10 python3; do
+    if command -v "$cand" >/dev/null 2>&1 && py_ok "$cand"; then command -v "$cand"; return 0; fi
+  done
+  return 1
+}
 
 export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://agentopt:agentopt@localhost:5432/agentopt}"
 export SYNC_DATABASE_URL="${SYNC_DATABASE_URL:-postgresql+psycopg://agentopt:agentopt@localhost:5432/agentopt}"
@@ -26,8 +40,26 @@ done
 
 echo "==> Backend deps"
 cd "$ROOT/backend"
-if [ ! -d .venv ]; then python3 -m venv .venv; fi
+# Recreate the venv if it is missing or was built with an unsupported Python
+# (e.g. a system default of 3.14) — otherwise pip tries to compile pydantic-core
+# from source and fails.
+if [ -d .venv ] && ! py_ok .venv/bin/python; then
+  echo "    existing .venv uses an unsupported Python (3.$(py_minor .venv/bin/python)); recreating"
+  rm -rf .venv
+fi
+if [ ! -d .venv ]; then
+  PYBIN="$(pick_python)" || {
+    echo "ERROR: need CPython 3.10-3.13 on PATH (found none)."
+    echo "       Your 'python3' is likely 3.14, which the pinned deps don't support yet."
+    echo "       macOS:  brew install python@3.12   (then re-run)"
+    echo "       or set PYTHON_BIN=/path/to/python3.12 and re-run."
+    exit 1
+  }
+  echo "    creating .venv with $PYBIN ($("$PYBIN" --version 2>&1))"
+  "$PYBIN" -m venv .venv
+fi
 . .venv/bin/activate
+pip install -q --upgrade pip >/dev/null
 pip install -q -r requirements.txt
 
 echo "==> Alembic migrate"
