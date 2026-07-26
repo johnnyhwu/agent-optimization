@@ -23,7 +23,12 @@ real thing, created by an Alembic migration.
 - **Upload:** JSONL only (Stage 1).
 
 ## Prerequisites
-Docker (with compose), Python 3.11+, Node 18+.
+Docker (with compose), **Python 3.10–3.13** (3.14 is not yet supported — some
+pinned deps have no 3.14 wheels and can't build from source against it), Node 18+.
+
+`scripts/dev.sh` auto-selects a supported Python and rebuilds the venv if an
+existing one was created with an unsupported interpreter. To force a specific
+interpreter: `PYTHON_BIN=/path/to/python3.12 ./scripts/dev.sh`.
 
 ## Run it (one command)
 ```bash
