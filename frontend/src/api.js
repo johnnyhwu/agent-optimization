@@ -43,10 +43,12 @@ async function req(method, path, body) {
 
 export const api = {
   me: () => req("GET", "/me"),
+  users: () => req("GET", "/users"),
   listEvalSets: () => req("GET", "/eval-sets"),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
   createEvalSet: (payload) => req("POST", "/eval-sets", payload),
   updateEvalSet: (id, payload) => req("PATCH", `/eval-sets/${id}`, payload),
+  updateRoles: (id, shares) => req("PUT", `/eval-sets/${id}/roles`, { shares }),
   metadataKeys: () => req("GET", "/eval-sets/metadata/keys"),
   listQuestions: (id) => req("GET", `/eval-sets/${id}/questions`),
   updateQuestion: (id, qpk, payload) =>

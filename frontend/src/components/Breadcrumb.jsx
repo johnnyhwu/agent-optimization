@@ -1,4 +1,5 @@
 import React from "react";
+import { IconChevronRight } from "./icons.jsx";
 
 // §6.13 breadcrumb + one-click back to run / back to set.
 export default function Breadcrumb({ view, setView }) {
@@ -13,8 +14,12 @@ export default function Breadcrumb({ view, setView }) {
     <div className="breadcrumb">
       {crumbs.map((c, i) => (
         <React.Fragment key={i}>
-          {i > 0 && <span className="sep">/</span>}
-          {c.target ? <a onClick={() => setView(c.target)}>{c.label}</a> : <span>{c.label}</span>}
+          {i > 0 && <span className="sep"><IconChevronRight size={14} /></span>}
+          {c.target ? (
+            <a onClick={() => setView(c.target)}>{c.label}</a>
+          ) : (
+            <span className="current">{c.label}</span>
+          )}
         </React.Fragment>
       ))}
     </div>

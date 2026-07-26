@@ -9,10 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # --- Eval sets --------------------------------------------------------------
 
+class ShareEntry(BaseModel):
+    """One access grant on an eval set (§6.16 roles)."""
+    subject: str
+    role: str  # 'owner' | 'viewer'
+
+
 class EvalSetCreate(BaseModel):
     name: str
     description: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+    # Optional access grants beyond the creator (who is always owner).
+    shares: list[ShareEntry] = Field(default_factory=list)
     # JSONL upload payload (raw file text). Stage 1 = JSONL only.
     jsonl: str
 
@@ -23,6 +31,11 @@ class EvalSetUpdate(BaseModel):
     description: str | None = None
     metadata: dict[str, str] | None = None
     version: int  # client-held version; mismatch -> 409
+
+
+class RolesUpdate(BaseModel):
+    """Replace the share list for an eval set (owner-only)."""
+    shares: list[ShareEntry] = Field(default_factory=list)
 
 
 class RunTrend(BaseModel):
@@ -45,6 +58,7 @@ class EvalSetCard(BaseModel):
     regressed: int
     improved: int
     my_role: str | None
+    roles: list[ShareEntry]  # current share list (for the config dialog)
 
 
 # --- Questions --------------------------------------------------------------
