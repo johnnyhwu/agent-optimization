@@ -657,7 +657,10 @@ pk (eval_set_id, user_subject)
   `psycopg`）+ Pydantic v2。run 進度用 **SSE**（`sse-starlette`）即時推送。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
-- **上傳格式**：只做 **JSONL**（避開 CSV quoting；CSV 留待後續）。
+- **上傳格式**：支援 **JSONL 與 CSV 檔案**。開發者一律**上傳檔案**（不再手貼 JSONL），檔案在**前端解析**
+  成一張**可編輯的預覽表格**（見 §9.9）；按 Create 前把（可能改過的）表格**在前端重新序列化為 JSONL**
+  送給後端，因此後端契約仍維持 JSONL-only（§6.11），CSV 的 quoting/換行由前端 `upload_parse.js`
+  處理。CSV 欄位名同 §6.11；`skill` 儲存格接受 JSON 陣列字面值或以 `,`/`;`/`|` 分隔的字串。
 
 ### 9.2 真實 vs 假造的邊界（最重要）
 所有外部依賴都以「假資料層」樁接，藏在**四個 Python Protocol seam 後面**，每個假實作都標了
@@ -697,6 +700,7 @@ backend/
   sample_eval_set.jsonl
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
+  upload_parse.js       # 前端 JSONL/CSV 解析→可編輯表格列，送出前再序列化回 JSONL
   components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor
                         # RunHistory/RunProgress(SSE)/RunDetail/QuestionList/SpanList/SpanDetail
                         # Breadcrumb/Modal/Toast/ThemeToggle/icons
@@ -752,10 +756,22 @@ run 開始**讀定 question 快照** → 每題：生 correlation_id → 假 age
 - **假登入**：`X-User-Subject` header（SSE 用 `?subject=`）或設定檔預設；UI 右上角下拉切換身分。
 - **★ 新增：分享（§6.10/§6.16 的延伸）**
   - 上傳時 `EvalSetCreate.shares`（`[{subject, role}]`）直接建對應 `eval_set_roles`。
+  - **分享對象一律以「直接輸入人名」新增**（例：Alice 輸入 `bob`）；已移除原本「從預先定義名單下拉挑選」
+    那個入口，`ShareEditor` 只保留自由輸入框 + add。加入後仍可切換該對象的 viewer/owner 角色。
   - 每張 card 有 **config 齒輪**（僅 owner 見）：一個對話框可改 name/description/metadata **與分享名單**。
   - `PUT /eval-sets/{id}/roles` **整批覆寫**分享名單；**操作者本人永遠保留 owner**（不可自我鎖出、
     保證至少一個 owner）。viewer 呼叫→403。
   - card 回傳 `roles`（分享名單）供 config 對話框顯示；首頁 card 顯示「N members」。
+
+### 9.8b 上傳介面（如實作）——**檔案上傳 + 可編輯預覽表格**
+- **不再有大 JSONL 文字框**。開發者按「Choose file…」選一個 **JSONL 或 CSV 檔**（或按「load sample」
+  載入內建範例）→ 檔案在前端解析為一張**可編輯表格**（欄位：question / ground_truth_response /
+  reasoning_process_description / skill(s) / question_id）。
+- **表格可就地編輯**：每格可改；可 **add row / 刪 row**（鎖定規則僅在 set 建立**之後**生效，故上傳當下
+  可自由增刪列）。`question_id` 留白代表由後端生成 immutable id。
+- 按 **Create** 時，前端把表格重新序列化為 JSONL 打 `POST /eval-sets`；解析/驗證錯誤（缺必填欄、
+  skill 空）在送出前於前端先提示，後端仍會再驗一次（422）。
+- 因為要容納預覽表格，**上傳對話框放大**（width 960）。
 
 ### 9.9 前端三層 UI（如實作，對照 §6.13）——**含新增功能**
 - **三層下鑽**都做了：首頁 card（run 數 / 最近通過率 / 趨勢小折線 / regression 摘要數）→ 某 set 的
@@ -784,7 +800,7 @@ intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷�
 ### 9.12 與本設計文件（§1–§8）的差異總表
 | 主題 | 原文件說 | 實作現況 |
 |---|---|---|
-| 上傳格式 | CSV + JSONL 皆定義 | **只做 JSONL** |
+| 上傳格式 | CSV + JSONL 皆定義 | **JSONL + CSV 檔案上傳**（前端解析成可編輯表格，送出前再序列化為 JSONL；後端仍 JSONL-only）|
 | metadata keys | 需 `eval_set_metadata_keys` 表 | **未建表**，單一 JSONB + 掃描取 key |
 | metadata 篩選/排序 | 首頁可依 key 篩選/排序 | **尚未做** |
 | 授權 | 「統一 middleware」 | 以 **FastAPI 依賴**（require_owner/reader）實作，效果等同 |
@@ -802,4 +818,5 @@ intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷�
 
 ### 9.14 明確「尚未做」（維持 Stage 2/3 邊界）
 per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill override 重跑、寫回 agent server、
-真實 Langfuse/A2A/LLM 串接、CSV 上傳、多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
+真實 Langfuse/A2A/LLM 串接、多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
+（CSV 上傳已補上——見 §9.1；惟後端仍以 JSONL 為單一寫入契約，CSV 於前端解析。）

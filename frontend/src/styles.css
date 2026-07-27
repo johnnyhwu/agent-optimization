@@ -308,6 +308,29 @@ select { cursor: pointer; }
 .share-row .who { flex: 1; display: flex; align-items: center; gap: 8px; }
 .share-row select { width: 120px; }
 .share-add { display: flex; gap: 8px; margin-top: 6px; }
+.share-add input { flex: 1; }
+
+/* ---- upload preview table ---- */
+.upload-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.link-btn { background: none; border: none; box-shadow: none; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 12px; }
+.link-btn:hover { background: none; box-shadow: none; color: var(--accent); }
+.upload-empty {
+  border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 18px;
+  text-align: center; color: var(--muted); font-size: 13px; background: var(--panel-2);
+}
+.upload-table-wrap { overflow: auto; max-height: 340px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.upload-table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 12px; }
+.upload-table th {
+  position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 600; color: var(--muted);
+  background: var(--panel-2); padding: 8px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.upload-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.upload-table tr:last-child td { border-bottom: none; }
+.upload-table td.rownum, .upload-table th.rownum { width: 34px; color: var(--muted); text-align: right; }
+.upload-table th.skillcol, .upload-table td.skillcol { width: 130px; }
+.upload-table th.qidcol, .upload-table td.qidcol { width: 110px; }
+.upload-table textarea { min-height: 0; width: 100%; font-family: inherit; font-size: 12px; resize: vertical; }
+.upload-table td input { width: 100%; font-size: 12px; }
 
 /* ---- toast ---- */
 .toast-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: flex; flex-direction: column; gap: 10px; }
