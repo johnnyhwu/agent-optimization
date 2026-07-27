@@ -671,40 +671,63 @@ pk (eval_set_id, user_subject)
   開發者原本上傳的格式另以 `source_format` 欄位一併送出並存進 `eval_sets`（§9.4）。
 
 ### 9.2 真實 vs 假造的邊界（最重要）
-所有外部依賴都以「假資料層」樁接，藏在**四個 Python Protocol seam 後面**，每個假實作都標了
-`# REPLACE WITH REAL IMPL`，換成真實只需改一個檔（`backend/app/integrations/`）：
+四個外部依賴各自藏在一個 **Python Protocol seam** 後面，**假、真兩套實作都已存在**，由
+`backend/app/integrations/__init__.py` 依設定**逐一 seam** 選用（`*_IMPL=fake|real`）。
+預設四個都是 `fake`，所以 `SEED=1 ./scripts/dev.sh` 不需要任何外部服務就能跑完整 demo；
+要接真的可以一個一個開，不必一次全換。
 
-| Seam（Protocol） | 介面 | 假實作行為（模擬延遲） |
-|---|---|---|
-| `AgentClient` | `call(question, correlation_id) -> AgentResponse` | 睡 1–3s；回假 response |
-| `JudgeClient` | `judge(response, ground_truth) -> Verdict(verdict,score,comment)` | 睡 0.5–1s；二元判定 |
-| `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace（練 §6.12 非同步 ingestion）|
-| `DiagnosisClient` | `diagnose(trace, gt_reasoning, verdict) -> dict` | 睡 2–4s；回 §6.9 的 JSON |
+| Seam（Protocol） | 介面 | 假實作（模擬延遲） | 真實實作 |
+|---|---|---|---|
+| `AgentClient` | `call(question, correlation_id) -> AgentResponse` | 睡 1–3s；回假 response | `real/a2a.py`：手寫 JSON-RPC `message/send`，correlation_id 放 request metadata（§6.2）|
+| `JudgeClient` | `judge(question, response, ground_truth) -> Verdict` | 睡 0.5–1s；二元判定 | `real/judge.py`：OpenAI 相容端點，LLM 同時吐 verdict+score，可選門檻覆寫 |
+| `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | `real/langfuse.py`：`GET /api/public/v2/observations?traceId=`，0 筆 = NotReady（§6.12）|
+| `DiagnosisClient` | `diagnose(trace, gt_reasoning, verdict) -> dict` | 睡 2–4s；回 §6.9 的 JSON | `real/diagnosis.py`：§6.9 四段式 prompt，輸出驗證 + span_index 越界剔除 |
 
-- **所有延遲/計時參數集中在單一檔** `backend/app/fake_config.py`（agent/judge/diagnosis 的 min/max、
-  trace not-ready poll 次數、poll backoff `[0.5,1,2,4]`、poll 上限 8 次）。
-- **假造範圍**：A2A agent、LLM judge、LLM 診斷、Langfuse 取 trace **全部是假的**。**app DB、
-  orchestration、樂觀鎖、權限、SSE、三層 UI、診斷落庫與讀取都是真的**。
+> **介面變更**：`judge()` 多了 `question` 參數——真實 LLM judge 需要題目本身當 context 才判得準。
+
+- **假層延遲參數集中在** `backend/app/fake_config.py`（agent/judge/diagnosis 的 min/max、
+  trace not-ready poll 次數）。**trace poll backoff 與上限已移到 `app/config.py`**：它同時
+  管真實 Langfuse ingestion 的等待，而真實 ingestion 比假層慢一個數量級。
 - **可控觸發（demo/測試用）**：假層會辨識題目文字裡的標記——`⟦timeout⟧`→該題 agent「逾時」變
   `failed`；`⟦wrong⟧`→judge 判 incorrect；`⟦caveat⟧`（放 reasoning 內）→診斷帶 caveat。其餘題目
-  以文字 hash 決定約 30% incorrect。
+  以文字 hash 決定約 30% incorrect。**真實實作不認得這些標記**（真 agent 沒有理由認得）。
+- **接真實需要 agent server 端配合（§6.2）**：A2A server 必須讀 request metadata 的 `trace_id`
+  並用它當 Langfuse trace id，否則平台無從找回自己剛觸發的 trace。key 名可用
+  `A2A_CORRELATION_METADATA_KEY` 調整。
+- **落庫新增**（migration `0002_real_integration`）：`question_results.agent_response`（agent
+  實際回答）、`error_message`（失敗原因）、`agent_latency_ms`，以及 `runs.error_message`。
+  假資料時代不需要，真實情境下「看得到 eval 結果」少不了它們。
+- **失敗策略**：單題失敗（agent 不通、judge 解析不了、timeout）→ 該題 `failed` 並記下原因，
+  run 繼續並正常收斂（partial completion）；診斷失敗**不影響**該題判定；任何非預期例外仍會把 run
+  結掉並送出 SSE 終止事件——run 不會卡在 `running` 讓前端空等。
+- **前置檢查**：`python -m app.check_integrations`（`make preflight`）會逐一 ping 設為 real 的
+  seam 並回報 OK/FAIL。
 
 ### 9.3 專案結構（關鍵檔案）
 ```
 backend/
-  alembic/versions/0001_stage1_schema.py   # §6.14 的 7 張表（唯一 migration）
+  Dockerfile  .dockerignore                # backend container；依賴用 uv 安裝
+  alembic/versions/0001_stage1_schema.py   # §6.14 的 7 張表
+  alembic/versions/0002_real_integration.py # agent_response / error_message / agent_latency_ms
   app/
-    config.py           # 設定：DB URL、fake_user_subject、known_users、span 截斷長度
-    fake_config.py      # ★ 唯一的延遲/計時設定檔
+    config.py           # 設定：DB URL、假登入、span 截斷長度、★四個 *_IMPL 開關、
+                        #   A2A / LLM / Langfuse 連線、run_concurrency、trace poll backoff
+    fake_config.py      # ★ 假層專用的延遲設定檔
     db.py  models.py    # async engine；7 張表的 ORM（EvalSet.metadata 因保留字→ORM 屬性叫 meta）
     schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares, source_format) / RolesUpdate / *Card ...
     auth.py             # current_subject + require_owner / require_reader 依賴
-    integrations/       # ★ 四個 seam：base.py(Protocol) + fake.py(假實作)
-    orchestrator.py     # §6.15 run 流程（背景 asyncio task）
+    integrations/       # ★ 四個 seam：base.py(Protocol) + fake.py(假) + real/(真)
+      real/a2a.py  real/judge.py  real/langfuse.py  real/diagnosis.py
+      real/llm.py       # 共用 OpenAI 相容 client + JSON 契約解析（含一次修復重試）
+      real/prompts.py   # judge prompt + §6.9 四段式診斷 prompt
+      __init__.py       # 依 settings 逐一 seam 選 fake / real
+    orchestrator.py     # §6.15 run 流程（背景 asyncio task）+ 失敗策略 + 併發上限
+    check_integrations.py # 前置檢查：ping 設為 real 的 seam
     sse.py              # 每個 run 的 in-memory 進度 pub/sub
     services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
+  tests/                # A2A / Langfuse / judge / 診斷 / orchestrator 失敗路徑（respx mock）
   sample_eval_set.jsonl  sample_eval_set.csv   # 兩種格式的範例檔（內容等價）
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
@@ -820,17 +843,22 @@ intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷�
 | 登入 | key-lock service token | **假登入**（header/query/設定檔 + UI 切換）|
 | 上傳介面 | 未細談（§6.10 只談 card 欄位） | **檔案上傳 + 可編輯預覽表格**（§9.8b）：無手貼文字框，送出前可逐格修改與增刪列 |
 | 分享 | 只提「可多 owner」 | **新增完整分享 UI/API**：上傳時指定分享對象、card config 改分享名單、`PUT /roles`；**對象一律直接輸入人名**（無預設名單下拉）|
-| Langfuse | 讀 trace / 寫 dataset+score | **完全樁接**：不寫 Langfuse，trace 為假；correlation_id 有存但指向假 trace |
+| Langfuse | 讀 trace / 寫 dataset+score | **讀已實作**（`TRACE_IMPL=real`：`/api/public/v2/observations` 依 correlation_id 取回並重建 span 列表）；**寫 dataset / score 尚未做**（§6.3 的 score 回寫留待之後）|
 | UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
 | 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |
 
 ### 9.13 如何執行
-- 一鍵：`SEED=1 ./scripts/dev.sh`（起 Postgres → 裝依賴 → migrate → seed → 起 backend:8000 + 
-  frontend:5173）。或用 `make` 分項（`make db/setup/migrate/seed/backend/frontend`）。
-- 需 **Python 3.10–3.13**（3.14 尚無部分套件 wheel）；`dev.sh` 會自動挑合適的直譯器。
+- 一鍵：`SEED=1 ./scripts/dev.sh`（build image → 起 Postgres → migrate → seed → 起 backend:8000 +
+  frontend:5173）。或用 `make` 分項（`make db/build/migrate/seed/backend/frontend/test/preflight`）。
+- **db、backend、frontend 各自是一個 container**，host 只需要 docker（含 compose）——不需要
+  host 的 Python venv 或 node_modules。backend image 釘 CPython 3.12，依賴以 **uv** 安裝；
+  frontend 依賴以 **pnpm** 安裝。
+- 接真實整合的設定與逐一啟用步驟見 `README.md` 的「Going from fake to real」。
 - 詳見 repo 根目錄 `README.md`。
 
 ### 9.14 明確「尚未做」（維持 Stage 2/3 邊界）
 per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill override 重跑、寫回 agent server、
-真實 Langfuse/A2A/LLM 串接、多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
+多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
+Langfuse 方向：**寫回 score / dataset 尚未做**（讀 trace 已做）。
+span tree（`parentObservationId`）目前不重建，Stage 1 以時間排序的平舖列表呈現。
 （CSV 上傳已補上——見 §9.1；惟後端仍以 JSONL 為單一寫入契約，CSV 於前端解析。）

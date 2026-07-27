@@ -2,6 +2,11 @@
 
 Every simulated-latency value for the fake integration layer lives here and
 nowhere else. Tune the whole demo's feel from this one file.
+
+What is NOT here: the trace-ready poll schedule. That governs the wait for real
+Langfuse ingestion as well, so it belongs to the real settings —
+`settings.trace_poll_backoff_s` / `settings.trace_poll_max_attempts` in
+`app/config.py`.
 """
 from __future__ import annotations
 
@@ -23,8 +28,3 @@ DIAGNOSIS_LATENCY_MAX_S: float = 4.0
 TRACE_NOT_READY_POLLS: int = 2
 # Per-poll network latency for a single fetch_trace call.
 TRACE_FETCH_LATENCY_S: float = 0.2
-# Orchestrator backoff schedule (seconds) between trace-ready polls. The list is
-# consumed in order; the last value repeats if more polls are needed.
-TRACE_POLL_BACKOFF_S: list[float] = [0.5, 1.0, 2.0, 4.0]
-# Safety cap so a never-ready trace can't stall a run forever (partial completion).
-TRACE_POLL_MAX_ATTEMPTS: int = 8

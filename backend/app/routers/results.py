@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import fake_config as fc
 from app.auth import require_reader
+from app.config import settings
 from app.db import get_session
 from app.integrations import trace_client
 from app.integrations.base import NotReady
@@ -109,9 +109,12 @@ async def list_results(
             QuestionResultOut(
                 id=rep.id, run_id=rep.run_id, question_pk=qpk,
                 question_id=q.question_id, question=q.question,
-                correlation_id=rep.correlation_id, verdict=rep.verdict,
+                correlation_id=rep.correlation_id,
+                agent_response=rep.agent_response, verdict=rep.verdict,
                 judge_score=float(rep.judge_score) if rep.judge_score is not None else None,
                 judge_comment=rep.judge_comment, status=rep.status,
+                error_message=rep.error_message,
+                agent_latency_ms=rep.agent_latency_ms,
                 trace_ready=rep.trace_ready, has_analysis=rep.id in analyses_qr,
                 is_incorrect=qpk in incorrect_set,
             )
@@ -122,10 +125,17 @@ async def list_results(
 
 
 async def _resolve_trace_spans(correlation_id: str):
-    """Light poll of the (fake) trace store for the view path. trace_ready in the
-    DB says it's ingested; a couple of fetches resolve the fake NotReady window."""
-    for _ in range(fc.TRACE_POLL_MAX_ATTEMPTS):
-        trace = await trace_client.fetch_trace(correlation_id)
+    """Light poll of the trace store for the view path. trace_ready in the DB
+    says it's ingested; a couple of fetches resolve any residual NotReady window.
+
+    Short sleeps on purpose: this runs inside a request, so it must not block for
+    the orchestrator's much longer ingestion backoff. If the trace still isn't
+    there the view falls back to the "generating" state and the user retries."""
+    for _ in range(settings.trace_poll_max_attempts):
+        try:
+            trace = await trace_client.fetch_trace(correlation_id)
+        except Exception:  # a trace-store hiccup shows as "generating", not a 500
+            return None
         if not isinstance(trace, NotReady):
             return trace
         await asyncio.sleep(0.05)
@@ -180,10 +190,16 @@ async def get_trace(
                         index=s.index, tool_name=s.tool_name, status=s.status,
                         input=in_body, output=out_body, token_usage=s.token_usage,
                         input_truncated=in_trunc, output_truncated=out_trunc,
+                        status_message=s.status_message,
                     )
                 )
+
+    question = await session.get(Question, result.question_pk)
 
     return TraceView(
         trace_state=state, spans=spans, analysis=analysis,
         verdict=result.verdict, judge_comment=result.judge_comment,
+        agent_response=result.agent_response,
+        ground_truth_response=question.ground_truth_response if question else None,
+        error_message=result.error_message,
     )

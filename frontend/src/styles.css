@@ -245,12 +245,27 @@ select { cursor: pointer; }
 .dot.incorrect { background: var(--red); }
 .dot.failed { background: var(--muted); }
 .qitem .qid { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.qitem .qerror { font-size: 11px; color: var(--red); margin-top: 2px; line-height: 1.35; }
 
 .banner { margin: 12px 16px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 13px; animation: fadeIn 0.3s var(--ease) both; }
 .banner.diagnosis { background: var(--panel-2); border: 1px solid var(--border); }
 .banner.caveat { background: var(--amber-soft); border: 1px solid var(--amber); color: var(--text); }
 .banner.caveat strong { color: var(--amber); }
 .banner.generating { background: var(--accent-soft); border: 1px solid var(--accent); }
+.banner.error-banner { background: var(--red-soft); border: 1px solid var(--red); color: var(--text); }
+
+/* Agent answer vs expected answer, above the diagnosis in the middle column. */
+.answers { padding: 14px 16px 4px; border-bottom: 1px solid var(--border); }
+.answers .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 5px; }
+.answers .label + pre { margin-bottom: 12px; }
+.answers pre {
+  white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px; margin: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; max-height: 180px; overflow: auto;
+}
+.answers .verdict { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; letter-spacing: 0.5px; }
+.answers .verdict.correct { background: var(--green); color: #fff; }
+.answers .verdict.incorrect { background: var(--red); color: #fff; }
 
 .spanrow { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.12s; }
 .spanrow:hover { background: var(--panel-2); }

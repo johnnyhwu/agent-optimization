@@ -1,13 +1,13 @@
 """The four integration seams as Protocols + shared data types (§6.15).
 
 A real implementation swaps in behind the SAME interface — the orchestrator and
-routers depend only on these Protocols, never on the fake module directly.
+routers depend only on these Protocols, never on a concrete module.
 
 Seams:
-    AgentClient.call(question, correlation_id)              -> AgentResponse
-    JudgeClient.judge(response, ground_truth)              -> Verdict
-    TraceClient.fetch_trace(correlation_id)               -> Trace | NotReady
-    DiagnosisClient.diagnose(trace, ground_truth, verdict) -> dict (§6.9 JSON)
+    AgentClient.call(question, correlation_id)                        -> AgentResponse
+    JudgeClient.judge(question, response, ground_truth)               -> Verdict
+    TraceClient.fetch_trace(correlation_id)                           -> Trace | NotReady
+    DiagnosisClient.diagnose(trace, ground_truth_reasoning, verdict)  -> dict (§6.9 JSON)
 """
 from __future__ import annotations
 
@@ -21,7 +21,11 @@ from typing import Protocol, runtime_checkable
 class AgentResponse:
     response: str
     correlation_id: str
-    failed: bool = False  # simulate agent timeout/error -> question status=failed
+    failed: bool = False  # agent timeout/error -> question status=failed
+    # Why it failed, surfaced in the UI. A bare status='failed' tells the
+    # developer nothing once the agent is a real service.
+    error: str | None = None
+    latency_ms: int | None = None
 
 
 @dataclass
@@ -40,6 +44,9 @@ class Span:
     input: str
     output: str
     token_usage: dict = field(default_factory=dict)  # {"input": n, "output": n, "total": n}
+    # Langfuse `statusMessage`: why an observation is at ERROR level. Only ever
+    # populated by the real trace client.
+    status_message: str | None = None
 
 
 @dataclass
@@ -64,7 +71,9 @@ class AgentClient(Protocol):
 
 @runtime_checkable
 class JudgeClient(Protocol):
-    async def judge(self, response: str, ground_truth: str) -> Verdict: ...
+    # `question` is part of the contract because a real LLM judge needs the
+    # question itself to grade an answer against the ground truth.
+    async def judge(self, question: str, response: str, ground_truth: str) -> Verdict: ...
 
 
 @runtime_checkable
@@ -74,6 +83,10 @@ class TraceClient(Protocol):
 
 @runtime_checkable
 class DiagnosisClient(Protocol):
+    # `model_name` is stored on span_analyses.model_used, so every implementation
+    # exposes which model produced a diagnosis.
+    model_name: str
+
     async def diagnose(
         self, trace: Trace, ground_truth_reasoning: str, judge_verdict: Verdict
     ) -> dict: ...

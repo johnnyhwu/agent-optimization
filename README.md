@@ -54,15 +54,60 @@ triggers Vite HMR — no rebuild needed. Rebuild (`make build`) only when
 
 ### Granular targets (Makefile)
 ```bash
-make db        # docker compose up -d db  (Postgres only)
-make build     # build both images (backend deps via uv, frontend via pnpm)
-make setup     # alias for make build
-make migrate   # alembic upgrade head, in the backend container
-make seed      # python -m app.seed, in the backend container
-make backend   # backend container: uvicorn app.main:app --reload on :8000
-make frontend  # frontend container: vite dev server on :5173
-make down      # docker compose down
+make db         # docker compose up -d db  (Postgres only)
+make build      # build both images (backend deps via uv, frontend via pnpm)
+make setup      # alias for make build
+make migrate    # alembic upgrade head, in the backend container
+make seed       # python -m app.seed, in the backend container
+make backend    # backend container: uvicorn app.main:app --reload on :8000
+make frontend   # frontend container: vite dev server on :5173
+make test       # backend unit tests (no DB or external service needed)
+make preflight  # ping whichever integrations are set to real
+make down       # docker compose down
 ```
+
+## Going from fake to real
+Out of the box every external dependency is faked, so the demo runs with nothing
+but Docker. The four seams of §9.2 each have their own switch, so you can bring
+them up **one at a time** — a real agent while the judge is still fake, and so on.
+
+| env var | seam | what `real` means |
+|---|---|---|
+| `AGENT_IMPL` | `AgentClient` | POST the question to the A2A server (`A2A_BASE_URL`), with the correlation id in request metadata (§6.2) |
+| `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
+| `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
+| `DIAGNOSIS_IMPL` | `DiagnosisClient` | §6.9 clue-style diagnosis over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
+
+Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
+forwards them into the backend container, and credentials never enter the image.
+See [`backend/.env.example`](backend/.env.example) for the full list.
+
+```bash
+# minimum for "upload a real eval set, run it, see real results"
+AGENT_IMPL=real  A2A_BASE_URL=https://your-a2a-server/rpc
+JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=...
+```
+Then check the wiring before spending a run on it:
+```bash
+make preflight   # OK / FAIL per seam, with the reason
+```
+
+**Prerequisite for the trace seam (§6.2):** the A2A server must read the
+`trace_id` key out of the request metadata and use it as its Langfuse trace id.
+Without that the platform has no way to find the trace it just caused. The
+metadata key is configurable via `A2A_CORRELATION_METADATA_KEY`.
+
+Notes:
+- A question that fails (agent unreachable, judge unparseable, timeout) is
+  recorded as `failed` **with the reason**, and the run continues and completes —
+  it is never left hanging in `running`.
+- A diagnosis failure never fails the question; the verdict stands and the owner
+  can retry from the UI.
+- `RUN_CONCURRENCY` defaults to 1 (strictly sequential). Raise it to run
+  questions against the agent in parallel.
+- `JUDGE_SCORE_THRESHOLD` is empty by default, meaning the judge's own verdict is
+  used. Set a 0–1 number to derive the verdict from its score instead, so the
+  pass/fail boundary can be retuned without touching the prompt.
 
 ## Trying the flows
 - **Fake login switch (§6.16):** top-right dropdown flips between the seeded users
@@ -98,6 +143,10 @@ make down      # docker compose down
 | ORM models | `backend/app/models.py` |
 | **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
 | **Fake impls** (each `# REPLACE WITH REAL IMPL`) | `backend/app/integrations/fake.py` |
+| **Real impls** (A2A / judge / Langfuse / diagnosis) | `backend/app/integrations/real/` |
+| Which impl backs each seam | `backend/app/integrations/__init__.py` |
+| Judge + diagnosis prompts (§6.9 contract) | `backend/app/integrations/real/prompts.py` |
+| Integration preflight | `backend/app/check_integrations.py` |
 | **All latency values, one file** | `backend/app/fake_config.py` |
 | Orchestrator (§6.15) | `backend/app/orchestrator.py` |
 | Optimistic-lock 409 (§6.16) | `backend/app/routers/eval_sets.py`, `questions.py` |
@@ -109,11 +158,12 @@ make down      # docker compose down
 | Frontend three tiers | `frontend/src/components/` |
 
 ## Swapping fake → real
-Each integration is a Python `Protocol` in `integrations/base.py` with a fake
-implementation in `integrations/fake.py` tagged `# REPLACE WITH REAL IMPL`. Point
-the four instances in `integrations/__init__.py` at real implementations of the
-same interface — nothing else changes. Simulated latencies live only in
-`app/fake_config.py`.
+Each integration is a Python `Protocol` in `integrations/base.py`, with a fake
+implementation in `integrations/fake.py` and a real one in `integrations/real/`.
+`integrations/__init__.py` picks between them per seam from the `*_IMPL` settings
+— see [Going from fake to real](#going-from-fake-to-real). Nothing downstream
+imports a concrete class, so the orchestrator and routers are untouched by the
+choice. Simulated latencies live only in `app/fake_config.py`.
 
 ## Upload schema (§6.11)
 Both formats carry the same fields. **JSONL** — one JSON object per line:

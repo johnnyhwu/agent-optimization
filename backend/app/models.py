@@ -106,6 +106,8 @@ class Run(Base):
     pass_rate: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     total_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     correct_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Why a run ended as status='failed' (unexpected orchestrator error).
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     eval_set: Mapped["EvalSet"] = relationship(back_populates="runs")
     results: Mapped[list["QuestionResult"]] = relationship(
@@ -127,10 +129,16 @@ class QuestionResult(Base):
         UUID(as_uuid=True), ForeignKey("questions.id"), nullable=False
     )
     correlation_id: Mapped[str] = mapped_column(Text, nullable=False)  # -> Langfuse trace
+    # What the agent actually answered — the other half of "the eval result",
+    # next to the judge's verdict on it.
+    agent_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     verdict: Mapped[str | None] = mapped_column(Text, nullable=True)  # correct|incorrect
     judge_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     judge_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)  # pending|done|failed
+    # Why status='failed' (agent error, judge error, timeout, ...).
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trace_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
 

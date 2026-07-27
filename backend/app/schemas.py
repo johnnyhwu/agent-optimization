@@ -108,10 +108,13 @@ class QuestionResultOut(BaseModel):
     question_id: str
     question: str
     correlation_id: str
+    agent_response: str | None = None  # what the agent actually answered
     verdict: str | None
     judge_score: float | None
     judge_comment: str | None
     status: str
+    error_message: str | None = None  # why status == 'failed'
+    agent_latency_ms: int | None = None
     trace_ready: bool
     has_analysis: bool
     is_incorrect: bool  # per the requested multi-run mode
@@ -126,6 +129,7 @@ class SpanOut(BaseModel):
     token_usage: dict
     input_truncated: bool = False
     output_truncated: bool = False
+    status_message: str | None = None  # Langfuse statusMessage on ERROR spans
 
 
 class SuspectOut(BaseModel):
@@ -151,3 +155,8 @@ class TraceView(BaseModel):
     analysis: AnalysisOut | None = None
     verdict: str | None = None
     judge_comment: str | None = None
+    # The answer under evaluation, next to what it was graded against — with a
+    # real agent this is the first thing a developer wants to read.
+    agent_response: str | None = None
+    ground_truth_response: str | None = None
+    error_message: str | None = None

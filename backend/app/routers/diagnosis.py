@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import fake_config as fc
 from app.auth import require_owner
+from app.config import settings
 from app.db import get_session
 from app.integrations import diagnosis_client, trace_client
 from app.integrations.base import NotReady, Verdict
@@ -24,9 +24,13 @@ router = APIRouter(prefix="/eval-sets/{eval_set_id}", tags=["diagnosis"])
 
 
 async def _resolve_trace(correlation_id: str):
-    """Poll the (fake) trace store until ingestion lands (§6.12)."""
-    for _ in range(fc.TRACE_POLL_MAX_ATTEMPTS):
-        trace = await trace_client.fetch_trace(correlation_id)
+    """Poll the trace store until ingestion lands (§6.12). Short sleeps: this is
+    a request path, and a still-missing trace returns 409 for the user to retry."""
+    for _ in range(settings.trace_poll_max_attempts):
+        try:
+            trace = await trace_client.fetch_trace(correlation_id)
+        except Exception:
+            return None
         if not isinstance(trace, NotReady):
             return trace
         await asyncio.sleep(0.05)
@@ -67,7 +71,7 @@ async def re_diagnose(
     existing.overall_diagnosis = diag["overall_diagnosis"]
     existing.caveat = diag.get("caveat")
     existing.raw_llm_output = diag
-    existing.model_used = diagnosis_client.MODEL_NAME
+    existing.model_used = diagnosis_client.model_name
     if not result.trace_ready:
         result.trace_ready = True
     await session.commit()
