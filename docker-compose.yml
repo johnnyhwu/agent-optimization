@@ -16,5 +16,59 @@ services:
       timeout: 3s
       retries: 20
 
+  backend:
+    build: ./backend
+    image: agentopt_backend
+    container_name: agentopt_backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Same URLs as before, with the Postgres host swapped from localhost to the
+      # compose service name. Still overridable from the host environment.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentopt:agentopt@db:5432/agentopt}
+      SYNC_DATABASE_URL: ${SYNC_DATABASE_URL:-postgresql+psycopg://agentopt:agentopt@db:5432/agentopt}
+      FAKE_USER_SUBJECT: ${FAKE_USER_SUBJECT:-alice}
+      # CORS origin of the Vite dev server, as seen by the browser.
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Live source for --reload; deps live in system site-packages, so this
+      # mount cannot shadow them.
+      - ./backend:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build: ./frontend
+    image: agentopt_frontend
+    container_name: agentopt_frontend
+    depends_on:
+      - backend
+    environment:
+      # The browser (not the container) calls the backend, so this stays a
+      # localhost URL pointing at the published port.
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+      # Bind-mounted sources don't always emit inotify events (macOS/Windows);
+      # polling keeps HMR working everywhere.
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      # Keep the image's node_modules — the bind mount above would hide it.
+      - agentopt_node_modules:/app/node_modules
+    # The volume outlives image rebuilds, so re-check deps on start (a no-op
+    # when they already match the lockfile) before handing over to Vite.
+    # `exec` hands PID 1 to pnpm so Ctrl-C stops the dev server promptly instead
+    # of waiting out the stop grace period.
+    command: ["sh", "-c", "pnpm install --frozen-lockfile && exec pnpm run dev --host 0.0.0.0"]
+
 volumes:
   agentopt_pgdata:
+  agentopt_node_modules:

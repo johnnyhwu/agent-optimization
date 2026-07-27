@@ -1,10 +1,7 @@
 # Convenience targets for the Stage 1 POC. See README.md for the one-command path.
-.PHONY: up db migrate seed backend frontend setup down
-
-# A CPython the pinned deps have wheels for (3.10-3.13). Prefer a versioned
-# interpreter so a system default of 3.14 (no wheels yet) isn't picked.
-# Override with: make setup PYTHON_BIN=/path/to/python3.12
-PYTHON_BIN ?= $(shell command -v python3.12 || command -v python3.11 || command -v python3.13 || command -v python3.10 || command -v python3)
+# db, backend and frontend all run as containers, so the only host requirement
+# is docker (with compose) — no host venv, no host node_modules.
+.PHONY: up up-seed db build setup migrate seed backend frontend down
 
 # One command: Postgres + backend + frontend (Ctrl-C stops backend+frontend).
 up:
@@ -15,23 +12,26 @@ up-seed:
 	SEED=1 ./scripts/dev.sh
 
 db:
-	docker compose up -d
+	docker compose up -d db
 
 down:
 	docker compose down
 
-setup:
-	cd backend && $(PYTHON_BIN) -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-	cd frontend && npm install
+# Build both app images: backend deps via uv, frontend deps via pnpm.
+build:
+	docker compose build
+
+# Kept as an alias so the documented "install the deps" step still works.
+setup: build
 
 migrate:
-	cd backend && . .venv/bin/activate && alembic upgrade head
+	docker compose run --rm --no-deps backend alembic upgrade head
 
 seed:
-	cd backend && . .venv/bin/activate && python -m app.seed
+	docker compose run --rm --no-deps backend python -m app.seed
 
 backend:
-	cd backend && . .venv/bin/activate && uvicorn app.main:app --reload --port 8000
+	docker compose up backend
 
 frontend:
-	cd frontend && npm run dev
+	docker compose up frontend

@@ -15,5 +15,9 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.11"
+  },
+  "pnpm": {
+    "//": "npm ran these install scripts by default; pnpm blocks them unless listed.",
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }
