@@ -262,6 +262,8 @@
 - **judge 視為黑盒 sub-component**：Stage 1 把 LLM-as-judge 當成一個獨立子元件（輸入
   response + ground truth，輸出 verdict），其 prompt、連續分→二元化門檻等細節**留待之後詳細
   實作**，先不阻塞 Stage 1 其他部分。
+  > **已定案並實作，見 §9.7 / §9.15**：prompt 與門檻都已落地，且介面多了 `question` 參數
+  > （真 judge 需要題目本身當 context）。
 
 **Stage 1 各項決策**
 - **Correlation（前置阻斷項，已確認可行）**：agent server 傳過去的 payload 本就含一個 metadata
@@ -655,15 +657,32 @@ pk (eval_set_id, user_subject)
 
 ## 9. Stage 1 POC 實作現況（As-Built）
 
-> 本節描述**已經寫進 codebase 且可執行**的東西，是本文件目前最權威的「現況」來源。與 §6 藍圖若有
-> 出入，以本節為準。
+> 本節描述**已經寫進 codebase 且可執行**的東西，是本文件目前最權威的「現況」來源。與 §1–§8
+> 的討論/藍圖若有出入，**一律以本節為準**——前面章節是設計過程的紀錄，本節是實際做出來的東西。
+>
+> **一句話現況**：Stage 1 的 app 本身（DB schema、orchestration、權限、樂觀鎖、SSE、三層 UI、
+> 診斷落庫與讀取）**全是真的**；四個外部依賴（A2A agent、LLM judge、Langfuse trace、LLM 診斷）
+> **假、真兩套實作都已寫好**，用四個環境變數逐一切換，**預設走假的**，因此不接任何外部服務也能
+> 完整跑起來。真實實作**尚未對接過正式環境**（只用 mock 驗過，見 §9.16）。
+>
+> 導讀：§9.2 是真假邊界（最重要）、§9.4 是 schema、§9.6 是 run 流程與失敗策略、
+> §9.15 是完整設定表、§9.16 是測試與「哪些已驗證／哪些沒有」、§9.14 是還缺什麼。
 
 ### 9.1 交付形態與技術棧
-- **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`（Postgres）。
+- **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`。
+- **全部容器化**：`db` / `backend` / `frontend` **各自是一個 container**，由 compose 編排。
+  host 端唯一需求是 **docker（含 compose）**——不需要 host 的 Python venv 或 node_modules。
+  - backend image 釘 **CPython 3.12**，依賴用 **uv**（`uv pip install --system`）安裝。
+  - frontend image 用 **pnpm**（corepack 釘版本）安裝依賴，鎖檔為 `pnpm-lock.yaml`。
+  - 兩個 app container 都 bind-mount 原始碼，所以 `uvicorn --reload` 與 Vite HMR 照常運作；
+    只有 `requirements.txt` / `package.json` 變動才需要 rebuild。
 - **Backend**：FastAPI（async）+ SQLAlchemy 2（async, `asyncpg`）+ Alembic（migration 用 sync
   `psycopg`）+ Pydantic v2。run 進度用 **SSE**（`sse-starlette`）即時推送。
+  對外整合用 `httpx`（A2A / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
+- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 52 個測試，
+  **不需要 DB 也不需要網路**（`make test`）。
 - **上傳格式**：支援 **JSONL 與 CSV 檔案**。開發者一律**上傳檔案**（不再手貼 JSONL），檔案在**前端解析**
   成一張**可編輯的預覽表格**（見 §9.9）；按 Create 前把（可能改過的）表格**在前端重新序列化為 JSONL**
   送給後端，因此後端契約仍維持 JSONL-only（§6.11），CSV 的 quoting/換行由前端 `upload_parse.js`
@@ -741,6 +760,16 @@ frontend/src/
 - **完全照 §6.14 建 7 張表**：`eval_sets / questions / question_skills / runs / question_results /
   span_analyses / eval_set_roles`。UUID 主鍵用 `gen_random_uuid()`（migration 先 `CREATE EXTENSION
   pgcrypto`）。`questions` 與 `eval_sets` 各有 `version` 供樂觀鎖。
+- **兩個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）。
+- **★ `0002_real_integration` 新增的四個欄位**（假資料時代不需要，接真實服務後不可或缺）：
+
+  | 欄位 | 用途 |
+  |---|---|
+  | `question_results.agent_response` | **agent 實際回答的內容**。原本只存 judge 的 verdict，接真 agent 後等於看不到「被評的東西是什麼」 |
+  | `question_results.error_message` | 該題 `status='failed'` 的**原因**（agent 不通 / judge 解析失敗 / timeout）。原本只有一個光禿禿的 `failed` |
+  | `question_results.agent_latency_ms` | agent round-trip 實測耗時 |
+  | `runs.error_message` | 整個 run 以 `status='failed'` 收場的原因 |
+
 - **metadata 用單一 JSONB**（`eval_sets.metadata`），**未建** §6.10 提的 `eval_set_metadata_keys` 表。
 - **`source_format`（`'csv' | 'jsonl'`）記的是「開發者實際上傳的檔案格式」**，由前端隨建立請求送上。
   因為 CSV 在前端就被轉成 JSONL（§9.1），後端 payload 恆為 JSONL，此欄是唯一保留原始格式的地方。
@@ -764,22 +793,60 @@ POST /eval-sets/{id}/runs                   # 觸發 run（owner 或 viewer）
 GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count）
 GET  /eval-sets/{id}/runs/{run_id}/progress # SSE 即時進度
 GET  /eval-sets/{id}/results                # 左欄題目清單；?run_ids=..&mode=union|intersection|last_n&last_n=
-GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓(假)trace(截斷) + 讀 DB 的診斷
+GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓 trace(截斷) + 讀 DB 的診斷
 POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
 ```
+- `GET /results` 每題回傳含 **`agent_response` / `error_message` / `agent_latency_ms`**
+  （§9.4 新欄位）與 `verdict / judge_score / judge_comment / status / trace_ready / has_analysis /
+  is_incorrect`。
+- `GET /results/{rid}/trace` 回傳 `trace_state`（`ready` | `generating` | `no_trace`）、
+  `spans[]`（含 `status_message`）、`analysis`、以及 **`agent_response` / `ground_truth_response` /
+  `error_message`**，讓中間欄可以並排顯示「agent 答了什麼 vs 期望答案」。
+- **沒有 run 取消端點**：run 一旦開始就無法中止（見 §9.14）。
 
 ### 9.6 Orchestrator（如實作，對照 §6.15）
 `POST /runs` 建立 `runs`(status=running) 後，開一個背景 asyncio task 跑 `orchestrator.run_eval`：
-run 開始**讀定 question 快照** → 每題：生 correlation_id → 假 agent → 假 judge → 寫
-`question_results` → poll（backoff）等 trace ready → 標 `trace_ready` → 若 incorrect：抓+截斷 trace →
-假診斷 → 寫 `span_analyses`（含 caveat）→ 每題透過 SSE 推進度。**任一題失敗標 `status=failed`，run
-續跑**（部分完成）。完成時算好 `pass_rate/total_count/correct_count` 存回 `runs`。
+run 開始**讀定 question 快照**（之後改題不影響這次 run）→ 每題：生 correlation_id → agent →
+judge → 寫 `question_results`（含 `agent_response` 與 `agent_latency_ms`）→ poll（backoff）等
+trace ready → 標 `trace_ready` → 若 incorrect：抓+截斷 trace → 診斷 → 寫 `span_analyses`（含
+caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count/correct_count` 存回 `runs`。
+
+**★ 失敗策略（接真實服務後的重點；假層永遠不會 raise，所以這整段在假資料時代是無效程式碼）**
+
+| 情境 | 行為 |
+|---|---|
+| 單題失敗（agent 不通、judge 回不了合法 JSON、timeout） | 該題 `status='failed'` 並**寫下 `error_message`**，run 繼續跑其餘題目（partial completion） |
+| judge 呼叫失敗 | **絕不預設為 correct**——那會灌水通過率。該題記為 failed、`verdict` 留 null |
+| 診斷失敗 | **不影響該題判定**。verdict 才是結果，診斷是加值；owner 可事後手動 re-diagnose |
+| trace store 暫時抓不到 | 不算該題失敗，只是 `trace_ready=false` |
+| 任何非預期例外 | 仍會把 run 收成 `status='failed'`、寫 `runs.error_message`、**並送出 SSE 終止事件**。run 不會卡在 `running` 讓前端無限等待 |
+
+**其他執行控制**
+- **timeout**：agent 呼叫包 `asyncio.wait_for`（`A2A_TIMEOUT_S`），client 自身另有 httpx timeout。
+- **重試**：對暫時性錯誤（timeout / 連線錯誤）做**有上限的指數退避**重試
+  （`A2A_MAX_RETRIES` / `LLM_MAX_RETRIES`，預設各 2 次）。4xx 這類必然重現的錯誤不重試。
+- **併發**：`RUN_CONCURRENCY`（預設 **1** ＝ 嚴格序列，與原本行為一致）以 `asyncio.Semaphore`
+  控制同時打 agent 的題數。>1 時 `question_done` 事件順序不再固定，但前端以 `question_pk` 索引，不受影響。
 
 ### 9.7 診斷 I/O 契約（如實作，對照 §6.9）
-假診斷器輸出**強制 JSON**：`overall_diagnosis`（白話總結）、`suspects[]`（每個含
+診斷器（假、真皆同）輸出**強制 JSON**：`overall_diagnosis`（白話總結）、`suspects[]`（每個含
 `span_index / confidence(high|medium|low) / reason / evidence`，第一名排最前，前端預設跳它）、
 `caveat`（可選，懷疑非單一 span 或非 skill 可控）。整包存進 `span_analyses.raw_llm_output`(JSONB)，
-`caveat` 另存獨立欄。前端讀 DB 直接 render，不重跑（§6.12 快取）。
+`caveat` 另存獨立欄，`model_used` 記下產生它的模型名。前端讀 DB 直接 render，不重跑（§6.12 快取）。
+
+**真實實作額外做的三件事**（`real/diagnosis.py`）：
+1. **input 依 §6.9 固定四段組裝**：system 語氣硬約束（「提供線索、不是判決；不確定就說不確定；
+   可指多個可疑點」）→ 期望流程（整段 `ground_truth_reasoning`）→ 截斷後的 trace（每個 span 帶
+   `index / tool_name / status / input / output`）→ judge 的 verdict 與 comment。
+2. **餵給 LLM 的 trace 先套 §6.7 截斷**（見 §9.10）。
+3. **`span_index` 對照實際送出的 span 驗證，越界的 suspect 直接丟棄**。前端會自動跳到
+   `suspects[0].span_index`，LLM 幻覺一個 index 就會讓開發者跳到不存在的 span。
+   `confidence` 不在 high/medium/low 之列時正規化為 medium。
+
+**LLM 輸出解析**（`real/llm.py`，judge 與診斷共用）：要求 `response_format: json_object`
+（相容性比 `json_schema` 高，很多 self-hosted 端點只支援前者；端點若整個拒絕就自動退回不帶該參數），
+回來的內容以 Pydantic model 驗證。解析失敗會把模型自己的輸出與錯誤訊息回丟、**給它一次修復機會**；
+再失敗就 raise（絕不默默塞一個預設值）。也會處理模型自作主張加上的 ```json code fence。
 
 ### 9.8 權限、登入、分享（如實作，對照 §6.16）——**含新增功能**
 - **角色**：owner（全寫 + 讀 + 跑 run + re-diagnose）、viewer（讀 + 跑 run；不可寫、不可 re-diagnose）。
@@ -815,6 +882,13 @@ run 開始**讀定 question 快照** → 每題：生 correlation_id → 假 age
   「只看錯的」；中 span 列表 + 頂部 `overall_diagnosis` + caveat 橫幅 + suspect 標 confidence，自動選
   第一名 suspect；右 span 的 input/output/token + 該 span 的 reason+evidence 或「未被標為可疑」）。
 - **麵包屑 + 一鍵回上層**：已做。
+- **★ 新增（配合真實整合，讓「看得到 eval 結果」成立）**
+  - 中間欄最上方多一個 **Answer 區塊**：並排顯示 **agent 實際回答**（帶 correct/incorrect 標籤）
+    與**期望答案**，下方是 judge 的 comment。接真 agent 後這是開發者第一個要看的東西——
+    光有 verdict 說不出哪裡錯。
+  - 左欄 failed 題目直接**紅字顯示 `error_message`**（滑過看完整內容），不再只是一個 `failed` 標籤。
+  - 中間欄 failed 題目上方有一條錯誤橫幅；span 列若有 `status_message`（Langfuse ERROR level 的
+    說明）也會一併顯示。
 - **★ 新增（回應「太像玩具」的回饋）**：整套現代化 CSS 設計系統（陰影/圓角/字級/焦點框）、卡片
   hover 浮起、清單進場、**對話框 pop-in 動畫**、進度條 shimmer、**Toast** 提示（存檔/衝突/錯誤）；
   **light/dark 主題切換**（右上角，首次進站前套用避免閃爍，存 localStorage，預設跟隨作業系統）；
@@ -822,16 +896,29 @@ run 開始**讀定 question 快照** → 每題：生 correlation_id → 假 age
 
 ### 9.10 截斷 / 快取 / 進度（如實作）
 - **§6.7 截斷**：只截**單一 span 過長的 input/output body**（保留頭尾、中間省略），**絕不砍 span**；
-  門檻 `config.span_body_max_chars`（預設 800）。截斷在「檢視時抓 trace」當下套用。
+  門檻 `SPAN_BODY_MAX_CHARS`（預設 800）。**兩個地方都套用同一個 `truncate_body`**：
+  1. **檢視時**（`GET .../trace`）——UI 上會標示 "truncated"。
+  2. **餵給診斷 LLM 前**（`real/diagnosis.py`）——§6.9 要求 LLM input 也要截斷。
+     （早期只做了第 1 點；真實 trace 不截會直接把 context window 撐爆。）
 - **§6.12 快取**：診斷在 run 當下（trace ready 後）生成並落庫；事後點開**直接讀 DB**；唯一重算入口是
   owner 手動 re-diagnose。
-- **進度**：SSE（`sse.py` 的 in-memory pub/sub，單程序 POC）。
+- **§6.12 非同步 ingestion**：抓 trace 前 poll + 指數退避。**參數在 `config.py`
+  （`TRACE_POLL_BACKOFF_S` 預設 `[0.5,1,2,4,8]`、`TRACE_POLL_MAX_ATTEMPTS` 預設 8），不在
+  `fake_config.py`**——它同時管真實 Langfuse ingestion 的等待，而真實 ingestion 比假層慢一個數量級。
+  兩個 request 路徑（看 trace、re-diagnose）用同一個上限但**短 sleep**，因為它們跑在 request 裡，
+  不能佔用 orchestrator 那種長退避；抓不到就回 `generating` / 409 讓使用者重試。
+- **進度**：SSE（`sse.py` 的 in-memory pub/sub，單程序 POC）。事件型別：`snapshot`（晚加入的訂閱者
+  補當前狀態）、`run_started`、`question_done`（含 `verdict / status / error_message / trace_ready /
+  done / total / correct`）、`run_completed`、15 秒無事件時的 `ping`。
 
 ### 9.11 seed 假資料（`python -m app.seed`）
 一個 eval set「Billing Agent Regression Suite」，角色 alice=owner、bob=viewer、carol=viewer（示範分享）；
-5 題、3 個 run，通過率 0.8→0.6→0.4（可見的退步趨勢），使三種 incorrect mode 明顯不同（union / 
-intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷、一題 trace 「生成中」狀態、以及一個
-超長 span body 觸發 §6.7 截斷。
+5 題、3 個 run，通過率 0.8→0.6→0.4（可見的退步趨勢），使三種 incorrect mode 明顯不同
+（union={Q2,Q3,Q5} / intersection={Q2} / last-2={Q2,Q3}）；含一題帶 **caveat** 的診斷、
+一題 trace 「生成中」狀態、以及一個超長 span body 觸發 §6.7 截斷。
+
+> seed 依賴假層（它直接呼叫 `build_fake_trace` 產生 trace，並在題目文字裡埋 §9.2 的標記），
+> 所以 seed 出來的資料是給 **fake 模式**的 demo 用的。真實模式下請自行上傳 eval set 再 run。
 
 ### 9.12 與本設計文件（§1–§8）的差異總表
 | 主題 | 原文件說 | 實作現況 |
@@ -846,6 +933,13 @@ intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷�
 | Langfuse | 讀 trace / 寫 dataset+score | **讀已實作**（`TRACE_IMPL=real`：`/api/public/v2/observations` 依 correlation_id 取回並重建 span 列表）；**寫 dataset / score 尚未做**（§6.3 的 score 回寫留待之後）|
 | UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
 | 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |
+| A2A agent | §6.2 定案 correlation 機制 | **已實作**（`AGENT_IMPL=real`：手寫 JSON-RPC `message/send`，correlation_id 走 request metadata）|
+| LLM judge | §6.7 標明「prompt 與二元化門檻留待之後」 | **已定案並實作**：LLM 同時吐 `verdict + score + comment`；另有可選的 `JUDGE_SCORE_THRESHOLD` 由分數推導 verdict，調門檻不用改 prompt |
+| judge 介面 | `judge(response, ground_truth)` | **多了 `question` 參數**——真 LLM judge 需要題目本身當 context |
+| 診斷 LLM | §6.9 定案 I/O 契約 | **已實作**（`DIAGNOSIS_IMPL=real`），並加上輸出驗證與 `span_index` 越界剔除 |
+| 部署形態 | 未提（只提 docker-compose 起 Postgres）| **db / backend / frontend 各一個 container**；backend 依賴用 uv、frontend 用 pnpm |
+| 錯誤處理 | 未提 | orchestrator 有完整失敗策略（§9.6），run 不會卡在 `running` |
+| 測試 | 未提 | 52 個單元測試（respx mock），不需 DB 或網路 |
 
 ### 9.13 如何執行
 - 一鍵：`SEED=1 ./scripts/dev.sh`（build image → 起 Postgres → migrate → seed → 起 backend:8000 +
@@ -856,9 +950,96 @@ intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷�
 - 接真實整合的設定與逐一啟用步驟見 `README.md` 的「Going from fake to real」。
 - 詳見 repo 根目錄 `README.md`。
 
-### 9.14 明確「尚未做」（維持 Stage 2/3 邊界）
+### 9.14 明確「尚未做」
+
+**維持 Stage 2/3 邊界（刻意不做）**
 per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill override 重跑、寫回 agent server、
 多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
-Langfuse 方向：**寫回 score / dataset 尚未做**（讀 trace 已做）。
-span tree（`parentObservationId`）目前不重建，Stage 1 以時間排序的平舖列表呈現。
+
+**Stage 1 範圍內但確實還缺的**
+- **run 無法取消**：按下 Run eval 之後沒有中止的方法（沒有 cancel 端點、沒有停止鈕）。
+  假模式下 5 題十幾秒無所謂；真實 agent 一題可能數十秒，誤按大批題目只能等它跑完或重啟 backend。
+  補法不難：`runs` 加 `cancel_requested`、orchestrator 每題開始前檢查、加 `POST /runs/{id}/cancel`。
+- **Langfuse 只讀不寫**：§6.3 說 verdict 應同時寫成 Langfuse Score（`source=API`），**尚未做**。
+  目前 app DB 是唯一真相，Langfuse UI 上看不到本平台判的分數。
+- **span tree 不重建**：Langfuse 回傳的 `parentObservationId` **完全未使用**，Stage 1 以
+  **依 startTime 排序的平舖列表**呈現；樹狀結構留給 Stage 2 的熱點檢視。
+- **metadata 篩選/排序**：§6.10 提的首頁依 metadata key 篩選/排序尚未做。
+
 （CSV 上傳已補上——見 §9.1；惟後端仍以 JSONL 為單一寫入契約，CSV 於前端解析。）
+
+---
+
+### 9.15 設定總表（環境變數）
+
+全部由 `backend/app/config.py`（pydantic-settings）讀取，`docker-compose.yml` 會把它們透傳進
+backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不會進 image**。
+完整說明見 `backend/.env.example`。
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `DATABASE_URL` / `SYNC_DATABASE_URL` | 指向 compose 的 `db` | app 用 asyncpg、Alembic 用 psycopg |
+| `FAKE_USER_SUBJECT` | `alice` | 假登入的預設身分（§6.16）|
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源 |
+| `SPAN_BODY_MAX_CHARS` | `800` | §6.7 單一 span body 截斷門檻 |
+| **`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL`** | 皆 `fake` | 每個 seam 各自 `fake` 或 `real`，**可逐一切換** |
+| `A2A_BASE_URL` | 空 | A2A server 的 JSON-RPC 端點 |
+| `A2A_CORRELATION_METADATA_KEY` | `trace_id` | 放 correlation_id 的 metadata key（§6.2）|
+| `A2A_TIMEOUT_S` / `A2A_MAX_RETRIES` | `120` / `2` | 單次呼叫上限、暫時性錯誤重試次數 |
+| `A2A_API_KEY` / `A2A_AUTH_HEADER` / `A2A_AUTH_SCHEME` | 空 / `Authorization` / `Bearer` | 選用驗證 |
+| `LLM_BASE_URL` / `LLM_API_KEY` | 空 | **OpenAI 相容**端點（可指向 self-hosted）|
+| `JUDGE_MODEL` / `DIAGNOSIS_MODEL` | 空 | 兩個用途可用不同模型 |
+| `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
+| `JUDGE_SCORE_THRESHOLD` | 空（＝採信 LLM 的 verdict）| 設 0–1 數字則改由分數推導 verdict |
+| `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 空 | HTTP Basic auth |
+| `LANGFUSE_TIMEOUT_S` | `30` | |
+| `LANGFUSE_OBSERVATION_TYPES` | `["GENERATION","SPAN"]` | 其餘型別（如 `EVENT`）不進 span 列表 |
+| `RUN_CONCURRENCY` | `1` | 1 ＝ 嚴格序列（原行為）；調高可併發打 agent |
+| `TRACE_POLL_BACKOFF_S` / `TRACE_POLL_MAX_ATTEMPTS` | `[0.5,1,2,4,8]` / `8` | §6.12 ingestion 等待 |
+
+**前置檢查**：`make preflight`（＝`python -m app.check_integrations`）會逐一 ping 設為 `real`
+的 seam，回報每個 OK / FAIL 與原因。設定打錯時，這比跑一次 eval 才發現快得多。
+
+**建議的逐一帶起順序**（每一步都可以獨立驗證，壞掉時範圍很小）：
+
+| 步驟 | 設定 | 這一步該看到什麼 |
+|---|---|---|
+| 1 | `AGENT_IMPL=real` + `A2A_BASE_URL` | 題目打得到真 agent；`agent_response` 有真實回答（判分仍是假的）|
+| 2 | 加 `JUDGE_IMPL=real` + `LLM_BASE_URL` / `JUDGE_MODEL` | 通過率與 judge comment 開始有意義 |
+| 3 | 加 `TRACE_IMPL=real` + `LANGFUSE_*` | 點錯題看得到真實 span（**前提是 agent server 已套用 correlation_id**）|
+| 4 | 加 `DIAGNOSIS_IMPL=real` + `DIAGNOSIS_MODEL` | 診斷、caveat、可疑 span 都由真 LLM 產生 |
+
+**接真實的前提（§6.2，repo 外的相依）**：A2A server 必須讀 request metadata 的
+`trace_id`（或 `A2A_CORRELATION_METADATA_KEY` 指定的 key）並用它當 Langfuse trace id，
+否則平台無從找回自己剛觸發的 trace。
+
+---
+
+### 9.16 測試與驗證現況
+
+**單元測試**（`backend/tests/`，52 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
+- `test_a2a_client.py`：request 的 metadata key/value、Task 與 Message 兩種回應形狀、
+  artifacts 優先於 status.message、JSON-RPC error 走 failed 而非例外、空回答視為失敗、
+  5xx raise（交給重試）vs 4xx 直接失敗、auth header。
+- `test_langfuse_client.py`：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
+  分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射。
+- `test_judge_and_diagnosis.py`：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
+  越界 `span_index` 剔除、§6.9 四段 prompt 的順序、JSON 修復重試（成功與放棄各一）。
+- `test_orchestrator.py`：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
+  judge 失敗**不**被當成 correct、診斷失敗不影響 verdict、trace store 出錯不讓題目失敗、
+  非預期例外把 run 收成 failed 並送出 SSE 終止事件、重試次數上限、併發。
+
+**已驗證的端到端行為**
+- **fake 模式**：與真實整合加入前**行為完全相同**（卡片 3 runs / 趨勢 0.8→0.6→0.4、
+  三種 incorrect mode 各異、SSE 五題含 `⟦timeout⟧` 部分完成、診斷與 caveat、§6.7 截斷、
+  403/409、上傳與 version bump、三層 UI）。
+- **real 模式**：以**自建 mock 的 A2A / OpenAI 相容 / Langfuse 服務**跑過完整流程——
+  上傳 → run → 真回答與判分落庫、correlation_id 從 A2A metadata 一路對回 Langfuse `traceId`、
+  NotReady 退避路徑、observation→span 映射、幻覺 `span_index` 剔除、
+  以及「故意打壞 A2A endpoint → 每題帶原因失敗、run 仍正常收斂」。
+
+> ⚠️ **尚未對接真正的服務**。上述 real 模式驗證用的是 mock，能證明協定解析、correlation 環路、
+> 失敗策略與資料流都正確；**證明不了**貴方 A2A server 實際回傳的 Task 形狀、貴方 LLM 端點是否支援
+> `response_format: json_object`、貴方 Langfuse 版本的 token 欄位命名。這三處在 client 內都刻意
+> 寫得寬容（兩種回應形狀都吃、`response_format` 被拒會自動退回、新舊 usage 欄位都認），
+> 但真的接上去仍可能需要微調。
