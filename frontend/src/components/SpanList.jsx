@@ -13,6 +13,30 @@ export default function SpanList({ trace, activeSpan, onPickSpan, canReDiagnose,
     <div className="col">
       <h4>Trace & diagnosis</h4>
 
+      {/* What the agent answered, next to what it was graded against. With a real
+          agent this is the first thing to read — the verdict alone doesn't say
+          what went wrong. */}
+      {(trace.agent_response || trace.ground_truth_response) && (
+        <div className="answers">
+          <div className="label">
+            Agent answer
+            {trace.verdict && <span className={`verdict ${trace.verdict}`}>{trace.verdict}</span>}
+          </div>
+          <pre>{trace.agent_response || "— (no answer recorded)"}</pre>
+          <div className="label">Expected answer</div>
+          <pre>{trace.ground_truth_response || "—"}</pre>
+          {trace.judge_comment && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              <strong>Judge:</strong> {trace.judge_comment}
+            </div>
+          )}
+        </div>
+      )}
+
+      {trace.error_message && (
+        <div className="banner error-banner">✕ This question failed: {trace.error_message}</div>
+      )}
+
       {trace.trace_state === "generating" && (
         <div className="banner generating">
           ⏳ Trace is generating (Langfuse ingestion is async — retrying). This is not
@@ -56,6 +80,7 @@ export default function SpanList({ trace, activeSpan, onPickSpan, canReDiagnose,
             {suspect && <span className={`conf ${suspect.confidence}`}>{suspect.confidence}</span>}
             <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
               {s.status}
+              {s.status_message && <span> · {s.status_message}</span>}
               {(s.input_truncated || s.output_truncated) && <span className="trunc"> · body truncated</span>}
             </div>
           </div>

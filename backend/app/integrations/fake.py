@@ -90,7 +90,10 @@ class FakeAgentClient:
     async def call(self, question: str, correlation_id: str) -> AgentResponse:
         await _sleep_between(fc.AGENT_LATENCY_MIN_S, fc.AGENT_LATENCY_MAX_S)
         if "⟦timeout⟧" in question:
-            return AgentResponse(response="", correlation_id=correlation_id, failed=True)
+            return AgentResponse(
+                response="", correlation_id=correlation_id, failed=True,
+                error="Simulated agent timeout (⟦timeout⟧ marker).",
+            )
         verdict = _intended_verdict(question)
         # Encode intended verdict into the response so the fake judge is consistent.
         body = "Here is the agent's answer based on the retrieved data."
@@ -98,9 +101,9 @@ class FakeAgentClient:
 
 
 class FakeJudgeClient:
-    # REPLACE WITH REAL IMPL: run the real LLM-as-judge (§6.7 black box) — response
-    # + ground_truth in, {verdict, score, comment} out.
-    async def judge(self, response: str, ground_truth: str) -> Verdict:
+    # REPLACE WITH REAL IMPL: run the real LLM-as-judge (§6.7 black box) — question
+    # + response + ground_truth in, {verdict, score, comment} out.
+    async def judge(self, question: str, response: str, ground_truth: str) -> Verdict:
         await _sleep_between(fc.JUDGE_LATENCY_MIN_S, fc.JUDGE_LATENCY_MAX_S)
         verdict = "correct"
         if "[[v:incorrect]]" in response:
@@ -131,7 +134,7 @@ class FakeDiagnosisClient:
     # REPLACE WITH REAL IMPL: build the §6.9 prompt (system tone constraint +
     # ground-truth reasoning + truncated trace + judge verdict) and call the real
     # diagnosis LLM. Must return the §6.9 JSON shape.
-    MODEL_NAME = "fake-diagnosis-v0"
+    model_name = "fake-diagnosis-v0"
 
     async def diagnose(self, trace: Trace, ground_truth_reasoning: str,
                        judge_verdict: Verdict) -> dict:

@@ -28,6 +28,12 @@ export default function QuestionList({ results, activeId, onlyWrong, setOnlyWron
                 {r.status === "failed" ? " · failed" : ""}
                 {r.is_incorrect && r.status !== "failed" ? " · incorrect" : ""}
               </div>
+              {/* A bare "failed" says nothing once the agent is a real service. */}
+              {r.status === "failed" && r.error_message && (
+                <div className="qerror" title={r.error_message}>
+                  {r.error_message.slice(0, 80)}
+                </div>
+              )}
             </div>
           </div>
         );

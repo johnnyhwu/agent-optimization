@@ -31,6 +31,28 @@ services:
       FAKE_USER_SUBJECT: ${FAKE_USER_SUBJECT:-alice}
       # CORS origin of the Vite dev server, as seen by the browser.
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+
+      # --- Integration selection (§9.2). Default fake = the seeded demo. ---
+      AGENT_IMPL: ${AGENT_IMPL:-fake}
+      JUDGE_IMPL: ${JUDGE_IMPL:-fake}
+      TRACE_IMPL: ${TRACE_IMPL:-fake}
+      DIAGNOSIS_IMPL: ${DIAGNOSIS_IMPL:-fake}
+
+      # --- Real integrations. Credentials come from the host environment or a
+      # repo-root .env; they are never baked into the image. ---
+      A2A_BASE_URL: ${A2A_BASE_URL:-}
+      A2A_TIMEOUT_S: ${A2A_TIMEOUT_S:-120}
+      A2A_CORRELATION_METADATA_KEY: ${A2A_CORRELATION_METADATA_KEY:-trace_id}
+      A2A_API_KEY: ${A2A_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      JUDGE_MODEL: ${JUDGE_MODEL:-}
+      DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-}
+      JUDGE_SCORE_THRESHOLD: ${JUDGE_SCORE_THRESHOLD:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      RUN_CONCURRENCY: ${RUN_CONCURRENCY:-1}
     ports:
       - "8000:8000"
     volumes:

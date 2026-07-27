@@ -1,7 +1,7 @@
 # Convenience targets for the Stage 1 POC. See README.md for the one-command path.
 # db, backend and frontend all run as containers, so the only host requirement
 # is docker (with compose) — no host venv, no host node_modules.
-.PHONY: up up-seed db build setup migrate seed backend frontend down
+.PHONY: up up-seed db build setup migrate seed backend frontend down test preflight
 
 # One command: Postgres + backend + frontend (Ctrl-C stops backend+frontend).
 up:
@@ -35,3 +35,11 @@ backend:
 
 frontend:
 	docker compose up frontend
+
+# Backend unit tests (no DB or external service needed).
+test:
+	docker compose run --rm --no-deps backend pytest -q
+
+# Ping whichever integrations are set to real; reports OK/FAIL per seam.
+preflight:
+	docker compose run --rm --no-deps backend python -m app.check_integrations
