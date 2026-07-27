@@ -63,7 +63,7 @@ export default function App() {
 
       <div className="container">
         {view.tier === "sets" && (
-          <EvalSetList key={subject} onOpen={(es) => setView({ tier: "runs", es })} users={users} subject={subject} />
+          <EvalSetList key={subject} onOpen={(es) => setView({ tier: "runs", es })} subject={subject} />
         )}
         {view.tier === "runs" && (
           <RunHistory

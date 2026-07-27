@@ -8,7 +8,7 @@ import { IconPlus, IconX } from "./icons.jsx";
 // Owner-only card config (§6.10/§6.16): edit name, description, metadata keys, and
 // the share list. Name/desc/metadata go through the versioned PATCH (409 flow);
 // the share list goes through PUT /roles.
-export default function ConfigDialog({ evalSet, users, subject, onClose, onSaved }) {
+export default function ConfigDialog({ evalSet, subject, onClose, onSaved }) {
   const toast = useToast();
   const [name, setName] = useState(evalSet.name);
   const [description, setDescription] = useState(evalSet.description || "");
@@ -79,7 +79,7 @@ export default function ConfigDialog({ evalSet, users, subject, onClose, onSaved
 
       <div className="field">
         <label>Share list</label>
-        <ShareEditor shares={shares} setShares={setShares} knownUsers={users || []} currentUser={subject} />
+        <ShareEditor shares={shares} setShares={setShares} currentUser={subject} />
       </div>
 
       <div className="field">

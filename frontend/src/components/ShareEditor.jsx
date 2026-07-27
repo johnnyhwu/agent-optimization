@@ -3,15 +3,14 @@ import { IconPlus, IconUsers, IconX } from "./icons.jsx";
 
 // Reusable "share with" editor used by upload + config dialogs. Edits a list of
 // {subject, role}. The current user is always an owner and is shown locked.
-export default function ShareEditor({ shares, setShares, knownUsers, currentUser }) {
-  const [picker, setPicker] = useState("");
+// Sharing is by direct name entry only: type a subject (e.g. "bob") and add it.
+export default function ShareEditor({ shares, setShares, currentUser }) {
   const [freeText, setFreeText] = useState("");
 
   const taken = useMemo(
     () => new Set([currentUser, ...shares.map((s) => s.subject)]),
     [shares, currentUser]
   );
-  const available = knownUsers.filter((u) => !taken.has(u));
 
   function add(subject) {
     const subj = (subject || "").trim();
@@ -41,7 +40,6 @@ export default function ShareEditor({ shares, setShares, knownUsers, currentUser
           <div className="who">
             <IconUsers size={14} />
             {s.subject}
-            {!knownUsers.includes(s.subject) && <span className="hint">(external)</span>}
           </div>
           <select value={s.role} onChange={(e) => setRole(s.subject, e.target.value)}>
             <option value="viewer">viewer</option>
@@ -54,17 +52,13 @@ export default function ShareEditor({ shares, setShares, knownUsers, currentUser
       ))}
 
       <div className="share-add">
-        <select value={picker} onChange={(e) => { add(e.target.value); setPicker(""); }}>
-          <option value="">+ add user…</option>
-          {available.map((u) => (
-            <option key={u} value={u}>{u}</option>
-          ))}
-        </select>
         <input
-          placeholder="or type a subject"
+          placeholder="type a name to share with (e.g. bob)"
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { add(freeText); setFreeText(""); } }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); add(freeText); setFreeText(""); }
+          }}
         />
         <button onClick={() => { add(freeText); setFreeText(""); }}>
           <IconPlus size={14} /> add

@@ -7,7 +7,7 @@ import { IconGear, IconUpload, IconUsers } from "./icons.jsx";
 
 // Top tier (§6.13): one card per eval set — run count, latest pass rate, trend
 // sparkline, regression summary. Owners get a config gear to edit the card.
-export default function EvalSetList({ onOpen, users, subject }) {
+export default function EvalSetList({ onOpen, subject }) {
   const [sets, setSets] = useState(null);
   const [error, setError] = useState(null);
   const [showUpload, setShowUpload] = useState(false);
@@ -91,7 +91,6 @@ export default function EvalSetList({ onOpen, users, subject }) {
 
       {showUpload && (
         <UploadDialog
-          users={users}
           subject={subject}
           onClose={() => setShowUpload(false)}
           onCreated={() => { setShowUpload(false); load(); }}
@@ -100,7 +99,6 @@ export default function EvalSetList({ onOpen, users, subject }) {
       {configSet && (
         <ConfigDialog
           evalSet={configSet}
-          users={users}
           subject={subject}
           onClose={() => setConfigSet(null)}
           onSaved={() => { setConfigSet(null); load(); }}
