@@ -1,4 +1,4 @@
-"""Eval-set endpoints: upload (JSONL), list cards, edit metadata, list questions."""
+"""Eval-set endpoints: create (JSONL payload), list cards, edit metadata, list questions."""
 from __future__ import annotations
 
 import uuid
@@ -81,7 +81,9 @@ async def create_eval_set(
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
 ):
-    """Upload a JSONL eval set. Creator becomes owner. Set is LOCKED afterward
+    """Create an eval set from JSONL question lines. A CSV upload is parsed and
+    converted to JSONL client-side (§9.1); `source_format` records which format the
+    developer actually uploaded. Creator becomes owner. Set is LOCKED afterward
     (no add/delete question endpoints exist)."""
     parsed = parse_jsonl(payload.jsonl)
     if parsed.errors:
@@ -89,7 +91,7 @@ async def create_eval_set(
 
     es = EvalSet(
         name=payload.name, description=payload.description,
-        source_format="jsonl", meta=payload.metadata,
+        source_format=payload.source_format, meta=payload.metadata,
     )
     session.add(es)
     await session.flush()  # get es.id

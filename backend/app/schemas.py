@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,8 +22,12 @@ class EvalSetCreate(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
     # Optional access grants beyond the creator (who is always owner).
     shares: list[ShareEntry] = Field(default_factory=list)
-    # JSONL upload payload (raw file text). Stage 1 = JSONL only.
+    # Questions, always serialized as JSONL. A CSV upload is parsed and converted
+    # to JSONL in the browser (§9.1), so the wire contract stays JSONL-only.
     jsonl: str
+    # Which format the developer actually uploaded — recorded on the eval set for
+    # provenance (§6.14 `source_format`). The payload above is JSONL either way.
+    source_format: Literal["csv", "jsonl"] = "jsonl"
 
 
 class EvalSetUpdate(BaseModel):

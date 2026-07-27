@@ -41,6 +41,9 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   const [description, setDescription] = useState("");
   const [rows, setRows] = useState([]);
   const [fileName, setFileName] = useState(null);
+  // Which format the developer uploaded; recorded on the eval set for provenance
+  // (the payload itself is always JSONL).
+  const [sourceFormat, setSourceFormat] = useState("jsonl");
   const [parseErrors, setParseErrors] = useState([]);
   const [metaRows, setMetaRows] = useState([{ k: "", v: "" }]);
   const [shares, setShares] = useState([]);
@@ -66,10 +69,12 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
     setError(null);
     try {
       const text = await file.text();
-      const { rows: parsed, errors } = parseFile(text, detectFormat(file.name));
+      const format = detectFormat(file.name);
+      const { rows: parsed, errors } = parseFile(text, format);
       setRows(parsed);
       setParseErrors(errors);
       setFileName(file.name);
+      setSourceFormat(format);
       if (parsed.length === 0 && errors.length === 0) {
         setParseErrors(["file contained no questions"]);
       }
@@ -82,6 +87,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
     setRows(SAMPLE_ROWS.map((r) => ({ ...r })));
     setParseErrors([]);
     setFileName("sample.jsonl");
+    setSourceFormat("jsonl");
     setError(null);
   }
 
@@ -95,7 +101,11 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
     metaRows.forEach((r) => { if (r.k.trim()) metadata[r.k.trim()] = r.v; });
     setBusy(true);
     try {
-      await api.createEvalSet({ name, description, metadata, shares, jsonl: rowsToJsonl(rows) });
+      await api.createEvalSet({
+        name, description, metadata, shares,
+        jsonl: rowsToJsonl(rows),
+        source_format: sourceFormat,
+      });
       toast.success("Eval set created");
       onCreated();
     } catch (e) {
