@@ -345,16 +345,19 @@ LLM 診斷輸出的 `caveat` 欄位（懷疑錯不在單一 span、或不在 ski
 
 > **（實作現況，見 §9）**：POC **未建 `eval_set_metadata_keys` 表**——metadata 存在 `eval_sets.metadata`
 > 這個單一 JSONB 欄位裡，「既有 key 自動帶出」改由 `GET /eval-sets/metadata/keys` **掃描 JSONB** 提供。
-> 「依 metadata 篩選 / 排序」尚未實作（留待後續）。**新增功能**：上傳時 owner 可直接選擇要把此 eval set
-> **分享**給誰（見 §6.16 與 §9 的分享說明）。
+> 「依 metadata 篩選 / 排序」尚未實作（留待後續）。**新增功能**：上傳時 owner 可**直接輸入人名**指定要把
+> 此 eval set **分享**給誰（見 §6.16 與 §9 的分享說明）。
 
 ## 6.11 上傳資料結構契約（CSV / JSONL，定案）
 
-支援 **CSV** 與 **JSONL** 兩種上傳格式（spec 兩者都定義，實作先做一種）。CSV 若含長 reasoning /
+支援 **CSV** 與 **JSONL** 兩種上傳格式。CSV 若含長 reasoning /
 逗號 / 換行，須用標準 CSV quoting。欄位：
 
-> **（實作現況，見 §9）**：POC **只實作 JSONL**（每行一個 JSON 物件，欄位名同下表；`skill` 為
-> `list[str]`）。CSV 上傳留待後續。下面關於 `question_id`、題目鎖定、改題快照的規則**皆已如實作實作**。
+> **（實作現況，見 §9）**：**CSV 與 JSONL 皆已實作**。JSONL 為每行一個 JSON 物件（欄位名同下表，
+> `skill` 為 `list[str]`）；CSV 為首列表頭、欄名同下表，`skill` 儲存格可為 JSON 陣列字面值或以
+> `,`/`;`/`|` 分隔的字串。兩者都在**前端**解析為可編輯表格（§9.8b），送出前一律序列化為 JSONL，
+> 故**後端只有一條 JSONL 寫入路徑**；開發者實際上傳的格式記在 `eval_sets.source_format`。
+> 下面關於 `question_id`、題目鎖定、改題快照的規則**皆已如實作**。
 
 | 欄位 | 必填 | 說明 |
 |---|---|---|
@@ -577,12 +580,16 @@ pk (eval_set_id, user_subject)
 
 ### 7.1 Stage 1 驗收清單
 
-> **（實作現況，見 §9）**：以下 1–10 項在 POC 中**皆已實作並以 Playwright + curl 端到端驗證通過**，
+> **（實作現況，見 §9）**：以下 1–10 項在 POC 中**皆已實作**，且**當時**以 Playwright + curl 端到端驗證通過。
 > 唯二例外是與 Langfuse 真實串接有關的部分：POC **不寫入 Langfuse Dataset**（第 1 項末句不適用），
 > trace 也是**假造**的（correlation_id 有存進 `question_results` 並用來取回假 trace，但不是真 Langfuse）。
+>
+> ⚠️ **驗證狀態註記**：第 1 項的上傳流程後來改為「檔案上傳 + 可編輯預覽表格」（§9.8b）。該次改動**尚未
+> 重跑 Playwright 端到端驗證**——目前只驗證了「前端 parser 對 sample CSV/JSONL 的解析與序列化 round-trip
+> 正確」「`EvalSetCreate.source_format` 的型別驗證」與「前端 build 通過」。**重跑第 1 項的端到端驗收仍待補**。
 
-1. **上傳**：上傳一個小 eval set（CSV 或 JSONL，含 reasoning desc + skill）→ questions 建好、
-   未提供的 `question_id` 由系統生成且 immutable → 對應 Langfuse Dataset 出現。
+1. **上傳**：上傳一個小 eval set 檔案（**CSV 或 JSONL**，含 reasoning desc + skill）→ 預覽表格正確呈現且
+   可編輯 → 送出後 questions 建好、未提供的 `question_id` 由系統生成且 immutable → 對應 Langfuse Dataset 出現。
 2. **鎖定規則**：嘗試新增/刪除該 set 的題目 → 被擋（只能另建新 set）；透過介面改一題文字 →
    `question_id` 不變、`version+1`。
 3. **執行 run**：觸發 eval → orchestrator 打 A2A agent（metadata 帶 correlation_id）→ judge 判分
@@ -661,6 +668,7 @@ pk (eval_set_id, user_subject)
   成一張**可編輯的預覽表格**（見 §9.9）；按 Create 前把（可能改過的）表格**在前端重新序列化為 JSONL**
   送給後端，因此後端契約仍維持 JSONL-only（§6.11），CSV 的 quoting/換行由前端 `upload_parse.js`
   處理。CSV 欄位名同 §6.11；`skill` 儲存格接受 JSON 陣列字面值或以 `,`/`;`/`|` 分隔的字串。
+  開發者原本上傳的格式另以 `source_format` 欄位一併送出並存進 `eval_sets`（§9.4）。
 
 ### 9.2 真實 vs 假造的邊界（最重要）
 所有外部依賴都以「假資料層」樁接，藏在**四個 Python Protocol seam 後面**，每個假實作都標了
@@ -689,7 +697,7 @@ backend/
     config.py           # 設定：DB URL、fake_user_subject、known_users、span 截斷長度
     fake_config.py      # ★ 唯一的延遲/計時設定檔
     db.py  models.py    # async engine；7 張表的 ORM（EvalSet.metadata 因保留字→ORM 屬性叫 meta）
-    schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares) / RolesUpdate / *Card ...
+    schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares, source_format) / RolesUpdate / *Card ...
     auth.py             # current_subject + require_owner / require_reader 依賴
     integrations/       # ★ 四個 seam：base.py(Protocol) + fake.py(假實作)
     orchestrator.py     # §6.15 run 流程（背景 asyncio task）
@@ -697,7 +705,7 @@ backend/
     services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
-  sample_eval_set.jsonl
+  sample_eval_set.jsonl  sample_eval_set.csv   # 兩種格式的範例檔（內容等價）
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
   upload_parse.js       # 前端 JSONL/CSV 解析→可編輯表格列，送出前再序列化回 JSONL
@@ -711,6 +719,8 @@ frontend/src/
   span_analyses / eval_set_roles`。UUID 主鍵用 `gen_random_uuid()`（migration 先 `CREATE EXTENSION
   pgcrypto`）。`questions` 與 `eval_sets` 各有 `version` 供樂觀鎖。
 - **metadata 用單一 JSONB**（`eval_sets.metadata`），**未建** §6.10 提的 `eval_set_metadata_keys` 表。
+- **`source_format`（`'csv' | 'jsonl'`）記的是「開發者實際上傳的檔案格式」**，由前端隨建立請求送上。
+  因為 CSV 在前端就被轉成 JSONL（§9.1），後端 payload 恆為 JSONL，此欄是唯一保留原始格式的地方。
 - **實作註**：`question_results.question_pk -> questions.id` 這條 FK **沒有 ON DELETE CASCADE**（刻意——
   鎖定的 set 本就不刪題）；seed 清理舊資料時是**依 FK 順序手動刪子表**，非靠 cascade。
 
@@ -719,7 +729,7 @@ frontend/src/
 GET  /health
 GET  /users                                  # 假使用者名單 + 目前身分
 GET  /me                                     # 目前 subject 與其在各 set 的角色
-POST /eval-sets                              # 上傳(JSONL)；建立者=owner；可帶 shares
+POST /eval-sets                              # 建立(payload 恆為 JSONL + source_format)；建立者=owner；可帶 shares
 GET  /eval-sets                             # 我有權限的 set 卡片（含 run 數/通過率/趨勢/regression/roles）
 GET  /eval-sets/metadata/keys               # 掃 JSONB 得既有 metadata key
 GET  /eval-sets/{id}                        # 單一 card
@@ -769,9 +779,12 @@ run 開始**讀定 question 快照** → 每題：生 correlation_id → 假 age
   reasoning_process_description / skill(s) / question_id）。
 - **表格可就地編輯**：每格可改；可 **add row / 刪 row**（鎖定規則僅在 set 建立**之後**生效，故上傳當下
   可自由增刪列）。`question_id` 留白代表由後端生成 immutable id。
-- 按 **Create** 時，前端把表格重新序列化為 JSONL 打 `POST /eval-sets`；解析/驗證錯誤（缺必填欄、
-  skill 空）在送出前於前端先提示，後端仍會再驗一次（422）。
+- 按 **Create** 時，前端把表格重新序列化為 JSONL 打 `POST /eval-sets`，並附上 `source_format`
+  （開發者實際上傳的格式，§9.4）；解析/驗證錯誤（缺必填欄、skill 空）在送出前於前端先提示，
+  後端仍會再驗一次（422）。
 - 因為要容納預覽表格，**上傳對話框放大**（width 960）。
+- **範例檔**：`backend/sample_eval_set.jsonl` 與 `backend/sample_eval_set.csv`（內容等價，供兩種格式測試）；
+  對話框另有「load sample」可不用檔案直接載入兩列示範資料。
 
 ### 9.9 前端三層 UI（如實作，對照 §6.13）——**含新增功能**
 - **三層下鑽**都做了：首頁 card（run 數 / 最近通過率 / 趨勢小折線 / regression 摘要數）→ 某 set 的
@@ -805,7 +818,8 @@ intersection / last-2 各給不同題集）；含一題帶 **caveat** 的診斷�
 | metadata 篩選/排序 | 首頁可依 key 篩選/排序 | **尚未做** |
 | 授權 | 「統一 middleware」 | 以 **FastAPI 依賴**（require_owner/reader）實作，效果等同 |
 | 登入 | key-lock service token | **假登入**（header/query/設定檔 + UI 切換）|
-| 分享 | 只提「可多 owner」 | **新增完整分享 UI/API**：上傳選分享對象、card config 改分享名單、`PUT /roles` |
+| 上傳介面 | 未細談（§6.10 只談 card 欄位） | **檔案上傳 + 可編輯預覽表格**（§9.8b）：無手貼文字框，送出前可逐格修改與增刪列 |
+| 分享 | 只提「可多 owner」 | **新增完整分享 UI/API**：上傳時指定分享對象、card config 改分享名單、`PUT /roles`；**對象一律直接輸入人名**（無預設名單下拉）|
 | Langfuse | 讀 trace / 寫 dataset+score | **完全樁接**：不寫 Langfuse，trace 為假；correlation_id 有存但指向假 trace |
 | UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
 | 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |

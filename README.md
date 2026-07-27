@@ -12,7 +12,7 @@ schema (§6.14)**, not to integrate anything real yet. The app DB schema is the
 real thing, created by an Alembic migration.
 
 > **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
-> re-labeling, SkillOpt, skill write-back, annotation score sync, CSV upload,
+> re-labeling, SkillOpt, skill write-back, annotation score sync,
 > real Langfuse/A2A/LLM calls, multi-tenant isolation.
 
 ## Stack
@@ -20,7 +20,8 @@ real thing, created by an Alembic migration.
   progress.
 - **DB:** PostgreSQL (via docker-compose).
 - **Frontend:** React (Vite).
-- **Upload:** JSONL only (Stage 1).
+- **Upload:** JSONL or CSV file, parsed in the browser into an editable preview
+  table; serialized back to JSONL on submit (the API takes JSONL only).
 
 ## Prerequisites
 Docker (with compose), **Python 3.10–3.13** (3.14 is not yet supported — some
@@ -69,10 +70,12 @@ make down      # docker compose down
   spans marked high/med/low with the top one auto-selected. The right column
   shows that span's input/output/token and its reason + evidence (or
   "not flagged").
-- **Upload:** "+ Upload eval set (JSONL)" — a sample is prefilled;
-  `backend/sample_eval_set.jsonl` is another. The set is **locked** after
-  creation (edit only, no add/delete). Editing keeps `question_id` and bumps
-  `version`; a stale version returns **409**.
+- **Upload:** "+ Upload eval set" — choose a **JSONL or CSV** file (or click
+  "load sample"); it is parsed into an **editable preview table** where you can
+  fix any cell and add/remove rows before saving. `backend/sample_eval_set.jsonl`
+  and `backend/sample_eval_set.csv` are equivalent test files. The set is
+  **locked** after creation (edit only, no add/delete). Editing keeps
+  `question_id` and bumps `version`; a stale version returns **409**.
 - **Live run + partial completion:** "▶ Run eval" streams progress over SSE. A
   question whose text contains the `⟦timeout⟧` marker fails while the run
   finishes (partial completion).
@@ -101,11 +104,21 @@ the four instances in `integrations/__init__.py` at real implementations of the
 same interface — nothing else changes. Simulated latencies live only in
 `app/fake_config.py`.
 
-## JSONL upload schema (§6.11)
-One JSON object per line:
+## Upload schema (§6.11)
+Both formats carry the same fields. **JSONL** — one JSON object per line:
 ```jsonl
 {"question": "...", "ground_truth_response": "...", "ground_truth_reasoning_process_description": "...", "skill": ["billing"], "question_id": "q_optional"}
 ```
+**CSV** — a header row with the same field names (standard quoting for values
+containing commas/newlines). The `skill` cell may be a JSON array literal
+(`["billing","reports"]`) or a `,`/`;`/`|`-delimited string (`billing, reports`):
+```csv
+question,ground_truth_response,ground_truth_reasoning_process_description,skill,question_id
+"...","...","...",billing,
+```
+CSV is parsed in the browser and converted to JSONL before it is sent, so the
+API has a single JSONL write path; the format you uploaded is recorded on the
+eval set as `source_format`.
 | field | required | notes |
 |---|---|---|
 | `question` | ✅ | |
