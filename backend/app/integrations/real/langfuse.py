@@ -4,8 +4,8 @@
 (public key : secret key). The correlation_id is the trace id because the agent
 server pins it there when it receives the question (§6.2).
 
-Stage 1 renders a flat, time-ordered span list, so `parentObservationId` is read
-but not used to rebuild a tree — that belongs with the Stage 2 heatmap view.
+Stage 1 renders a flat, time-ordered span list, so the `parentObservationId` in
+the payload goes unused — rebuilding the tree belongs with the Stage 2 heatmap.
 
 The NotReady contract is what makes §6.12 work: Langfuse ingestion is async, so
 a trace requested right after a run finishes may legitimately not exist yet. Zero
