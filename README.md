@@ -17,42 +17,50 @@ real thing, created by an Alembic migration.
 
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
-  progress.
+  progress. Containerized; Python deps installed with **uv**.
 - **DB:** PostgreSQL (via docker-compose).
-- **Frontend:** React (Vite).
+- **Frontend:** React (Vite). Containerized; Node deps installed with **pnpm**.
 - **Upload:** JSONL or CSV file, parsed in the browser into an editable preview
   table; serialized back to JSONL on submit (the API takes JSONL only).
 
 ## Prerequisites
-Docker (with compose), **Python 3.10–3.13** (3.14 is not yet supported — some
-pinned deps have no 3.14 wheels and can't build from source against it), Node 18+.
+**Docker (with compose)** — and nothing else. Postgres, the backend and the
+frontend each run as their own container, so no host Python, venv, Node or
+`node_modules` is required. The backend image pins CPython 3.12 (an interpreter
+the pinned deps have wheels for), which is why the old "find a Python in
+3.10–3.13 / `PYTHON_BIN=…`" dance is gone.
 
-`scripts/dev.sh` auto-selects a supported Python and rebuilds the venv if an
-existing one was created with an unsupported interpreter. To force a specific
-interpreter: `PYTHON_BIN=/path/to/python3.12 ./scripts/dev.sh`.
+Dependencies are installed inside the images: **uv** for the backend
+(`backend/Dockerfile`), **pnpm** for the frontend (`frontend/Dockerfile`).
 
 ## Run it (one command)
 ```bash
 SEED=1 ./scripts/dev.sh
 ```
-This brings up Postgres, installs backend + frontend deps, runs the Alembic
-migration, seeds fake data, and starts the backend (`:8000`) and frontend
-(`:5173`). Open **http://localhost:5173**. Press Ctrl-C to stop backend +
-frontend; Postgres stays up (`docker compose down` to stop it).
+This builds both images, brings up Postgres, runs the Alembic migration, seeds
+fake data, and starts the backend (`:8000`) and frontend (`:5173`) containers.
+Open **http://localhost:5173**. Press Ctrl-C to stop backend + frontend;
+Postgres stays up (`docker compose down` to stop it).
 
 Drop `SEED=1` to start without (re)seeding. To (re)seed on its own later:
 ```bash
 make seed
 ```
 
+Both app containers bind-mount their source directory, so editing
+`backend/app/**` triggers a uvicorn `--reload` and editing `frontend/src/**`
+triggers Vite HMR — no rebuild needed. Rebuild (`make build`) only when
+`requirements.txt` / `package.json` change.
+
 ### Granular targets (Makefile)
 ```bash
-make db        # docker compose up -d  (Postgres only)
-make setup     # create venv + install backend & frontend deps
-make migrate   # alembic upgrade head
-make seed      # python -m app.seed
-make backend   # uvicorn app.main:app --reload --port 8000
-make frontend  # vite dev server on :5173
+make db        # docker compose up -d db  (Postgres only)
+make build     # build both images (backend deps via uv, frontend via pnpm)
+make setup     # alias for make build
+make migrate   # alembic upgrade head, in the backend container
+make seed      # python -m app.seed, in the backend container
+make backend   # backend container: uvicorn app.main:app --reload on :8000
+make frontend  # frontend container: vite dev server on :5173
 make down      # docker compose down
 ```
 
@@ -83,6 +91,9 @@ make down      # docker compose down
 ## Where the important pieces live
 | Concern | File |
 |---|---|
+| Container topology (db + backend + frontend) | `docker-compose.yml` |
+| Backend image (deps via uv) | `backend/Dockerfile` |
+| Frontend image (deps via pnpm) | `frontend/Dockerfile` |
 | App DB schema (§6.14), the 7 tables | `backend/alembic/versions/0001_stage1_schema.py` |
 | ORM models | `backend/app/models.py` |
 | **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
