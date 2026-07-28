@@ -92,7 +92,9 @@ class HttpAgentClient:
         payload = self.build_payload(question, correlation_id, user_id, tags)
         started = time.monotonic()
 
-        async with httpx.AsyncClient(timeout=settings.agent_timeout_s) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.agent_timeout_s, follow_redirects=True
+        ) as client:
             resp = await client.post(
                 f"{self.base_url}/execute", json=payload, headers=self._headers()
             )

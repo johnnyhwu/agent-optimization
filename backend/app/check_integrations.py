@@ -36,7 +36,9 @@ async def check_agent() -> bool:
         # A GET on a POST-only endpoint won't be a valid call, but it proves
         # the host resolves, TLS works and something is listening there. Any
         # HTTP status counts as reachable; only transport errors are failures.
-        async with httpx.AsyncClient(timeout=settings.agent_timeout_s) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.agent_timeout_s, follow_redirects=True
+        ) as client:
             resp = await client.get(url)
         _line(OK, "agent", f"{url} reachable (HTTP {resp.status_code})")
         return True
