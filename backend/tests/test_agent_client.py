@@ -110,6 +110,21 @@ async def test_empty_content_is_a_failure_not_a_wrong_answer(client):
 
 
 @respx.mock
+async def test_redirect_is_followed_not_treated_as_the_response(client):
+    # Some servers register the route with a trailing slash, so a POST to
+    # /execute comes back as a 307 to /execute/ (httpx does not follow
+    # redirects by default). Confirm we follow it instead of parsing the
+    # redirect's (empty) body as the answer.
+    respx.post(EXECUTE_URL).mock(
+        return_value=httpx.Response(307, headers={"location": f"{EXECUTE_URL}/"})
+    )
+    respx.post(f"{EXECUTE_URL}/").mock(return_value=httpx.Response(200, json={"content": "hi"}))
+    resp = await client.call("q", "corr", "alice")
+    assert resp.failed is False
+    assert resp.response == "hi"
+
+
+@respx.mock
 async def test_5xx_raises_so_the_orchestrator_can_retry(client):
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(503, text="unavailable"))
     with pytest.raises(AgentHttpError):
