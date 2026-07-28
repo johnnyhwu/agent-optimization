@@ -99,9 +99,10 @@ class A2AAgentClient:
                     "role": "user",
                     "parts": [{"kind": "text", "text": question}],
                     "messageId": uuid.uuid4().hex,
+                    # §6.2: on the message, not params — a2a-sdk's RequestContext
+                    # exposes this as `context.message.metadata`, not `context.metadata`.
+                    "metadata": {settings.a2a_correlation_metadata_key: correlation_id},
                 },
-                # §6.2: the agent server reads this and pins its Langfuse trace id.
-                "metadata": {settings.a2a_correlation_metadata_key: correlation_id},
             },
         }
 
