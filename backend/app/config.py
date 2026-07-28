@@ -3,7 +3,7 @@
 All *fake-layer* latency knobs live in `app/fake_config.py` — the single file
 required by TASK.md. This module holds everything else: DB URLs, the fake-login
 switch, CORS, the §6.7 span-body truncation limit, and the configuration for the
-real integrations (A2A agent, OpenAI-compatible LLM, Langfuse).
+real integrations (HTTP agent, OpenAI-compatible LLM, Langfuse).
 
 Note the trace-poll knobs live *here*, not in fake_config: they govern the wait
 for real Langfuse ingestion too, and real ingestion lags by orders of magnitude
@@ -49,18 +49,15 @@ class Settings(BaseSettings):
     trace_impl: Impl = "fake"
     diagnosis_impl: Impl = "fake"
 
-    # --- A2A agent (§6.2) --------------------------------------------------
-    # JSON-RPC endpoint of the A2A server hosting the domain agent.
-    a2a_base_url: str = ""
-    a2a_timeout_s: float = 120.0
-    # The request-metadata key the agent server reads to pin its Langfuse trace
-    # id (§6.7: "直接在其中新增一個 trace_id key").
-    a2a_correlation_metadata_key: str = "trace_id"
-    # Optional auth for the A2A endpoint.
-    a2a_api_key: str = ""
-    a2a_auth_header: str = "Authorization"
-    a2a_auth_scheme: str = "Bearer"
-    a2a_max_retries: int = 2
+    # --- Agent HTTP server (§6.2) -------------------------------------------
+    # Base URL of the FastAPI agent server; the client POSTs to {base}/execute.
+    agent_base_url: str = ""
+    agent_timeout_s: float = 120.0
+    # Optional auth for the agent endpoint.
+    agent_api_key: str = ""
+    agent_auth_header: str = "Authorization"
+    agent_auth_scheme: str = "Bearer"
+    agent_max_retries: int = 2
 
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
     llm_base_url: str = ""

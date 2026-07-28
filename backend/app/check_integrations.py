@@ -28,19 +28,20 @@ async def check_agent() -> bool:
     if settings.agent_impl != "real":
         _line(SKIP, "agent", "AGENT_IMPL=fake")
         return True
-    if not settings.a2a_base_url:
-        _line(FAIL, "agent", "A2A_BASE_URL is empty")
+    if not settings.agent_base_url:
+        _line(FAIL, "agent", "AGENT_BASE_URL is empty")
         return False
+    url = f"{settings.agent_base_url.rstrip('/')}/execute"
     try:
-        # A HEAD/GET on the JSON-RPC endpoint won't be a valid RPC call, but it
-        # proves the host resolves, TLS works and something is listening. Any
+        # A GET on a POST-only endpoint won't be a valid call, but it proves
+        # the host resolves, TLS works and something is listening there. Any
         # HTTP status counts as reachable; only transport errors are failures.
-        async with httpx.AsyncClient(timeout=settings.a2a_timeout_s) as client:
-            resp = await client.get(settings.a2a_base_url)
-        _line(OK, "agent", f"{settings.a2a_base_url} reachable (HTTP {resp.status_code})")
+        async with httpx.AsyncClient(timeout=settings.agent_timeout_s) as client:
+            resp = await client.get(url)
+        _line(OK, "agent", f"{url} reachable (HTTP {resp.status_code})")
         return True
     except Exception as exc:  # noqa: BLE001
-        _line(FAIL, "agent", f"{settings.a2a_base_url}: {exc}")
+        _line(FAIL, "agent", f"{url}: {exc}")
         return False
 
 

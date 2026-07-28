@@ -2,7 +2,7 @@
 
 Every method simulates realistic latency (values from app/fake_config.py) and
 returns deterministic-but-plausible data so the UI + data flow can be exercised
-end to end without any real A2A agent / LLM / Langfuse.
+end to end without any real HTTP agent / LLM / Langfuse.
 
 Determinism: outcomes are derived from a hash of the question (so a re-run is
 stable) but can be forced with markers embedded in the question text, letting the
@@ -85,9 +85,13 @@ def _intended_verdict(question: str) -> str:
 
 
 class FakeAgentClient:
-    # REPLACE WITH REAL IMPL: call the A2A agent server, passing correlation_id
-    # in request metadata (§6.2) so the agent applies it to its Langfuse trace.
-    async def call(self, question: str, correlation_id: str) -> AgentResponse:
+    # REPLACE WITH REAL IMPL: POST the agent HTTP server's /execute endpoint,
+    # passing correlation_id as metadata.trace_data.trace_id (§6.2) so the
+    # agent applies it to its Langfuse trace.
+    async def call(
+        self, question: str, correlation_id: str, user_id: str,
+        tags: list[str] | None = None,
+    ) -> AgentResponse:
         await _sleep_between(fc.AGENT_LATENCY_MIN_S, fc.AGENT_LATENCY_MAX_S)
         if "⟦timeout⟧" in question:
             return AgentResponse(

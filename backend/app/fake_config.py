@@ -10,7 +10,7 @@ Langfuse ingestion as well, so it belongs to the real settings —
 """
 from __future__ import annotations
 
-# --- AgentClient.call : fake A2A agent round-trip (1-3s) ---
+# --- AgentClient.call : fake agent round-trip (1-3s) ---
 AGENT_LATENCY_MIN_S: float = 1.0
 AGENT_LATENCY_MAX_S: float = 3.0
 

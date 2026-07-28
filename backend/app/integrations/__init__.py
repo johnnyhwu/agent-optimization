@@ -28,9 +28,9 @@ from app.integrations.fake import (
 
 def _build_agent_client() -> AgentClient:
     if settings.agent_impl == "real":
-        from app.integrations.real.a2a import A2AAgentClient
+        from app.integrations.real.agent import HttpAgentClient
 
-        return A2AAgentClient()
+        return HttpAgentClient()
     return FakeAgentClient()
 
 

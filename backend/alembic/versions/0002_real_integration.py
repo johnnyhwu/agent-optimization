@@ -1,7 +1,7 @@
 """Columns the real integrations need (§9.2 fake -> real).
 
 With the fake layer nobody missed these: outcomes were synthetic and failures
-were simulated. Against a real A2A agent and a real LLM judge they are the
+were simulated. Against a real HTTP agent server and a real LLM judge they are the
 difference between "you can see the eval result" and "you can see a verdict":
 
   question_results.agent_response    what the agent actually answered

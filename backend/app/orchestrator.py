@@ -34,7 +34,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.integrations import agent_client, diagnosis_client, judge_client, trace_client
 from app.integrations.base import NotReady
-from app.models import Question, QuestionResult, Run, SpanAnalysis
+from app.models import EvalSet, Question, QuestionResult, Run, SpanAnalysis
 from app.sse import hub
 
 log = logging.getLogger(__name__)
@@ -117,6 +117,12 @@ async def _execute_run(session, run: Run) -> None:
     total = len(snapshot)
     await hub.publish(run_id, {"type": "run_started", "total": total})
 
+    # Agent metadata (§6.2): user_id is who triggered this run, tags carries
+    # the eval set name — computed once per run, not per question.
+    eval_set = await session.get(EvalSet, run.eval_set_id)
+    user_id = run.triggered_by
+    tags = [f"eval_{eval_set.name}"] if eval_set is not None else []
+
     # Progress counters are shared across concurrent workers; the lock also
     # serializes DB writes, since one AsyncSession is not safe for concurrent use.
     state = {"done": 0, "correct": 0}
@@ -125,7 +131,7 @@ async def _execute_run(session, run: Run) -> None:
 
     async def process(item: dict) -> None:
         async with semaphore:
-            await _process_question(session, run_id, item, total, state, lock)
+            await _process_question(session, run_id, item, total, state, lock, user_id, tags)
 
     # return_exceptions=True: one unexpected per-question error must not cancel
     # its siblings. _process_question already handles the expected ones.
@@ -154,7 +160,7 @@ async def _execute_run(session, run: Run) -> None:
     )
 
 
-async def _process_question(session, run_id, item, total, state, lock) -> None:
+async def _process_question(session, run_id, item, total, state, lock, user_id, tags) -> None:
     correlation_id = uuid.uuid4().hex
     async with lock:
         result = QuestionResult(
@@ -180,10 +186,10 @@ async def _process_question(session, run_id, item, total, state, lock) -> None:
     try:
         agent_resp = await _with_retries(
             lambda: asyncio.wait_for(
-                agent_client.call(item["question"], correlation_id),
-                timeout=settings.a2a_timeout_s,
+                agent_client.call(item["question"], correlation_id, user_id, tags),
+                timeout=settings.agent_timeout_s,
             ),
-            settings.a2a_max_retries,
+            settings.agent_max_retries,
             "agent call",
         )
     except Exception as exc:  # noqa: BLE001

@@ -4,7 +4,7 @@ A real implementation swaps in behind the SAME interface — the orchestrator an
 routers depend only on these Protocols, never on a concrete module.
 
 Seams:
-    AgentClient.call(question, correlation_id)                        -> AgentResponse
+    AgentClient.call(question, correlation_id, user_id, tags)         -> AgentResponse
     JudgeClient.judge(question, response, ground_truth)               -> Verdict
     TraceClient.fetch_trace(correlation_id)                           -> Trace | NotReady
     DiagnosisClient.diagnose(trace, ground_truth_reasoning, verdict)  -> dict (§6.9 JSON)
@@ -66,7 +66,12 @@ NOT_READY = NotReady()
 
 @runtime_checkable
 class AgentClient(Protocol):
-    async def call(self, question: str, correlation_id: str) -> AgentResponse: ...
+    # `user_id` is the subject who triggered the run; `tags` lets the caller
+    # attach labels (e.g. the eval set name) to the agent's Langfuse metadata.
+    async def call(
+        self, question: str, correlation_id: str, user_id: str,
+        tags: list[str] | None = None,
+    ) -> AgentResponse: ...
 
 
 @runtime_checkable
