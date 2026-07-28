@@ -102,7 +102,7 @@ def seams(monkeypatch):
     stubs = Stubs()
 
     class Agent:
-        async def call(self, question, correlation_id):
+        async def call(self, question, correlation_id, user_id, tags=None):
             return await stubs.agent(question, correlation_id)
 
     class Judge:
@@ -146,7 +146,7 @@ def seams(monkeypatch):
 @pytest.fixture(autouse=True)
 def fast_polling(configure):
     with configure(trace_poll_max_attempts=1, trace_poll_backoff_s=[0.0],
-                   a2a_max_retries=0, llm_max_retries=0, run_concurrency=1):
+                   agent_max_retries=0, llm_max_retries=0, run_concurrency=1):
         yield
 
 
@@ -193,7 +193,7 @@ async def test_agent_reported_failure_keeps_its_reason(seams):
     async def failed(question, correlation_id):
         return AgentResponse(
             response="", correlation_id=correlation_id, failed=True,
-            error="A2A JSON-RPC error: skill not found", latency_ms=8,
+            error="agent server returned 500: skill not found", latency_ms=8,
         )
 
     seams.agent = failed

@@ -40,10 +40,9 @@ services:
 
       # --- Real integrations. Credentials come from the host environment or a
       # repo-root .env; they are never baked into the image. ---
-      A2A_BASE_URL: ${A2A_BASE_URL:-}
-      A2A_TIMEOUT_S: ${A2A_TIMEOUT_S:-120}
-      A2A_CORRELATION_METADATA_KEY: ${A2A_CORRELATION_METADATA_KEY:-trace_id}
-      A2A_API_KEY: ${A2A_API_KEY:-}
+      AGENT_BASE_URL: ${AGENT_BASE_URL:-}
+      AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       JUDGE_MODEL: ${JUDGE_MODEL:-}

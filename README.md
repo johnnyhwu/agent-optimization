@@ -5,15 +5,15 @@ A runnable end-to-end demo of **Stage 1** from [`docs/spec.md`](docs/spec.md)
 orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
 jumps the UI straight to the suspect span with its input/output/token detail.
 
-Everything external is **faked** behind a swappable interface — a real A2A agent,
-LLM judge, LLM diagnosis, and Langfuse trace fetch are stubbed with realistic
-latency. The point of the POC is to prove the **UI + data flow + real app-DB
-schema (§6.14)**, not to integrate anything real yet. The app DB schema is the
-real thing, created by an Alembic migration.
+Everything external is **faked** behind a swappable interface — a real HTTP
+agent server, LLM judge, LLM diagnosis, and Langfuse trace fetch are stubbed
+with realistic latency. The point of the POC is to prove the **UI + data flow
++ real app-DB schema (§6.14)**, not to integrate anything real yet. The app DB
+schema is the real thing, created by an Alembic migration.
 
 > **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
 > re-labeling, SkillOpt, skill write-back, annotation score sync,
-> real Langfuse/A2A/LLM calls, multi-tenant isolation.
+> real Langfuse/agent/LLM calls, multi-tenant isolation.
 
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
@@ -73,7 +73,7 @@ them up **one at a time** — a real agent while the judge is still fake, and so
 
 | env var | seam | what `real` means |
 |---|---|---|
-| `AGENT_IMPL` | `AgentClient` | POST the question to the A2A server (`A2A_BASE_URL`), with the correlation id in request metadata (§6.2) |
+| `AGENT_IMPL` | `AgentClient` | POST `{"query", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data` (§6.2) |
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | §6.9 clue-style diagnosis over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
@@ -84,7 +84,7 @@ See [`backend/.env.example`](backend/.env.example) for the full list.
 
 ```bash
 # minimum for "upload a real eval set, run it, see real results"
-AGENT_IMPL=real  A2A_BASE_URL=https://your-a2a-server/rpc
+AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=...
 ```
 Then check the wiring before spending a run on it:
@@ -92,10 +92,15 @@ Then check the wiring before spending a run on it:
 make preflight   # OK / FAIL per seam, with the reason
 ```
 
-**Prerequisite for the trace seam (§6.2):** the A2A server must read the
-`trace_id` key out of the request metadata and use it as its Langfuse trace id.
-Without that the platform has no way to find the trace it just caused. The
-metadata key is configurable via `A2A_CORRELATION_METADATA_KEY`.
+**Prerequisite for the trace seam (§6.2):** the agent server must read
+`metadata.trace_data.trace_id` out of the `/execute` request body and use it
+as its Langfuse trace id. Without that the platform has no way to find the
+trace it just caused. The full metadata shape sent on every call is:
+```json
+{"trace_data": {"trace_id": "...", "session_id": "...", "user_id": "...", "tags": ["eval_<eval_set_name>"]}}
+```
+`trace_id` and `session_id` are the same value (each question is its own
+correlation unit); `user_id` is the subject who triggered the run.
 
 Notes:
 - A question that fails (agent unreachable, judge unparseable, timeout) is
@@ -143,7 +148,7 @@ Notes:
 | ORM models | `backend/app/models.py` |
 | **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
 | **Fake impls** (each `# REPLACE WITH REAL IMPL`) | `backend/app/integrations/fake.py` |
-| **Real impls** (A2A / judge / Langfuse / diagnosis) | `backend/app/integrations/real/` |
+| **Real impls** (agent / judge / Langfuse / diagnosis) | `backend/app/integrations/real/` |
 | Which impl backs each seam | `backend/app/integrations/__init__.py` |
 | Judge + diagnosis prompts (§6.9 contract) | `backend/app/integrations/real/prompts.py` |
 | Integration preflight | `backend/app/check_integrations.py` |

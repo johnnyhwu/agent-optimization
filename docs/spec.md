@@ -661,7 +661,7 @@ pk (eval_set_id, user_subject)
 > 的討論/藍圖若有出入，**一律以本節為準**——前面章節是設計過程的紀錄，本節是實際做出來的東西。
 >
 > **一句話現況**：Stage 1 的 app 本身（DB schema、orchestration、權限、樂觀鎖、SSE、三層 UI、
-> 診斷落庫與讀取）**全是真的**；四個外部依賴（A2A agent、LLM judge、Langfuse trace、LLM 診斷）
+> 診斷落庫與讀取）**全是真的**；四個外部依賴（HTTP agent、LLM judge、Langfuse trace、LLM 診斷）
 > **假、真兩套實作都已寫好**，用四個環境變數逐一切換，**預設走假的**，因此不接任何外部服務也能
 > 完整跑起來。真實實作**尚未對接過正式環境**（只用 mock 驗過，見 §9.16）。
 >
@@ -678,7 +678,7 @@ pk (eval_set_id, user_subject)
     只有 `requirements.txt` / `package.json` 變動才需要 rebuild。
 - **Backend**：FastAPI（async）+ SQLAlchemy 2（async, `asyncpg`）+ Alembic（migration 用 sync
   `psycopg`）+ Pydantic v2。run 進度用 **SSE**（`sse-starlette`）即時推送。
-  對外整合用 `httpx`（A2A / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
+  對外整合用 `httpx`（agent HTTP / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
 - **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 52 個測試，
@@ -697,7 +697,7 @@ pk (eval_set_id, user_subject)
 
 | Seam（Protocol） | 介面 | 假實作（模擬延遲） | 真實實作 |
 |---|---|---|---|
-| `AgentClient` | `call(question, correlation_id) -> AgentResponse` | 睡 1–3s；回假 response | `real/a2a.py`：手寫 JSON-RPC `message/send`，correlation_id 放 request metadata（§6.2）|
+| `AgentClient` | `call(question, correlation_id, user_id, tags) -> AgentResponse` | 睡 1–3s；回假 response | `real/agent.py`：`POST /execute {"query","metadata"}`，metadata.trace_data 帶 trace_id(=correlation_id)/session_id(=correlation_id)/user_id/tags，回應為 `{"content": str}`（§6.2）|
 | `JudgeClient` | `judge(question, response, ground_truth) -> Verdict` | 睡 0.5–1s；二元判定 | `real/judge.py`：OpenAI 相容端點，LLM 同時吐 verdict+score，可選門檻覆寫 |
 | `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | `real/langfuse.py`：`GET /api/public/v2/observations?traceId=`，0 筆 = NotReady（§6.12）|
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, verdict) -> dict` | 睡 2–4s；回 §6.9 的 JSON | `real/diagnosis.py`：§6.9 四段式 prompt，輸出驗證 + span_index 越界剔除 |
@@ -710,9 +710,10 @@ pk (eval_set_id, user_subject)
 - **可控觸發（demo/測試用）**：假層會辨識題目文字裡的標記——`⟦timeout⟧`→該題 agent「逾時」變
   `failed`；`⟦wrong⟧`→judge 判 incorrect；`⟦caveat⟧`（放 reasoning 內）→診斷帶 caveat。其餘題目
   以文字 hash 決定約 30% incorrect。**真實實作不認得這些標記**（真 agent 沒有理由認得）。
-- **接真實需要 agent server 端配合（§6.2）**：A2A server 必須讀 request metadata 的 `trace_id`
-  並用它當 Langfuse trace id，否則平台無從找回自己剛觸發的 trace。key 名可用
-  `A2A_CORRELATION_METADATA_KEY` 調整。
+- **接真實需要 agent server 端配合（§6.2）**：agent server 必須讀 `/execute` request body 的
+  `metadata.trace_data.trace_id` 並用它當 Langfuse trace id，否則平台無從找回自己剛觸發的
+  trace。`trace_id` 與 `session_id` 用同一個值（每題都是自己的 correlation 單位）；`user_id`
+  是觸發該 run 的使用者；`tags` 帶 `["eval_<eval_set 名稱>"]`。
 - **落庫新增**（migration `0002_real_integration`）：`question_results.agent_response`（agent
   實際回答）、`error_message`（失敗原因）、`agent_latency_ms`，以及 `runs.error_message`。
   假資料時代不需要，真實情境下「看得到 eval 結果」少不了它們。
@@ -730,13 +731,13 @@ backend/
   alembic/versions/0002_real_integration.py # agent_response / error_message / agent_latency_ms
   app/
     config.py           # 設定：DB URL、假登入、span 截斷長度、★四個 *_IMPL 開關、
-                        #   A2A / LLM / Langfuse 連線、run_concurrency、trace poll backoff
+                        #   agent HTTP / LLM / Langfuse 連線、run_concurrency、trace poll backoff
     fake_config.py      # ★ 假層專用的延遲設定檔
     db.py  models.py    # async engine；7 張表的 ORM（EvalSet.metadata 因保留字→ORM 屬性叫 meta）
     schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares, source_format) / RolesUpdate / *Card ...
     auth.py             # current_subject + require_owner / require_reader 依賴
     integrations/       # ★ 四個 seam：base.py(Protocol) + fake.py(假) + real/(真)
-      real/a2a.py  real/judge.py  real/langfuse.py  real/diagnosis.py
+      real/agent.py  real/judge.py  real/langfuse.py  real/diagnosis.py
       real/llm.py       # 共用 OpenAI 相容 client + JSON 契約解析（含一次修復重試）
       real/prompts.py   # judge prompt + §6.9 四段式診斷 prompt
       __init__.py       # 依 settings 逐一 seam 選 fake / real
@@ -746,7 +747,7 @@ backend/
     services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
-  tests/                # A2A / Langfuse / judge / 診斷 / orchestrator 失敗路徑（respx mock）
+  tests/                # agent HTTP / Langfuse / judge / 診斷 / orchestrator 失敗路徑（respx mock）
   sample_eval_set.jsonl  sample_eval_set.csv   # 兩種格式的範例檔（內容等價）
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
@@ -822,9 +823,9 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | 任何非預期例外 | 仍會把 run 收成 `status='failed'`、寫 `runs.error_message`、**並送出 SSE 終止事件**。run 不會卡在 `running` 讓前端無限等待 |
 
 **其他執行控制**
-- **timeout**：agent 呼叫包 `asyncio.wait_for`（`A2A_TIMEOUT_S`），client 自身另有 httpx timeout。
+- **timeout**：agent 呼叫包 `asyncio.wait_for`（`AGENT_TIMEOUT_S`），client 自身另有 httpx timeout。
 - **重試**：對暫時性錯誤（timeout / 連線錯誤）做**有上限的指數退避**重試
-  （`A2A_MAX_RETRIES` / `LLM_MAX_RETRIES`，預設各 2 次）。4xx 這類必然重現的錯誤不重試。
+  （`AGENT_MAX_RETRIES` / `LLM_MAX_RETRIES`，預設各 2 次）。4xx 這類必然重現的錯誤不重試。
 - **併發**：`RUN_CONCURRENCY`（預設 **1** ＝ 嚴格序列，與原本行為一致）以 `asyncio.Semaphore`
   控制同時打 agent 的題數。>1 時 `question_done` 事件順序不再固定，但前端以 `question_pk` 索引，不受影響。
 
@@ -933,7 +934,7 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | Langfuse | 讀 trace / 寫 dataset+score | **讀已實作**（`TRACE_IMPL=real`：`/api/public/v2/observations` 依 correlation_id 取回並重建 span 列表）；**寫 dataset / score 尚未做**（§6.3 的 score 回寫留待之後）|
 | UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
 | 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |
-| A2A agent | §6.2 定案 correlation 機制 | **已實作**（`AGENT_IMPL=real`：手寫 JSON-RPC `message/send`，correlation_id 走 request metadata）|
+| Agent 通訊協定 | §1.1/§6.2 設想的是 Google A2A(Agent-to-Agent) protocol server | **agent server 端後來改為單一 FastAPI `POST /execute`**（`{"query","metadata"}` → `{"content"}`），本平台的 `AgentClient` 也隨之從手寫 A2A JSON-RPC client 換成 `real/agent.py` 的 HTTP client；correlation 機制不變——`metadata.trace_data.trace_id`(=`session_id`) 走 correlation_id，另加 `user_id`(觸發 run 的使用者) 與 `tags`(`["eval_<eval_set 名稱>"]`)|
 | LLM judge | §6.7 標明「prompt 與二元化門檻留待之後」 | **已定案並實作**：LLM 同時吐 `verdict + score + comment`；另有可選的 `JUDGE_SCORE_THRESHOLD` 由分數推導 verdict，調門檻不用改 prompt |
 | judge 介面 | `judge(response, ground_truth)` | **多了 `question` 參數**——真 LLM judge 需要題目本身當 context |
 | 診斷 LLM | §6.9 定案 I/O 契約 | **已實作**（`DIAGNOSIS_IMPL=real`），並加上輸出驗證與 `span_index` 越界剔除 |
@@ -983,10 +984,9 @@ backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源 |
 | `SPAN_BODY_MAX_CHARS` | `800` | §6.7 單一 span body 截斷門檻 |
 | **`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL`** | 皆 `fake` | 每個 seam 各自 `fake` 或 `real`，**可逐一切換** |
-| `A2A_BASE_URL` | 空 | A2A server 的 JSON-RPC 端點 |
-| `A2A_CORRELATION_METADATA_KEY` | `trace_id` | 放 correlation_id 的 metadata key（§6.2）|
-| `A2A_TIMEOUT_S` / `A2A_MAX_RETRIES` | `120` / `2` | 單次呼叫上限、暫時性錯誤重試次數 |
-| `A2A_API_KEY` / `A2A_AUTH_HEADER` / `A2A_AUTH_SCHEME` | 空 / `Authorization` / `Bearer` | 選用驗證 |
+| `AGENT_BASE_URL` | 空 | agent server 的 base URL；client 會打 `{base}/execute` |
+| `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | 單次呼叫上限、暫時性錯誤重試次數 |
+| `AGENT_API_KEY` / `AGENT_AUTH_HEADER` / `AGENT_AUTH_SCHEME` | 空 / `Authorization` / `Bearer` | 選用驗證 |
 | `LLM_BASE_URL` / `LLM_API_KEY` | 空 | **OpenAI 相容**端點（可指向 self-hosted）|
 | `JUDGE_MODEL` / `DIAGNOSIS_MODEL` | 空 | 兩個用途可用不同模型 |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
@@ -1004,23 +1004,23 @@ backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不
 
 | 步驟 | 設定 | 這一步該看到什麼 |
 |---|---|---|
-| 1 | `AGENT_IMPL=real` + `A2A_BASE_URL` | 題目打得到真 agent；`agent_response` 有真實回答（判分仍是假的）|
+| 1 | `AGENT_IMPL=real` + `AGENT_BASE_URL` | 題目打得到真 agent；`agent_response` 有真實回答（判分仍是假的）|
 | 2 | 加 `JUDGE_IMPL=real` + `LLM_BASE_URL` / `JUDGE_MODEL` | 通過率與 judge comment 開始有意義 |
 | 3 | 加 `TRACE_IMPL=real` + `LANGFUSE_*` | 點錯題看得到真實 span（**前提是 agent server 已套用 correlation_id**）|
 | 4 | 加 `DIAGNOSIS_IMPL=real` + `DIAGNOSIS_MODEL` | 診斷、caveat、可疑 span 都由真 LLM 產生 |
 
-**接真實的前提（§6.2，repo 外的相依）**：A2A server 必須讀 request metadata 的
-`trace_id`（或 `A2A_CORRELATION_METADATA_KEY` 指定的 key）並用它當 Langfuse trace id，
-否則平台無從找回自己剛觸發的 trace。
+**接真實的前提（§6.2，repo 外的相依）**：agent server 必須讀 `/execute` request body 的
+`metadata.trace_data.trace_id` 並用它當 Langfuse trace id，否則平台無從找回自己剛觸發的
+trace。
 
 ---
 
 ### 9.16 測試與驗證現況
 
 **單元測試**（`backend/tests/`，52 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
-- `test_a2a_client.py`：request 的 metadata key/value、Task 與 Message 兩種回應形狀、
-  artifacts 優先於 status.message、JSON-RPC error 走 failed 而非例外、空回答視為失敗、
-  5xx raise（交給重試）vs 4xx 直接失敗、auth header。
+- `test_agent_client.py`：request body 的 `query` + `metadata.trace_data`（trace_id=session_id、
+  user_id、tags）、`{"content": str}` 回應解析（含裸 JSON 字串與純文字兩種容錯 fallback）、
+  非字串/缺 `content` 視為失敗、空回答視為失敗、5xx raise（交給重試）vs 4xx 直接失敗、auth header。
 - `test_langfuse_client.py`：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
   分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射。
 - `test_judge_and_diagnosis.py`：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
@@ -1033,13 +1033,16 @@ backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不
 - **fake 模式**：與真實整合加入前**行為完全相同**（卡片 3 runs / 趨勢 0.8→0.6→0.4、
   三種 incorrect mode 各異、SSE 五題含 `⟦timeout⟧` 部分完成、診斷與 caveat、§6.7 截斷、
   403/409、上傳與 version bump、三層 UI）。
-- **real 模式**：以**自建 mock 的 A2A / OpenAI 相容 / Langfuse 服務**跑過完整流程——
-  上傳 → run → 真回答與判分落庫、correlation_id 從 A2A metadata 一路對回 Langfuse `traceId`、
+- **real 模式**：以**自建 mock 的 agent HTTP / OpenAI 相容 / Langfuse 服務**跑過完整流程——
+  上傳 → run → 真回答與判分落庫、correlation_id 從 agent metadata 一路對回 Langfuse `traceId`、
   NotReady 退避路徑、observation→span 映射、幻覺 `span_index` 剔除、
-  以及「故意打壞 A2A endpoint → 每題帶原因失敗、run 仍正常收斂」。
+  以及「故意打壞 agent `/execute` endpoint → 每題帶原因失敗、run 仍正常收斂」。
+  ⚠️ 這批 real 模式驗證是 agent server 端還是 A2A JSON-RPC 協定時做的；agent server 改成
+  `POST /execute` 這個純 HTTP 契約後，尚未針對新契約重跑一次完整的 real-模式端到端驗證
+  （單元測試 `test_agent_client.py` 已針對新契約重寫並通過，但 mock 端到端流程還沒有）。
 
-> ⚠️ **尚未對接真正的服務**。上述 real 模式驗證用的是 mock，能證明協定解析、correlation 環路、
-> 失敗策略與資料流都正確；**證明不了**貴方 A2A server 實際回傳的 Task 形狀、貴方 LLM 端點是否支援
-> `response_format: json_object`、貴方 Langfuse 版本的 token 欄位命名。這三處在 client 內都刻意
-> 寫得寬容（兩種回應形狀都吃、`response_format` 被拒會自動退回、新舊 usage 欄位都認），
-> 但真的接上去仍可能需要微調。
+> ⚠️ **尚未對接真正的服務**。上述 real 模式驗證用的是 mock，能證明 correlation 環路、
+> 失敗策略與資料流都正確；**證明不了**貴方 agent server 的 `/execute` 是否真的回
+> `{"content": str}`、貴方 LLM 端點是否支援 `response_format: json_object`、貴方 Langfuse
+> 版本的 token 欄位命名。前兩處在 client 內都刻意寫得寬容（`/execute` 回應接受裸 JSON
+> 字串或純文字當 fallback、`response_format` 被拒會自動退回），但真的接上去仍可能需要微調。

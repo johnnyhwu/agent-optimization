@@ -10,7 +10,7 @@ python-multipart==0.0.20
 sse-starlette==2.1.3
 
 # --- Real integrations (§9.2 seams) ---
-# httpx: hand-written A2A JSON-RPC client + Langfuse public REST API.
+# httpx: hand-written HTTP agent client + Langfuse public REST API.
 httpx==0.28.1
 # openai: any OpenAI-compatible endpoint (self-hosted included) via base_url.
 openai==1.59.6
