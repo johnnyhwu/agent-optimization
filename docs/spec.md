@@ -681,7 +681,7 @@ pk (eval_set_id, user_subject)
   對外整合用 `httpx`（agent HTTP / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
-- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 53 個測試，
+- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 72 個測試，
   **不需要 DB 也不需要網路**（`make test`）。
 - **上傳格式**：支援 **JSONL 與 CSV 檔案**。開發者一律**上傳檔案**（不再手貼 JSONL），檔案在**前端解析**
   成一張**可編輯的預覽表格**（見 §9.9）；按 Create 前把（可能改過的）表格**在前端重新序列化為 JSONL**
@@ -691,9 +691,13 @@ pk (eval_set_id, user_subject)
 
 ### 9.2 真實 vs 假造的邊界（最重要）
 四個外部依賴各自藏在一個 **Python Protocol seam** 後面，**假、真兩套實作都已存在**，由
-`backend/app/integrations/__init__.py` 依設定**逐一 seam** 選用（`*_IMPL=fake|real`）。
-預設四個都是 `fake`，所以 `SEED=1 ./scripts/dev.sh` 不需要任何外部服務就能跑完整 demo；
-要接真的可以一個一個開，不必一次全換。
+`backend/app/integrations/__init__.py` 的 `build_seams(config, secrets)` 依設定**逐一 seam**
+選用（`*_IMPL=fake|real`）。預設四個都是 `fake`，所以 `SEED=1 ./scripts/dev.sh` 不需要任何
+外部服務就能跑完整 demo；要接真的可以一個一個開，不必一次全換。
+
+**`*_IMPL` 決定 fake/real（全域），端點則逐 run 決定**：`build_seams` 每次都建新的 client
+實例，設定來自該 run 的 `runs.config` / `runs.secrets`（空值退回環境變數）。這不只是彈性——
+`trigger_run` 開背景 task 時沒有鎖，若改成變動全域 settings，兩個併行的 run 會互相污染端點。
 
 | Seam（Protocol） | 介面 | 假實作（模擬延遲） | 真實實作 |
 |---|---|---|---|
@@ -717,6 +721,7 @@ pk (eval_set_id, user_subject)
 - **落庫新增**（migration `0002_real_integration`）：`question_results.agent_response`（agent
   實際回答）、`error_message`（失敗原因）、`agent_latency_ms`，以及 `runs.error_message`。
   假資料時代不需要，真實情境下「看得到 eval 結果」少不了它們。
+  （`0003_run_config` 再加上 `runs.name` / `runs.config` / `runs.secrets`——逐 run 設定，見 §9.15。）
 - **失敗策略**：單題失敗（agent 不通、judge 解析不了、timeout）→ 該題 `failed` 並記下原因，
   run 繼續並正常收斂（partial completion）；診斷失敗**不影響**該題判定；任何非預期例外仍會把 run
   結掉並送出 SSE 終止事件——run 不會卡在 `running` 讓前端空等。
@@ -736,7 +741,8 @@ backend/
                         #   （連線類的值同時是 run config dialog 的預設值）
     fake_config.py      # ★ 假層專用的延遲設定檔
     db.py  models.py    # async engine；7 張表的 ORM（EvalSet.metadata 因保留字→ORM 屬性叫 meta）
-    schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares, source_format) / RolesUpdate / *Card ...
+    schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares, source_format) / RolesUpdate / *Card
+                        #   RunConfig(非機密) / RunSecrets(只進不出) / RunCreate / RunOut ...
     auth.py             # current_subject + require_owner / require_reader 依賴
     integrations/       # ★ 四個 seam：base.py(Protocol) + fake.py(假) + real/(真)
       real/agent.py  real/judge.py  real/langfuse.py  real/diagnosis.py
@@ -751,12 +757,13 @@ backend/
                         #   run_config(逐 run 設定的 env 預設值 + 觸發時寫死有效值)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
-  tests/                # agent HTTP / Langfuse / judge / 診斷 / orchestrator 失敗路徑（respx mock）
+  tests/                # agent HTTP / Langfuse / judge / 診斷 / orchestrator 失敗路徑 /
+                        #   逐 run 設定與金鑰不外流（respx mock）
   sample_eval_set.jsonl  sample_eval_set.csv   # 兩種格式的範例檔（內容等價）
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
   upload_parse.js       # 前端 JSONL/CSV 解析→可編輯表格列，送出前再序列化回 JSONL
-  components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor
+  components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor/QuestionEditor
                         # RunHistory/RunConfigDialog/RunConfigView(唯讀)/RunProgress(SSE)
                         # RunDetail/QuestionList/SpanList/SpanDetail
                         # Breadcrumb/Modal/Toast/ThemeToggle/icons
@@ -792,6 +799,7 @@ frontend/src/
 GET  /health
 GET  /users                                  # 假使用者名單 + 目前身分
 GET  /me                                     # 目前 subject 與其在各 set 的角色
+GET  /run-config/defaults                    # run config dialog 的預填值（env 來源）+ 四個 *_IMPL 現況
 POST /eval-sets                              # 建立(payload 恆為 JSONL + source_format)；建立者=owner；可帶 shares
 GET  /eval-sets                             # 我有權限的 set 卡片（含 run 數/通過率/趨勢/regression/roles）
 GET  /eval-sets/metadata/keys               # 掃 JSONB 得既有 metadata key
@@ -800,8 +808,9 @@ PATCH/eval-sets/{id}                        # 改 name/description/metadata（�
 PUT  /eval-sets/{id}/roles                  # 整批覆寫分享名單 owner-only（操作者保留 owner）
 GET  /eval-sets/{id}/questions              # 題目清單
 PATCH/eval-sets/{id}/questions/{qpk}        # 改題（樂觀鎖→409；question_id 不變）owner
-POST /eval-sets/{id}/runs                   # 觸發 run（owner 或 viewer）
-GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count）
+POST /eval-sets/{id}/runs                   # 觸發 run（owner 或 viewer）；body 帶 name/config/secrets
+                                            #   /reuse_secrets_from_run_id，全部可省略
+GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count / name / config / credentials_set）
 GET  /eval-sets/{id}/runs/{run_id}/progress # SSE 即時進度
 GET  /eval-sets/{id}/results                # 左欄題目清單；?run_ids=..&mode=union|intersection|last_n&last_n=
 GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓 trace(截斷) + 讀 DB 的診斷
@@ -816,7 +825,10 @@ POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
 - **沒有 run 取消端點**：run 一旦開始就無法中止（見 §9.14）。
 
 ### 9.6 Orchestrator（如實作，對照 §6.15）
-`POST /runs` 建立 `runs`(status=running) 後，開一個背景 asyncio task 跑 `orchestrator.run_eval`：
+`POST /runs` 建立 `runs`(status=running，並存下該次的 `name` / `config` / `secrets`) 後，開一個
+背景 asyncio task 跑 `orchestrator.run_eval`：先用 `build_seams(run.config, run.secrets)` 建出這個
+run 專屬的四個 client，並從 `config["concurrency"]` 決定併發上限、`config["agent_timeout_s"]`
+決定單題逾時（**都是逐 run，不再讀全域 settings**）→
 run 開始**讀定 question 快照**（之後改題不影響這次 run）→ 每題：生 correlation_id → agent →
 judge → 寫 `question_results`（含 `agent_response` 與 `agent_latency_ms`）→ poll（backoff）等
 trace ready → 標 `trace_ready` → 若 incorrect：抓+截斷 trace → 診斷 → 寫 `span_analyses`（含
@@ -865,6 +877,11 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 - **樂觀鎖 409**：`questions`、`eval_sets` 各帶 `version`；`UPDATE ... WHERE id AND version` 未命中回
   **409**。衝突粒度=單列。已驗證兩人改同題→後者 409。
 - **假登入**：`X-User-Subject` header（SSE 用 `?subject=`）或設定檔預設；UI 右上角下拉切換身分。
+- **★ run config 的可見範圍**：`list_runs` 走 `require_reader`，所以**在該 eval set 有角色的人
+  （含 viewer）都看得到底下所有 run 的非機密設定**（`RunOut.config`：base URL、模型、timeout、
+  concurrency，以及 `langfuse_public_key`——它是 Basic auth 的識別碼那半，沒有 secret key 不能用，
+  且讓它 round-trip 才能讓「沿用舊 run 設定」免重填）。**金鑰對任何人都不回傳，owner 也一樣**；
+  只透過 `credentials_set` 顯示某個 slot 有沒有值。沒有角色的人連 run 列表都拿不到（403）。
 - **★ 新增：分享（§6.10/§6.16 的延伸）**
   - 上傳時 `EvalSetCreate.shares`（`[{subject, role}]`）直接建對應 `eval_set_roles`。
   - **分享對象一律以「直接輸入人名」新增**（例：Alice 輸入 `bob`）；已移除原本「從預先定義名單下拉挑選」
@@ -900,6 +917,15 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
   - 左欄 failed 題目直接**紅字顯示 `error_message`**（滑過看完整內容），不再只是一個 `failed` 標籤。
   - 中間欄 failed 題目上方有一條錯誤橫幅；span 列若有 `status_message`（Langfuse ERROR level 的
     說明）也會一併顯示。
+- **★ 新增（逐 run 設定，見 §9.15）**
+  - 按「Run eval」先開 **`RunConfigDialog`**：run 名稱（預設當下日期時間）＋ agent / Langfuse /
+    LLM 三區的端點、模型、timeout 與 concurrency，右下角才是送出。預填來自
+    `GET /run-config/defaults`；`*_IMPL=fake` 的區塊會**變灰並標示不會生效**——否則填了半天
+    卻跑出假資料是最容易踩的坑。頂端「Use config from」可挑舊 run 沿用設定。
+  - 每個 run 列右側一顆按鈕開 **`RunConfigView`**（唯讀）：該 run 當初的九項設定，加上金鑰
+    「有/無」。整個元件**沒有任何 input**，所以不會被誤認成可編輯表單。
+  - **run 列整列可點**進入詳情（原本要按 "Open" 按鈕）；checkbox 與 config 按鈕各自
+    `stopPropagation` 保留自己的行為，並補上 `role="button"` 與 Enter/Space 鍵盤支援。
 - **★ 新增（回應「太像玩具」的回饋）**：整套現代化 CSS 設計系統（陰影/圓角/字級/焦點框）、卡片
   hover 浮起、清單進場、**對話框 pop-in 動畫**、進度條 shimmer、**Toast** 提示（存檔/衝突/錯誤）；
   **light/dark 主題切換**（右上角，首次進站前套用避免閃爍，存 localStorage，預設跟隨作業系統）；
@@ -950,7 +976,8 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | 診斷 LLM | §6.9 定案 I/O 契約 | **已實作**（`DIAGNOSIS_IMPL=real`），並加上輸出驗證與 `span_index` 越界剔除 |
 | 部署形態 | 未提（只提 docker-compose 起 Postgres）| **db / backend / frontend 各一個 container**；backend 依賴用 uv、frontend 用 pnpm |
 | 錯誤處理 | 未提 | orchestrator 有完整失敗策略（§9.6），run 不會卡在 `running` |
-| 測試 | 未提 | 53 個單元測試（respx mock），不需 DB 或網路 |
+| 連線設定的作用域 | 未提（隱含是部署層級的環境變數）| **改為逐 run**：觸發時用 dialog 設定並寫入 `runs.config`/`runs.secrets`；`*_IMPL` 仍是全域主開關。金鑰只進不出，沿用舊 run 由後端複製且與端點綁定（§9.15）|
+| 測試 | 未提 | 72 個單元測試（respx mock），不需 DB 或網路 |
 
 ### 9.13 如何執行
 - 一鍵：`SEED=1 ./scripts/dev.sh`（build image → 起 Postgres → migrate → seed → 起 backend:8000 +
@@ -976,6 +1003,12 @@ per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill overri
 - **span tree 不重建**：Langfuse 回傳的 `parentObservationId` **完全未使用**，Stage 1 以
   **依 startTime 排序的平舖列表**呈現；樹狀結構留給 Stage 2 的熱點檢視。
 - **metadata 篩選/排序**：§6.10 提的首頁依 metadata key 篩選/排序尚未做。
+- **`LLM_TIMEOUT_S` 沒有逐 run 版本**：`AGENT_TIMEOUT_S` 與 `LANGFUSE_TIMEOUT_S` 都能在 run
+  config dialog 逐次調整，唯獨 LLM 的 timeout 仍是全域設定（`build_seams` 呼叫
+  `get_client_for` 時沒有傳 `timeout_s`），dialog 上也沒有這個欄位。判斷 judge/diagnosis
+  模型太慢時只能改 env 重啟。補法很小：`RunConfig` 加欄位、`run_config.defaults()` 加一行、
+  往 `get_client_for` 傳進去、dialog 加一格。
+- **run config 無法比對**：唯讀檢視一次只能看一個 run；要並排 diff 兩個 run 的設定還得自己切換。
 
 （CSV 上傳已補上——見 §9.1；惟後端仍以 JSONL 為單一寫入契約，CSV 於前端解析。）
 
@@ -1046,19 +1079,26 @@ trace。
 
 ### 9.16 測試與驗證現況
 
-**單元測試**（`backend/tests/`，53 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
-- `test_agent_client.py`：request body 的 `message` + `metadata.trace_data`（trace_id=session_id、
+**單元測試**（`backend/tests/`，72 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
+- `test_agent_client.py`（13）：request body 的 `message` + `metadata.trace_data`（trace_id=session_id、
   user_id、tags）、`{"content": str}` 回應解析（含裸 JSON 字串與純文字兩種容錯 fallback）、
   非字串/缺 `content` 視為失敗、空回答視為失敗、307 redirect 會被 follow 而非誤判為空回應
   （實測中撞到過：server 端路由是 `/execute/` 帶尾斜線時常見的 trailing-slash 307）、
-  5xx raise（交給重試）vs 4xx 直接失敗、auth header。
-- `test_langfuse_client.py`：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
+  5xx raise（交給重試）vs 4xx 直接失敗、逐 run 的 base URL / timeout 覆寫環境變數。
+- `test_langfuse_client.py`（11）：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
   分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射。
-- `test_judge_and_diagnosis.py`：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
+- `test_judge_and_diagnosis.py`（18）：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
   越界 `span_index` 剔除、§6.9 四段 prompt 的順序、JSON 修復重試（成功與放棄各一）。
-- `test_orchestrator.py`：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
+- `test_orchestrator.py`（11）：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
   judge 失敗**不**被當成 correct、診斷失敗不影響 verdict、trace store 出錯不讓題目失敗、
   非預期例外把 run 收成 failed 並送出 SSE 終止事件、重試次數上限、併發。
+- `test_run_config.py`（19）：`build_seams` 空設定等同純環境變數行為、`*_IMPL` 仍是主開關
+  （設定填了真端點也不會把 fake seam 變 real）、逐 run 值覆寫 env、空白欄位退回 env、
+  judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白欄位寫死成 env 值且
+  `defaults()` 涵蓋每個欄位；金鑰沿用的端點配對規則（端點沒變才複製、變了就丟、
+  手動輸入優先、跨 eval set 一律 404）；以及**金鑰不外流的值層級斷言**——
+  序列化一個帶哨兵金鑰的 `RunOut`，斷言兩個哨兵值都不出現在 payload 任何位置
+  （比檢查欄位名稱可靠，因為 `credentials_set` 讓 router 合法地讀到 `runs.secrets`）。
 
 **已驗證的端到端行為**
 - **fake 模式**：與真實整合加入前**行為完全相同**（卡片 3 runs / 趨勢 0.8→0.6→0.4、
@@ -1071,6 +1111,10 @@ trace。
   ⚠️ 這批 real 模式驗證是 agent server 端還是 A2A JSON-RPC 協定時做的；agent server 改成
   `POST /execute` 這個純 HTTP 契約後，尚未針對新契約重跑一次完整的 real-模式端到端驗證
   （單元測試 `test_agent_client.py` 已針對新契約重寫並通過，但 mock 端到端流程還沒有）。
+  ⚠️ **逐 run 設定（§9.15）同樣只有單元測試層級的驗證**：`build_seams` / `resolve()` /
+  金鑰配對 / 金鑰不外流都有測試涵蓋，前端也 build 過，但「開 dialog → 跑 run → 開唯讀
+  檢視 → 用『Use config from』再跑一次 → 事後看 trace」這條完整 UI 動線尚未實跑。
+  `0003_run_config` 的 migration 只用 alembic offline（`--sql`）確認過產出的 DDL 正確。
 
 > ⚠️ **尚未對接真正的服務**。上述 real 模式驗證用的是 mock，能證明 correlation 環路、
 > 失敗策略與資料流都正確；**證明不了**貴方 agent server 的 `/execute` 是否真的回
