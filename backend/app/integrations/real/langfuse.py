@@ -11,19 +11,38 @@ The NotReady contract is what makes §6.12 work: Langfuse ingestion is async, so
 a trace requested right after a run finishes may legitimately not exist yet. Zero
 observations means "not ingested yet", and the existing poll + backoff in the
 orchestrator and the view path handle the wait unchanged.
+
+Anything that is *not* that — an unreachable host, rejected credentials, a
+timeout — raises `TraceFetchError` with the host, the status code and a snippet
+of the response body, so the UI can say what actually went wrong instead of
+showing the same "still ingesting" message forever.
 """
 from __future__ import annotations
 
 import httpx
 
 from app.config import settings
-from app.integrations.base import NOT_READY, NotReady, Span, Trace
+from app.integrations.base import NOT_READY, NotReady, Span, Trace, TraceFetchError
 from app.integrations.real.llm import as_text
 
 _PAGE_LIMIT = 100
 # Stop paging even if Langfuse keeps claiming more; a single eval question should
 # never produce this many observations, and an unbounded loop here would hang a run.
 _MAX_PAGES = 20
+
+
+_ERROR_BODY_MAX_CHARS = 200
+
+
+def _body_snippet(resp: httpx.Response) -> str:
+    try:
+        text = resp.text
+    except Exception:  # noqa: BLE001 - a body we can't read is not worth failing over
+        return "<unreadable response body>"
+    text = " ".join(text.split())
+    if len(text) > _ERROR_BODY_MAX_CHARS:
+        text = text[:_ERROR_BODY_MAX_CHARS] + "…"
+    return text or "<empty response body>"
 
 
 def _token_usage(obs: dict) -> dict:
@@ -93,24 +112,36 @@ class LangfuseTraceClient:
         auth = (self.public_key, self.secret_key)
         collected: list[dict] = []
 
-        async with httpx.AsyncClient(timeout=self.timeout_s, auth=auth) as client:
-            for page in range(1, _MAX_PAGES + 1):
-                resp = await client.get(
-                    url,
-                    params={"traceId": correlation_id, "page": page, "limit": _PAGE_LIMIT},
-                )
-                resp.raise_for_status()
-                body = resp.json()
-                batch = body.get("data") or []
-                collected += [o for o in batch if isinstance(o, dict)]
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_s, auth=auth) as client:
+                for page in range(1, _MAX_PAGES + 1):
+                    resp = await client.get(
+                        url,
+                        params={"traceId": correlation_id, "page": page, "limit": _PAGE_LIMIT},
+                    )
+                    if resp.status_code >= 400:
+                        # The body is where Langfuse says *why* — "invalid
+                        # credentials", "project not found". A bare status code
+                        # sends the developer looking in the wrong place.
+                        raise TraceFetchError(
+                            f"Langfuse at {self.host} returned HTTP {resp.status_code}: "
+                            f"{_body_snippet(resp)}"
+                        )
+                    body = resp.json()
+                    batch = body.get("data") or []
+                    collected += [o for o in batch if isinstance(o, dict)]
 
-                meta = body.get("meta") or {}
-                total_pages = meta.get("totalPages")
-                if total_pages is not None:
-                    if page >= total_pages:
+                    meta = body.get("meta") or {}
+                    total_pages = meta.get("totalPages")
+                    if total_pages is not None:
+                        if page >= total_pages:
+                            break
+                    elif len(batch) < _PAGE_LIMIT:
                         break
-                elif len(batch) < _PAGE_LIMIT:
-                    break
+        except httpx.HTTPError as exc:
+            raise TraceFetchError(
+                f"Could not reach Langfuse at {self.host}: {type(exc).__name__}: {exc}"
+            ) from exc
         return collected
 
     async def fetch_trace(self, correlation_id: str) -> Trace | NotReady:

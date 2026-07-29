@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from app import orchestrator
+from app import cancellation, orchestrator
 from app.integrations import Seams
 from app.integrations.base import AgentResponse, Trace, Verdict
 from app.models import Question, QuestionResult, Run, SpanAnalysis
@@ -249,6 +249,8 @@ async def test_diagnosis_failure_leaves_the_verdict_intact(seams):
     assert result.verdict == "incorrect"
     assert not any(isinstance(o, SpanAnalysis) for o in session.added)
     assert run.status == "completed"
+    # The UI has to be able to say *why* there is no diagnosis.
+    assert "diagnosis model down" in result.diagnosis_error
 
 
 async def test_diagnosis_is_stored_for_incorrect_answers(seams):
@@ -279,6 +281,9 @@ async def test_trace_store_error_does_not_fail_the_question(seams):
     result = next(o for o in session.added if isinstance(o, QuestionResult))
     assert result.status == "done"
     assert result.trace_ready is False
+    # Recorded, not just logged: otherwise "Langfuse is unreachable" reaches the
+    # UI as the same "still ingesting" message as a trace that is seconds away.
+    assert "langfuse down" in result.trace_error
 
 
 async def test_unexpected_error_fails_the_run_instead_of_stranding_it(monkeypatch, seams):
@@ -354,3 +359,109 @@ async def test_concurrency_runs_questions_in_parallel(seams, configure):
 
     assert run.total_count == 4
     assert run.status == "completed"
+
+
+# --- The question list must exist before the first agent call ----------------
+
+async def test_all_result_rows_exist_before_the_first_agent_call(seams):
+    """The detail view lists a run's whole question set from the first second.
+
+    That only works if the orchestrator creates every question_results row up
+    front; creating them lazily made questions appear one at a time, which reads
+    as "the eval set has one question" while a slow agent thinks.
+    """
+    seen: list[int] = []
+
+    async def counting_agent(question, correlation_id):
+        seen.append(len([o for o in session.added if isinstance(o, QuestionResult)]))
+        return AgentResponse(response="a", correlation_id=correlation_id)
+
+    seams.agent = counting_agent
+    run = make_run()
+    questions = [make_question(text=f"q{i}") for i in range(3)]
+    session = StubSession(run, questions)
+
+    await orchestrator._execute_run(session, run)
+
+    assert seen == [3, 3, 3]
+
+
+# --- Cancellation ------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def clean_cancellation():
+    yield
+    cancellation._events.clear()
+
+
+async def test_cancel_before_any_question_starts_leaves_them_pending(seams):
+    run = make_run()
+    questions = [make_question(text=f"q{i}") for i in range(3)]
+    session = StubSession(run, questions)
+    collector = Collector(run.id)
+
+    cancellation.signal(run.id)
+    await orchestrator._execute_run(session, run)
+
+    results = [o for o in session.added if isinstance(o, QuestionResult)]
+    assert len(results) == 3
+    assert all(r.status == "pending" for r in results)
+    assert run.status == "cancelled"
+    # A partial run has no meaningful pass rate; scoring it would drag the eval
+    # set's trend down for a reason unrelated to the agent.
+    assert run.pass_rate is None
+    assert any(
+        e["type"] == "run_completed" and e.get("status") == "cancelled"
+        for e in collector.drain()
+    )
+    collector.close()
+
+
+async def test_cancel_abandons_the_in_flight_agent_call(seams):
+    """Stop means stop. Waiting for the current question to return would make it
+    "stop in up to AGENT_TIMEOUT_S" against a real agent."""
+    run = make_run()
+    questions = [make_question(text=f"q{i}") for i in range(2)]
+    session = StubSession(run, questions)
+
+    async def hanging_agent(question, correlation_id):
+        cancellation.signal(run.id)  # someone hits stop while this call is open
+        await asyncio.sleep(30)
+        return AgentResponse(response="never", correlation_id=correlation_id)
+
+    seams.agent = hanging_agent
+
+    # The timeout is the assertion: without the race this would sit for 30s.
+    await asyncio.wait_for(orchestrator._execute_run(session, run), timeout=2.0)
+
+    results = [o for o in session.added if isinstance(o, QuestionResult)]
+    assert [r.status for r in results] == ["cancelled", "pending"]
+    assert "cancelled" in results[0].error_message.lower()
+    assert run.status == "cancelled"
+    assert run.pass_rate is None
+
+
+async def test_cancel_after_judging_keeps_the_verdict(seams):
+    """A judged question is a finished question — its cost is already paid, so
+    cancellation skips the extras rather than discarding the result."""
+    run = make_run()
+    questions = [make_question()]
+    session = StubSession(run, questions)
+
+    async def judge_then_cancel(question, response, ground_truth):
+        verdict = Verdict(verdict="incorrect", score=0.2, comment="nope")
+        cancellation.signal(run.id)
+        return verdict
+
+    async def ready(correlation_id):
+        raise AssertionError("trace must not be polled after cancellation")
+
+    seams.judge, seams.trace = judge_then_cancel, ready
+
+    await orchestrator._execute_run(session, run)
+
+    result = next(o for o in session.added if isinstance(o, QuestionResult))
+    assert result.status == "done"
+    assert result.verdict == "incorrect"
+    assert not any(isinstance(o, SpanAnalysis) for o in session.added)
+    assert run.status == "cancelled"

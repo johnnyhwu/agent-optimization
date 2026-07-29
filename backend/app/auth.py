@@ -35,7 +35,10 @@ def current_subject(
     return (x_user_subject or subject or settings.fake_user_subject).strip()
 
 
-async def _role_for(session: AsyncSession, eval_set_id: uuid.UUID, subject: str) -> str | None:
+async def role_for(session: AsyncSession, eval_set_id: uuid.UUID, subject: str) -> str | None:
+    """The caller's role on one eval set, or None. Public because a couple of
+    endpoints (run cancel) need a rule the two guards below don't express:
+    "owner, or the person who started this run"."""
     row = await session.scalar(
         select(EvalSetRole.role).where(
             EvalSetRole.eval_set_id == eval_set_id,
@@ -51,7 +54,7 @@ async def require_reader(
     session: AsyncSession = Depends(get_session),
 ) -> str:
     """owner or viewer may read (and trigger runs)."""
-    role = await _role_for(session, eval_set_id, subject)
+    role = await role_for(session, eval_set_id, subject)
     if role not in ("owner", "viewer"):
         raise HTTPException(status_code=403, detail="no access to this eval set")
     return subject
@@ -63,7 +66,7 @@ async def require_owner(
     session: AsyncSession = Depends(get_session),
 ) -> str:
     """Only owner may write / delete / re-diagnose."""
-    role = await _role_for(session, eval_set_id, subject)
+    role = await role_for(session, eval_set_id, subject)
     if role != "owner":
         raise HTTPException(status_code=403, detail="owner role required for this action")
     return subject

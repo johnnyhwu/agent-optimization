@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from app.integrations.base import NotReady
+from app.integrations.base import NotReady, TraceFetchError
 from app.integrations.real.langfuse import LangfuseTraceClient, observation_to_span
 
 HOST = "https://langfuse.test"
@@ -143,3 +143,38 @@ def test_error_level_maps_to_error_status_with_message():
 def test_structured_input_is_rendered_as_text():
     span = observation_to_span(_obs(input={"query": "select 1"}), 0)
     assert "select 1" in span.input
+
+
+# --- Failures must be distinguishable from "not ingested yet" ----------------
+
+@respx.mock
+async def test_rejected_credentials_raise_with_the_reason(client):
+    """A 401 used to surface as the same "trace is generating" banner as async
+    ingestion, so a wrong key looked like a trace that was always seconds away."""
+    respx.get(OBS_URL).mock(
+        return_value=httpx.Response(401, json={"message": "invalid credentials"})
+    )
+    with pytest.raises(TraceFetchError) as exc:
+        await client.fetch_trace("corr")
+    message = str(exc.value)
+    assert HOST in message          # which Langfuse
+    assert "401" in message         # what it said
+    assert "invalid credentials" in message  # and why
+
+
+@respx.mock
+async def test_unreachable_host_raises_rather_than_looking_empty(client):
+    respx.get(OBS_URL).mock(side_effect=httpx.ConnectError("nodename nor servname"))
+    with pytest.raises(TraceFetchError) as exc:
+        await client.fetch_trace("corr")
+    assert HOST in str(exc.value)
+    assert "ConnectError" in str(exc.value)
+
+
+@respx.mock
+async def test_error_body_is_truncated(client):
+    respx.get(OBS_URL).mock(return_value=httpx.Response(500, text="x" * 5000))
+    with pytest.raises(TraceFetchError) as exc:
+        await client.fetch_trace("corr")
+    # A 5 KB HTML error page is not a UI message.
+    assert len(str(exc.value)) < 400

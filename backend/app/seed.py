@@ -19,10 +19,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.integrations.fake import build_fake_trace
+from app.integrations.fake import NOT_READY_MARKER, build_fake_trace
 from app.models import (
     EvalSet,
     EvalSetRole,
@@ -32,6 +32,7 @@ from app.models import (
     Run,
     SpanAnalysis,
 )
+from app.services.deletion import delete_eval_set
 
 SET_NAME = "Billing Agent Regression Suite"
 OWNER = "alice"
@@ -118,37 +119,10 @@ async def seed() -> None:
         old_ids = (
             await session.scalars(select(EvalSet.id).where(EvalSet.name == SET_NAME))
         ).all()
-        if old_ids:
-            # question_results.question_pk -> questions.id has no ON DELETE CASCADE
-            # (the app never deletes questions from a locked set), so clean up
-            # children explicitly in FK-safe order rather than relying on cascade.
-            run_ids = (
-                await session.scalars(select(Run.id).where(Run.eval_set_id.in_(old_ids)))
-            ).all()
-            q_ids = (
-                await session.scalars(select(Question.id).where(Question.eval_set_id.in_(old_ids)))
-            ).all()
-            if run_ids:
-                qr_ids = (
-                    await session.scalars(
-                        select(QuestionResult.id).where(QuestionResult.run_id.in_(run_ids))
-                    )
-                ).all()
-                if qr_ids:
-                    await session.execute(
-                        delete(SpanAnalysis).where(SpanAnalysis.question_result_id.in_(qr_ids))
-                    )
-                await session.execute(
-                    delete(QuestionResult).where(QuestionResult.run_id.in_(run_ids))
-                )
-            if q_ids:
-                await session.execute(
-                    delete(QuestionSkill).where(QuestionSkill.question_pk.in_(q_ids))
-                )
-            await session.execute(delete(Run).where(Run.eval_set_id.in_(old_ids)))
-            await session.execute(delete(Question).where(Question.eval_set_id.in_(old_ids)))
-            await session.execute(delete(EvalSetRole).where(EvalSetRole.eval_set_id.in_(old_ids)))
-            await session.execute(delete(EvalSet).where(EvalSet.id.in_(old_ids)))
+        # FK-safe ordering lives in services/deletion.py (question_results ->
+        # questions has no ON DELETE CASCADE, so cascade alone is not enough).
+        for old_id in old_ids:
+            await delete_eval_set(session, old_id)
         await session.commit()
 
         es = EvalSet(
@@ -194,10 +168,14 @@ async def seed() -> None:
             await session.flush()
 
             for qid, is_correct in verdicts.items():
-                cid = f"seed-{run_no}-{qid}"
                 verdict = "correct" if is_correct else "incorrect"
                 # Newest run's Q3 demonstrates the trace-not-ready "generating" UI.
                 generating = (run_no == len(RUN_VERDICTS) - 1 and qid == "q_emea03")
+                # The view path retries the trace store rather than trusting
+                # trace_ready, so the marker (not the flag) is what keeps this
+                # question stuck in "generating" for the demo.
+                cid = f"seed-{NOT_READY_MARKER}-{run_no}-{qid}" if generating \
+                    else f"seed-{run_no}-{qid}"
                 qr = QuestionResult(
                     run_id=run.id, question_pk=qmap[qid].id, correlation_id=cid,
                     verdict=verdict,

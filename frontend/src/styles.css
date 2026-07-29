@@ -120,6 +120,14 @@ button.ghost:hover { background: var(--panel-2); border-color: transparent; box-
   color: var(--muted);
 }
 .icon-btn:hover { background: var(--panel-2); color: var(--text); box-shadow: none; }
+/* Destructive actions announce themselves on hover rather than shouting at rest —
+   a row of permanently red icons reads as an error state. */
+.icon-btn.danger-btn:hover { background: var(--red-soft); color: var(--red); }
+button.danger {
+  background: var(--red); border-color: transparent; color: #fff;
+  box-shadow: 0 2px 8px var(--red-soft);
+}
+button.danger:hover { border-color: transparent; box-shadow: 0 6px 18px var(--red-soft); }
 
 input, textarea, select {
   width: 100%; font: inherit; color: var(--text);
@@ -185,10 +193,14 @@ select { cursor: pointer; }
   animation: fadeInUp 0.5s var(--ease) both;
 }
 .card:hover { transform: translateY(-4px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
-.card h3 { margin: 0 0 4px; font-size: 16px; }
+/* Room for the hover actions (gear + trash) so a long name doesn't run under them. */
+.card h3 { margin: 0 0 4px; font-size: 16px; padding-right: 58px; }
 .card .meta { color: var(--muted); font-size: 12px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
-.card .cfg-btn { position: absolute; top: 12px; right: 12px; opacity: 0; transition: opacity 0.15s; }
-.card:hover .cfg-btn { opacity: 1; }
+.card-actions {
+  position: absolute; top: 12px; right: 12px; display: flex; gap: 2px;
+  opacity: 0; transition: opacity 0.15s;
+}
+.card:hover .card-actions, .card-actions:focus-within { opacity: 1; }
 .card .stats { display: flex; gap: 20px; align-items: flex-end; }
 .stat .num { font-size: 24px; font-weight: 700; line-height: 1; }
 .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; }
@@ -223,6 +235,7 @@ select { cursor: pointer; }
 .pill.completed { color: var(--green); border-color: var(--green); background: var(--green-soft); }
 .pill.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .pill.failed { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+.pill.cancelled { color: var(--muted); border-color: var(--border-strong); background: var(--panel-2); }
 
 .toolbar {
   display: flex; gap: 10px; align-items: center; margin: 14px 0;
@@ -233,6 +246,30 @@ select { cursor: pointer; }
 .segmented button { border: none; background: transparent; border-radius: 999px; padding: 5px 12px; box-shadow: none; color: var(--muted); font-size: 13px; }
 .segmented button:hover { box-shadow: none; background: transparent; color: var(--text); }
 .segmented button.active { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
+.segmented.sm button { padding: 4px 10px; font-size: 12px; }
+.segmented.sm .count {
+  margin-left: 6px; font-variant-numeric: tabular-nums; font-size: 11px;
+  padding: 0 6px; border-radius: 999px; background: var(--panel-3); color: var(--muted);
+}
+.segmented.sm button.active .count { background: var(--accent-soft); color: var(--accent); }
+
+/* ---- run status (above the three columns) ---- */
+.runstatus {
+  margin: 0 0 12px; padding: 12px 16px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-1);
+}
+.runstatus-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.runstatus-nums { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13px; }
+.runstatus-nums .sep { color: var(--border-strong); }
+.runstatus-nums strong { font-variant-numeric: tabular-nums; }
+.runstatus-nums .failedcount { color: var(--red); }
+.stackbar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--panel-3); }
+.stackbar .s { transition: width 0.4s var(--ease); }
+.stackbar .s.correct { background: var(--green); }
+.stackbar .s.incorrect { background: var(--red); }
+.stackbar .s.failed { background: var(--muted); }
+.stackbar .s.answered { background: var(--accent); }
+.stackbar .s.pending { background: transparent; }
 
 /* ---- three-column detail ---- */
 .detail-meta { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
@@ -244,17 +281,46 @@ select { cursor: pointer; }
   background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px); z-index: 1;
   display: flex; align-items: center; justify-content: space-between;
 }
-.qitem { padding: 11px 16px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; gap: 10px; transition: background 0.12s; }
+/* Column header: title on the left, filter on the right. Sticky so the filter
+   stays reachable in a long question list. */
+.col-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1;
+  background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px);
+}
+.col-head h4 { margin: 0; padding: 0; border: none; background: none; backdrop-filter: none; position: static; }
+
+.qitem { padding: 11px 16px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; gap: 10px; transition: background 0.12s, opacity 0.25s; }
 .qitem:hover { background: var(--panel-2); }
 .qitem.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.qitem .grow { min-width: 0; flex: 1; }
+.qitem .qtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Not started yet: present in the list (so the run's size is visible from the
+   first second) but visibly not carrying a result. */
+.qitem.pending { opacity: 0.55; }
+.qitem.cancelled { opacity: 0.7; }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 3px transparent; }
 .dot.correct { background: var(--green); }
 .dot.incorrect { background: var(--red); }
-.dot.failed { background: var(--muted); }
+.dot.failed { background: var(--red); opacity: 0.55; }
+.dot.cancelled { background: var(--muted); }
+.dot.pending { background: var(--border-strong); animation: pulse 1.6s ease-in-out infinite; }
+/* Answered, awaiting the judge: a hollow dot — something happened, nothing has
+   been decided. */
+.dot.answered { background: transparent; border: 2px solid var(--accent); }
 .qitem .qid { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.qphase { font-weight: 600; }
+.qphase.pending { color: var(--muted); }
+.qphase.answered { color: var(--accent); }
+.qphase.failed, .qphase.cancelled { color: var(--red); }
 .qitem .qerror { font-size: 11px; color: var(--red); margin-top: 2px; line-height: 1.35; }
 
 .banner { margin: 12px 16px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 13px; animation: fadeIn 0.3s var(--ease) both; }
+.banner .banner-detail {
+  margin-top: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px; line-height: 1.45; word-break: break-word;
+}
 .banner.diagnosis { background: var(--panel-2); border: 1px solid var(--border); }
 .banner.caveat { background: var(--amber-soft); border: 1px solid var(--amber); color: var(--text); }
 .banner.caveat strong { color: var(--amber); }
@@ -401,6 +467,7 @@ select { cursor: pointer; }
 @keyframes slideInRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .spin { animation: spin 0.9s linear infinite; }
 
 @media (prefers-reduced-motion: reduce) {

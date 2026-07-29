@@ -2,12 +2,20 @@ import React from "react";
 
 // Middle column (§6.13): top overall_diagnosis + caveat banner, then the vertical
 // span list with suspects marked (confidence high/med/low). Distinguishes
-// "generating (retrying)" from "no trace" (§6.12 / §7.1 #5).
-export default function SpanList({ trace, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing }) {
+// "generating (retrying)" from "no trace" (§6.12 / §7.1 #5) — and from "the trace
+// store rejected us", which used to be shown as "generating" forever.
+export default function SpanList({
+  trace, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing, onRetryTrace,
+}) {
   if (!trace) return <div className="col"><h4>Trace</h4><div className="notflagged">Select a question.</div></div>;
 
   const suspectByIndex = {};
   (trace.analysis?.suspects || []).forEach((s) => (suspectByIndex[s.span_index] = s));
+  const reDiagnoseButton = canReDiagnose ? (
+    <button onClick={onReDiagnose} disabled={reDiagnosing}>
+      {reDiagnosing ? "Re-diagnosing…" : "↻ Re-diagnose"}
+    </button>
+  ) : null;
 
   return (
     <div className="col">
@@ -37,10 +45,33 @@ export default function SpanList({ trace, activeSpan, onPickSpan, canReDiagnose,
         <div className="banner error-banner">✕ This question failed: {trace.error_message}</div>
       )}
 
+      {/* The whole point of separating this from "generating": a wrong host or a
+          rejected key is a thing the developer must go and fix, not wait out. */}
+      {trace.trace_state === "error" && (
+        <div className="banner error-banner">
+          <strong>✕ Could not load the trace.</strong>
+          <div className="banner-detail">{trace.trace_error}</div>
+          {onRetryTrace && (
+            <div style={{ marginTop: 8 }}>
+              <button onClick={onRetryTrace}>↻ Retry</button>
+            </div>
+          )}
+        </div>
+      )}
       {trace.trace_state === "generating" && (
         <div className="banner generating">
           ⏳ Trace is generating (Langfuse ingestion is async — retrying). This is not
           "no trace"; check back shortly.
+          {trace.trace_error && (
+            <div className="banner-detail">
+              Last attempt during the run failed: {trace.trace_error}
+            </div>
+          )}
+          {onRetryTrace && (
+            <div style={{ marginTop: 8 }}>
+              <button onClick={onRetryTrace}>↻ Retry</button>
+            </div>
+          )}
         </div>
       )}
       {trace.trace_state === "no_trace" && (
@@ -51,18 +82,28 @@ export default function SpanList({ trace, activeSpan, onPickSpan, canReDiagnose,
         <>
           <div className="banner diagnosis">
             <strong>Diagnosis (clue, not a verdict):</strong> {trace.analysis.overall_diagnosis}
-            {canReDiagnose && (
-              <div style={{ marginTop: 8 }}>
-                <button onClick={onReDiagnose} disabled={reDiagnosing}>
-                  {reDiagnosing ? "Re-diagnosing…" : "↻ Re-diagnose"}
-                </button>
-              </div>
-            )}
+            {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
           </div>
           {trace.analysis.caveat && (
             <div className="banner caveat">⚠ Caveat: {trace.analysis.caveat}</div>
           )}
         </>
+      )}
+      {/* An undiagnosed incorrect question used to look identical whether the
+          model errored or was never asked. */}
+      {!trace.analysis && trace.diagnosis_error && (
+        <div className="banner error-banner">
+          <strong>✕ Diagnosis failed.</strong>
+          <div className="banner-detail">{trace.diagnosis_error}</div>
+          {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
+        </div>
+      )}
+      {trace.trace_state === "ready" && !trace.analysis && !trace.diagnosis_error &&
+        trace.verdict === "incorrect" && reDiagnoseButton && (
+        <div className="banner diagnosis">
+          No diagnosis stored for this question yet.
+          <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>
+        </div>
       )}
       {trace.trace_state === "ready" && !trace.analysis && trace.verdict === "correct" && (
         <div className="banner diagnosis muted">Correct answer — no diagnosis generated.</div>

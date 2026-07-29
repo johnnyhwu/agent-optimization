@@ -126,8 +126,13 @@ Notes:
 - A question that fails (agent unreachable, judge unparseable, timeout) is
   recorded as `failed` **with the reason**, and the run continues and completes —
   it is never left hanging in `running`.
-- A diagnosis failure never fails the question; the verdict stands and the owner
-  can retry from the UI.
+- A diagnosis failure never fails the question; the verdict stands, the reason is
+  recorded on the question, and the owner can retry from the UI.
+- **Integration failures are shown in the UI, not only in the backend log.** A
+  Langfuse host that is unreachable or rejects its key shows as a red banner on
+  the trace with the host, the status code and the server's own message — the
+  "trace is generating" banner now means only what it says. Likewise a failed
+  judge call appears on the question, and a failed diagnosis in the middle column.
 - `RUN_CONCURRENCY` defaults to 1 (strictly sequential) and is the default for
   the dialog's **Concurrency** field, which sets it per run.
 - `AGENT_TIMEOUT_S` and `LANGFUSE_TIMEOUT_S` are settable per run; `LLM_TIMEOUT_S`
@@ -157,9 +162,21 @@ Notes:
   **locked** after creation (edit only, no add/delete). Editing keeps
   `question_id` and bumps `version`; a stale version returns **409**.
 - **Live run + partial completion:** "▶ Run eval" opens the config dialog
-  (prefilled from the environment; seams still set to `fake` are greyed out),
-  then streams progress over SSE. A question whose text contains the `⟦timeout⟧`
-  marker fails while the run finishes (partial completion).
+  (prefilled from the environment; seams still set to `fake` are greyed out) and
+  then drops you straight into the run's detail view. Every question is listed
+  from the first second — grey while it waits, plain once the agent has answered,
+  green/red once judged — with a percentage bar above the columns. A question
+  whose text contains the `⟦timeout⟧` marker fails while the run finishes
+  (partial completion).
+- **Stopping a run:** "Stop run" in the detail view, or the stop button on a
+  running row in the run history. It abandons the in-flight agent call rather
+  than waiting for it, keeps every question already judged, and leaves the rest
+  `pending`; the run ends as `cancelled` with no pass rate (a partial run's
+  pass rate would distort the eval set's trend). An owner may stop any run;
+  a viewer may stop the ones they started.
+- **Deleting:** owners get a trash button on each eval-set card and on each
+  finished run, both behind a confirmation that spells out what else goes. A run
+  still executing offers stop instead — cancel it first.
 - **Per-run config:** each run row has a button showing, read-only, the settings
   that run used. Click a row anywhere to open the run itself; the checkbox and
   the config button keep their own clicks.
@@ -173,6 +190,7 @@ Notes:
 | App DB schema (§6.14), the 7 tables | `backend/alembic/versions/0001_stage1_schema.py` |
 | Columns the real integrations need | `backend/alembic/versions/0002_real_integration.py` |
 | Per-run config columns (`name`/`config`/`secrets`) | `backend/alembic/versions/0003_run_config.py` |
+| Cancellation flag + the two error columns | `backend/alembic/versions/0004_run_lifecycle.py` |
 | ORM models | `backend/app/models.py` |
 | **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
 | **Fake impls** (each `# REPLACE WITH REAL IMPL`) | `backend/app/integrations/fake.py` |
@@ -184,6 +202,8 @@ Notes:
 | Integration preflight | `backend/app/check_integrations.py` |
 | **All latency values, one file** | `backend/app/fake_config.py` |
 | Orchestrator (§6.15) | `backend/app/orchestrator.py` |
+| Run cancellation signal (durable flag + in-process event) | `backend/app/cancellation.py` |
+| FK-safe delete order (run / eval set) | `backend/app/services/deletion.py` |
 | Optimistic-lock 409 (§6.16) | `backend/app/routers/eval_sets.py`, `questions.py` |
 | Roles / fake login (§6.16) | `backend/app/auth.py` |
 | §6.7 body truncation | `backend/app/services/truncation.py` |

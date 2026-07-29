@@ -48,6 +48,7 @@ export const api = {
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
   createEvalSet: (payload) => req("POST", "/eval-sets", payload),
   updateEvalSet: (id, payload) => req("PATCH", `/eval-sets/${id}`, payload),
+  deleteEvalSet: (id) => req("DELETE", `/eval-sets/${id}`),
   updateRoles: (id, shares) => req("PUT", `/eval-sets/${id}/roles`, { shares }),
   metadataKeys: () => req("GET", "/eval-sets/metadata/keys"),
   listQuestions: (id) => req("GET", `/eval-sets/${id}/questions`),
@@ -57,6 +58,8 @@ export const api = {
   // Env-derived prefill for the run-config dialog + which seams are live.
   runConfigDefaults: () => req("GET", "/run-config/defaults"),
   triggerRun: (id, payload) => req("POST", `/eval-sets/${id}/runs`, payload),
+  cancelRun: (id, runId) => req("POST", `/eval-sets/${id}/runs/${runId}/cancel`),
+  deleteRun: (id, runId) => req("DELETE", `/eval-sets/${id}/runs/${runId}`),
   results: (id, runIds, mode, lastN) => {
     const qs = new URLSearchParams();
     runIds.forEach((r) => qs.append("run_ids", r));

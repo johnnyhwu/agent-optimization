@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { api, getSubject } from "../api.js";
 import RunProgress from "./RunProgress.jsx";
 import QuestionEditor from "./QuestionEditor.jsx";
 import RunConfigDialog from "./RunConfigDialog.jsx";
 import RunConfigView from "./RunConfigView.jsx";
+import ConfirmDialog from "./ConfirmDialog.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconPlay, IconGear, IconFileText } from "./icons.jsx";
+import { IconPlay, IconGear, IconFileText, IconStop, IconTrash } from "./icons.jsx";
 
 const MODES = [
   ["union", "Union"],
@@ -22,10 +23,11 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const [selected, setSelected] = useState([]);
   const [mode, setMode] = useState("union");
   const [lastN, setLastN] = useState(2);
-  const [activeRun, setActiveRun] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
   const [showRunConfig, setShowRunConfig] = useState(false);
   const [viewConfigRun, setViewConfigRun] = useState(null);
+  const [deleteRun, setDeleteRun] = useState(null);
+  const subject = getSubject();
 
   function load() {
     setError(null);
@@ -42,10 +44,32 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
     setError(null);
     const run = await api.triggerRun(evalSet.id, payload);
     setShowRunConfig(false);
-    setActiveRun(run.id);
     toast.info("Run started");
+    // Straight into the detail view: that is where the live question list is,
+    // and watching a run is the reason anyone starts one.
+    onOpenRuns([run.id], "union", 2);
+  }
+
+  async function cancel(run) {
+    try {
+      await api.cancelRun(evalSet.id, run.id);
+      toast.info("Cancelling run…");
+      load();
+    } catch (e) {
+      toast.error(e.message);
+    }
+  }
+
+  async function confirmDelete() {
+    await api.deleteRun(evalSet.id, deleteRun.id);
+    setSelected((s) => s.filter((x) => x !== deleteRun.id));
+    setDeleteRun(null);
+    toast.success("Run deleted");
     load();
   }
+
+  // A viewer may trigger a run (§6.16), so they must be able to stop it.
+  const canCancel = (r) => myRole === "owner" || r.triggered_by === subject;
 
   return (
     <div>
@@ -67,7 +91,19 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
       </div>
       {error && <div className="error">{error}</div>}
 
-      {activeRun && <RunProgress evalSetId={evalSet.id} runId={activeRun} onDone={load} />}
+      {/* Driven by the run list rather than by "did I start it in this tab", so
+          coming back to this page mid-run still shows where the run is. */}
+      {(runs || [])
+        .filter((r) => r.status === "running")
+        .map((r) => (
+          <RunProgress
+            key={r.id}
+            evalSetId={evalSet.id}
+            runId={r.id}
+            label={r.name || new Date(r.started_at).toLocaleString()}
+            onDone={load}
+          />
+        ))}
 
       <div className="toolbar">
         <span className="muted">Incorrect mode</span>
@@ -127,7 +163,9 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
                 {r.name && ` · ${new Date(r.started_at).toLocaleString()}`}
               </div>
             </div>
-            <span className={`pill ${r.status}`}>{r.status}</span>
+            <span className={`pill ${r.status}`}>
+              {r.status === "running" && r.cancel_requested ? "cancelling" : r.status}
+            </span>
             <div style={{ width: 96, textAlign: "right", fontWeight: 600 }}>
               {r.pass_rate === null ? "—" : `${Math.round(r.pass_rate * 100)}% pass`}
             </div>
@@ -140,6 +178,31 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
             >
               <IconFileText size={16} />
             </button>
+            {/* A run in flight offers stop; only a finished one offers delete. */}
+            {r.status === "running" ? (
+              canCancel(r) && (
+                <button
+                  className="icon-btn danger-btn"
+                  aria-label="Cancel run"
+                  title="Stop this run"
+                  disabled={r.cancel_requested}
+                  onClick={(e) => { e.stopPropagation(); cancel(r); }}
+                >
+                  <IconStop size={14} />
+                </button>
+              )
+            ) : (
+              myRole === "owner" && (
+                <button
+                  className="icon-btn danger-btn"
+                  aria-label="Delete run"
+                  title="Delete this run"
+                  onClick={(e) => { e.stopPropagation(); setDeleteRun(r); }}
+                >
+                  <IconTrash size={16} />
+                </button>
+              )
+            )}
           </div>
         ))}
 
@@ -153,6 +216,16 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
       )}
       {viewConfigRun && (
         <RunConfigView run={viewConfigRun} onClose={() => setViewConfigRun(null)} />
+      )}
+      {deleteRun && (
+        <ConfirmDialog
+          title="Delete this run?"
+          message={`“${deleteRun.name || new Date(deleteRun.started_at).toLocaleString()}” and everything recorded for it will be removed.`}
+          detail="Its per-question results and stored diagnoses go with it. Other runs in this eval set are untouched."
+          confirmLabel="Delete run"
+          onConfirm={confirmDelete}
+          onClose={() => setDeleteRun(null)}
+        />
       )}
     </div>
   );

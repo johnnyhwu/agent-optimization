@@ -62,6 +62,16 @@ class NotReady:
 NOT_READY = NotReady()
 
 
+class TraceFetchError(RuntimeError):
+    """The trace store could not be reached or refused the request.
+
+    Deliberately distinct from `NotReady`: "your Langfuse host is wrong" and
+    "ingestion hasn't landed yet" produce the same empty result otherwise, and
+    collapsing them is what makes a misconfigured deployment look like a trace
+    that is perpetually seconds away.
+    """
+
+
 # --- Protocols (the swappable seams) ----------------------------------------
 
 @runtime_checkable

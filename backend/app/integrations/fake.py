@@ -33,6 +33,10 @@ from app.integrations.base import (
 # TRACE_NOT_READY_POLLS calls per correlation_id (simulates async ingestion).
 _poll_counts: dict[str, int] = {}
 
+# A correlation id containing this never becomes ready — the seed uses it to keep
+# the "trace is generating" UI state reachable.
+NOT_READY_MARKER = "notready"
+
 
 def _rng(seed: str) -> random.Random:
     h = int(hashlib.sha256(seed.encode()).hexdigest(), 16)
@@ -127,6 +131,11 @@ class FakeTraceClient:
     # ingestion lands (§6.12).
     async def fetch_trace(self, correlation_id: str) -> Trace | NotReady:
         await asyncio.sleep(fc.TRACE_FETCH_LATENCY_S)
+        # A correlation id the seed marks as permanently un-ingested, so the
+        # "trace is generating" state stays demonstrable now that the view path
+        # retries instead of trusting the stored trace_ready flag.
+        if NOT_READY_MARKER in correlation_id:
+            return NOT_READY
         count = _poll_counts.get(correlation_id, 0)
         _poll_counts[correlation_id] = count + 1
         if count < fc.TRACE_NOT_READY_POLLS:

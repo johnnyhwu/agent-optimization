@@ -111,7 +111,12 @@ class Run(Base):
     secrets: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
-    status: Mapped[str] = mapped_column(Text, nullable=False)  # running|completed|failed
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # running|completed|failed|cancelled
+    # Set by POST /runs/{id}/cancel. Persisted rather than in-memory only, so a
+    # run that was stopped still reads as stopped after a backend restart.
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pass_rate: Mapped[float | None] = mapped_column(Numeric, nullable=True)
@@ -146,11 +151,18 @@ class QuestionResult(Base):
     verdict: Mapped[str | None] = mapped_column(Text, nullable=True)  # correct|incorrect
     judge_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     judge_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(Text, nullable=False)  # pending|done|failed
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # pending|done|failed|cancelled
     # Why status='failed' (agent error, judge error, timeout, ...).
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trace_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # Why the trace could not be fetched (Langfuse unreachable / 401 / timeout).
+    # Distinguishes a misconfigured trace store from ingestion that simply hasn't
+    # landed yet — the UI shows the same "generating" state for both otherwise.
+    trace_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why the diagnosis LLM call failed. A failed diagnosis never fails the
+    # question (the verdict is the result), but it must not be invisible either.
+    diagnosis_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
 
     run: Mapped["Run"] = relationship(back_populates="results")

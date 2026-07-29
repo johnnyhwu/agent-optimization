@@ -3,21 +3,33 @@ import { api } from "../api.js";
 import Sparkline from "./Sparkline.jsx";
 import UploadDialog from "./UploadDialog.jsx";
 import ConfigDialog from "./ConfigDialog.jsx";
-import { IconGear, IconUpload, IconUsers } from "./icons.jsx";
+import ConfirmDialog from "./ConfirmDialog.jsx";
+import { useToast } from "./Toast.jsx";
+import { IconGear, IconTrash, IconUpload, IconUsers } from "./icons.jsx";
 
 // Top tier (§6.13): one card per eval set — run count, latest pass rate, trend
-// sparkline, regression summary. Owners get a config gear to edit the card.
+// sparkline, regression summary. Owners get a config gear to edit the card and a
+// trash button to delete it.
 export default function EvalSetList({ onOpen, subject }) {
+  const toast = useToast();
   const [sets, setSets] = useState(null);
   const [error, setError] = useState(null);
   const [showUpload, setShowUpload] = useState(false);
   const [configSet, setConfigSet] = useState(null);
+  const [deleteSet, setDeleteSet] = useState(null);
 
   function load() {
     setError(null);
     api.listEvalSets().then(setSets).catch((e) => setError(e.message));
   }
   useEffect(load, []);
+
+  async function confirmDelete() {
+    await api.deleteEvalSet(deleteSet.id);
+    setDeleteSet(null);
+    toast.success(`Deleted “${deleteSet.name}”`);
+    load();
+  }
 
   return (
     <div>
@@ -43,14 +55,24 @@ export default function EvalSetList({ onOpen, subject }) {
             return (
               <div className="card" key={s.id} style={{ animationDelay: `${i * 50}ms` }} onClick={() => onOpen(s)}>
                 {s.my_role === "owner" && (
-                  <button
-                    className="icon-btn cfg-btn"
-                    aria-label="Configure"
-                    title="Configure"
-                    onClick={(e) => { e.stopPropagation(); setConfigSet(s); }}
-                  >
-                    <IconGear size={16} />
-                  </button>
+                  <div className="card-actions">
+                    <button
+                      className="icon-btn"
+                      aria-label="Configure"
+                      title="Configure"
+                      onClick={(e) => { e.stopPropagation(); setConfigSet(s); }}
+                    >
+                      <IconGear size={16} />
+                    </button>
+                    <button
+                      className="icon-btn danger-btn"
+                      aria-label="Delete eval set"
+                      title="Delete eval set"
+                      onClick={(e) => { e.stopPropagation(); setDeleteSet(s); }}
+                    >
+                      <IconTrash size={16} />
+                    </button>
+                  </div>
                 )}
                 <h3>{s.name}</h3>
                 <div className="meta">
@@ -102,6 +124,20 @@ export default function EvalSetList({ onOpen, subject }) {
           subject={subject}
           onClose={() => setConfigSet(null)}
           onSaved={() => { setConfigSet(null); load(); }}
+        />
+      )}
+      {deleteSet && (
+        <ConfirmDialog
+          title={`Delete “${deleteSet.name}”?`}
+          message="The eval set, its questions and every run recorded against it are removed. This cannot be undone."
+          detail={
+            deleteSet.run_count
+              ? `${deleteSet.run_count} run${deleteSet.run_count === 1 ? "" : "s"} — with their results and diagnoses — will be deleted too.`
+              : "No runs have been recorded against this set yet."
+          }
+          confirmLabel="Delete eval set"
+          onConfirm={confirmDelete}
+          onClose={() => setDeleteSet(null)}
         />
       )}
     </div>
