@@ -88,10 +88,54 @@ class QuestionUpdate(BaseModel):
 
 # --- Runs / results ---------------------------------------------------------
 
+class RunConfig(BaseModel):
+    """The non-secret settings a run is triggered with (§9.2 seams).
+
+    Every field is optional: a blank value means "use the environment", which is
+    what keeps the seeded fake demo runnable from an empty form. Defaults are
+    served to the UI by GET /run-config/defaults rather than baked in here, so
+    the form and the fallback always agree.
+    """
+
+    agent_base_url: str = ""
+    agent_timeout_s: float | None = None
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_timeout_s: float | None = None
+    llm_base_url: str = ""
+    judge_model: str = ""
+    diagnosis_model: str = ""
+    # How many questions are sent to the agent at once.
+    concurrency: int | None = Field(default=None, ge=1)
+
+
+class RunSecrets(BaseModel):
+    """Credentials for one run. Inbound only — no response model carries these."""
+
+    langfuse_secret_key: str = ""
+    llm_api_key: str = ""
+
+
+class RunCreate(BaseModel):
+    """Body of POST /eval-sets/{id}/runs."""
+
+    name: str | None = None
+    config: RunConfig = Field(default_factory=RunConfig)
+    secrets: RunSecrets = Field(default_factory=RunSecrets)
+    # Borrow the credentials of an earlier run instead of retyping them. They are
+    # copied server-side and never travel to the browser; a credential is only
+    # copied when its paired endpoint is unchanged (see routers/runs.py).
+    reuse_secrets_from_run_id: uuid.UUID | None = None
+
+
 class RunOut(BaseModel):
     id: uuid.UUID
     eval_set_id: uuid.UUID
     triggered_by: str
+    name: str | None = None
+    # Non-secret settings only: RunConfig has no credential fields, so this can
+    # never carry one outward.
+    config: RunConfig = Field(default_factory=RunConfig)
     status: str
     started_at: datetime
     completed_at: datetime | None

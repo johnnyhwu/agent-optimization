@@ -32,7 +32,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.integrations import agent_client, diagnosis_client, judge_client, trace_client
+from app.integrations import Seams, build_seams
 from app.integrations.base import NotReady
 from app.models import EvalSet, Question, QuestionResult, Run, SpanAnalysis
 from app.sse import hub
@@ -65,7 +65,7 @@ async def _with_retries(coro_factory, attempts: int, what: str):
     raise last if last is not None else RuntimeError(f"{what} failed")
 
 
-async def _poll_trace_ready(correlation_id: str):
+async def _poll_trace_ready(correlation_id: str, trace_client):
     """Poll the trace store with backoff until ready or capped (§6.12)."""
     backoff = settings.trace_poll_backoff_s or [1.0]
     for attempt in range(settings.trace_poll_max_attempts):
@@ -93,8 +93,15 @@ async def run_eval(run_id: uuid.UUID) -> None:
             await _finalize_failed(session, run_id, exc)
 
 
-async def _execute_run(session, run: Run) -> None:
+async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     run_id = run.id
+
+    # The endpoints this run was triggered against (§9.2). Blank keys fall back
+    # to the environment, so a run started before per-run config existed — or the
+    # seeded fake demo — behaves exactly as it used to.
+    config = run.config or {}
+    seams = seams or build_seams(config, run.secrets or {})
+    agent_timeout_s = config.get("agent_timeout_s") or settings.agent_timeout_s
 
     # Snapshot the question set at run start (§6.15) — later edits don't affect
     # this run.
@@ -127,11 +134,15 @@ async def _execute_run(session, run: Run) -> None:
     # serializes DB writes, since one AsyncSession is not safe for concurrent use.
     state = {"done": 0, "correct": 0}
     lock = asyncio.Lock()
-    semaphore = asyncio.Semaphore(max(settings.run_concurrency, 1))
+    concurrency = config.get("concurrency") or settings.run_concurrency
+    semaphore = asyncio.Semaphore(max(concurrency, 1))
 
     async def process(item: dict) -> None:
         async with semaphore:
-            await _process_question(session, run_id, item, total, state, lock, user_id, tags)
+            await _process_question(
+                session, run_id, item, total, state, lock, user_id, tags,
+                seams, agent_timeout_s,
+            )
 
     # return_exceptions=True: one unexpected per-question error must not cancel
     # its siblings. _process_question already handles the expected ones.
@@ -160,7 +171,8 @@ async def _execute_run(session, run: Run) -> None:
     )
 
 
-async def _process_question(session, run_id, item, total, state, lock, user_id, tags) -> None:
+async def _process_question(session, run_id, item, total, state, lock, user_id, tags,
+                            seams: Seams, agent_timeout_s: float) -> None:
     correlation_id = uuid.uuid4().hex
     async with lock:
         result = QuestionResult(
@@ -186,8 +198,8 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     try:
         agent_resp = await _with_retries(
             lambda: asyncio.wait_for(
-                agent_client.call(item["question"], correlation_id, user_id, tags),
-                timeout=settings.agent_timeout_s,
+                seams.agent.call(item["question"], correlation_id, user_id, tags),
+                timeout=agent_timeout_s,
             ),
             settings.agent_max_retries,
             "agent call",
@@ -212,7 +224,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     # 2) judge
     try:
         verdict = await _with_retries(
-            lambda: judge_client.judge(
+            lambda: seams.judge.judge(
                 item["question"], agent_resp.response, item["ground_truth"]
             ),
             settings.llm_max_retries,
@@ -235,7 +247,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
             state["correct"] += 1
 
     # 3) wait for trace ready (§6.12) before any diagnosis
-    trace = await _poll_trace_ready(correlation_id)
+    trace = await _poll_trace_ready(correlation_id, seams.trace)
     if trace is not None:
         async with lock:
             result.trace_ready = True
@@ -246,7 +258,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     #    owner can retry from the UI via re-diagnose.
     if verdict.verdict == "incorrect" and trace is not None:
         try:
-            diag = await diagnosis_client.diagnose(trace, item["reasoning"], verdict)
+            diag = await seams.diagnosis.diagnose(trace, item["reasoning"], verdict)
         except Exception as exc:  # noqa: BLE001
             log.warning("diagnosis failed for %s: %s", correlation_id, exc)
         else:
@@ -257,7 +269,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
                         overall_diagnosis=diag["overall_diagnosis"],
                         caveat=diag.get("caveat"),
                         raw_llm_output=diag,
-                        model_used=diagnosis_client.model_name,
+                        model_used=seams.diagnosis.model_name,
                     )
                 )
                 await session.commit()

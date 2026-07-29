@@ -100,6 +100,17 @@ class Run(Base):
         UUID(as_uuid=True), ForeignKey("eval_sets.id", ondelete="CASCADE"), nullable=False
     )
     triggered_by: Mapped[str] = mapped_column(Text, nullable=False)  # token subject
+    # Developer-supplied label; the UI falls back to started_at when unset.
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The configuration this run was triggered with (§9.2 seams). Split in two so
+    # that "credentials never leave the server" is structural: no response model
+    # reads `secrets`. Blank/missing keys fall back to the environment.
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    secrets: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False)  # running|completed|failed
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

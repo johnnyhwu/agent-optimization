@@ -7,6 +7,7 @@ score so the boundary can be retuned without touching the prompt.
 """
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
@@ -32,14 +33,19 @@ class JudgeOutput(BaseModel):
 
 
 class LlmJudgeClient:
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, llm: AsyncOpenAI | None = None) -> None:
         self.model_name = model or settings.judge_model
         if not self.model_name:
-            raise RuntimeError("JUDGE_IMPL=real but JUDGE_MODEL is empty.")
+            raise RuntimeError(
+                "JUDGE_IMPL=real but no judge model was given — set it in the run "
+                "config, or via JUDGE_MODEL."
+            )
+        # None = the environment-configured endpoint.
+        self.llm = llm
 
     async def judge(self, question: str, response: str, ground_truth: str) -> Verdict:
         messages = build_judge_messages(question, response, ground_truth)
-        out = await complete_json(self.model_name, messages, JudgeOutput)
+        out = await complete_json(self.model_name, messages, JudgeOutput, client=self.llm)
 
         verdict = out.verdict
         threshold = settings.judge_score_threshold

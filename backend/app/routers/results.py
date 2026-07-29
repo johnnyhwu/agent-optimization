@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_reader
 from app.config import settings
 from app.db import get_session
-from app.integrations import trace_client
+from app.integrations import build_seams
 from app.integrations.base import NotReady
 from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.routers._helpers import load_run_verdicts
@@ -124,7 +124,7 @@ async def list_results(
     return out
 
 
-async def _resolve_trace_spans(correlation_id: str):
+async def _resolve_trace_spans(correlation_id: str, trace_client):
     """Light poll of the trace store for the view path. trace_ready in the DB
     says it's ingested; a couple of fetches resolve any residual NotReady window.
 
@@ -175,7 +175,13 @@ async def get_trace(
         state = "generating"
         spans = []
     else:
-        trace = await _resolve_trace_spans(result.correlation_id)
+        # The trace lives wherever the run that produced it was pointed, which is
+        # not necessarily where the environment points today.
+        run = await session.get(Run, result.run_id)
+        seams = build_seams(
+            run.config if run else None, run.secrets if run else None
+        )
+        trace = await _resolve_trace_spans(result.correlation_id, seams.trace)
         if trace is None:
             state = "generating"
             spans = []

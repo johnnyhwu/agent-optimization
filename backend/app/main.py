@@ -34,6 +34,36 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/run-config/defaults")
+async def run_config_defaults(subject: str = Depends(current_subject)):
+    """Prefill values for the run-config dialog, plus which seams are live.
+
+    Only the non-secret settings — credentials are write-only, so the form starts
+    them blank and the developer either types them or borrows an earlier run's.
+    `impls` lets the dialog grey out the seams still set to `fake`, whose
+    connection settings would have no effect.
+    """
+    return {
+        "defaults": {
+            "agent_base_url": settings.agent_base_url,
+            "agent_timeout_s": settings.agent_timeout_s,
+            "langfuse_host": settings.langfuse_host,
+            "langfuse_public_key": settings.langfuse_public_key,
+            "langfuse_timeout_s": settings.langfuse_timeout_s,
+            "llm_base_url": settings.llm_base_url,
+            "judge_model": settings.judge_model,
+            "diagnosis_model": settings.diagnosis_model,
+            "concurrency": settings.run_concurrency,
+        },
+        "impls": {
+            "agent": settings.agent_impl,
+            "judge": settings.judge_impl,
+            "trace": settings.trace_impl,
+            "diagnosis": settings.diagnosis_impl,
+        },
+    }
+
+
 @app.get("/users")
 async def users(subject: str = Depends(current_subject)):
     """Fake user directory for the login switch + share pickers (§6.16)."""

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
@@ -74,17 +75,22 @@ def sanitize_suspects(suspects: list[SuspectOutput], valid_indices: set[int]) ->
 
 
 class LlmDiagnosisClient:
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, llm: AsyncOpenAI | None = None) -> None:
         self.model_name = model or settings.diagnosis_model
         if not self.model_name:
-            raise RuntimeError("DIAGNOSIS_IMPL=real but DIAGNOSIS_MODEL is empty.")
+            raise RuntimeError(
+                "DIAGNOSIS_IMPL=real but no diagnosis model was given — set it in "
+                "the run config, or via DIAGNOSIS_MODEL."
+            )
+        # None = the environment-configured endpoint.
+        self.llm = llm
 
     async def diagnose(
         self, trace: Trace, ground_truth_reasoning: str, judge_verdict: Verdict
     ) -> dict:
         spans = truncate_spans(trace.spans)
         messages = build_diagnosis_messages(spans, ground_truth_reasoning, judge_verdict)
-        out = await complete_json(self.model_name, messages, DiagnosisOutput)
+        out = await complete_json(self.model_name, messages, DiagnosisOutput, client=self.llm)
 
         suspects = sanitize_suspects(out.suspects, {s.index for s in spans})
         caveat = (out.caveat or "").strip() or None

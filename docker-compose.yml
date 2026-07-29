@@ -40,17 +40,20 @@ services:
 
       # --- Real integrations. Credentials come from the host environment or a
       # repo-root .env; they are never baked into the image. ---
+      # These are the *defaults* the "Run eval" dialog prefills from; each run
+      # stores the settings it was actually triggered with. Values mirror
+      # app/config.py so an unset variable here doesn't blank out its default.
       AGENT_BASE_URL: ${AGENT_BASE_URL:-}
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
-      AGENT_API_KEY: ${AGENT_API_KEY:-}
-      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm-ai4bi.cpoap-dev.dev.tsmc.com}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      JUDGE_MODEL: ${JUDGE_MODEL:-}
-      DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-}
+      JUDGE_MODEL: ${JUDGE_MODEL:-Qwen3.6-27B}
+      DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-Qwen3.6-27B}
       JUDGE_SCORE_THRESHOLD: ${JUDGE_SCORE_THRESHOLD:-}
-      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-ai4bi.cpoap-dev.dev.tsmc.com}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_TIMEOUT_S: ${LANGFUSE_TIMEOUT_S:-60}
       RUN_CONCURRENCY: ${RUN_CONCURRENCY:-1}
     ports:
       - "8000:8000"

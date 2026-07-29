@@ -729,9 +729,11 @@ backend/
   Dockerfile  .dockerignore                # backend container；依賴用 uv 安裝
   alembic/versions/0001_stage1_schema.py   # §6.14 的 7 張表
   alembic/versions/0002_real_integration.py # agent_response / error_message / agent_latency_ms
+  alembic/versions/0003_run_config.py       # runs.name / runs.config / runs.secrets（逐 run 設定）
   app/
     config.py           # 設定：DB URL、假登入、span 截斷長度、★四個 *_IMPL 開關、
                         #   agent HTTP / LLM / Langfuse 連線、run_concurrency、trace poll backoff
+                        #   （連線類的值同時是 run config dialog 的預設值）
     fake_config.py      # ★ 假層專用的延遲設定檔
     db.py  models.py    # async engine；7 張表的 ORM（EvalSet.metadata 因保留字→ORM 屬性叫 meta）
     schemas.py          # Pydantic：ShareEntry / EvalSetCreate(含 shares, source_format) / RolesUpdate / *Card ...
@@ -740,7 +742,8 @@ backend/
       real/agent.py  real/judge.py  real/langfuse.py  real/diagnosis.py
       real/llm.py       # 共用 OpenAI 相容 client + JSON 契約解析（含一次修復重試）
       real/prompts.py   # judge prompt + §6.9 四段式診斷 prompt
-      __init__.py       # 依 settings 逐一 seam 選 fake / real
+      __init__.py       # Seams + build_seams(config, secrets)：依 *_IMPL 選 fake / real，
+                        #   端點則逐 run 決定（空值退回環境變數）
     orchestrator.py     # §6.15 run 流程（背景 asyncio task）+ 失敗策略 + 併發上限
     check_integrations.py # 前置檢查：ping 設為 real 的 seam
     sse.py              # 每個 run 的 in-memory 進度 pub/sub
@@ -753,15 +756,20 @@ frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
   upload_parse.js       # 前端 JSONL/CSV 解析→可編輯表格列，送出前再序列化回 JSONL
   components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor
-                        # RunHistory/RunProgress(SSE)/RunDetail/QuestionList/SpanList/SpanDetail
-                        # Breadcrumb/Modal/Toast/ThemeToggle/icons
+                        # RunHistory/RunConfigDialog/RunProgress(SSE)/RunDetail/QuestionList
+                        # SpanList/SpanDetail/Breadcrumb/Modal/Toast/ThemeToggle/icons
 ```
 
 ### 9.4 App DB Schema（如實作，對照 §6.14）
 - **完全照 §6.14 建 7 張表**：`eval_sets / questions / question_skills / runs / question_results /
   span_analyses / eval_set_roles`。UUID 主鍵用 `gen_random_uuid()`（migration 先 `CREATE EXTENSION
   pgcrypto`）。`questions` 與 `eval_sets` 各有 `version` 供樂觀鎖。
-- **兩個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）。
+- **三個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）、
+  `0003_run_config`（`runs.name` / `runs.config` / `runs.secrets`，逐 run 設定）。
+- **★ `0003_run_config`**：`config`（非機密：base URL、模型、timeout、concurrency）與
+  `secrets`（金鑰）刻意分成兩個 JSONB 欄位——沒有任何 response model 讀 `secrets`，
+  「金鑰不外流」因此是結構上的保證，而不是靠人記得維護白名單。舊 run 的 `'{}'`
+  代表整組退回環境變數，行為與過去完全一致。
 - **★ `0002_real_integration` 新增的四個欄位**（假資料時代不需要，接真實服務後不可或缺）：
 
   | 欄位 | 用途 |
@@ -986,16 +994,28 @@ backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不
 | **`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL`** | 皆 `fake` | 每個 seam 各自 `fake` 或 `real`，**可逐一切換** |
 | `AGENT_BASE_URL` | 空 | agent server 的 base URL；client 會打 `{base}/execute` |
 | `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | 單次呼叫上限、暫時性錯誤重試次數 |
-| `AGENT_API_KEY` / `AGENT_AUTH_HEADER` / `AGENT_AUTH_SCHEME` | 空 / `Authorization` / `Bearer` | 選用驗證 |
-| `LLM_BASE_URL` / `LLM_API_KEY` | 空 | **OpenAI 相容**端點（可指向 self-hosted）|
-| `JUDGE_MODEL` / `DIAGNOSIS_MODEL` | 空 | 兩個用途可用不同模型 |
+| `LLM_BASE_URL` / `LLM_API_KEY` | `http://litellm-ai4bi.cpoap-dev.dev.tsmc.com` / 空 | **OpenAI 相容**端點（可指向 self-hosted）|
+| `JUDGE_MODEL` / `DIAGNOSIS_MODEL` | 皆 `Qwen3.6-27B` | 兩個用途可用不同模型 |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
 | `JUDGE_SCORE_THRESHOLD` | 空（＝採信 LLM 的 verdict）| 設 0–1 數字則改由分數推導 verdict |
-| `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 空 | HTTP Basic auth |
-| `LANGFUSE_TIMEOUT_S` | `30` | |
+| `LANGFUSE_HOST` | `http://langfuse-ai4bi.cpoap-dev.dev.tsmc.com` | |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 空 | HTTP Basic auth |
+| `LANGFUSE_TIMEOUT_S` | `60` | |
 | `LANGFUSE_OBSERVATION_TYPES` | `["GENERATION","SPAN"]` | 其餘型別（如 `EVENT`）不進 span 列表 |
 | `RUN_CONCURRENCY` | `1` | 1 ＝ 嚴格序列（原行為）；調高可併發打 agent |
 | `TRACE_POLL_BACKOFF_S` / `TRACE_POLL_MAX_ATTEMPTS` | `[0.5,1,2,4,8]` / `8` | §6.12 ingestion 等待 |
+
+**這些連線設定是「預設值」，不是唯一來源**：`*_IMPL` 仍是 fake / real 的主開關，但按下
+「Run eval」會先跳出 config dialog，用上表的值預填，並允許逐次修改 run 名稱、agent base URL /
+timeout、Langfuse host / 金鑰 / timeout、LLM base URL / 金鑰、judge 與 diagnosis 模型，以及
+**concurrency（一次送幾題給 agent）**。每個 run 會把自己實際用的設定存進 `runs.config`
+（非機密）與 `runs.secrets`（金鑰），因此兩個 run 可以打不同的 agent server 或用不同的
+judge model，而且事後看 trace / re-diagnose 時會沿用該 run 當初的端點。dialog 中留白的欄位
+就退回上表的環境變數值，所以 seeded fake demo 仍可空表單直接跑。
+
+金鑰**只進不出**：`runs.secrets` 不會被任何 response model 序列化（`list_runs` 對 viewer 也開放，
+見 §6.16）。要沿用舊 run 的金鑰時，前端只送 `reuse_secrets_from_run_id`，由後端 server-side 複製；
+且金鑰與其端點綁定——若 `llm_base_url` / `langfuse_host` 被改掉，對應金鑰就不會被沿用，必須重新輸入。
 
 **前置檢查**：`make preflight`（＝`python -m app.check_integrations`）會逐一 ping 設為 `real`
 的 seam，回報每個 OK / FAIL 與原因。設定打錯時，這比跑一次 eval 才發現快得多。

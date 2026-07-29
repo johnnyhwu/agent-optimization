@@ -53,29 +53,25 @@ class Settings(BaseSettings):
     # Base URL of the FastAPI agent server; the client POSTs to {base}/execute.
     agent_base_url: str = ""
     agent_timeout_s: float = 120.0
-    # Optional auth for the agent endpoint.
-    agent_api_key: str = ""
-    agent_auth_header: str = "Authorization"
-    agent_auth_scheme: str = "Bearer"
     agent_max_retries: int = 2
 
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
-    llm_base_url: str = ""
+    llm_base_url: str = "http://litellm-ai4bi.cpoap-dev.dev.tsmc.com"
     llm_api_key: str = ""
     llm_timeout_s: float = 120.0
     llm_max_retries: int = 2
-    judge_model: str = ""
-    diagnosis_model: str = ""
+    judge_model: str = "Qwen3.6-27B"
+    diagnosis_model: str = "Qwen3.6-27B"
     # Optional override: when set, the verdict is derived from the judge's
     # continuous score (score >= threshold -> correct) instead of trusting the
     # verdict field the model returned. §6.7 deliberately left this knob open.
     judge_score_threshold: float | None = None
 
     # --- Langfuse (trace store; read-only in Stage 1) ----------------------
-    langfuse_host: str = ""
+    langfuse_host: str = "http://langfuse-ai4bi.cpoap-dev.dev.tsmc.com"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    langfuse_timeout_s: float = 30.0
+    langfuse_timeout_s: float = 60.0
     # Observation types rebuilt into the span list. EVENT observations carry no
     # input/output worth showing, so they are dropped by default.
     langfuse_observation_types: list[str] = ["GENERATION", "SPAN"]

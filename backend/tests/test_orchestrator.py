@@ -13,6 +13,7 @@ import uuid
 import pytest
 
 from app import orchestrator
+from app.integrations import Seams
 from app.integrations.base import AgentResponse, Trace, Verdict
 from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.sse import hub
@@ -119,10 +120,15 @@ def seams(monkeypatch):
         async def diagnose(self, trace, reasoning, verdict):
             return await stubs.diagnosis(trace, reasoning, verdict)
 
-    monkeypatch.setattr(orchestrator, "agent_client", Agent())
-    monkeypatch.setattr(orchestrator, "judge_client", Judge())
-    monkeypatch.setattr(orchestrator, "trace_client", TraceClient())
-    monkeypatch.setattr(orchestrator, "diagnosis_client", Diagnosis())
+    # The orchestrator builds its clients per run from the run's own config, so
+    # the stubs go in through that factory rather than over module globals.
+    monkeypatch.setattr(
+        orchestrator,
+        "build_seams",
+        lambda config=None, secrets=None: Seams(
+            agent=Agent(), judge=Judge(), trace=TraceClient(), diagnosis=Diagnosis()
+        ),
+    )
 
     async def ok_agent(question, correlation_id):
         return AgentResponse(response="answer", correlation_id=correlation_id, latency_ms=12)

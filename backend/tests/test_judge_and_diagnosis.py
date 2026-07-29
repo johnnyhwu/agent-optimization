@@ -31,7 +31,7 @@ def _spans(n=3, body="short") -> list[Span]:
 @pytest.fixture
 def judge(configure, monkeypatch):
     def _make(payload: dict):
-        async def fake_complete_json(model, messages, schema):
+        async def fake_complete_json(model, messages, schema, client=None):
             return schema.model_validate(payload)
 
         monkeypatch.setattr(judge_mod, "complete_json", fake_complete_json)
@@ -124,7 +124,7 @@ async def test_diagnose_returns_the_69_shape(configure, monkeypatch):
         "caveat": "  ",
     }
 
-    async def fake_complete_json(model, messages, schema):
+    async def fake_complete_json(model, messages, schema, client=None):
         return schema.model_validate(payload)
 
     monkeypatch.setattr(diagnosis_mod, "complete_json", fake_complete_json)
@@ -173,7 +173,7 @@ async def test_repair_attempt_then_give_up(monkeypatch):
 
     calls = []
 
-    async def bad_complete(model, messages, json_mode):
+    async def bad_complete(model, messages, json_mode, client=None):
         calls.append(messages)
         return "not json at all"
 
@@ -189,7 +189,7 @@ async def test_repair_attempt_can_succeed(monkeypatch):
 
     replies = iter(["oops", '{"verdict": "correct", "score": 0.9, "comment": "ok"}'])
 
-    async def flaky_complete(model, messages, json_mode):
+    async def flaky_complete(model, messages, json_mode, client=None):
         return next(replies)
 
     monkeypatch.setattr(llm_mod, "_complete", flaky_complete)

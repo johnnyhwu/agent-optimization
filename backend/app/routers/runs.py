@@ -14,8 +14,15 @@ from app.auth import require_reader
 from app.db import get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
-from app.schemas import RunOut
+from app.schemas import RunConfig, RunCreate, RunOut
 from app.sse import hub
+
+# A credential and the endpoint it authenticates against, for the reuse rule
+# below: {secret key in runs.secrets: endpoint key in runs.config}.
+_SECRET_ENDPOINTS = {
+    "llm_api_key": "llm_base_url",
+    "langfuse_secret_key": "langfuse_host",
+}
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}/runs", tags=["runs"])
 
@@ -33,9 +40,48 @@ async def _incorrect_count(session: AsyncSession, run_id: uuid.UUID) -> int:
     ) or 0
 
 
+async def _resolve_secrets(
+    session: AsyncSession,
+    eval_set_id: uuid.UUID,
+    body: RunCreate,
+    config: dict,
+) -> dict:
+    """The credentials this run executes with: what was typed, plus anything
+    borrowed from an earlier run.
+
+    A borrowed credential is only carried over when the endpoint it authenticates
+    against is unchanged. Without that rule a user could reuse a stored key while
+    pointing the base URL at a server they control, and the backend would happily
+    send someone else's credential there.
+    """
+    secrets = {k: v for k, v in body.secrets.model_dump().items() if v}
+    if body.reuse_secrets_from_run_id is None:
+        return secrets
+
+    source = await session.get(Run, body.reuse_secrets_from_run_id)
+    # Same eval set only — the caller has already been authorized for this one.
+    if source is None or source.eval_set_id != eval_set_id:
+        raise HTTPException(
+            status_code=404, detail="run to reuse config from not found in this eval set"
+        )
+
+    source_config = source.config or {}
+    for secret_key, endpoint_key in _SECRET_ENDPOINTS.items():
+        if secrets.get(secret_key):
+            continue  # explicitly typed in this request; nothing to borrow
+        stored = (source.secrets or {}).get(secret_key)
+        if not stored:
+            continue
+        if (config.get(endpoint_key) or "") != (source_config.get(endpoint_key) or ""):
+            continue  # endpoint changed — the user must re-enter this credential
+        secrets[secret_key] = stored
+    return secrets
+
+
 @router.post("", response_model=RunOut, status_code=201)
 async def trigger_run(
     eval_set_id: uuid.UUID,
+    body: RunCreate | None = None,
     subject: str = Depends(require_reader),  # owner OR viewer may run (§6.16)
     session: AsyncSession = Depends(get_session),
 ):
@@ -43,7 +89,17 @@ async def trigger_run(
     if es is None:
         raise HTTPException(status_code=404, detail="eval set not found")
 
-    run = Run(eval_set_id=eval_set_id, triggered_by=subject, status="running")
+    body = body or RunCreate()
+    # Blank fields are dropped rather than stored as "": the seams treat a missing
+    # key as "fall back to the environment", and an empty string would mean the
+    # same thing while making the stored config harder to read.
+    config = {k: v for k, v in body.config.model_dump().items() if v not in ("", None)}
+    secrets = await _resolve_secrets(session, eval_set_id, body, config)
+
+    run = Run(
+        eval_set_id=eval_set_id, triggered_by=subject, status="running",
+        name=(body.name or "").strip() or None, config=config, secrets=secrets,
+    )
     session.add(run)
     await session.commit()
     await session.refresh(run)
@@ -54,6 +110,7 @@ async def trigger_run(
 
     return RunOut(
         id=run.id, eval_set_id=run.eval_set_id, triggered_by=run.triggered_by,
+        name=run.name, config=RunConfig(**(run.config or {})),
         status=run.status, started_at=run.started_at, completed_at=run.completed_at,
         pass_rate=run.pass_rate, total_count=run.total_count,
         correct_count=run.correct_count, incorrect_count=0,
@@ -76,6 +133,7 @@ async def list_runs(
         out.append(
             RunOut(
                 id=r.id, eval_set_id=r.eval_set_id, triggered_by=r.triggered_by,
+                name=r.name, config=RunConfig(**(r.config or {})),
                 status=r.status, started_at=r.started_at, completed_at=r.completed_at,
                 pass_rate=float(r.pass_rate) if r.pass_rate is not None else None,
                 total_count=r.total_count, correct_count=r.correct_count,

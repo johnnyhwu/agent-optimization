@@ -82,6 +82,19 @@ Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
 See [`backend/.env.example`](backend/.env.example) for the full list.
 
+The `*_IMPL` switches are the master switch, but the connection settings are only
+**defaults**. "Run eval" opens a config dialog prefilled from them, where each run
+gets its own name, agent base URL and timeout, Langfuse host/keys/timeout, LLM
+endpoint and models, and concurrency (how many questions go to the agent at once).
+Each run stores what it was triggered with, so two runs can target different agent
+servers, and viewing a run's trace later uses the endpoints *that* run used. Blank
+fields fall back to the environment, so the fake demo still runs from an empty form.
+
+Credentials are write-only: `runs.secrets` is never serialized into a response
+(`list_runs` is open to viewers too). To avoid retyping them, pick an earlier run
+under "Use config from" — the backend copies that run's keys server-side, and only
+while the endpoint they authenticate against is unchanged.
+
 ```bash
 # minimum for "upload a real eval set, run it, see real results"
 AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
