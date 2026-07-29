@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { api, getSubject } from "../api.js";
+import { usePagedList } from "../usePagedList.js";
+import ListFooter from "./ListFooter.jsx";
 import RunProgress from "./RunProgress.jsx";
 import QuestionEditor from "./QuestionEditor.jsx";
 import RunConfigDialog from "./RunConfigDialog.jsx";
@@ -14,11 +16,16 @@ const MODES = [
   ["last_n", "Last-N"],
 ];
 
+const PAGE_SIZE = 20;
+
 // Middle tier (§6.13): run history for a set; multi-select runs + the 3 incorrect
 // modes; trigger new runs (owner or viewer). Owner can edit questions.
+//
+// Runs page in newest-first as you scroll. Selection is held as a list of run
+// ids rather than indices, so multi-select survives an append — the whole point
+// of the multi-run modes is comparing runs that may be pages apart.
 export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const toast = useToast();
-  const [runs, setRuns] = useState(null);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState([]);
   const [mode, setMode] = useState("union");
@@ -29,11 +36,13 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const [deleteRun, setDeleteRun] = useState(null);
   const subject = getSubject();
 
-  function load() {
-    setError(null);
-    api.listRuns(evalSet.id).then(setRuns).catch((e) => setError(e.message));
-  }
-  useEffect(load, [evalSet.id]);
+  const {
+    items: runs, total, hasMore, loadingMore, error: loadError, loadMore,
+    refresh: load,
+  } = usePagedList(
+    ({ offset, limit }) => api.listRuns(evalSet.id, { offset, limit }),
+    { pageSize: PAGE_SIZE, deps: [evalSet.id] }
+  );
 
   const toggle = (id) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -89,7 +98,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           </button>
         </div>
       </div>
-      {error && <div className="error">{error}</div>}
+      {(error || loadError) && <div className="error">{error || loadError}</div>}
 
       {/* Driven by the run list rather than by "did I start it in this tab", so
           coming back to this page mid-run still shows where the run is. */}
@@ -137,7 +146,9 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           <div
             className={`runrow ${selected.includes(r.id) ? "sel" : ""}`}
             key={r.id}
-            style={{ animationDelay: `${i * 30}ms` }}
+            // Stagger within a page only, so appending doesn't re-animate rows
+            // the developer is already looking at.
+            style={{ animationDelay: `${(i % PAGE_SIZE) * 25}ms` }}
             role="button"
             tabIndex={0}
             onClick={() => onOpenRuns([r.id], "union", 2)}
@@ -206,10 +217,20 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           </div>
         ))}
 
+      {runs && runs.length > 0 && (
+        <ListFooter
+          shown={runs.length}
+          total={total}
+          hasMore={hasMore}
+          loading={loadingMore}
+          onLoadMore={loadMore}
+        />
+      )}
+
       {showEditor && <QuestionEditor evalSet={evalSet} onClose={() => setShowEditor(false)} />}
       {showRunConfig && (
         <RunConfigDialog
-          runs={runs || []}
+          evalSetId={evalSet.id}
           onClose={() => setShowRunConfig(false)}
           onRun={trigger}
         />

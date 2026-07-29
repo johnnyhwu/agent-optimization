@@ -465,3 +465,94 @@ async def test_cancel_after_judging_keeps_the_verdict(seams):
     assert result.verdict == "incorrect"
     assert not any(isinstance(o, SpanAnalysis) for o in session.added)
     assert run.status == "cancelled"
+
+
+# --- Live progress events ----------------------------------------------------
+#
+# The detail view refetches the open question's trace when its phase, verdict,
+# trace_ready or has_analysis changes. Those fields therefore have to travel on
+# the stream; when they didn't, the middle column stayed frozen on "no answer
+# yet" for the whole run and only filled in on the next navigation.
+
+async def test_progress_events_cover_every_stage_of_a_question(seams):
+    run, questions = make_run(), [make_question()]
+    session = StubSession(run, questions)
+    collector = Collector(run.id)
+
+    async def wrong(question, response, ground_truth):
+        return Verdict(verdict="incorrect", score=0.1, comment="nope")
+
+    async def ready(correlation_id):
+        return Trace(correlation_id=correlation_id, spans=[])
+
+    seams.judge, seams.trace = wrong, ready
+
+    await orchestrator._execute_run(session, run)
+
+    types = [e["type"] for e in collector.drain()]
+    collector.close()
+    # The verdict and the trace each get their own event: against real services
+    # the trace poll and the diagnosis between them can run for tens of seconds,
+    # and a question must not sit on "judging…" for that whole window.
+    assert types == [
+        "run_started", "question_started", "question_answered",
+        "question_judged", "question_traced", "question_done", "run_completed",
+    ]
+
+
+async def test_progress_events_carry_the_trace_refresh_fingerprint(seams):
+    run, questions = make_run(), [make_question()]
+    session = StubSession(run, questions)
+    collector = Collector(run.id)
+
+    async def wrong(question, response, ground_truth):
+        return Verdict(verdict="incorrect", score=0.1, comment="nope")
+
+    async def ready(correlation_id):
+        return Trace(correlation_id=correlation_id, spans=[])
+
+    seams.judge, seams.trace = wrong, ready
+
+    await orchestrator._execute_run(session, run)
+
+    events = {e["type"]: e for e in collector.drain() if "question_pk" in e}
+    collector.close()
+
+    for event in events.values():
+        assert {"phase", "verdict", "trace_ready", "has_analysis",
+                "trace_error", "diagnosis_error"} <= event.keys()
+
+    assert events["question_started"]["phase"] == "pending"
+    assert events["question_answered"]["phase"] == "answered"
+    assert events["question_judged"]["phase"] == "judged"
+    assert events["question_traced"]["trace_ready"] is True
+    # The diagnosis is written after the judged/traced events, so only the final
+    # one can announce it — which is exactly why it has to.
+    assert events["question_judged"]["has_analysis"] is False
+    assert events["question_done"]["has_analysis"] is True
+
+
+async def test_diagnosis_failure_travels_on_the_stream(seams):
+    """The UI distinguishes "the model failed" from "it was never asked", so the
+    reason has to reach it live, not only on the next reload."""
+    run, questions = make_run(), [make_question()]
+    session = StubSession(run, questions)
+    collector = Collector(run.id)
+
+    async def wrong(question, response, ground_truth):
+        return Verdict(verdict="incorrect", score=0.1, comment="nope")
+
+    async def ready(correlation_id):
+        return Trace(correlation_id=correlation_id, spans=[])
+
+    async def broken(trace, reasoning, verdict):
+        raise RuntimeError("diagnosis model is down")
+
+    seams.judge, seams.trace, seams.diagnosis = wrong, ready, broken
+
+    await orchestrator._execute_run(session, run)
+
+    done = next(e for e in collector.drain() if e["type"] == "question_done")
+    collector.close()
+    assert done["has_analysis"] is False
+    assert "diagnosis model is down" in done["diagnosis_error"]

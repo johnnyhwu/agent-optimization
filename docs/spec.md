@@ -668,7 +668,9 @@ pk (eval_set_id, user_subject)
 > 導讀：§9.2 是真假邊界（最重要）、§9.4 是 schema、§9.6 是 run 流程與失敗策略、
 > §9.15 是完整設定表、§9.16 是測試與「哪些已驗證／哪些沒有」、§9.14 是還缺什麼、
 > **§9.17 是後續補強：中止 run、刪除 eval set/run、執行中的完整 question list、
-> 以及外部依賴失敗時的錯誤可見性**。
+> 以及外部依賴失敗時的錯誤可見性**、**§9.18 是第一次接上真實 Langfuse 後的五項修正：
+> 三欄詳情的即時更新、Langfuse 讀取的雙端點 fallback、未開始題目不再誤報 trace 錯誤、
+> 有上限的 run config 選單、以及兩個清單的分頁與查詢效能**。
 
 ### 9.1 交付形態與技術棧
 - **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`。
@@ -808,6 +810,8 @@ GET  /me                                     # 目前 subject 與其在各 set �
 GET  /run-config/defaults                    # run config dialog 的預填值（env 來源）+ 四個 *_IMPL 現況
 POST /eval-sets                              # 建立(payload 恆為 JSONL + source_format)；建立者=owner；可帶 shares
 GET  /eval-sets                             # 我有權限的 set 卡片（含 run 數/通過率/趨勢/regression/roles）
+                                            #   分頁 + 篩選：?limit&offset&q&metadata_key&metadata_value&sort
+                                            #   回傳 {items,total,has_more}（§9.18）
 GET  /eval-sets/metadata/keys               # 掃 JSONB 得既有 metadata key
 GET  /eval-sets/{id}                        # 單一 card
 PATCH/eval-sets/{id}                        # 改 name/description/metadata（樂觀鎖→409）owner
@@ -819,7 +823,9 @@ DELETE /eval-sets/{id}                      # 刪除整個 set（含所有 run/�
 POST /eval-sets/{id}/runs                   # 觸發 run（owner 或 viewer）；body 帶 name/config/secrets
                                             #   /reuse_secrets_from_run_id，全部可省略
 GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count / name / config / credentials_set
-                                            #   / cancel_requested）
+                                            #   / cancel_requested）；分頁 ?limit&offset&q，
+                                            #   回傳 {items,total,has_more}（§9.18）
+GET  /eval-sets/{id}/runs/{run_id}          # 單一 run（詳情頁判斷中止鈕用；§9.18）
 POST /eval-sets/{id}/runs/{run_id}/cancel   # 中止 run（owner 或該 run 的觸發者）；非 running → 409
 DELETE /eval-sets/{id}/runs/{run_id}        # 刪除一個 run owner-only；running → 409（先中止）
 GET  /eval-sets/{id}/runs/{run_id}/progress # SSE 即時進度
@@ -830,7 +836,8 @@ POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
 - `GET /results` 每題回傳含 **`agent_response` / `error_message` / `agent_latency_ms`**
   （§9.4 新欄位）與 `verdict / judge_score / judge_comment / status / trace_ready / has_analysis /
   is_incorrect`，以及 **`phase`**（`pending`|`answered`|`judged`|`failed`|`cancelled`，見 §9.17）。
-- `GET /results/{rid}/trace` 回傳 `trace_state`（`ready` | `generating` | `no_trace` | **`error`**）、
+- `GET /results/{rid}/trace` 回傳 `trace_state`（`ready` | `generating` | `no_trace` | **`error`**
+  | **`not_started`**，見 §9.18）、
   **`trace_error`** / **`diagnosis_error`**、`spans[]`（含 `status_message`）、`analysis`、以及
   **`agent_response` / `ground_truth_response` / `error_message`**，讓中間欄可以並排顯示
   「agent 答了什麼 vs 期望答案」。
@@ -1016,7 +1023,8 @@ per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill overri
   目前 app DB 是唯一真相，Langfuse UI 上看不到本平台判的分數。
 - **span tree 不重建**：Langfuse 回傳的 `parentObservationId` **完全未使用**，Stage 1 以
   **依 startTime 排序的平舖列表**呈現；樹狀結構留給 Stage 2 的熱點檢視。
-- **metadata 篩選/排序**：§6.10 提的首頁依 metadata key 篩選/排序尚未做。
+- ~~**metadata 篩選/排序**~~ → **已補**，見 §9.18(c)：首頁的名稱搜尋與 metadata key/value
+  篩選、排序皆在 SQL 中完成，跨全部分頁生效。
 - **`LLM_TIMEOUT_S` 沒有逐 run 版本**：`AGENT_TIMEOUT_S` 與 `LANGFUSE_TIMEOUT_S` 都能在 run
   config dialog 逐次調整，唯獨 LLM 的 timeout 仍是全域設定（`build_seams` 呼叫
   `get_client_for` 時沒有傳 `timeout_s`），dialog 上也沒有這個欄位。判斷 judge/diagnosis
@@ -1051,6 +1059,7 @@ backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 空 | HTTP Basic auth |
 | `LANGFUSE_TIMEOUT_S` | `60` | |
 | `LANGFUSE_OBSERVATION_TYPES` | `["GENERATION","SPAN"]` | 其餘型別（如 `EVENT`）不進 span 列表 |
+| **`LANGFUSE_TRACE_READ_STRATEGY`** | `auto` | `auto`(兩個端點依序試) / `trace_api` / `observations_api`（§9.18）|
 | `RUN_CONCURRENCY` | `1` | 1 ＝ 嚴格序列（原行為）；調高可併發打 agent |
 | `TRACE_POLL_BACKOFF_S` / `TRACE_POLL_MAX_ATTEMPTS` | `[0.5,1,2,4,8]` / `8` | §6.12 ingestion 等待 |
 
@@ -1229,3 +1238,146 @@ trace。
   過程中無任何 console / page error。
 - ⚠️ 仍**未對接真正的外部服務**（同 §9.16 末段的但書）：Langfuse 錯誤路徑是用不存在的 host 與
   空金鑰驗的，成功路徑仍只有 mock。
+
+---
+
+### 9.18 首次接上真實 Langfuse 後的五項修正
+
+> 本節是 §9.17 之後的一次修正，起因是**第一次把 `TRACE_IMPL` 指到真實 Langfuse 去跑**時暴露的四個
+> 缺陷，外加一個 POC 一直沒處理的規模問題。四個 seam 的 real 實作除了 Langfuse 讀取（(b)）之外
+> **維持原樣**，`*_IMPL` 也仍預設 `fake`。
+
+#### (a) 三欄詳情不會即時更新（最影響體感的一個）
+
+**症狀**：run 執行中點進一題，左欄的小字從 `waiting` → `judging…` → `correct` 一路變化，但
+**中欄的 Agent Answer 一直是空的，judge 結果也不出現**；退回上一頁再進來，全部資訊就都在了。
+
+**病灶三處，全在 `frontend/src/components/RunDetail.jsx`**：
+1. `activeResult` 存的是**點擊當下從 `results` 複製出來的物件**。SSE 進來時 `patch` 會重建
+   `results` 裡的物件，但 `activeResult` 還指著舊的那一個——由它衍生的 verdict、
+   `canReDiagnose` 全部跟著凍結。
+2. 中欄與右欄的內容**全部來自 `GET .../trace`，而那個請求只在 `pick()` 裡發一次**。題目從
+   `pending → answered → judged → diagnosed` 的過程中沒有任何重新抓取。
+3. `agent_response`、`judge_comment`、`verdict`、`analysis` 都在同一包 payload 裡，所以是一起凍結的。
+
+**補法**：
+- `activeResult` 改存 **id**，畫面上的那一列由 `results.find(...)` 即時推導。
+- 新增一個「**trace 指紋**」`id|phase|verdict|trace_ready|has_analysis`，指紋一變就重抓 trace。
+  它由既有的 SSE 事件就地更新，所以是**事件驅動、不是輪詢**。
+- **重抓時不清空畫面**（舊 `pick()` 的 `setTrace(null)` 會讓畫面閃回空狀態）；只有換題才清空，
+  同一題的背景刷新以標題列一個小圓點表示。
+- **保留開發者手動選的 span**：只有換題、或診斷第一次出現時才自動跳到 `suspects[0]`。每次刷新
+  都跳的話，正在讀某個 span 的人會被硬拉走。
+- **後端**：`orchestrator._publish_progress` 補上 `has_analysis` / `trace_error` /
+  `diagnosis_error`；並新增 **`question_judged`** 與 **`question_traced`** 兩個事件。原本判分完到
+  最後一個 `question_done` 之間隔著 trace poll 與診斷，接真實服務時那是數十秒——那段時間題目會
+  一直停在 `judging…`。
+
+#### (b) Langfuse 的 `Unknown table expression 'events'`
+
+**這是 Langfuse 部署端的問題，不是本平台的**。我們呼叫的是
+`GET /api/public/v2/observations?traceId=`；錯誤訊息裡的 SQL 是 **Langfuse server 自己對它的
+ClickHouse 產生的**。自架版本約 3.152.0 起會查一張屬於 v4 wide-observations schema 的
+`events` / `events_core` 表，而該表的 production migration 尚未釋出
+（langfuse#11924、langfuse#12223、discussion#12777）。
+
+> **官方 Python SDK 幫不上忙**：`langfuse.api.*` 是同一組 REST 端點的產生式 client，會撞到
+> 完全相同的 server 端查詢。因此**不引入該依賴**，維持既有的 httpx client。
+
+**根治在 Langfuse 那邊**：查 `SELECT * FROM default.schema_migrations WHERE dirty = 1`、
+重跑 ClickHouse migration（注意 `LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED`），
+或把 image 釘回 3.152 以下。
+
+**本 repo 這邊做的（`real/langfuse.py`）**：
+1. **兩條讀取策略，依序嘗試**，先拿到 observation 的獲勝：
+   - `GET /api/public/traces/{id}` → `TraceWithFullDetails`，其 `observations` 是完整的
+     observation 物件，欄位與列表端點相同，**`observation_to_span` 原封不動共用**。
+   - 既有的分頁式 `GET /api/public/v2/observations?traceId=`。
+   兩者由 Langfuse 內部**不同的查詢**服務，所以其中一條壞掉時另一條有機會可用。
+2. **每條策略各自的 NotReady 語意**：單一 trace 端點的 `404` = 尚未 ingest（→ `NotReady`），
+   不是失敗。只有**每一條都失敗**才 raise `TraceFetchError`，且**把每一條的錯誤都帶上**——
+   fallback 絕不能把主要路徑的失敗原因藏起來。
+3. **`LANGFUSE_TRACE_READ_STRATEGY`**（`auto` | `trace_api` | `observations_api`）：部署確認
+   正常後可以釘死其中一條，省掉多餘的第一次請求。
+4. **錯誤訊息要能讀**：前端 `SpanList.jsx` 認得這個 ClickHouse 簽章（以及 401、連不上），紅色
+   banner 顯示一句白話說明「這是 Langfuse 自架的已知問題，不是 eval 平台的錯」與該怎麼修，
+   **原始 SQL 收進可展開的 Technical detail**。完整原文照舊存進 `trace_error`。
+
+> ⚠️ 誠實的但書：fallback 是一個**避險**。如果貴方的 Langfuse 兩個端點都以同樣方式壞掉，
+> 只有修部署才能解決——但至少畫面會直說是這麼回事。
+
+#### (c) 新 run 顯示上一個 run 的 Langfuse 錯誤
+
+**病灶**：`routers/results.py::get_trace` 只用 `result.status in ("failed","cancelled")` 分支。
+還在 `pending`（agent 根本還沒被問）的題目會落進 else 分支、**真的去打 Langfuse**——一個不可能
+存在 trace 的 correlation_id。Langfuse 壞掉時那一打就立刻失敗，產生一個**跟上次一模一樣的全新
+錯誤**，看起來就像舊錯誤被重複拿來用。
+
+**補法**：改用 `result_phase(...)` 判斷，`pending` → 新的 `trace_state="not_started"`
+（「這題還沒送給 agent」），**在 agent 回答之前絕不呼叫 trace store**。順帶省掉一筆真實成本：
+以前每點一次未開始的題目，都會在同一個 request 內連打最多 `TRACE_POLL_MAX_ATTEMPTS`(8) 次 HTTP。
+另外 re-diagnose 成功時會清掉 `trace_error`；多選 run 時中欄會標出這一列**屬於哪一個 run**
+（`QuestionResultOut.run_label`）——跨 run 的代表列很容易被誤認成正在看的那個 run。
+
+#### (d) 「Use config from」下拉改為有上限的 listbox
+
+原本一個 run 一個 `<option>`，沒有上限；而且原生 `<select>` **無法指定顯示幾列**
+（`size` 對下拉不適用），所以「只顯示 10 個、其餘用捲的」只能自己做 listbox。
+
+新的 `RunPicker.jsx`：`max-height` 剛好十列、其餘捲動；每列顯示 run 名稱、時間、通過率與金鑰
+標記（一整排原始時間戳很難認）；超過十個時出現搜尋框；支援 ↑/↓/Enter/Esc 與
+`role="listbox"`/`role="option"`。**Esc 只關 popup、不關整個 run config 對話框**（否則填到一半
+的設定全沒了）。它**自己去打分頁端點**，不再靠 `RunHistory` 傳整份清單當 prop——那份清單現在也
+分頁了，當 prop 只會拿到使用者剛好捲到的部分。
+
+#### (e) 分頁與清單效能
+
+畫面渲染只是小的那一半，**真正會讓 app 卡住的是後端查詢**：
+
+| 端點 | 原本 | 現在 |
+|---|---|---|
+| `GET /eval-sets` | 每個 set 三個查詢，其中一個把**該 set 所有 run 的所有 `question_results`** 撈出來，只為了算兩個 run 的 regression | 整頁一次算完的聚合查詢，**查詢數固定** |
+| `GET /eval-sets/{id}/runs` | 每個 run 一個 `COUNT`（N+1） | 一次 `GROUP BY run_id` |
+
+- **regression 只需要最新兩個 run**（`regression_summary` 本來就只讀 `[0:2]`），把 verdict 載入
+  限制在那兩個 run 上，去掉了絕大部分的資料量。
+- **趨勢線只取最近 `TREND_RUNS`(20) 個 run**（window function）。趨勢是「最近走向」的一瞥，不是
+  檔案庫；沒有上限的話，一個長壽的 eval set 會為了畫 120px 的 SVG 而載入它的全部歷史。
+- **分頁**：兩個端點都吃 `limit`/`offset`，回傳 `{items, total, has_more}`。前端是
+  **無限捲動 + Load more 按鈕**（`usePagedList.js` / `ListFooter.jsx`）——按鈕不是裝飾：
+  IntersectionObserver 對鍵盤操作不會觸發，頁面不捲動時也永遠不會觸發。
+- **篩選/排序在 SQL 做**（§6.10 的缺口）：名稱搜尋 + metadata key/value + 排序。只篩已載入的
+  那一頁，會讓搜尋結果取決於使用者捲了多遠。
+- **migration `0005_list_indexes`**：schema 原本除了 PK 與 unique 之外**一個索引都沒有**。新增
+  `eval_set_roles(user_subject)`（首頁第一個查詢，PK 是 `(eval_set_id, user_subject)` 用不上）、
+  `runs(eval_set_id, started_at DESC)`、`question_results(run_id, verdict)`。
+
+**實測（真 Postgres 16，60 個 eval set、其中一個 80 個 run、共 31,520 筆 `question_results`）**：
+
+| | 之前 | 之後 |
+|---|---|---|
+| `GET /eval-sets` | 180 個查詢 / 209.5 ms | **6 個查詢 / 47.4 ms** |
+| `GET /runs` | 80 個查詢 / 44.8 ms | **3 個查詢 / 4.0 ms** |
+
+查詢數與頁面大小無關（limit=1 與 limit=24 相同），這正是
+`tests/test_pagination.py::test_card_query_count_does_not_grow_with_page_size` 守住的性質——
+斷言時間會 flaky，斷言查詢數不會。
+
+#### (f) 本次的驗證方式
+
+- **後端單元測試 122 個通過**（新增 27 個）。其中 11 個是**需要資料庫**的分頁測試，未設
+  `TEST_DATABASE_URL` 時會 skip，所以 `make test` **維持不需要 DB 也不需要網路**（111 passed,
+  11 skipped）。
+- **真 Postgres 16**：`alembic upgrade head`（含 `0005`）、`python -m app.seed`、上表的效能實測。
+- **真瀏覽器**（Playwright + Chromium，17 項檢查全通過、無任何 console / page error）：
+  - 首頁 24 張卡分頁、Load more 追加 48 張**無重複**、搜尋跨全部分頁生效。
+  - run 歷史 20 列分頁、追加 40 列無重複、**多選在追加後仍保留**。
+  - Run picker popup 高度受限可捲、Esc 只關 popup。
+  - **觸發 run 後停在同一題不做任何切換**，中欄自己長出 Agent Answer → verdict → trace spans；
+    手動選的 span 在多次背景刷新後仍是選中的那一個。
+  - 未開始的題目顯示「Waiting for the agent」，**不是** trace 錯誤。
+- **Langfuse 錯誤路徑**：用一個回傳真實 `Unknown table expression 'events'` 500 body 的 mock，
+  確認**兩條策略都被嘗試**、錯誤訊息含兩者、瀏覽器中顯示白話說明且原始 SQL 收在可展開區塊；
+  同時確認**同一個 run 中尚未回答的題目完全沒有對 Langfuse 發出任何請求**（(c) 的直接驗證）。
+- ⚠️ 仍**未對接真正的 Langfuse 服務**：成功路徑仍只有 mock。(b) 的 fallback 能不能繞過貴方那台
+  Langfuse 的 `events` 問題，要接上去才知道。

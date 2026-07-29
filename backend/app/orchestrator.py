@@ -14,6 +14,13 @@ Per question (from a snapshot read at run start):
       -> if incorrect: fetch+truncate trace -> diagnose -> write span_analyses
       -> push live progress (SSE)
 
+Progress is published at every one of those boundaries, not just at the end:
+`question_started`, `question_answered`, `question_judged`, `question_traced`,
+`question_done`. The last three matter because the trace poll and the diagnosis
+together can run for tens of seconds against real services, and the detail view
+refetches the open question's trace whenever one of these events changes its
+phase, verdict, trace_ready or has_analysis.
+
 Failure policy, which matters once the seams are real services rather than
 fakes that never raise:
 
@@ -265,10 +272,17 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     if cancel_event.is_set():
         return
 
+    # Flipped once span_analyses is written, so the final event tells the detail
+    # view a diagnosis is now there to fetch.
+    has_analysis = False
+
     async def publish(event_type: str) -> None:
         async with lock:
             snap = (state["done"], state["correct"])
-        await _publish_progress(run_id, item["pk"], result, snap[0], total, snap[1], event_type)
+        await _publish_progress(
+            run_id, item["pk"], result, snap[0], total, snap[1], event_type,
+            has_analysis=has_analysis,
+        )
 
     async def fail(message: str) -> None:
         async with lock:
@@ -359,6 +373,11 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         if verdict.verdict == "correct":
             state["correct"] += 1
 
+    # Publish the verdict now rather than only after the trace poll and diagnosis
+    # below, which together can run for tens of seconds against real services.
+    # Without this the question sits on "judging…" long after it has been judged.
+    await publish("question_judged")
+
     # 3) wait for trace ready (§6.12) before any diagnosis. A judged question is
     #    a finished question, so cancellation from here on keeps the verdict and
     #    just skips the extras.
@@ -369,6 +388,9 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
             result.trace_ready = trace is not None
             result.trace_error = trace_error
             await session.commit()
+        # The trace becoming available (or failing to) is itself a reason for the
+        # middle column to refetch — diagnosis may still be minutes away.
+        await publish("question_traced")
 
     # 4) diagnose incorrect questions once, at run time (§6.12 cache).
     #    A diagnosis failure leaves the question intact and undiagnosed; the
@@ -395,11 +417,15 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
                     )
                 )
                 await session.commit()
+            has_analysis = True
 
     async with lock:
         state["done"] += 1
         snap = (state["done"], state["correct"])
-    await _publish_progress(run_id, item["pk"], result, snap[0], total, snap[1])
+    await _publish_progress(
+        run_id, item["pk"], result, snap[0], total, snap[1],
+        has_analysis=has_analysis,
+    )
 
 
 async def _finalize_failed(session, run_id: uuid.UUID, exc: Exception) -> None:
@@ -424,7 +450,8 @@ async def _finalize_failed(session, run_id: uuid.UUID, exc: Exception) -> None:
 
 async def _publish_progress(run_id, question_pk, result: QuestionResult,
                             done: int, total: int, correct: int,
-                            event_type: str = "question_done") -> None:
+                            event_type: str = "question_done",
+                            has_analysis: bool = False) -> None:
     await hub.publish(
         run_id,
         {
@@ -438,6 +465,14 @@ async def _publish_progress(run_id, question_pk, result: QuestionResult,
             "status": result.status,
             "error_message": result.error_message,
             "trace_ready": result.trace_ready,
+            # The detail view refetches the trace when any of these change, so
+            # the middle column follows a live question instead of freezing at
+            # whatever it looked like when it was clicked. Without them the
+            # diagnosis — written after the last payload would otherwise be
+            # composed — only surfaces on the end-of-run reload.
+            "has_analysis": has_analysis,
+            "trace_error": result.trace_error,
+            "diagnosis_error": result.diagnosis_error,
             "done": done,
             "total": total,
             "correct": correct,

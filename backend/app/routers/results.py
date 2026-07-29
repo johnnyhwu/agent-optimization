@@ -88,6 +88,10 @@ async def list_results(
 
     # index results by question_pk, newest run first
     run_order = {r.id: i for i, r in enumerate(newest_first)}
+    run_labels = {
+        r.id: (r.name or r.started_at.isoformat(timespec="seconds"))
+        for r in newest_first
+    }
     by_q: dict[uuid.UUID, list[QuestionResult]] = {}
     for r in results:
         by_q.setdefault(r.question_pk, []).append(r)
@@ -107,7 +111,8 @@ async def list_results(
         )
         out.append(
             QuestionResultOut(
-                id=rep.id, run_id=rep.run_id, question_pk=qpk,
+                id=rep.id, run_id=rep.run_id,
+                run_label=run_labels.get(rep.run_id), question_pk=qpk,
                 question_id=q.question_id, question=q.question,
                 correlation_id=rep.correlation_id,
                 agent_response=rep.agent_response, verdict=rep.verdict,
@@ -174,12 +179,22 @@ async def get_trace(
         )
 
     # §6.12 / §7.1 #5: distinguish "generating (retrying)" from "no trace" — and,
-    # since this change, from "the trace store rejected us".
+    # since this change, from "the trace store rejected us" and from "this
+    # question hasn't run yet".
     spans: list[SpanOut] = []
     trace_error: str | None = None
+    phase = result_phase(result.status, result.agent_response, result.verdict)
     if result.status in ("failed", "cancelled"):
         # The agent never answered (or was stopped), so there is nothing to fetch.
         state = "no_trace"
+    elif phase == "pending":
+        # The agent hasn't been asked yet, so no trace can exist for this
+        # correlation_id. Calling the trace store here was worse than useless: on
+        # a broken or misconfigured Langfuse it produced a fresh error identical
+        # to the previous run's, which reads exactly like a stale one being
+        # replayed. It also fired up to trace_poll_max_attempts requests inside
+        # this request, per click, for a question that hasn't started.
+        state = "not_started"
     else:
         # The trace lives wherever the run that produced it was pointed, which is
         # not necessarily where the environment points today.

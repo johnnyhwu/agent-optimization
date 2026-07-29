@@ -228,6 +228,67 @@ state. The same call rebuilds the seams on the view path (trace fetch,
 re-diagnose) from the run that produced the result, so a past run is always read
 back through the endpoints it actually used.
 
+## Langfuse read strategies (and the `events` table error)
+
+A trace's observations can be read from either of two Langfuse endpoints:
+
+| `LANGFUSE_TRACE_READ_STRATEGY` | Reads from |
+|---|---|
+| `auto` (default) | `GET /api/public/traces/{id}`, falling back to the list endpoint |
+| `trace_api` | `GET /api/public/traces/{id}` only |
+| `observations_api` | `GET /api/public/v2/observations?traceId=` only |
+
+Both return the same observation fields, so the span mapping is identical — but
+Langfuse serves them with **different internal queries**, which matters if you
+hit this:
+
+```
+SQL Error: Unknown table expression 'events' in scope
+SELECT e._span_id AS id, e.trace_id AS trace_id, ...
+```
+
+**That error comes from your Langfuse server, not from this platform.** This
+client sends no SQL; Langfuse generates it against its own ClickHouse.
+Self-hosted builds from around 3.152.0 query an `events` / `events_core` table
+belonging to the v4 wide-observations schema whose production migration has not
+shipped ([langfuse#11924](https://github.com/langfuse/langfuse/issues/11924),
+[langfuse#12223](https://github.com/langfuse/langfuse/issues/12223),
+[discussion#12777](https://github.com/orgs/langfuse/discussions/12777)).
+
+Fix it on the Langfuse deployment:
+
+1. `SELECT * FROM default.schema_migrations WHERE dirty = 1` — rows here mean a
+   failed migration left the database marked dirty.
+2. Re-run the ClickHouse migrations (check `LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED`,
+   and that `langfuse-web` can reach ClickHouse at startup).
+3. Failing that, pin the Langfuse image below 3.152.
+
+`auto` is a hedge, not a cure: if both endpoints fail the same way, only fixing
+the deployment helps. The UI says so explicitly rather than showing a raw SQL
+dump — the banner explains the cause and keeps the original error behind a
+"Technical detail" disclosure. Switching to the official `langfuse` Python SDK
+would *not* help: it is a generated client over these same REST endpoints.
+
+## Paging the lists
+
+`GET /eval-sets` and `GET /eval-sets/{id}/runs` both take `limit` and `offset`
+and return `{items, total, has_more}`. The UI appends pages as you scroll, with a
+Load-more button for keyboard users and for when the page itself doesn't scroll.
+
+`GET /eval-sets` also takes `q` (name substring), `metadata_key` /
+`metadata_value`, and `sort` (`created_at` | `name`). These are applied in SQL,
+so searching looks at every eval set you can see rather than only the pages
+already loaded.
+
+Both endpoints issue a **fixed number of queries regardless of page size**;
+`backend/tests/test_pagination.py` asserts it. Those tests need a database and
+skip without one, so `make test` stays DB-free:
+
+```bash
+createdb agenteval_test
+TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/test_pagination.py
+```
+
 ## Upload schema (§6.11)
 Both formats carry the same fields. **JSONL** — one JSON object per line:
 ```jsonl

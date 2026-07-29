@@ -13,19 +13,34 @@ import { useToast } from "./Toast.jsx";
 // While a single run is executing this view is also the live one: the question
 // list is fully populated from the first second (the orchestrator creates every
 // result row up front) and each row is repainted from the run's SSE stream.
+//
+// All *three* columns follow that stream, not just the left one. The open
+// question is held by id and re-read from `results`, and its trace payload is
+// refetched whenever the fields that change it move (see `traceKey` below), so
+// the agent's answer, the verdict and the diagnosis appear as they happen
+// rather than on the next navigation.
 export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
   const toast = useToast();
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("all");
-  const [activeResult, setActiveResult] = useState(null);
+  // The *id* of the open question, not a copy of its row. The SSE stream
+  // replaces row objects as a question progresses, so holding the object froze
+  // the verdict, the re-diagnose affordance and everything else derived from it.
+  const [activeResultId, setActiveResultId] = useState(null);
   const [trace, setTrace] = useState(null);
+  const [traceRefreshing, setTraceRefreshing] = useState(false);
+  // Bumped to force a refetch that the fingerprint below wouldn't catch — a
+  // manual Retry, or a re-diagnose that replaces an analysis already present.
+  const [traceNonce, setTraceNonce] = useState(0);
   const [activeSpan, setActiveSpan] = useState(null);
   const [reDiagnosing, setReDiagnosing] = useState(false);
   const [runStatus, setRunStatus] = useState(null);
   const [cancelling, setCancelling] = useState(false);
   const [triggeredBy, setTriggeredBy] = useState(null);
   const subject = getSubject();
+
+  const activeResult = results?.find((r) => r.id === activeResultId) || null;
 
   // A single selected run is the only case that can be live: the multi-run modes
   // compare finished history.
@@ -48,14 +63,11 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
   useEffect(() => {
     if (!liveRunId) return;
     api
-      .listRuns(evalSet.id)
-      .then((runs) => {
-        const run = runs.find((r) => r.id === liveRunId);
-        if (run) {
-          setRunStatus(run.status);
-          setTriggeredBy(run.triggered_by);
-          setCancelling(Boolean(run.cancel_requested));
-        }
+      .getRun(evalSet.id, liveRunId)
+      .then((run) => {
+        setRunStatus(run.status);
+        setTriggeredBy(run.triggered_by);
+        setCancelling(Boolean(run.cancel_requested));
       })
       .catch(() => {});
   }, [evalSet.id, liveRunId]);
@@ -81,6 +93,11 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
                     verdict: d.verdict,
                     error_message: d.error_message,
                     trace_ready: d.trace_ready,
+                    // Part of the open question's trace fingerprint, so the
+                    // middle column follows the run instead of freezing.
+                    has_analysis: d.has_analysis ?? r.has_analysis,
+                    trace_error: d.trace_error,
+                    diagnosis_error: d.diagnosis_error,
                     is_incorrect: d.verdict === "incorrect" || r.is_incorrect,
                   }
                 : r
@@ -98,6 +115,8 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
     });
     es.addEventListener("question_started", patch);
     es.addEventListener("question_answered", patch);
+    es.addEventListener("question_judged", patch);
+    es.addEventListener("question_traced", patch);
     es.addEventListener("question_done", patch);
     es.addEventListener("run_completed", (e) => {
       let status = "completed";
@@ -108,28 +127,75 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
       }
       setRunStatus(status);
       es.close();
-      // Final reload picks up what the stream doesn't carry: has_analysis and
-      // the trace_ready flag settled after diagnosis.
+      // The stream now carries every per-question field, but a final reload is
+      // still the cheap way to reconcile anything a dropped or out-of-order
+      // event missed (concurrency > 1 makes ordering non-deterministic).
       loadResults();
     });
     es.onerror = () => es.close();
     return () => es.close();
   }, [evalSet.id, liveRunId]);
 
-  async function pick(r) {
-    setActiveResult(r);
-    setTrace(null);
+  function pick(r) {
+    if (r.id === activeResultId) return;
+    setActiveResultId(r.id);
+    setTrace(null); // a different question: nothing of the old one still applies
     setActiveSpan(null);
-    try {
-      const t = await api.trace(evalSet.id, r.id);
-      setTrace(t);
-      // Auto-select the top suspect (§6.13).
-      const top = t.analysis?.suspects?.[0]?.span_index;
-      setActiveSpan(top !== undefined ? top : t.spans[0]?.index ?? null);
-    } catch (e) {
-      setError(e.message);
-    }
   }
+
+  // Everything the middle and right columns render comes from GET .../trace, so
+  // that payload has to be refetched as the open question progresses. This
+  // fingerprint is exactly the set of fields that change what comes back —
+  // updated in place by the SSE stream, so the refresh is event-driven rather
+  // than polled.
+  const traceKey = activeResult
+    ? [
+        activeResult.id,
+        activeResult.phase,
+        activeResult.verdict,
+        activeResult.trace_ready,
+        activeResult.has_analysis,
+        traceNonce,
+      ].join("|")
+    : null;
+
+  // Auto-jumping to the top suspect is right when the question changes or a
+  // diagnosis first lands, and wrong on every background refresh — it would pull
+  // the developer off the span they are reading. This tracks which question the
+  // jump has already been spent on.
+  const jumpedFor = useRef(null);
+
+  useEffect(() => {
+    if (!activeResultId || !traceKey) return undefined;
+    let cancelled = false;
+    // Keep the previous content mounted while refetching: blanking it made a
+    // live question flicker back to the empty state on every event.
+    setTraceRefreshing(true);
+    api
+      .trace(evalSet.id, activeResultId)
+      .then((t) => {
+        if (cancelled) return;
+        setTrace(t);
+        const top = t.analysis?.suspects?.[0]?.span_index;
+        const target = top !== undefined ? top : t.spans[0]?.index;
+        // Jump once per question, and again the moment a diagnosis appears —
+        // landing on the top suspect is the point of the diagnosis (§6.13).
+        const jumpTo = t.analysis ? `${activeResultId}:analysis` : activeResultId;
+        if (target !== undefined && jumpedFor.current !== jumpTo) {
+          jumpedFor.current = jumpTo;
+          setActiveSpan(target);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setTraceRefreshing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [evalSet.id, activeResultId, traceKey]);
 
   async function cancelRun() {
     setCancelling(true);
@@ -147,7 +213,10 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
     setReDiagnosing(true);
     try {
       await api.reDiagnose(evalSet.id, activeResult.id);
-      await pick(activeResult); // reload trace+analysis
+      // Regenerating over an existing analysis leaves has_analysis unchanged, so
+      // the fingerprint alone wouldn't notice the new content.
+      jumpedFor.current = null; // a fresh diagnosis earns a fresh jump
+      setTraceNonce((n) => n + 1);
       toast.success("Diagnosis regenerated");
     } catch (e) {
       const msg = e.status === 403 ? "Re-diagnose is owner-only." : e.message;
@@ -183,12 +252,18 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
         {runStatus && runStatus !== "running" && runIds.length === 1 && (
           <> · run <strong>{runStatus}</strong></>
         )}
+        {/* Across several runs the row on screen is a representative one that may
+            predate the run being watched; say which, or an old run's trace and
+            errors read as the current one's. */}
+        {runIds.length > 1 && activeResult?.run_label && (
+          <> · showing <strong>{activeResult.run_label}</strong></>
+        )}
       </p>
       <div className="three">
         {results && (
           <QuestionList
             results={results}
-            activeId={activeResult?.id}
+            activeId={activeResultId}
             filter={filter}
             setFilter={setFilter}
             onPick={pick}
@@ -196,12 +271,13 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
         )}
         <SpanList
           trace={trace}
+          refreshing={traceRefreshing}
           activeSpan={activeSpan}
           onPickSpan={setActiveSpan}
           canReDiagnose={canReDiagnose}
           onReDiagnose={reDiagnose}
           reDiagnosing={reDiagnosing}
-          onRetryTrace={() => activeResult && pick(activeResult)}
+          onRetryTrace={() => setTraceNonce((n) => n + 1)}
         />
         <SpanDetail span={activeSpanObj} suspect={activeSpanObj ? suspectByIndex[activeSpanObj.index] : null} />
       </div>

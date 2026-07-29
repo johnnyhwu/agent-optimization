@@ -1,5 +1,6 @@
 """Langfuse trace client: the NotReady contract that §6.12 depends on, paging,
-and the observation -> Span mapping across Langfuse schema versions."""
+the observation -> Span mapping across Langfuse schema versions, and the two
+read strategies that let one broken endpoint be routed around."""
 from __future__ import annotations
 
 import httpx
@@ -11,16 +12,43 @@ from app.integrations.real.langfuse import LangfuseTraceClient, observation_to_s
 
 HOST = "https://langfuse.test"
 OBS_URL = f"{HOST}/api/public/v2/observations"
+TRACE_URL = f"{HOST}/api/public/traces/corr"
+
+# The real body a self-hosted Langfuse ≥3.152 returns when its ClickHouse is
+# missing the v4 `events` table (langfuse#11924).
+EVENTS_TABLE_ERROR = (
+    "SQL Error: Unknown table expression 'events' in scope SELECT e._span_id AS id, "
+    "e.trace_id AS trace_id"
+)
 
 
-@pytest.fixture
-def client(configure):
-    with configure(
+def _client(configure, strategy: str):
+    return configure(
         langfuse_host=HOST,
         langfuse_public_key="pk",
         langfuse_secret_key="sk",
         langfuse_observation_types=["GENERATION", "SPAN"],
-    ):
+        langfuse_trace_read_strategy=strategy,
+    )
+
+
+@pytest.fixture
+def client(configure):
+    # Pinned to the list endpoint: these cases are about *its* paging, auth and
+    # error handling. Strategy selection has its own tests below.
+    with _client(configure, "observations_api"):
+        yield LangfuseTraceClient()
+
+
+@pytest.fixture
+def trace_api_client(configure):
+    with _client(configure, "trace_api"):
+        yield LangfuseTraceClient()
+
+
+@pytest.fixture
+def auto_client(configure):
+    with _client(configure, "auto"):
         yield LangfuseTraceClient()
 
 
@@ -178,3 +206,97 @@ async def test_error_body_is_truncated(client):
         await client.fetch_trace("corr")
     # A 5 KB HTML error page is not a UI message.
     assert len(str(exc.value)) < 400
+
+
+# --- Read strategies ---------------------------------------------------------
+#
+# Two endpoints expose the same observations through different server-side
+# queries, so a Langfuse that can serve one but not the other (the `events`
+# table bug) is still usable.
+
+@respx.mock
+async def test_trace_api_returns_the_same_spans_as_the_list_endpoint(trace_api_client):
+    """GET /traces/{id} embeds full observation objects, so the mapper is shared.
+
+    If this ever diverges from the list endpoint's shape, the fallback would
+    silently produce a different-looking trace.
+    """
+    respx.get(TRACE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "corr",
+                "observations": [
+                    _obs(id="b", name="second", startTime="2026-07-27T00:00:02Z"),
+                    _obs(id="a", name="first", startTime="2026-07-27T00:00:01Z"),
+                ],
+            },
+        )
+    )
+    trace = await trace_api_client.fetch_trace("corr")
+    assert [s.index for s in trace.spans] == [0, 1]
+    assert [s.tool_name for s in trace.spans] == ["first", "second"]
+
+
+@respx.mock
+async def test_trace_api_404_is_not_ready_not_an_error(trace_api_client):
+    """Ingestion is async: a trace that doesn't exist yet must keep the caller
+    polling (§6.12), not fail the question."""
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(404, json={"message": "not found"}))
+    assert isinstance(await trace_api_client.fetch_trace("corr"), NotReady)
+
+
+@respx.mock
+async def test_auto_tries_the_trace_api_first_and_stops_there(auto_client):
+    trace_route = respx.get(TRACE_URL).mock(
+        return_value=httpx.Response(200, json={"observations": [_obs()]})
+    )
+    obs_route = respx.get(OBS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [], "meta": {}})
+    )
+    trace = await auto_client.fetch_trace("corr")
+    assert [s.tool_name for s in trace.spans] == ["sql_query"]
+    assert trace_route.called
+    assert not obs_route.called  # no wasted second request on the happy path
+
+
+@respx.mock
+async def test_auto_falls_back_when_the_first_endpoint_breaks(auto_client):
+    """The point of the fallback: the broken ClickHouse query is per-endpoint."""
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR))
+    respx.get(OBS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [_obs()], "meta": {"totalPages": 1}})
+    )
+    trace = await auto_client.fetch_trace("corr")
+    assert [s.tool_name for s in trace.spans] == ["sql_query"]
+
+
+@respx.mock
+async def test_auto_reports_every_endpoint_that_failed(auto_client):
+    """A fallback must not hide why the primary path failed."""
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR))
+    respx.get(OBS_URL).mock(return_value=httpx.Response(401, json={"message": "invalid credentials"}))
+    with pytest.raises(TraceFetchError) as exc:
+        await auto_client.fetch_trace("corr")
+    message = str(exc.value)
+    assert "trace_api" in message and "observations_api" in message
+    assert "Unknown table expression" in message  # the primary failure survives
+    assert "invalid credentials" in message
+
+
+@respx.mock
+async def test_auto_keeps_polling_when_one_endpoint_says_not_ready(auto_client):
+    """A 404 (not ingested yet) plus an outright failure must not be reported as
+    a clean NotReady — the developer still needs to see the broken endpoint."""
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(404, json={"message": "not found"}))
+    respx.get(OBS_URL).mock(return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR))
+    with pytest.raises(TraceFetchError) as exc:
+        await auto_client.fetch_trace("corr")
+    assert "observations_api" in str(exc.value)
+
+
+@respx.mock
+async def test_auto_is_not_ready_when_both_endpoints_are_simply_empty(auto_client):
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(404))
+    respx.get(OBS_URL).mock(return_value=httpx.Response(200, json={"data": [], "meta": {}}))
+    assert isinstance(await auto_client.fetch_trace("corr"), NotReady)

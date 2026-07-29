@@ -75,6 +75,17 @@ class Settings(BaseSettings):
     # Observation types rebuilt into the span list. EVENT observations carry no
     # input/output worth showing, so they are dropped by default.
     langfuse_observation_types: list[str] = ["GENERATION", "SPAN"]
+    # Which of Langfuse's read APIs to pull a trace's observations from.
+    #
+    #   auto              try each strategy in turn, first success wins (default)
+    #   trace_api         GET /api/public/traces/{id} only
+    #   observations_api  GET /api/public/v2/observations?traceId= only
+    #
+    # `auto` exists because these two endpoints are served by different queries
+    # inside Langfuse, and some self-hosted builds can serve one but not the
+    # other — see the `events` table note in real/langfuse.py. Pin a single
+    # strategy once a deployment is known-good to skip the wasted first call.
+    langfuse_trace_read_strategy: str = "auto"
 
     # --- Run execution -----------------------------------------------------
     # 1 keeps the original strictly-sequential behaviour. Raise it to run
