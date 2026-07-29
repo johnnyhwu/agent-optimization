@@ -681,7 +681,7 @@ pk (eval_set_id, user_subject)
   對外整合用 `httpx`（agent HTTP / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
-- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 52 個測試，
+- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 53 個測試，
   **不需要 DB 也不需要網路**（`make test`）。
 - **上傳格式**：支援 **JSONL 與 CSV 檔案**。開發者一律**上傳檔案**（不再手貼 JSONL），檔案在**前端解析**
   成一張**可編輯的預覽表格**（見 §9.9）；按 Create 前把（可能改過的）表格**在前端重新序列化為 JSONL**
@@ -940,7 +940,7 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | 診斷 LLM | §6.9 定案 I/O 契約 | **已實作**（`DIAGNOSIS_IMPL=real`），並加上輸出驗證與 `span_index` 越界剔除 |
 | 部署形態 | 未提（只提 docker-compose 起 Postgres）| **db / backend / frontend 各一個 container**；backend 依賴用 uv、frontend 用 pnpm |
 | 錯誤處理 | 未提 | orchestrator 有完整失敗策略（§9.6），run 不會卡在 `running` |
-| 測試 | 未提 | 52 個單元測試（respx mock），不需 DB 或網路 |
+| 測試 | 未提 | 53 個單元測試（respx mock），不需 DB 或網路 |
 
 ### 9.13 如何執行
 - 一鍵：`SEED=1 ./scripts/dev.sh`（build image → 起 Postgres → migrate → seed → 起 backend:8000 +
@@ -1017,10 +1017,12 @@ trace。
 
 ### 9.16 測試與驗證現況
 
-**單元測試**（`backend/tests/`，52 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
+**單元測試**（`backend/tests/`，53 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
 - `test_agent_client.py`：request body 的 `query` + `metadata.trace_data`（trace_id=session_id、
   user_id、tags）、`{"content": str}` 回應解析（含裸 JSON 字串與純文字兩種容錯 fallback）、
-  非字串/缺 `content` 視為失敗、空回答視為失敗、5xx raise（交給重試）vs 4xx 直接失敗、auth header。
+  非字串/缺 `content` 視為失敗、空回答視為失敗、307 redirect 會被 follow 而非誤判為空回應
+  （實測中撞到過：server 端路由是 `/execute/` 帶尾斜線時常見的 trailing-slash 307）、
+  5xx raise（交給重試）vs 4xx 直接失敗、auth header。
 - `test_langfuse_client.py`：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
   分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射。
 - `test_judge_and_diagnosis.py`：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
