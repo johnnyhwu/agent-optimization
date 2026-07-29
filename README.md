@@ -73,7 +73,7 @@ them up **one at a time** — a real agent while the judge is still fake, and so
 
 | env var | seam | what `real` means |
 |---|---|---|
-| `AGENT_IMPL` | `AgentClient` | POST `{"query", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data` (§6.2) |
+| `AGENT_IMPL` | `AgentClient` | POST `{"message", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data` (§6.2) |
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | §6.9 clue-style diagnosis over the same LLM endpoint (`DIAGNOSIS_MODEL`) |

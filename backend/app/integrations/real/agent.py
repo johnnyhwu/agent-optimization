@@ -1,7 +1,7 @@
 """Real AgentClient: a plain HTTP agent server (§6.2).
 
 The agent server is a small FastAPI app with a single `POST /execute` endpoint
-that takes `{"query": str, "metadata": dict}` and returns `{"content": str}`
+that takes `{"message": str, "metadata": dict}` and returns `{"content": str}`
 with the agent's answer. No protocol SDK is involved — the payload and
 response are both trivial, so a hand-written httpx POST is simpler than
 depending on one.
@@ -72,7 +72,7 @@ class HttpAgentClient:
         tags: list[str] | None,
     ) -> dict[str, Any]:
         return {
-            "query": question,
+            "message": question,
             "metadata": {
                 "trace_data": {
                     "trace_id": correlation_id,

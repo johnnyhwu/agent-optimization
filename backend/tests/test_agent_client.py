@@ -1,4 +1,4 @@
-"""HTTP agent client: request shape (query + metadata.trace_data) and the
+"""HTTP agent client: request shape (message + metadata.trace_data) and the
 several response shapes the agent server's /execute endpoint may return."""
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ async def test_request_carries_trace_data(client):
     await client.call("What is 2+2?", "corr-abc", "alice", ["eval_billing"])
 
     body = json.loads(respx.calls[0].request.content)
-    assert body["query"] == "What is 2+2?"
+    assert body["message"] == "What is 2+2?"
     assert body["metadata"]["trace_data"] == {
         "trace_id": "corr-abc",
         "session_id": "corr-abc",

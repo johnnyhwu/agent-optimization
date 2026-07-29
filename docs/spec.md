@@ -697,7 +697,7 @@ pk (eval_set_id, user_subject)
 
 | Seam（Protocol） | 介面 | 假實作（模擬延遲） | 真實實作 |
 |---|---|---|---|
-| `AgentClient` | `call(question, correlation_id, user_id, tags) -> AgentResponse` | 睡 1–3s；回假 response | `real/agent.py`：`POST /execute {"query","metadata"}`，metadata.trace_data 帶 trace_id(=correlation_id)/session_id(=correlation_id)/user_id/tags，回應為 `{"content": str}`（§6.2）|
+| `AgentClient` | `call(question, correlation_id, user_id, tags) -> AgentResponse` | 睡 1–3s；回假 response | `real/agent.py`：`POST /execute {"message","metadata"}`，metadata.trace_data 帶 trace_id(=correlation_id)/session_id(=correlation_id)/user_id/tags，回應為 `{"content": str}`（§6.2）|
 | `JudgeClient` | `judge(question, response, ground_truth) -> Verdict` | 睡 0.5–1s；二元判定 | `real/judge.py`：OpenAI 相容端點，LLM 同時吐 verdict+score，可選門檻覆寫 |
 | `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | `real/langfuse.py`：`GET /api/public/v2/observations?traceId=`，0 筆 = NotReady（§6.12）|
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, verdict) -> dict` | 睡 2–4s；回 §6.9 的 JSON | `real/diagnosis.py`：§6.9 四段式 prompt，輸出驗證 + span_index 越界剔除 |
@@ -934,7 +934,7 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | Langfuse | 讀 trace / 寫 dataset+score | **讀已實作**（`TRACE_IMPL=real`：`/api/public/v2/observations` 依 correlation_id 取回並重建 span 列表）；**寫 dataset / score 尚未做**（§6.3 的 score 回寫留待之後）|
 | UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
 | 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |
-| Agent 通訊協定 | §1.1/§6.2 設想的是 Google A2A(Agent-to-Agent) protocol server | **agent server 端後來改為單一 FastAPI `POST /execute`**（`{"query","metadata"}` → `{"content"}`），本平台的 `AgentClient` 也隨之從手寫 A2A JSON-RPC client 換成 `real/agent.py` 的 HTTP client；correlation 機制不變——`metadata.trace_data.trace_id`(=`session_id`) 走 correlation_id，另加 `user_id`(觸發 run 的使用者) 與 `tags`(`["eval_<eval_set 名稱>"]`)|
+| Agent 通訊協定 | §1.1/§6.2 設想的是 Google A2A(Agent-to-Agent) protocol server | **agent server 端後來改為單一 FastAPI `POST /execute`**（`{"message","metadata"}` → `{"content"}`），本平台的 `AgentClient` 也隨之從手寫 A2A JSON-RPC client 換成 `real/agent.py` 的 HTTP client；correlation 機制不變——`metadata.trace_data.trace_id`(=`session_id`) 走 correlation_id，另加 `user_id`(觸發 run 的使用者) 與 `tags`(`["eval_<eval_set 名稱>"]`)|
 | LLM judge | §6.7 標明「prompt 與二元化門檻留待之後」 | **已定案並實作**：LLM 同時吐 `verdict + score + comment`；另有可選的 `JUDGE_SCORE_THRESHOLD` 由分數推導 verdict，調門檻不用改 prompt |
 | judge 介面 | `judge(response, ground_truth)` | **多了 `question` 參數**——真 LLM judge 需要題目本身當 context |
 | 診斷 LLM | §6.9 定案 I/O 契約 | **已實作**（`DIAGNOSIS_IMPL=real`），並加上輸出驗證與 `span_index` 越界剔除 |
@@ -1018,7 +1018,7 @@ trace。
 ### 9.16 測試與驗證現況
 
 **單元測試**（`backend/tests/`，53 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
-- `test_agent_client.py`：request body 的 `query` + `metadata.trace_data`（trace_id=session_id、
+- `test_agent_client.py`：request body 的 `message` + `metadata.trace_data`（trace_id=session_id、
   user_id、tags）、`{"content": str}` 回應解析（含裸 JSON 字串與純文字兩種容錯 fallback）、
   非字串/缺 `content` 視為失敗、空回答視為失敗、307 redirect 會被 follow 而非誤判為空回應
   （實測中撞到過：server 端路由是 `/execute/` 帶尾斜線時常見的 trailing-slash 307）、
