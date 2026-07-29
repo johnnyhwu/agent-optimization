@@ -17,6 +17,115 @@ DB schema is the real thing, created by Alembic migrations.
 > multi-tenant isolation. Writing back to Langfuse (verdicts as Scores, §6.3) is
 > also not done — the trace seam reads only.
 
+**Contents** — [The problem](#the-problem) · [How it works](#how-it-works) ·
+[Life of a run](#life-of-a-run) · [Stack](#stack) ·
+[Run it](#run-it-one-command) · [Fake → real](#going-from-fake-to-real) ·
+[Trying the flows](#trying-the-flows) · [Where things live](#where-the-important-pieces-live) ·
+[API](#api-surface) · [Langfuse read strategies](#langfuse-read-strategies-and-the-events-table-error) ·
+[Paging](#paging-the-lists) · [Upload schema](#upload-schema-611)
+
+> **New to this codebase?** Read [The problem](#the-problem) and
+> [Life of a run](#life-of-a-run) below, then [`docs/spec.md`](docs/spec.md) §9
+> (As-Built) for the design reasoning. Note that spec §1–§8 is *historical design
+> context* — where it disagrees with §9, §9 wins. This README is the operating
+> manual; the spec is the design and implementation record.
+
+## The problem
+
+There is a **stateless domain agent** hosted behind an HTTP endpoint. Each
+question it answers produces a **trace** in [Langfuse](https://langfuse.com) —
+a sequence of spans, each one a tool call or the final response generation. The
+agent picks a **skill** (a developer-written playbook for a class of question)
+and then tool-calls its way to an answer.
+
+Evaluating it was already possible: push questions in, LLM-as-judge the answers,
+get a pass rate. **The expensive part was what came next** — for every question
+judged wrong, a developer had to open that question's trace in Langfuse and read
+through the spans by hand to find where it went off the rails. That is the cost
+this platform removes.
+
+So on top of running the eval, it asks an LLM: *given the developer's plain-language
+description of how this question should have been answered, and the trace of what
+actually happened, where did the two diverge?* The answer is deliberately phrased
+as **a clue, not a verdict** — several suspect spans are allowed, confidence is
+high/medium/low rather than a fake percentage, and a `caveat` field lets the model
+say "this isn't attributable to one span at all". The UI then jumps straight to
+the top suspect with its input, output and token counts.
+
+Why the hedging matters: the whole feature rests on the assumption that an error
+can be pinned to a single span. That assumption is often wrong (compounding
+errors, several valid paths, faults in a tool rather than the skill). Overstating
+confidence would send developers down the wrong path with false authority — see
+spec §4.3 and §6.7.
+
+## How it works
+
+```
+                    ┌─────────────────────────────────────────────┐
+  browser ────────► │  Eval platform  (this repo)                 │
+  (React, :5173)    │                                             │
+                    │  FastAPI ──► Orchestrator (asyncio task)    │
+                    │     │              │                        │
+                    │     │              ├─► AgentClient  ────────┼─► agent server
+                    │     │              ├─► JudgeClient  ────────┼─► LLM endpoint
+                    │     │              ├─► TraceClient  ────────┼─► Langfuse
+                    │     │              └─► DiagnosisClient ─────┼─► LLM endpoint
+                    │     ▼                                       │
+                    │  Postgres: eval sets, questions, runs,      │
+                    │            results, diagnoses, roles        │
+                    └─────────────────────────────────────────────┘
+                          ▲ SSE: live per-question progress
+```
+
+Two ideas carry most of the design:
+
+**1. Four swappable seams.** Each external dependency is a Python `Protocol`
+with two implementations — a fake one with realistic latency, and a real one.
+`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` pick between them
+**independently**, all defaulting to fake. So the whole product runs on nothing
+but Docker, and you can bring up one real service at a time.
+
+**2. Langfuse owns traces; this app owns everything Langfuse has no concept of.**
+Span input/output/token counts are fetched live from Langfuse at view time and
+**never copied into our database**. Our database holds what Langfuse cannot
+express: eval sets, stable question ids, runs, verdicts, and the LLM diagnoses.
+The link between the two is a **correlation id**.
+
+> **The correlation id is the linchpin.** Before calling the agent, the platform
+> generates an id and passes it in the request metadata. The agent server must
+> use it as its Langfuse trace id. Without that, the platform has no way to find
+> the trace it just caused, and error localization cannot work at all. This is
+> the one change required **outside this repo** — see
+> [the trace-seam prerequisite](#going-from-fake-to-real).
+
+## Life of a run
+
+What happens when someone presses "Run eval", end to end:
+
+1. `POST /eval-sets/{id}/runs` records the run **with the exact settings it was
+   triggered with** (endpoints, models, timeouts, concurrency) and starts a
+   background asyncio task. Blank fields are resolved to the environment's values
+   *now*, so a run is a complete record rather than a set of deltas against an
+   environment that may since have changed.
+2. The orchestrator takes a **snapshot of the questions**. Editing a question
+   afterwards does not affect this run — a run is a historical execution.
+3. It creates **every** `question_results` row up front as `pending`, so the UI
+   lists the whole question set from the first second instead of having questions
+   pop into existence one at a time.
+4. Per question: **agent** (correlation id in the metadata) → **judge** → write
+   the verdict → **poll Langfuse with backoff** until the trace lands (ingestion
+   is asynchronous) → if the answer was wrong, fetch and truncate the trace and
+   ask the **diagnosis** model, storing the result.
+5. Each of those boundaries publishes an **SSE event**, so all three columns of
+   the detail view update live. The diagnosis is generated **once** and stored;
+   opening the question later reads the database.
+
+Failure is expected and never fatal to the run: a question that fails records
+*why* and the run continues to completion. A judge failure is never silently
+treated as a pass. A diagnosis failure leaves the verdict intact. An unexpected
+error still finalizes the run and still closes the SSE stream — a run is never
+left stuck in `running`.
+
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
   progress. Containerized; Python deps installed with **uv**.
@@ -63,7 +172,8 @@ make migrate    # alembic upgrade head, in the backend container
 make seed       # python -m app.seed, in the backend container
 make backend    # backend container: uvicorn app.main:app --reload on :8000
 make frontend   # frontend container: vite dev server on :5173
-make test       # backend unit tests (no DB or external service needed)
+make test       # backend unit tests (no DB or external service needed; the 11
+                #   database-backed paging tests skip — see "Paging the lists")
 make preflight  # ping whichever integrations are set to real
 make down       # docker compose down
 ```
@@ -148,8 +258,12 @@ Notes:
   allowed. (Backend default identity is `FAKE_USER_SUBJECT`, default `alice`.)
 - **Three tiers (§6.13):** cards → run history → 3-column detail, with a
   breadcrumb for one-click back.
+- **Finding an eval set:** the toolbar above the cards searches by name, filters
+  by a custom metadata key/value, and sorts by newest or name. All of it runs in
+  SQL, so it searches every set you can see — not just the pages already loaded.
 - **Incorrect modes:** in run history, multi-select runs and pick
   **union / intersection / last-N** — the seed data makes all three differ.
+  Selection is kept by run id, so it survives loading more pages.
 - **Diagnosis:** click an incorrect question; the middle column shows the
   clue-style `overall_diagnosis`, a **caveat** banner when present, and suspect
   spans marked high/med/low with the top one auto-selected. The right column
@@ -168,6 +282,15 @@ Notes:
   green/red once judged — with a percentage bar above the columns. A question
   whose text contains the `⟦timeout⟧` marker fails while the run finishes
   (partial completion).
+- **The detail view is live in all three columns.** Open a question that hasn't
+  run yet and *stay on it*: the middle column fills in by itself as the agent
+  answers, the judge rules and the diagnosis lands — no navigating away and back.
+  The open question is tracked by id and its trace payload is refetched whenever
+  the fields that change it move (`phase`, `verdict`, `trace_ready`,
+  `has_analysis`), driven by the SSE stream rather than polling. A span you
+  selected by hand is never stolen by a background refresh, and a question the
+  agent hasn't reached yet says "waiting for the agent" instead of reaching for a
+  trace that cannot exist yet.
 - **Stopping a run:** "Stop run" in the detail view, or the stop button on a
   running row in the run history. It abandons the in-flight agent call rather
   than waiting for it, keeps every question already judged, and leaves the rest
@@ -191,7 +314,9 @@ Notes:
 | Columns the real integrations need | `backend/alembic/versions/0002_real_integration.py` |
 | Per-run config columns (`name`/`config`/`secrets`) | `backend/alembic/versions/0003_run_config.py` |
 | Cancellation flag + the two error columns | `backend/alembic/versions/0004_run_lifecycle.py` |
+| Indexes for the two list endpoints | `backend/alembic/versions/0005_list_indexes.py` |
 | ORM models | `backend/app/models.py` |
+| Request/response models (incl. `Page`) | `backend/app/schemas.py` |
 | **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
 | **Fake impls** (each `# REPLACE WITH REAL IMPL`) | `backend/app/integrations/fake.py` |
 | **Real impls** (agent / judge / Langfuse / diagnosis) | `backend/app/integrations/real/` |
@@ -205,12 +330,45 @@ Notes:
 | Run cancellation signal (durable flag + in-process event) | `backend/app/cancellation.py` |
 | FK-safe delete order (run / eval set) | `backend/app/services/deletion.py` |
 | Optimistic-lock 409 (§6.16) | `backend/app/routers/eval_sets.py`, `questions.py` |
+| Card aggregates + paging/filter/sort | `backend/app/routers/eval_sets.py` |
+| Trace view state machine (incl. `not_started`) | `backend/app/routers/results.py` |
+| Manual re-diagnose (owner-only) | `backend/app/routers/diagnosis.py` |
 | Roles / fake login (§6.16) | `backend/app/auth.py` |
 | §6.7 body truncation | `backend/app/services/truncation.py` |
-| Incorrect modes + regression | `backend/app/services/aggregation.py` |
+| Incorrect modes + regression + `phase` | `backend/app/services/aggregation.py` |
 | SSE hub | `backend/app/sse.py` |
 | Seed data | `backend/app/seed.py` |
 | Frontend three tiers | `frontend/src/components/` |
+| Live 3-column update (trace fingerprint) | `frontend/src/components/RunDetail.jsx` |
+| Paging hook: append, dedupe, drop stale responses | `frontend/src/usePagedList.js` |
+| Load-more footer + scroll sentinel | `frontend/src/components/ListFooter.jsx` |
+| Bounded "Use config from" picker | `frontend/src/components/RunPicker.jsx` |
+| Live run progress bar + stop button | `frontend/src/components/RunStatusBar.jsx` |
+
+## API surface
+
+Interactive docs are served by the running backend at
+**http://localhost:8000/docs** (OpenAPI schema at `/openapi.json`). The annotated
+list, with the authorization rule for each endpoint, is spec §9.5. In brief:
+
+| Group | Endpoints |
+|---|---|
+| Session | `GET /health`, `/users`, `/me`, `/run-config/defaults` |
+| Eval sets | `POST /eval-sets`, `GET /eval-sets` (paged + filtered), `GET·PATCH·DELETE /eval-sets/{id}`, `PUT /eval-sets/{id}/roles`, `GET /eval-sets/metadata/keys` |
+| Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
+| Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
+| Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
+
+Authorization is a FastAPI dependency, not scattered per-endpoint: writes and
+re-diagnose require **owner**; reads and triggering a run accept **owner or
+viewer**; cancelling accepts an owner *or* whoever started that run. Identity
+comes from the `X-User-Subject` header (`?subject=` for SSE, which cannot set
+headers).
+
+`GET .../results/{rid}/trace` returns a `trace_state` of `ready`, `generating`
+(ingestion still landing), `not_started` (the agent hasn't been asked yet — no
+request is made to the trace store), `no_trace` (the question failed), or `error`
+(the trace store could not be read, with the reason).
 
 ## Swapping fake → real
 Each integration is a Python `Protocol` in `integrations/base.py`, with a fake

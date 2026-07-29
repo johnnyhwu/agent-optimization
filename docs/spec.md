@@ -7,16 +7,34 @@
 
 ---
 
-> ## ⚑ 目前狀態（2026-07，重要）
-> **Stage 1 的 POC 已經實作完成並可端到端執行**。§1–§5 為原始背景與設計推理、§6 為分階段
-> 藍圖與 Stage 1 定案、§7–§8 為驗收與開放問題，皆保留作為設計脈絡。**若你只想知道「現在到底
-> 做了什麼」，請直接看新增的 §9「Stage 1 POC 實作現況（As-Built）」**——那一節自包含地描述已落地
-> 的技術棧、DB schema、API、權限/分享、前端、以及與本設計文件的所有差異。
+> ## ⚑ 怎麼讀這份文件（2026-07，先讀這段）
 >
-> 一句話總結 POC 性質：**真實的 React UI + 真實的 app-DB schema + 真實的 orchestration/權限/樂觀鎖
-> 邏輯；但所有外部依賴（A2A agent、LLM judge、LLM 診斷、Langfuse 取 trace）皆以「假資料層」樁接
-> （stub），並模擬真實延遲**。目的先證明 UI + 資料流 + schema，尚未串接任何真實外部系統。
-> §6 各節中若與 §9 衝突，以 §9（實作現況）為準。
+> **這份文件有兩半，寫作時間相差很遠，讀錯順序會被誤導。**
+>
+> | 章節 | 是什麼 | 可信度 |
+> |---|---|---|
+> | **§1–§5** | 原始背景、對 Langfuse 能力邊界的查證、找出的風險、定案的架構決策 | **設計脈絡**。說明「為什麼是這樣設計」，不描述程式碼 |
+> | **§6** | 分階段藍圖與 Stage 1 的逐項定案 | **設計意圖**。多數已實作，但細節有出入 |
+> | **§7–§8** | 驗收清單與開放問題 | 部分已完成，狀態以 §9 為準 |
+> | **§9** | **Stage 1 實作現況（As-Built）** | **唯一權威的「現在到底做了什麼」** |
+>
+> **§1–§8 與 §9 衝突時，一律以 §9 為準。** §1–§8 刻意保留原貌（包含後來被推翻的假設），
+> 因為那是理解設計取捨的脈絡；但它們**不是**目前程式碼的描述。
+>
+> **第一次讀這個專案，建議路徑**：
+> 1. **§1–§2**（背景與想解決的問題）——不讀這段，後面所有設計都會顯得沒有動機。
+> 2. **§6.6–§6.7**（為什麼只做 Stage 1、Stage 1 的範圍）。
+> 3. **直接跳到 §9**，先看該節開頭的「§9 的地圖」再挑要讀的小節。§9 是自包含的。
+> 4. 想動手跑起來或接真實服務，看 repo 根目錄的 **`README.md`**——那份是操作手冊，
+>    本文件是設計與實作紀錄，兩者互補不重複。
+>
+> **一句話現況**：真實的 React UI + 真實的 app-DB schema + 真實的 orchestration/權限/樂觀鎖/
+> SSE 邏輯；四個外部依賴（HTTP agent、LLM judge、LLM 診斷、Langfuse 取 trace）**假、真兩套
+> 實作都已寫好**，由四個環境變數逐一切換，**預設全部走假的**，所以不接任何外部服務也能完整跑完。
+> 真實實作已用 mock 端到端驗證過，但**尚未對接貴方的正式環境**（詳見 §9.2 與 §9.16）。
+>
+> ⚠️ 兩個常見的踩雷點：§1.1／§6.2 寫的 **A2A protocol 已經不是現況**（agent server 改成單一
+> `POST /execute`，見 §9.12），而 §6.14 的 schema 之後又加了四個 migration（見 §9.4）。
 
 ---
 
@@ -665,12 +683,29 @@ pk (eval_set_id, user_subject)
 > **假、真兩套實作都已寫好**，用四個環境變數逐一切換，**預設走假的**，因此不接任何外部服務也能
 > 完整跑起來。真實實作**尚未對接過正式環境**（只用 mock 驗過，見 §9.16）。
 >
-> 導讀：§9.2 是真假邊界（最重要）、§9.4 是 schema、§9.6 是 run 流程與失敗策略、
-> §9.15 是完整設定表、§9.16 是測試與「哪些已驗證／哪些沒有」、§9.14 是還缺什麼、
-> **§9.17 是後續補強：中止 run、刪除 eval set/run、執行中的完整 question list、
-> 以及外部依賴失敗時的錯誤可見性**、**§9.18 是第一次接上真實 Langfuse 後的五項修正：
-> 三欄詳情的即時更新、Langfuse 讀取的雙端點 fallback、未開始題目不再誤報 trace 錯誤、
-> 有上限的 run config 選單、以及兩個清單的分頁與查詢效能**。
+> **§9 的地圖**（§9.1–§9.16 描述現況；§9.17–§9.18 是兩次後續補強的「改了什麼、為什麼」，
+> 其中被修正的現況已同步回前面各節，所以前後不會互相矛盾）：
+>
+> | 節 | 內容 | 什麼時候看 |
+> |---|---|---|
+> | §9.1 | 交付形態與技術棧 | 想知道用了什麼 |
+> | **§9.2** | **真假邊界（最重要的一節）** | 想知道哪些是真的、怎麼切換 |
+> | §9.3 | 專案結構（關鍵檔案） | 想找某個東西在哪 |
+> | **§9.4** | **App DB schema 與五個 migration** | 想理解資料模型 |
+> | §9.5 | API 端點清單 | 要串接或除錯 |
+> | **§9.6** | **Orchestrator 流程與失敗策略** | 想理解一次 run 到底發生什麼 |
+> | §9.7 | 診斷的 I/O 契約 | 想調診斷品質 |
+> | §9.8 / §9.8b | 權限、分享、上傳介面 | |
+> | §9.9 | 前端三層 UI（含即時更新機制） | 想改前端 |
+> | §9.10 | 截斷 / 快取 / SSE 事件表 | |
+> | §9.11 | seed 假資料的內容 | 想看 demo 資料為什麼長這樣 |
+> | §9.12 | **與 §1–§8 設計文件的差異總表** | 讀過前半段後**務必看這張表** |
+> | §9.13 | 如何執行 | |
+> | §9.14 | **明確「尚未做」** | 接手前務必看 |
+> | §9.15 | 完整設定表（環境變數） | 要部署或接真實服務 |
+> | §9.16 | 測試清單與「哪些已驗證／哪些沒有」 | 想知道能信到什麼程度 |
+> | §9.17 | 補強一：中止 run、刪除、執行中的完整 question list、錯誤可見性 | 想知道演進脈絡 |
+> | §9.18 | 補強二：三欄即時更新、Langfuse 雙端點、未開始題目不誤報、run 選單上限、清單分頁與效能 | 同上 |
 
 ### 9.1 交付形態與技術棧
 - **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`。
@@ -685,8 +720,9 @@ pk (eval_set_id, user_subject)
   對外整合用 `httpx`（agent HTTP / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
-- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 72 個測試，
-  **不需要 DB 也不需要網路**（`make test`）。
+- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 **122 個測試**。其中 111 個
+  **不需要 DB 也不需要網路**（`make test` 只跑這些）；另外 11 個分頁測試需要真 Postgres，未設
+  `TEST_DATABASE_URL` 時自動 skip（見 §9.16）。
 - **上傳格式**：支援 **JSONL 與 CSV 檔案**。開發者一律**上傳檔案**（不再手貼 JSONL），檔案在**前端解析**
   成一張**可編輯的預覽表格**（見 §9.9）；按 Create 前把（可能改過的）表格**在前端重新序列化為 JSONL**
   送給後端，因此後端契約仍維持 JSONL-only（§6.11），CSV 的 quoting/換行由前端 `upload_parse.js`
@@ -707,7 +743,7 @@ pk (eval_set_id, user_subject)
 |---|---|---|---|
 | `AgentClient` | `call(question, correlation_id, user_id, tags) -> AgentResponse` | 睡 1–3s；回假 response | `real/agent.py`：`POST /execute {"message","metadata"}`，metadata.trace_data 帶 trace_id(=correlation_id)/session_id(=correlation_id)/user_id/tags，回應為 `{"content": str}`（§6.2）|
 | `JudgeClient` | `judge(question, response, ground_truth) -> Verdict` | 睡 0.5–1s；二元判定 | `real/judge.py`：OpenAI 相容端點，LLM 同時吐 verdict+score，可選門檻覆寫 |
-| `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | `real/langfuse.py`：`GET /api/public/v2/observations?traceId=`，0 筆 = NotReady（§6.12）|
+| `TraceClient` | `fetch_trace(correlation_id) -> Trace 或 NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | `real/langfuse.py`：**兩條讀取策略依序嘗試**——`GET /api/public/traces/{id}` 與 `GET /api/public/v2/observations?traceId=`；0 筆或 404 = NotReady，全部失敗才 raise `TraceFetchError`（§6.12、§9.18(b)）|
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, verdict) -> dict` | 睡 2–4s；回 §6.9 的 JSON | `real/diagnosis.py`：§6.9 四段式 prompt，輸出驗證 + span_index 越界剔除 |
 
 > **介面變更**：`judge()` 多了 `question` 參數——真實 LLM judge 需要題目本身當 context 才判得準。
@@ -739,6 +775,8 @@ backend/
   alembic/versions/0001_stage1_schema.py   # §6.14 的 7 張表
   alembic/versions/0002_real_integration.py # agent_response / error_message / agent_latency_ms
   alembic/versions/0003_run_config.py       # runs.name / runs.config / runs.secrets（逐 run 設定）
+  alembic/versions/0004_run_lifecycle.py    # cancel_requested / trace_error / diagnosis_error（§9.17）
+  alembic/versions/0005_list_indexes.py     # ★ 兩個清單端點要用的三個索引（§9.18(e)）
   app/
     config.py           # 設定：DB URL、假登入、span 截斷長度、★四個 *_IMPL 開關、
                         #   agent HTTP / LLM / Langfuse 連線、run_concurrency、trace poll backoff
@@ -755,21 +793,25 @@ backend/
       __init__.py       # Seams + build_seams(config, secrets)：依 *_IMPL 選 fake / real，
                         #   端點則逐 run 決定（空值退回環境變數）
     orchestrator.py     # §6.15 run 流程（背景 asyncio task）+ 失敗策略 + 併發上限
+    cancellation.py     # 中止 run：耐久旗標 + in-process asyncio.Event（§9.17(a)）
     check_integrations.py # 前置檢查：ping 設為 real 的 seam
     sse.py              # 每個 run 的 in-memory 進度 pub/sub
     services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
                         #   run_config(逐 run 設定的 env 預設值 + 觸發時寫死有效值)
+                        #   deletion(FK 安全的刪除順序，seed 與兩個 DELETE 端點共用)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
-  tests/                # agent HTTP / Langfuse / judge / 診斷 / orchestrator 失敗路徑 /
-                        #   逐 run 設定與金鑰不外流（respx mock）
+  tests/                # 9 個檔案、122 個測試，逐一說明見 §9.16
   sample_eval_set.jsonl  sample_eval_set.csv   # 兩種格式的範例檔（內容等價）
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
   upload_parse.js       # 前端 JSONL/CSV 解析→可編輯表格列，送出前再序列化回 JSONL
+  usePagedList.js       # ★ 兩個清單共用的分頁 hook（追加、去重、擋過期回應）+ 捲動哨兵
   components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor/QuestionEditor
-                        # RunHistory/RunConfigDialog/RunConfigView(唯讀)/RunProgress(SSE)
+                        # RunHistory/RunConfigDialog/RunPicker(有上限的 run 選單)/RunConfigView(唯讀)
+                        # RunProgress(SSE)/RunStatusBar(執行中的堆疊長條+中止鈕)
                         # RunDetail/QuestionList/SpanList/SpanDetail
+                        # ListFooter(Load more + 捲動哨兵)/ConfirmDialog
                         # Breadcrumb/Modal/Toast/ThemeToggle/icons
 ```
 
@@ -777,10 +819,21 @@ frontend/src/
 - **完全照 §6.14 建 7 張表**：`eval_sets / questions / question_skills / runs / question_results /
   span_analyses / eval_set_roles`。UUID 主鍵用 `gen_random_uuid()`（migration 先 `CREATE EXTENSION
   pgcrypto`）。`questions` 與 `eval_sets` 各有 `version` 供樂觀鎖。
-- **四個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）、
+- **五個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）、
   `0003_run_config`（`runs.name` / `runs.config` / `runs.secrets`，逐 run 設定）、
   `0004_run_lifecycle`（`runs.cancel_requested` / `question_results.trace_error` /
-  `question_results.diagnosis_error`，見 §9.17）。
+  `question_results.diagnosis_error`，見 §9.17）、
+  `0005_list_indexes`（三個索引，見下）。
+- **★ `0005_list_indexes`**：在此之前，schema **除了主鍵與 unique 約束之外一個索引都沒有**——
+  資料只來自 `seed.py` 時無所謂，一旦累積真實歷史就不是。新增的三個都是兩個清單端點實際會走的路徑：
+
+  | 索引 | 為什麼需要 |
+  |---|---|
+  | `eval_set_roles(user_subject)` | 首頁的第一個查詢是「這個人看得到哪些 set」，但該表主鍵是 `(eval_set_id, user_subject)`，用 subject 單獨查用不到主鍵索引 |
+  | `runs(eval_set_id, started_at DESC)` | run 列表與每張卡的聚合（run 數、趨勢、最新兩個 run）都靠它，一次有序索引掃描解決 |
+  | `question_results(run_id, verdict)` | 算 incorrect 數的聚合。`(run_id, question_pk)` 的 unique 約束已能用 run 查，但依 verdict 計數仍要回表 |
+
+  不用 `CONCURRENTLY`：Stage 1 的資料量還小，而且 `CONCURRENTLY` 無法在 Alembic 的交易內執行。
 - **★ `0003_run_config`**：`config`（非機密：base URL、模型、timeout、concurrency）與
   `secrets`（金鑰）刻意分成兩個 JSONB 欄位——沒有任何 response model 讀 `secrets`，
   「金鑰不外流」因此是結構上的保證，而不是靠人記得維護白名單。舊 run 的 `'{}'`
@@ -833,14 +886,25 @@ GET  /eval-sets/{id}/results                # 左欄題目清單；?run_ids=..&m
 GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓 trace(截斷) + 讀 DB 的診斷
 POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
 ```
+（`/docs`、`/redoc`、`/openapi.json` 是 FastAPI 內建的，未列。）
+
 - `GET /results` 每題回傳含 **`agent_response` / `error_message` / `agent_latency_ms`**
   （§9.4 新欄位）與 `verdict / judge_score / judge_comment / status / trace_ready / has_analysis /
-  is_incorrect`，以及 **`phase`**（`pending`|`answered`|`judged`|`failed`|`cancelled`，見 §9.17）。
-- `GET /results/{rid}/trace` 回傳 `trace_state`（`ready` | `generating` | `no_trace` | **`error`**
-  | **`not_started`**，見 §9.18）、
-  **`trace_error`** / **`diagnosis_error`**、`spans[]`（含 `status_message`）、`analysis`、以及
-  **`agent_response` / `ground_truth_response` / `error_message`**，讓中間欄可以並排顯示
-  「agent 答了什麼 vs 期望答案」。
+  is_incorrect`、**`phase`**（`pending`|`answered`|`judged`|`failed`|`cancelled`，見 §9.17），
+  以及 **`run_label`**——多選 run 時這一列是**跨 run 挑出來的代表**，可能來自比正在看的那個 run
+  更舊的 run，不標出來很容易誤認（§9.18(c)）。
+- `GET /results/{rid}/trace` 回傳 `spans[]`（含 `status_message`）、`analysis`、
+  **`trace_error`** / **`diagnosis_error`**，以及 **`agent_response` / `ground_truth_response` /
+  `error_message`**（讓中間欄並排顯示「agent 答了什麼 vs 期望答案」）。
+  `trace_state` 有五個值，**分清楚它們是這支端點的主要價值**：
+
+  | `trace_state` | 意思 | UI |
+  |---|---|---|
+  | `ready` | 抓到了 | 顯示 span 列表 |
+  | `generating` | agent 已回答，但 Langfuse ingestion 還沒落地（§6.12） | 「產生中，重試中」+ Retry |
+  | **`not_started`** | **agent 還沒被問到這題** | 「等待 agent」。**此時完全不呼叫 trace store**——以前會呼叫，於是壞掉的 Langfuse 會吐出一個跟上次一模一樣的新錯誤，看起來像舊錯誤被重播（§9.18(c)）|
+  | `no_trace` | 該題 failed / cancelled，沒有 trace 可抓 | 說明沒有 trace |
+  | `error` | trace store 讀不到（host 錯、401、逾時、server 端 SQL 錯誤） | 紅色 banner + 白話說明 + 原始錯誤收在可展開區塊（§9.18(b)）|
 
 ### 9.6 Orchestrator（如實作，對照 §6.15）
 `POST /runs` 建立 `runs`(status=running，並存下該次的 `name` / `config` / `secrets`) 後，開一個
@@ -950,6 +1014,28 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
   hover 浮起、清單進場、**對話框 pop-in 動畫**、進度條 shimmer、**Toast** 提示（存檔/衝突/錯誤）；
   **light/dark 主題切換**（右上角，首次進站前套用避免閃爍，存 localStorage，預設跟隨作業系統）；
   **每張 card 的 config 齒輪**（見 §9.8）。
+- **★ 新增（清單規模，見 §9.18(e)）**
+  - **首頁卡片與 run 歷史都分頁**：捲到底自動追加下一頁（`IntersectionObserver`），並固定附一顆
+    **Load more** 按鈕與「Showing N of M」計數。按鈕不是裝飾——鍵盤操作不會觸發 observer，
+    頁面本身不捲動時也永遠不會觸發；計數則回答「還值不值得繼續捲」，只有轉圈圈是答不出來的。
+  - 兩份清單共用 `usePagedList.js`：**追加時以 id 去重**、**丟棄過期回應**（改了篩選條件後，
+    舊請求可能後到）、**擋掉重複的併發載入**（捲動哨兵會連續觸發）。`refresh()` 只重讀目前
+    已顯示的範圍，所以刪一筆資料不會把捲到一半的清單縮回第一頁。
+  - **首頁工具列**：名稱搜尋（debounce 250ms）＋ metadata key/value 篩選 ＋ 排序（最新 / 名稱）。
+    全部送到後端做，**跨所有分頁生效**——只篩已載入的那一頁，結果會取決於使用者捲了多遠。
+  - 進場動畫的 stagger **只在頁內計算**（`i % PAGE_SIZE`），否則每次追加都會讓整個清單重新閃一次。
+- **★ 新增（三欄詳情的即時更新，見 §9.18(a)）**——這是本 UI 最容易被誤解的一段，特別說明：
+  - **三欄全部跟著 run 的 SSE 走**，不只左欄。開啟中的那一題是**用 id 記住、每次 render 從
+    `results` 重新查**的（而不是點擊當下複製一份），所以它永遠是最新狀態。
+  - 中欄與右欄的內容全部來自 `GET .../trace` 這一包 payload。它會在**指紋**
+    （`phase|verdict|trace_ready|has_analysis`）改變時重抓——由既有的 SSE 事件就地更新，
+    **事件驅動，不是輪詢**。因此 agent 的回答、judge 的 verdict、診斷都會當場出現，不需要
+    退出去再進來。
+  - **重抓時不清空畫面**，只在標題列顯示一個小圓點；只有換題才清空。
+  - **不搶走開發者手動選的 span**：只有換題、或診斷第一次出現時才自動跳到 `suspects[0]`。
+    每次刷新都跳的話，正在讀某個 span 的人會被硬拉走。
+  - 手動 Retry 與 re-diagnose 走一個獨立的 nonce（重新產生的診斷不會改變 `has_analysis`，
+    光靠指紋看不出來）。
 
 ### 9.10 截斷 / 快取 / 進度（如實作）
 - **§6.7 截斷**：只截**單一 span 過長的 input/output body**（保留頭尾、中間省略），**絕不砍 span**；
@@ -964,12 +1050,25 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
   `fake_config.py`**——它同時管真實 Langfuse ingestion 的等待，而真實 ingestion 比假層慢一個數量級。
   兩個 request 路徑（看 trace、re-diagnose）用同一個上限但**短 sleep**，因為它們跑在 request 裡，
   不能佔用 orchestrator 那種長退避；抓不到就回 `generating` / 409 讓使用者重試。
-- **進度**：SSE（`sse.py` 的 in-memory pub/sub，單程序 POC）。事件型別：`snapshot`（晚加入的訂閱者
-  補當前狀態，含 `total` / `done` / `correct` / `status`）、`run_started`、
-  **`question_started`**、**`question_answered`**、`question_done`（三者皆含
-  `question_pk / phase / verdict / status / error_message / trace_ready / done / total / correct`）、
-  `run_completed`（含 `status`，可能是 `cancelled`）、15 秒無事件時的 `ping`。
-  中間兩個事件是左欄「灰 → 白 → 綠/紅」三段顏色的來源（§9.17）。
+- **進度**：SSE（`sse.py` 的 in-memory pub/sub，單程序 POC）。事件型別：
+
+  | 事件 | 何時送出 | 用途 |
+  |---|---|---|
+  | `snapshot` | 訂閱當下 | 晚加入的訂閱者補當前狀態（`total`/`done`/`correct`/`status`）|
+  | `run_started` | 所有 result 列建好後 | 帶 `total` |
+  | `question_started` | 開始打 agent 前 | 左欄轉灰（`pending`）|
+  | `question_answered` | agent 回答後 | 左欄轉白（`answered`，「judging…」）|
+  | **`question_judged`** | 判分寫入後 | 左欄轉綠/紅。**不能等到最後**——後面的 trace poll 與診斷在真實服務下要跑數十秒（§9.18(a)）|
+  | **`question_traced`** | trace poll 結束後 | `trace_ready` / `trace_error` 定案 |
+  | `question_done` | 該題全部完成 | 帶 `has_analysis`（診斷此時才寫完）|
+  | `run_completed` | run 結束 | 含 `status`，可能是 `cancelled` / `failed` |
+  | `ping` | 15 秒無事件 | 保持連線 |
+
+  五個 `question_*` 事件的 payload 相同：`question_pk / phase / verdict / status /
+  error_message / trace_ready / has_analysis / trace_error / diagnosis_error /
+  done / total / correct`。前三個欄位是左欄「灰 → 白 → 綠/紅」的來源（§9.17(c)）；
+  `phase`、`verdict`、`trace_ready`、`has_analysis` 四個合起來是中欄重抓 trace 的
+  **指紋**（§9.18(a)）——這是三欄詳情能即時更新的機制。
 
 ### 9.11 seed 假資料（`python -m app.seed`）
 一個 eval set「Billing Agent Regression Suite」，角色 alice=owner、bob=viewer、carol=viewer（示範分享）；
@@ -985,12 +1084,12 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 |---|---|---|
 | 上傳格式 | CSV + JSONL 皆定義 | **JSONL + CSV 檔案上傳**（前端解析成可編輯表格，送出前再序列化為 JSONL；後端仍 JSONL-only）|
 | metadata keys | 需 `eval_set_metadata_keys` 表 | **未建表**，單一 JSONB + 掃描取 key |
-| metadata 篩選/排序 | 首頁可依 key 篩選/排序 | **尚未做** |
+| metadata 篩選/排序 | 首頁可依 key 篩選/排序 | **已做**（§9.18(e)）：名稱搜尋 + metadata key/value 篩選 + 排序，全部在 SQL 完成，跨所有分頁生效 |
 | 授權 | 「統一 middleware」 | 以 **FastAPI 依賴**（require_owner/reader）實作，效果等同 |
 | 登入 | key-lock service token | **假登入**（header/query/設定檔 + UI 切換）|
 | 上傳介面 | 未細談（§6.10 只談 card 欄位） | **檔案上傳 + 可編輯預覽表格**（§9.8b）：無手貼文字框，送出前可逐格修改與增刪列 |
 | 分享 | 只提「可多 owner」 | **新增完整分享 UI/API**：上傳時指定分享對象、card config 改分享名單、`PUT /roles`；**對象一律直接輸入人名**（無預設名單下拉）|
-| Langfuse | 讀 trace / 寫 dataset+score | **讀已實作**（`TRACE_IMPL=real`：`/api/public/v2/observations` 依 correlation_id 取回並重建 span 列表）；**寫 dataset / score 尚未做**（§6.3 的 score 回寫留待之後）|
+| Langfuse | 讀 trace / 寫 dataset+score | **讀已實作**（`TRACE_IMPL=real`）：依 correlation_id 取回 observation 並重建 span 列表，**兩條端點策略依序嘗試**以繞開自架版的 `events` 表問題（§9.18(b)）；**寫 dataset / score 尚未做**（§6.3 的 score 回寫留待之後）|
 | UI 外觀/主題 | 未提 | **新增**現代化設計系統、動畫、Toast、**light/dark 主題** |
 | 逐題 regression | 標記為 Stage 1.5 | 首頁 card 的 regression 摘要與三 mode **皆已做** |
 | Agent 通訊協定 | §1.1/§6.2 設想的是 Google A2A(Agent-to-Agent) protocol server | **agent server 端後來改為單一 FastAPI `POST /execute`**（`{"message","metadata"}` → `{"content"}`），本平台的 `AgentClient` 也隨之從手寫 A2A JSON-RPC client 換成 `real/agent.py` 的 HTTP client；correlation 機制不變——`metadata.trace_data.trace_id`(=`session_id`) 走 correlation_id，另加 `user_id`(觸發 run 的使用者) 與 `tags`(`["eval_<eval_set 名稱>"]`)|
@@ -1000,7 +1099,9 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | 部署形態 | 未提（只提 docker-compose 起 Postgres）| **db / backend / frontend 各一個 container**；backend 依賴用 uv、frontend 用 pnpm |
 | 錯誤處理 | 未提 | orchestrator 有完整失敗策略（§9.6），run 不會卡在 `running` |
 | 連線設定的作用域 | 未提（隱含是部署層級的環境變數）| **改為逐 run**：觸發時用 dialog 設定並寫入 `runs.config`/`runs.secrets`；`*_IMPL` 仍是全域主開關。金鑰只進不出，沿用舊 run 由後端複製且與端點綁定（§9.15）|
-| 測試 | 未提 | 72 個單元測試（respx mock），不需 DB 或網路 |
+| 測試 | 未提 | **122 個測試**：111 個不需 DB 或網路（respx mock），11 個分頁測試需真 Postgres 且未設 `TEST_DATABASE_URL` 時 skip |
+| 清單規模 | 未提 | **兩個清單皆分頁**（`{items,total,has_more}` + 無限捲動），且卡片與 run 列表的查詢數**與頁面大小無關**（§9.18(e)）|
+| 三欄詳情的即時性 | 未提（§6.15 只說 run 進度要即時推送）| **三欄都跟著 SSE 更新**：開啟中的題目以指紋觸發重抓 trace，agent 回答 / verdict / 診斷都當場出現（§9.18(a)）|
 
 ### 9.13 如何執行
 - 一鍵：`SEED=1 ./scripts/dev.sh`（build image → 起 Postgres → migrate → seed → 起 backend:8000 +
@@ -1023,7 +1124,7 @@ per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill overri
   目前 app DB 是唯一真相，Langfuse UI 上看不到本平台判的分數。
 - **span tree 不重建**：Langfuse 回傳的 `parentObservationId` **完全未使用**，Stage 1 以
   **依 startTime 排序的平舖列表**呈現；樹狀結構留給 Stage 2 的熱點檢視。
-- ~~**metadata 篩選/排序**~~ → **已補**，見 §9.18(c)：首頁的名稱搜尋與 metadata key/value
+- ~~**metadata 篩選/排序**~~ → **已補**，見 §9.18(e)：首頁的名稱搜尋與 metadata key/value
   篩選、排序皆在 SQL 中完成，跨全部分頁生效。
 - **`LLM_TIMEOUT_S` 沒有逐 run 版本**：`AGENT_TIMEOUT_S` 與 `LANGFUSE_TIMEOUT_S` 都能在 run
   config dialog 逐次調整，唯獨 LLM 的 timeout 仍是全域設定（`build_seams` 呼叫
@@ -1046,6 +1147,8 @@ backend container。金鑰只走環境變數或 repo 根目錄的 `.env`，**不
 |---|---|---|
 | `DATABASE_URL` / `SYNC_DATABASE_URL` | 指向 compose 的 `db` | app 用 asyncpg、Alembic 用 psycopg |
 | `FAKE_USER_SUBJECT` | `alice` | 假登入的預設身分（§6.16）|
+| `KNOWN_USERS` | `["alice","bob","carol","dave"]` | `GET /users` 回傳的假使用者名單（右上角切換身分用）|
+| `ERROR_MESSAGE_MAX_CHARS` | `2000` | 落庫的錯誤訊息長度上限（`error_message` / `trace_error` / `diagnosis_error`）|
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源 |
 | `SPAN_BODY_MAX_CHARS` | `800` | §6.7 單一 span body 截斷門檻 |
 | **`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL`** | 皆 `fake` | 每個 seam 各自 `fake` 或 `real`，**可逐一切換** |
@@ -1102,23 +1205,36 @@ trace。
 
 ### 9.16 測試與驗證現況
 
-**單元測試**（`backend/tests/`，95 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
+**單元測試**（`backend/tests/`，共 **122 個**，9 個檔案）
+
+`make test` 跑其中 **111 個**——不需 DB 也不需網路，外部呼叫一律以 `respx` mock。剩下 11 個
+（`test_pagination.py`）需要一個真 Postgres，未設 `TEST_DATABASE_URL` 時整個檔案自動 skip，
+所以 `make test` 的「零外部依賴」承諾沒有被打破：
+
+```bash
+createdb agenteval_test
+TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/test_pagination.py
+```
 - `test_agent_client.py`（13）：request body 的 `message` + `metadata.trace_data`（trace_id=session_id、
   user_id、tags）、`{"content": str}` 回應解析（含裸 JSON 字串與純文字兩種容錯 fallback）、
   非字串/缺 `content` 視為失敗、空回答視為失敗、307 redirect 會被 follow 而非誤判為空回應
   （實測中撞到過：server 端路由是 `/execute/` 帶尾斜線時常見的 trailing-slash 307）、
   5xx raise（交給重試）vs 4xx 直接失敗、逐 run 的 base URL / timeout 覆寫環境變數。
-- `test_langfuse_client.py`（11）：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
-  分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射。
+- `test_langfuse_client.py`（21）：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
+  分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射；
+  401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼、過長的錯誤 body 會被截斷；
+  以及 §9.18(b) 的**兩條讀取策略**：trace API 與列表端點對映出的 span 完全相同、404 → `NotReady`
+  而非失敗、`auto` 命中第一條時不會多打第二條、第一條壞掉時會 fallback、全失敗時**兩條的原因都在
+  錯誤訊息裡**（fallback 不能把主要路徑的失敗藏起來）。
 - `test_judge_and_diagnosis.py`（18）：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
   越界 `span_index` 剔除、§6.9 四段 prompt 的順序、JSON 修復重試（成功與放棄各一）。
-- `test_orchestrator.py`（15）：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
+- `test_orchestrator.py`（18）：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
   judge 失敗**不**被當成 correct、診斷失敗不影響 verdict 且原因落庫、trace store 出錯不讓題目失敗
   且原因落庫、非預期例外把 run 收成 failed 並送出 SSE 終止事件、重試次數上限、併發；
   以及 §9.17 的四項：第一次呼叫 agent 前所有 result 列就已建好、中止前未開始的題目留 `pending`、
-  中止會**放棄進行中的 agent 呼叫**（以 `asyncio.wait_for` 逾時當斷言）、已判分的結果在中止後保留。
-- `test_langfuse_client.py` 另增 3 項：401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼、
-  過長的錯誤 body 會被截斷。
+  中止會**放棄進行中的 agent 呼叫**（以 `asyncio.wait_for` 逾時當斷言）、已判分的結果在中止後保留；
+  以及 §9.18(a) 的三項：一題走完會依序送出 `question_started/answered/judged/traced/done` 五個事件、
+  每個事件都帶齊中欄重抓 trace 所需的指紋欄位、診斷失敗的原因會出現在 `question_done` 上。
 - `test_deletion.py`（5）：`delete_run` / `delete_eval_set` 的 DELETE 語句**順序**（子表先於父表，
   特別是 `question_results` 必須早於 `questions`），以及一個「schema 新增子表卻忘了加進刪除順序」
   的守門測試。
@@ -1132,6 +1248,17 @@ trace。
   手動輸入優先、跨 eval set 一律 404）；以及**金鑰不外流的值層級斷言**——
   序列化一個帶哨兵金鑰的 `RunOut`，斷言兩個哨兵值都不出現在 payload 任何位置
   （比檢查欄位名稱可靠，因為 `credentials_set` 讓 router 合法地讀到 `runs.secrets`）。
+- `test_results.py`（6）：trace 檢視的狀態機。核心是 §9.18(c) 的迴歸測試——**`pending` 的題目回
+  `not_started` 且對 trace store 發出零個請求**（用一個會記錄呼叫次數的 stub 斷言）；即使該列上
+  留著上一次的 `trace_error` 也不會顯示。另有 `answered` 之後才會去抓、trace 就緒回 spans、
+  `failed` 回 `no_trace` 不發請求、trace store 失敗回 `error` 而非 `generating`。
+- `test_pagination.py`（11，**需要 DB**）：`limit`/`offset`/`total`/`has_more`、翻完所有頁
+  **每張卡剛好出現一次**（不重複也不遺漏）、只列出呼叫者有權限的 set、名稱搜尋與 metadata
+  key/value 篩選在 SQL 生效（`total` 反映全部符合者而非該頁）、依名稱排序、趨勢線受
+  `TREND_RUNS` 上限、regression 用最新兩個 run 算。**最重要的兩個是查詢數守門測試**：
+  `GET /eval-sets` 與 `GET /runs` 在 `limit=1` 與 `limit=20` 時發出的查詢數必須**完全相同**。
+  斷言相同而非「相近」，是因為聚合都是整頁一次算完的，查詢數是程式的性質、與資料無關；
+  任何人不小心加回一個 per-set 查詢都會立刻被抓到。斷言時間會 flaky，斷言查詢數不會。
 
 **已驗證的端到端行為**
 - **fake 模式**：與真實整合加入前**行為完全相同**（卡片 3 runs / 趨勢 0.8→0.6→0.4、
@@ -1227,7 +1354,7 @@ trace。
 > `notready` 標記（同 §9.2 的標記風格），seed 對該題改用帶標記的 correlation_id。
 
 #### (f) 本次的驗證方式（與 §9.16 不同，這次有真的跑起來）
-- 後端 **95 個單元測試**通過（新增 23 個）。
+- 後端單元測試全數通過（該次新增 23 個，當時總計 95 個；目前總數見 §9.16）。
 - **真 Postgres**（本機 16）跑完 `alembic upgrade head`（含 `0004`）、`python -m app.seed`
   **重複執行**（等於在真 DB 上驗證刪除順序）、以及完整的 API 動線：run 觸發後 5 題立刻全部
   `pending`、phase 依序推進、中止 44ms 生效、權限矩陣（owner / 觸發者 / 其他 viewer）、
