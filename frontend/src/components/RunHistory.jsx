@@ -3,8 +3,9 @@ import { api } from "../api.js";
 import RunProgress from "./RunProgress.jsx";
 import QuestionEditor from "./QuestionEditor.jsx";
 import RunConfigDialog from "./RunConfigDialog.jsx";
+import RunConfigView from "./RunConfigView.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconPlay, IconGear } from "./icons.jsx";
+import { IconPlay, IconGear, IconFileText } from "./icons.jsx";
 
 const MODES = [
   ["union", "Union"],
@@ -24,6 +25,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const [activeRun, setActiveRun] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
   const [showRunConfig, setShowRunConfig] = useState(false);
+  const [viewConfigRun, setViewConfigRun] = useState(null);
 
   function load() {
     setError(null);
@@ -130,6 +132,14 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
               {r.pass_rate === null ? "—" : `${Math.round(r.pass_rate * 100)}% pass`}
             </div>
             <div style={{ width: 80, textAlign: "right" }} className="muted">{r.incorrect_count ?? 0} wrong</div>
+            <button
+              className="icon-btn"
+              aria-label="View run config"
+              title="View the config this run used"
+              onClick={(e) => { e.stopPropagation(); setViewConfigRun(r); }}
+            >
+              <IconFileText size={16} />
+            </button>
           </div>
         ))}
 
@@ -140,6 +150,9 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           onClose={() => setShowRunConfig(false)}
           onRun={trigger}
         />
+      )}
+      {viewConfigRun && (
+        <RunConfigView run={viewConfigRun} onClose={() => setViewConfigRun(null)} />
       )}
     </div>
   );

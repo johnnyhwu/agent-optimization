@@ -333,6 +333,22 @@ select { cursor: pointer; }
 .cfg-section .hint { text-transform: none; letter-spacing: 0; font-weight: 500; }
 .field input:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Read-only view of the config a past run used — a definition list, never
+   inputs, so it can't be mistaken for an editable form. */
+.cfg-view { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.cfg-row {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.cfg-row:last-child { border-bottom: none; }
+.cfg-row:nth-child(odd) { background: var(--panel-2); }
+.cfg-label { flex: 0 0 40%; color: var(--muted); font-size: 12px; font-weight: 600; }
+.cfg-value {
+  flex: 1; min-width: 0; word-break: break-all;
+  font-family: ui-monospace, monospace; font-size: 12px;
+}
+.cfg-value.empty { color: var(--muted); font-style: italic; font-family: inherit; }
+
 /* ---- share editor ---- */
 .share-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .share-row .who { flex: 1; display: flex; align-items: center; gap: 8px; }

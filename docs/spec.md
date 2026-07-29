@@ -748,6 +748,7 @@ backend/
     check_integrations.py # 前置檢查：ping 設為 real 的 seam
     sse.py              # 每個 run 的 in-memory 進度 pub/sub
     services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
+                        #   run_config(逐 run 設定的 env 預設值 + 觸發時寫死有效值)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
   tests/                # agent HTTP / Langfuse / judge / 診斷 / orchestrator 失敗路徑（respx mock）
@@ -756,8 +757,9 @@ frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
   upload_parse.js       # 前端 JSONL/CSV 解析→可編輯表格列，送出前再序列化回 JSONL
   components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor
-                        # RunHistory/RunConfigDialog/RunProgress(SSE)/RunDetail/QuestionList
-                        # SpanList/SpanDetail/Breadcrumb/Modal/Toast/ThemeToggle/icons
+                        # RunHistory/RunConfigDialog/RunConfigView(唯讀)/RunProgress(SSE)
+                        # RunDetail/QuestionList/SpanList/SpanDetail
+                        # Breadcrumb/Modal/Toast/ThemeToggle/icons
 ```
 
 ### 9.4 App DB Schema（如實作，對照 §6.14）
@@ -1012,6 +1014,13 @@ timeout、Langfuse host / 金鑰 / timeout、LLM base URL / 金鑰、judge 與 d
 （非機密）與 `runs.secrets`（金鑰），因此兩個 run 可以打不同的 agent server 或用不同的
 judge model，而且事後看 trace / re-diagnose 時會沿用該 run 當初的端點。dialog 中留白的欄位
 就退回上表的環境變數值，所以 seeded fake demo 仍可空表單直接跑。
+
+**留白欄位在觸發當下就會被寫死**（`services/run_config.py` 的 `resolve()`）：`runs.config`
+存的是「有效值」而非「使用者改過的差異」，因此每個 run 的設定都是完整、可事後判讀的紀錄——
+否則一個空欄位事後無從分辨是「當初用了 env 的值」還是「根本沒設」，而今天的 env 也無法
+作證當初的內容。每個 run 列都有一顆按鈕可開啟**唯讀**的 config 檢視（`RunConfigView.jsx`）；
+`0003_run_config` 之前建立的舊 run `config` 是 `{}`，該畫面會直接說明它早於此功能，而不是
+編造數值。金鑰只顯示「有/無」（`RunOut.credentials_set` 僅回傳 slot 名稱 `llm` / `langfuse`）。
 
 金鑰**只進不出**：`runs.secrets` 不會被任何 response model 序列化（`list_runs` 對 viewer 也開放，
 見 §6.16）。要沿用舊 run 的金鑰時，前端只送 `reuse_secrets_from_run_id`，由後端 server-side 複製；

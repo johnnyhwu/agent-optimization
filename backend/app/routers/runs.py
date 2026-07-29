@@ -15,6 +15,7 @@ from app.db import get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
 from app.schemas import RunConfig, RunCreate, RunOut
+from app.services import run_config
 from app.sse import hub
 
 # A credential and the endpoint it authenticates against, for the reuse rule
@@ -24,10 +25,20 @@ _SECRET_ENDPOINTS = {
     "langfuse_secret_key": "langfuse_host",
 }
 
+# The same credentials as UI-facing slot names. Only these names are ever sent
+# outward — the values behind them stay in the database.
+_SECRET_SLOTS = {"llm_api_key": "llm", "langfuse_secret_key": "langfuse"}
+
 router = APIRouter(prefix="/eval-sets/{eval_set_id}/runs", tags=["runs"])
 
 # Keep strong references so background tasks aren't garbage-collected.
 _background_tasks: set[asyncio.Task] = set()
+
+
+def _credentials_set(run: Run) -> list[str]:
+    """Which credential slots this run recorded. Names only, never values."""
+    stored = run.secrets or {}
+    return [slot for key, slot in _SECRET_SLOTS.items() if stored.get(key)]
 
 
 async def _incorrect_count(session: AsyncSession, run_id: uuid.UUID) -> int:
@@ -90,10 +101,12 @@ async def trigger_run(
         raise HTTPException(status_code=404, detail="eval set not found")
 
     body = body or RunCreate()
-    # Blank fields are dropped rather than stored as "": the seams treat a missing
-    # key as "fall back to the environment", and an empty string would mean the
-    # same thing while making the stored config harder to read.
-    config = {k: v for k, v in body.config.model_dump().items() if v not in ("", None)}
+    # Materialize: a field left blank is stored with the environment's value, not
+    # dropped, so the run's config reads as a complete record of what it used
+    # rather than a set of deltas against an environment that may since have
+    # changed. Must precede _resolve_secrets, which compares endpoints against
+    # the source run's — both sides are then fully populated.
+    config = run_config.resolve(body.config)
     secrets = await _resolve_secrets(session, eval_set_id, body, config)
 
     run = Run(
@@ -111,6 +124,7 @@ async def trigger_run(
     return RunOut(
         id=run.id, eval_set_id=run.eval_set_id, triggered_by=run.triggered_by,
         name=run.name, config=RunConfig(**(run.config or {})),
+        credentials_set=_credentials_set(run),
         status=run.status, started_at=run.started_at, completed_at=run.completed_at,
         pass_rate=run.pass_rate, total_count=run.total_count,
         correct_count=run.correct_count, incorrect_count=0,
@@ -134,6 +148,7 @@ async def list_runs(
             RunOut(
                 id=r.id, eval_set_id=r.eval_set_id, triggered_by=r.triggered_by,
                 name=r.name, config=RunConfig(**(r.config or {})),
+                credentials_set=_credentials_set(r),
                 status=r.status, started_at=r.started_at, completed_at=r.completed_at,
                 pass_rate=float(r.pass_rate) if r.pass_rate is not None else None,
                 total_count=r.total_count, correct_count=r.correct_count,

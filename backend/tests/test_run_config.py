@@ -9,6 +9,7 @@ credential never follows the user to a different endpoint.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -23,8 +24,9 @@ from app.integrations.fake import (
 from app.integrations.real.agent import HttpAgentClient
 from app.integrations.real.judge import LlmJudgeClient
 from app.integrations.real.langfuse import LangfuseTraceClient
-from app.routers.runs import _resolve_secrets
+from app.routers.runs import _credentials_set, _resolve_secrets
 from app.schemas import RunConfig, RunCreate, RunOut, RunSecrets
+from app.services import run_config
 
 
 # --- Seam selection ---------------------------------------------------------
@@ -100,14 +102,85 @@ def test_judge_and_diagnosis_share_one_llm_client(configure):
     assert seams.diagnosis.model_name == "d"
 
 
+# --- Effective config is materialized at trigger time -----------------------
+
+def test_defaults_cover_every_config_field():
+    # The dialog prefills from defaults() and trigger_run materializes with it;
+    # a field in one and not the other would silently never be recorded.
+    assert set(run_config.defaults()) == set(RunConfig.model_fields)
+
+
+def test_resolve_fills_blank_fields_from_the_environment(configure):
+    with configure(judge_model="env-model", llm_base_url="https://env-llm.test",
+                   run_concurrency=3):
+        out = run_config.resolve(RunConfig(judge_model="   ", llm_base_url=""))
+
+    # A blank field is stored with the env value rather than dropped, so the
+    # run's config reads as a complete record instead of a set of deltas.
+    assert out["judge_model"] == "env-model"
+    assert out["llm_base_url"] == "https://env-llm.test"
+    assert out["concurrency"] == 3
+
+
+def test_resolve_lets_submitted_values_win(configure):
+    with configure(judge_model="env-model", agent_timeout_s=120.0):
+        out = run_config.resolve(RunConfig(judge_model="run-model", agent_timeout_s=9.0))
+
+    assert out["judge_model"] == "run-model"
+    assert out["agent_timeout_s"] == 9.0
+
+
+def test_resolve_always_returns_every_field():
+    out = run_config.resolve(RunConfig())
+    assert set(out) == set(RunConfig.model_fields)
+
+
 # --- Secrets never travel outward -------------------------------------------
 
-def test_no_run_response_model_can_carry_a_credential():
-    # Structural, not a review habit: the outbound models have no such fields.
+def test_no_run_response_model_declares_a_credential_field():
     outbound = set(RunOut.model_fields) | set(RunConfig.model_fields)
     assert not [f for f in outbound if "secret" in f or "api_key" in f]
     # ...while the inbound one does.
     assert set(RunSecrets.model_fields) == {"langfuse_secret_key", "llm_api_key"}
+
+
+def test_a_serialized_run_contains_no_credential_value():
+    """The property that actually matters, asserted on values not field names.
+
+    `credentials_set` means the router now reads runs.secrets, so "no endpoint
+    touches that column" is no longer the invariant. This is: whatever the run
+    stored, none of it appears in what goes over the wire.
+    """
+    run = _Run(ES, {"llm_base_url": "https://llm.test"},
+               {"llm_api_key": "SENTINEL-LLM-KEY",
+                "langfuse_secret_key": "SENTINEL-LF-KEY"})
+    run.id = uuid.uuid4()
+    run.name = "nightly"
+    run.triggered_by = "alice"
+    run.status = "completed"
+    run.started_at = datetime.now(timezone.utc)
+
+    payload = RunOut(
+        id=run.id, eval_set_id=ES, triggered_by=run.triggered_by, name=run.name,
+        config=RunConfig(**run.config), credentials_set=_credentials_set(run),
+        status=run.status, started_at=run.started_at, completed_at=None,
+        pass_rate=None, total_count=None, correct_count=None,
+    ).model_dump_json()
+
+    assert "SENTINEL-LLM-KEY" not in payload
+    assert "SENTINEL-LF-KEY" not in payload
+    # The slot names are what the UI gets instead.
+    assert '"llm"' in payload and '"langfuse"' in payload
+
+
+def test_credentials_set_lists_only_the_slots_that_were_filled():
+    assert _credentials_set(_Run(ES, {}, {})) == []
+    assert _credentials_set(_Run(ES, {}, {"llm_api_key": "k"})) == ["llm"]
+    # An empty string is "not set", not a credential.
+    assert _credentials_set(_Run(ES, {}, {"llm_api_key": ""})) == []
+    assert sorted(
+        _credentials_set(_Run(ES, {}, {"llm_api_key": "k", "langfuse_secret_key": "s"}))
+    ) == ["langfuse", "llm"]
 
 
 # --- Secret reuse -----------------------------------------------------------

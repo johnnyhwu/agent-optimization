@@ -90,6 +90,11 @@ Each run stores what it was triggered with, so two runs can target different age
 servers, and viewing a run's trace later uses the endpoints *that* run used. Blank
 fields fall back to the environment, so the fake demo still runs from an empty form.
 
+A blank field is resolved to the environment's value **when the run is triggered**,
+not left blank, so each run records a complete picture of what it used rather than
+a set of deltas against an environment that may since have changed. Every run row
+has a button opening that config, read-only — a finished run's settings are history.
+
 Credentials are write-only: `runs.secrets` is never serialized into a response
 (`list_runs` is open to viewers too). To avoid retyping them, pick an earlier run
 under "Use config from" — the backend copies that run's keys server-side, and only

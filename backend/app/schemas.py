@@ -136,6 +136,10 @@ class RunOut(BaseModel):
     # Non-secret settings only: RunConfig has no credential fields, so this can
     # never carry one outward.
     config: RunConfig = Field(default_factory=RunConfig)
+    # Which credential slots this run recorded — slot *names* ("llm",
+    # "langfuse"), never values. Enough to diagnose "the judge failed because no
+    # LLM key was set" without putting a credential on the wire.
+    credentials_set: list[str] = Field(default_factory=list)
     status: str
     started_at: datetime
     completed_at: datetime | None

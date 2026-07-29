@@ -11,6 +11,7 @@ from app.config import settings
 from app.db import get_session
 from app.models import EvalSetRole
 from app.routers import diagnosis, eval_sets, questions, results, runs
+from app.services import run_config
 
 app = FastAPI(title="Agent Eval — Stage 1 POC")
 
@@ -44,17 +45,7 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
     connection settings would have no effect.
     """
     return {
-        "defaults": {
-            "agent_base_url": settings.agent_base_url,
-            "agent_timeout_s": settings.agent_timeout_s,
-            "langfuse_host": settings.langfuse_host,
-            "langfuse_public_key": settings.langfuse_public_key,
-            "langfuse_timeout_s": settings.langfuse_timeout_s,
-            "llm_base_url": settings.llm_base_url,
-            "judge_model": settings.judge_model,
-            "diagnosis_model": settings.diagnosis_model,
-            "concurrency": settings.run_concurrency,
-        },
+        "defaults": run_config.defaults(),
         "impls": {
             "agent": settings.agent_impl,
             "judge": settings.judge_impl,
