@@ -140,7 +140,9 @@ class RunOut(BaseModel):
     # "langfuse"), never values. Enough to diagnose "the judge failed because no
     # LLM key was set" without putting a credential on the wire.
     credentials_set: list[str] = Field(default_factory=list)
-    status: str
+    status: str  # running | completed | failed | cancelled
+    # True once someone hit stop, even before the run has finished winding down.
+    cancel_requested: bool = False
     started_at: datetime
     completed_at: datetime | None
     pass_rate: float | None
@@ -160,8 +162,12 @@ class QuestionResultOut(BaseModel):
     verdict: str | None
     judge_score: float | None
     judge_comment: str | None
-    status: str
-    error_message: str | None = None  # why status == 'failed'
+    status: str  # pending | done | failed | cancelled
+    # How far this question got — 'pending' | 'answered' | 'judged' | 'failed' |
+    # 'cancelled'. Derived server-side (services.aggregation.result_phase) so the
+    # left column's colours and the live SSE events come from one rule.
+    phase: str
+    error_message: str | None = None  # why status == 'failed' / 'cancelled'
     agent_latency_ms: int | None = None
     trace_ready: bool
     has_analysis: bool
@@ -198,7 +204,13 @@ class AnalysisOut(BaseModel):
 class TraceView(BaseModel):
     """Middle+right column payload for one question_result."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    trace_state: str  # 'ready' | 'generating' | 'no_trace'
+    trace_state: str  # 'ready' | 'generating' | 'no_trace' | 'error'
+    # Why the trace could not be fetched. 'error' always carries one; 'generating'
+    # carries the run-time failure when there was one, so a developer staring at
+    # "still ingesting" can see that the last attempt actually got a 401.
+    trace_error: str | None = None
+    # Why this question has no diagnosis, when the LLM call was made and failed.
+    diagnosis_error: str | None = None
     spans: list[SpanOut] = Field(default_factory=list)
     analysis: AnalysisOut | None = None
     verdict: str | None = None

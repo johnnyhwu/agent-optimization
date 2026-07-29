@@ -9,6 +9,29 @@ import uuid
 from dataclasses import dataclass
 
 
+def result_phase(status: str, agent_response: str | None, verdict: str | None) -> str:
+    """How far one question got, as the left column paints it.
+
+        pending    no agent answer yet                      (grey)
+        answered   answered, judge hasn't ruled yet         (plain)
+        judged     has a verdict                            (green / red)
+        failed     agent or judge errored                   (error styling)
+        cancelled  the run was stopped mid-question
+
+    Derived rather than stored: `status`, `agent_response` and `verdict` already
+    say all of this, and a stored copy is one more thing that can drift. Kept
+    here so the REST payload and the live SSE events can't disagree about a
+    question's colour.
+    """
+    if status in ("failed", "cancelled"):
+        return status
+    if verdict is not None:
+        return "judged"
+    if agent_response is not None:
+        return "answered"
+    return "pending"
+
+
 @dataclass
 class RunVerdicts:
     """A run's verdicts, newest-relevant ordering handled by caller."""

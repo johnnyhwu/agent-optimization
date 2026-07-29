@@ -1,9 +1,10 @@
-"""Eval-set endpoints: create (JSONL payload), list cards, edit metadata, list questions."""
+"""Eval-set endpoints: create (JSONL payload), list cards, edit metadata, list
+questions, delete."""
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,7 @@ from app.schemas import (
     ShareEntry,
 )
 from app.services.aggregation import regression_summary
+from app.services.deletion import delete_eval_set as delete_eval_set_rows
 from app.services.upload import parse_jsonl
 
 router = APIRouter(prefix="/eval-sets", tags=["eval-sets"])
@@ -203,6 +205,38 @@ async def update_eval_set(
     await session.commit()
     es = await session.get(EvalSet, eval_set_id)
     return await _build_card(session, es, subject)
+
+
+@router.delete("/{eval_set_id}", status_code=204)
+async def delete_eval_set(
+    eval_set_id: uuid.UUID,
+    subject: str = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete an eval set with all of its runs, results and diagnoses (owner-only).
+
+    Refused while a run is in flight: the orchestrator is a background task still
+    writing to those rows, and deleting underneath it would leave the run writing
+    to nothing. The stop button is the way out.
+    """
+    es = await session.get(EvalSet, eval_set_id)
+    if es is None:
+        raise HTTPException(status_code=404, detail="eval set not found")
+
+    running = await session.scalar(
+        select(func.count())
+        .select_from(Run)
+        .where(Run.eval_set_id == eval_set_id, Run.status == "running")
+    )
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail="cancel the run(s) still executing before deleting this eval set",
+        )
+
+    await delete_eval_set_rows(session, eval_set_id)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.put("/{eval_set_id}/roles", response_model=EvalSetCard)

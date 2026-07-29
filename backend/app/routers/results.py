@@ -29,7 +29,7 @@ from app.schemas import (
     SuspectOut,
     TraceView,
 )
-from app.services.aggregation import incorrect_by_mode
+from app.services.aggregation import incorrect_by_mode, result_phase
 from app.services.truncation import truncate_body
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}", tags=["results"])
@@ -113,6 +113,7 @@ async def list_results(
                 agent_response=rep.agent_response, verdict=rep.verdict,
                 judge_score=float(rep.judge_score) if rep.judge_score is not None else None,
                 judge_comment=rep.judge_comment, status=rep.status,
+                phase=result_phase(rep.status, rep.agent_response, rep.verdict),
                 error_message=rep.error_message,
                 agent_latency_ms=rep.agent_latency_ms,
                 trace_ready=rep.trace_ready, has_analysis=rep.id in analyses_qr,
@@ -125,8 +126,13 @@ async def list_results(
 
 
 async def _resolve_trace_spans(correlation_id: str, trace_client):
-    """Light poll of the trace store for the view path. trace_ready in the DB
-    says it's ingested; a couple of fetches resolve any residual NotReady window.
+    """Light poll of the trace store for the view path.
+
+    Returns (trace_or_None, error_or_None). The error is returned rather than
+    swallowed: an unreachable Langfuse, a rejected key and a trace that is still
+    being ingested all produce "no spans", and showing the same "still
+    generating" message for all three is indistinguishable from the platform
+    being broken.
 
     Short sleeps on purpose: this runs inside a request, so it must not block for
     the orchestrator's much longer ingestion backoff. If the trace still isn't
@@ -134,12 +140,12 @@ async def _resolve_trace_spans(correlation_id: str, trace_client):
     for _ in range(settings.trace_poll_max_attempts):
         try:
             trace = await trace_client.fetch_trace(correlation_id)
-        except Exception:  # a trace-store hiccup shows as "generating", not a 500
-            return None
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            return None, f"{type(exc).__name__}: {exc}"
         if not isinstance(trace, NotReady):
-            return trace
+            return trace, None
         await asyncio.sleep(0.05)
-    return None
+    return None, None
 
 
 @router.get("/results/{result_id}/trace", response_model=TraceView)
@@ -167,43 +173,62 @@ async def get_trace(
             model_used=analysis_row.model_used,
         )
 
-    # §6.12 / §7.1 #5: distinguish "generating (retrying)" from "no trace".
-    if result.status == "failed":
+    # §6.12 / §7.1 #5: distinguish "generating (retrying)" from "no trace" — and,
+    # since this change, from "the trace store rejected us".
+    spans: list[SpanOut] = []
+    trace_error: str | None = None
+    if result.status in ("failed", "cancelled"):
+        # The agent never answered (or was stopped), so there is nothing to fetch.
         state = "no_trace"
-        spans: list[SpanOut] = []
-    elif not result.trace_ready:
-        state = "generating"
-        spans = []
     else:
         # The trace lives wherever the run that produced it was pointed, which is
         # not necessarily where the environment points today.
         run = await session.get(Run, result.run_id)
-        seams = build_seams(
-            run.config if run else None, run.secrets if run else None
-        )
-        trace = await _resolve_trace_spans(result.correlation_id, seams.trace)
-        if trace is None:
-            state = "generating"
-            spans = []
+        try:
+            seams = build_seams(
+                run.config if run else None, run.secrets if run else None
+            )
+        except Exception as exc:  # noqa: BLE001
+            # TRACE_IMPL=real with no host or an incomplete key pair raises here.
+            # Previously a 500; the developer needs to read the reason, not a
+            # stack trace in the backend log.
+            state = "error"
+            trace_error = f"{type(exc).__name__}: {exc}"
         else:
-            state = "ready"
-            spans = []
-            for s in trace.spans:
-                in_body, in_trunc = truncate_body(s.input)
-                out_body, out_trunc = truncate_body(s.output)
-                spans.append(
-                    SpanOut(
-                        index=s.index, tool_name=s.tool_name, status=s.status,
-                        input=in_body, output=out_body, token_usage=s.token_usage,
-                        input_truncated=in_trunc, output_truncated=out_trunc,
-                        status_message=s.status_message,
+            # Fetched even when trace_ready is false: that flag only records what
+            # the orchestrator managed at run time, and never retrying means a
+            # misconfigured trace store shows "generating" forever.
+            trace, fetch_error = await _resolve_trace_spans(
+                result.correlation_id, seams.trace
+            )
+            if trace is not None:
+                state = "ready"
+                for s in trace.spans:
+                    in_body, in_trunc = truncate_body(s.input)
+                    out_body, out_trunc = truncate_body(s.output)
+                    spans.append(
+                        SpanOut(
+                            index=s.index, tool_name=s.tool_name, status=s.status,
+                            input=in_body, output=out_body, token_usage=s.token_usage,
+                            input_truncated=in_trunc, output_truncated=out_trunc,
+                            status_message=s.status_message,
+                        )
                     )
-                )
+            elif fetch_error is not None:
+                state = "error"
+                trace_error = fetch_error
+            else:
+                # Genuinely not ingested yet. Still surface whatever the run hit,
+                # so "waiting for ingestion" doesn't hide a 401 from an hour ago.
+                state = "generating"
+                trace_error = result.trace_error
 
     question = await session.get(Question, result.question_pk)
 
     return TraceView(
-        trace_state=state, spans=spans, analysis=analysis,
+        trace_state=state, trace_error=trace_error,
+        diagnosis_error=result.diagnosis_error,
+        spans=spans, analysis=analysis,
         verdict=result.verdict, judge_comment=result.judge_comment,
         agent_response=result.agent_response,
         ground_truth_response=question.ground_truth_response if question else None,

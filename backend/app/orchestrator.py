@@ -1,9 +1,14 @@
 """Run orchestrator (§6.15).
 
-Runs as a background asyncio task with its own DB session. Per question (from a
-snapshot read at run start):
+Runs as a background asyncio task with its own DB session. All of the run's
+`question_results` rows are created up front, so the UI can list every question
+from the first second of a run and colour each one as it moves through:
 
-    gen correlation_id -> agent (correlation_id in request metadata)
+    pending -> answered (agent replied) -> judged (correct/incorrect)
+
+Per question (from a snapshot read at run start):
+
+    agent (correlation_id in request metadata)
       -> judge -> write question_results
       -> poll trace until ready (backoff) -> set trace_ready
       -> if incorrect: fetch+truncate trace -> diagnose -> write span_analyses
@@ -16,25 +21,37 @@ fakes that never raise:
     status='failed' with an error_message, and the run continues — partial
     completion, as before.
   * A diagnosis failure never fails the question. The verdict is the result;
-    the diagnosis is an extra.
+    the diagnosis is an extra. The reason is recorded on the question so the UI
+    can say why there is no diagnosis.
+  * A trace that cannot be fetched does not fail the question either, but the
+    reason is recorded: "Langfuse is unreachable" must not look the same as
+    "ingestion hasn't landed yet".
   * Any unexpected error still finalizes the run (status='failed') and still
     publishes a terminal SSE event. A run must never be left stuck in
     'running' with a stream nobody will ever close.
+
+Cancellation (§9.14) is cooperative but immediate: the cancel event is raced
+against the in-flight agent/judge call rather than checked between questions,
+because one real agent question can take tens of seconds — which is precisely
+when someone reaches for the stop button.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from app import cancellation
 from app.config import settings
 from app.db import SessionLocal
 from app.integrations import Seams, build_seams
 from app.integrations.base import NotReady
 from app.models import EvalSet, Question, QuestionResult, Run, SpanAnalysis
+from app.services.aggregation import result_phase
 from app.sse import hub
 
 log = logging.getLogger(__name__)
@@ -43,6 +60,10 @@ log = logging.getLogger(__name__)
 # malformed judge response will fail the same way every time, so those bubble up
 # on the first attempt.
 _RETRYABLE = (asyncio.TimeoutError, ConnectionError, OSError)
+
+
+class RunCancelled(Exception):
+    """Raised inside a question when the run was cancelled mid-call."""
 
 
 def _clip(message: str) -> str:
@@ -65,19 +86,55 @@ async def _with_retries(coro_factory, attempts: int, what: str):
     raise last if last is not None else RuntimeError(f"{what} failed")
 
 
-async def _poll_trace_ready(correlation_id: str, trace_client):
-    """Poll the trace store with backoff until ready or capped (§6.12)."""
+async def _await_or_cancel(coro, cancel_event: asyncio.Event):
+    """Await `coro`, abandoning it the moment cancellation is signalled.
+
+    Waiting for the current call to return would make "stop" mean "stop in up to
+    two minutes" against a real agent, so the in-flight task is cancelled rather
+    than awaited.
+    """
+    task = asyncio.ensure_future(coro)
+    waiter = asyncio.ensure_future(cancel_event.wait())
+    try:
+        await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiter
+
+    if task.done():
+        return task.result()
+
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await task
+    raise RunCancelled()
+
+
+async def _poll_trace_ready(correlation_id: str, trace_client, cancel_event: asyncio.Event):
+    """Poll the trace store with backoff until ready or capped (§6.12).
+
+    Returns (trace_or_None, last_error_or_None). The error is kept rather than
+    only logged: without it the UI cannot tell a misconfigured trace store from
+    ingestion that simply hasn't landed yet.
+    """
     backoff = settings.trace_poll_backoff_s or [1.0]
+    last_error: str | None = None
     for attempt in range(settings.trace_poll_max_attempts):
+        if cancel_event.is_set():
+            return None, last_error
         try:
             trace = await trace_client.fetch_trace(correlation_id)
         except Exception as exc:  # trace store hiccup must not fail the question
             log.warning("fetch_trace(%s) failed: %s", correlation_id, exc)
+            last_error = _clip(f"{type(exc).__name__}: {exc}")
             trace = None
+        else:
+            last_error = None
         if trace is not None and not isinstance(trace, NotReady):
-            return trace
+            return trace, None
         await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)])
-    return None
+    return None, last_error
 
 
 async def run_eval(run_id: uuid.UUID) -> None:
@@ -91,10 +148,13 @@ async def run_eval(run_id: uuid.UUID) -> None:
         except Exception as exc:  # noqa: BLE001 - last line of defence
             log.exception("run %s failed", run_id)
             await _finalize_failed(session, run_id, exc)
+        finally:
+            cancellation.clear(run_id)
 
 
 async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     run_id = run.id
+    cancel_event = cancellation.event_for(run_id)
 
     # The endpoints this run was triggered against (§9.2). Blank keys fall back
     # to the environment, so a run started before per-run config existed — or the
@@ -121,6 +181,22 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
         for q in questions
     ]
 
+    # Every result row exists before the first agent call, so the detail view can
+    # list the whole question set immediately (greyed out) instead of having
+    # questions pop into existence one at a time. It also makes the SSE snapshot's
+    # `total` correct for a subscriber that joins late.
+    for item in snapshot:
+        result = QuestionResult(
+            run_id=run_id,
+            question_pk=item["pk"],
+            correlation_id=uuid.uuid4().hex,
+            status="pending",
+            trace_ready=False,
+        )
+        session.add(result)
+        item["result"] = result
+    await session.commit()
+
     total = len(snapshot)
     await hub.publish(run_id, {"type": "run_started", "total": total})
 
@@ -141,7 +217,7 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
         async with semaphore:
             await _process_question(
                 session, run_id, item, total, state, lock, user_id, tags,
-                seams, agent_timeout_s,
+                seams, agent_timeout_s, cancel_event,
             )
 
     # return_exceptions=True: one unexpected per-question error must not cancel
@@ -152,38 +228,47 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
             log.exception("unexpected per-question error", exc_info=res)
 
     # Finalize aggregates (§6.13 card reads these directly).
+    cancelled = cancel_event.is_set()
     correct = state["correct"]
-    run.status = "completed"
+    run.status = "cancelled" if cancelled else "completed"
     run.completed_at = datetime.now(timezone.utc)
     run.total_count = total
     run.correct_count = correct
-    run.pass_rate = (correct / total) if total else None
+    # A cancelled run has no meaningful pass rate: scoring a partial run against
+    # the full question count would drag the eval set's trend line down for a
+    # reason that has nothing to do with the agent. Left null, exactly as a
+    # failed run already is.
+    run.pass_rate = None if cancelled else ((correct / total) if total else None)
     await session.commit()
 
     await hub.publish(
         run_id,
         {
             "type": "run_completed",
+            "status": run.status,
             "total": total,
             "correct": correct,
+            "done": state["done"],
             "pass_rate": run.pass_rate,
         },
     )
 
 
 async def _process_question(session, run_id, item, total, state, lock, user_id, tags,
-                            seams: Seams, agent_timeout_s: float) -> None:
-    correlation_id = uuid.uuid4().hex
-    async with lock:
-        result = QuestionResult(
-            run_id=run_id,
-            question_pk=item["pk"],
-            correlation_id=correlation_id,
-            status="pending",
-            trace_ready=False,
-        )
-        session.add(result)
-        await session.commit()
+                            seams: Seams, agent_timeout_s: float,
+                            cancel_event: asyncio.Event) -> None:
+    result: QuestionResult = item["result"]
+    correlation_id = result.correlation_id
+
+    # Not started yet when the stop button was hit: leave it 'pending' so the run
+    # honestly reads as "stopped after N of M".
+    if cancel_event.is_set():
+        return
+
+    async def publish(event_type: str) -> None:
+        async with lock:
+            snap = (state["done"], state["correct"])
+        await _publish_progress(run_id, item["pk"], result, snap[0], total, snap[1], event_type)
 
     async def fail(message: str) -> None:
         async with lock:
@@ -194,16 +279,34 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
             snap = (state["done"], state["correct"])
         await _publish_progress(run_id, item["pk"], result, snap[0], total, snap[1])
 
+    async def cancel(message: str) -> None:
+        """Stopped mid-flight. Not a failure of the agent — say so plainly, and
+        don't count it as done: the progress bar should show where we stopped."""
+        async with lock:
+            result.status = "cancelled"
+            result.error_message = message
+            await session.commit()
+            snap = (state["done"], state["correct"])
+        await _publish_progress(run_id, item["pk"], result, snap[0], total, snap[1])
+
+    await publish("question_started")
+
     # 1) agent
     try:
-        agent_resp = await _with_retries(
-            lambda: asyncio.wait_for(
-                seams.agent.call(item["question"], correlation_id, user_id, tags),
-                timeout=agent_timeout_s,
+        agent_resp = await _await_or_cancel(
+            _with_retries(
+                lambda: asyncio.wait_for(
+                    seams.agent.call(item["question"], correlation_id, user_id, tags),
+                    timeout=agent_timeout_s,
+                ),
+                settings.agent_max_retries,
+                "agent call",
             ),
-            settings.agent_max_retries,
-            "agent call",
+            cancel_event,
         )
+    except RunCancelled:
+        await cancel("Run cancelled while waiting for the agent.")
+        return
     except Exception as exc:  # noqa: BLE001
         log.warning("agent call failed for %s: %s", correlation_id, exc)
         await fail(f"Agent call failed: {exc!s}")
@@ -220,16 +323,26 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         result.agent_response = agent_resp.response
         result.agent_latency_ms = agent_resp.latency_ms
         await session.commit()
+    await publish("question_answered")
 
     # 2) judge
+    if cancel_event.is_set():
+        await cancel("Run cancelled before judging; the agent's answer was kept.")
+        return
     try:
-        verdict = await _with_retries(
-            lambda: seams.judge.judge(
-                item["question"], agent_resp.response, item["ground_truth"]
+        verdict = await _await_or_cancel(
+            _with_retries(
+                lambda: seams.judge.judge(
+                    item["question"], agent_resp.response, item["ground_truth"]
+                ),
+                settings.llm_max_retries,
+                "judge call",
             ),
-            settings.llm_max_retries,
-            "judge call",
+            cancel_event,
         )
+    except RunCancelled:
+        await cancel("Run cancelled while judging; the agent's answer was kept.")
+        return
     except Exception as exc:  # noqa: BLE001
         log.warning("judge call failed for %s: %s", correlation_id, exc)
         # Deliberately NOT defaulted to 'correct' — an unjudged question is an
@@ -246,23 +359,32 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         if verdict.verdict == "correct":
             state["correct"] += 1
 
-    # 3) wait for trace ready (§6.12) before any diagnosis
-    trace = await _poll_trace_ready(correlation_id, seams.trace)
-    if trace is not None:
+    # 3) wait for trace ready (§6.12) before any diagnosis. A judged question is
+    #    a finished question, so cancellation from here on keeps the verdict and
+    #    just skips the extras.
+    trace = None
+    if not cancel_event.is_set():
+        trace, trace_error = await _poll_trace_ready(correlation_id, seams.trace, cancel_event)
         async with lock:
-            result.trace_ready = True
+            result.trace_ready = trace is not None
+            result.trace_error = trace_error
             await session.commit()
 
     # 4) diagnose incorrect questions once, at run time (§6.12 cache).
     #    A diagnosis failure leaves the question intact and undiagnosed; the
-    #    owner can retry from the UI via re-diagnose.
-    if verdict.verdict == "incorrect" and trace is not None:
+    #    reason is stored so the UI can explain the absence, and the owner can
+    #    retry from the UI via re-diagnose.
+    if verdict.verdict == "incorrect" and trace is not None and not cancel_event.is_set():
         try:
             diag = await seams.diagnosis.diagnose(trace, item["reasoning"], verdict)
         except Exception as exc:  # noqa: BLE001
             log.warning("diagnosis failed for %s: %s", correlation_id, exc)
+            async with lock:
+                result.diagnosis_error = _clip(f"{type(exc).__name__}: {exc}")
+                await session.commit()
         else:
             async with lock:
+                result.diagnosis_error = None
                 session.add(
                     SpanAnalysis(
                         question_result_id=result.id,
@@ -301,12 +423,17 @@ async def _finalize_failed(session, run_id: uuid.UUID, exc: Exception) -> None:
 
 
 async def _publish_progress(run_id, question_pk, result: QuestionResult,
-                            done: int, total: int, correct: int) -> None:
+                            done: int, total: int, correct: int,
+                            event_type: str = "question_done") -> None:
     await hub.publish(
         run_id,
         {
-            "type": "question_done",
+            "type": event_type,
             "question_pk": str(question_pk),
+            # The colour the left column should paint this question, derived in
+            # one place (see services/aggregation.result_phase) so the API and
+            # the live stream can never disagree.
+            "phase": result_phase(result.status, result.agent_response, result.verdict),
             "verdict": result.verdict,
             "status": result.status,
             "error_message": result.error_message,

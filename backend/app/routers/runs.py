@@ -1,21 +1,24 @@
-"""Run endpoints: trigger a run, list runs, live SSE progress (§6.13 / §6.15)."""
+"""Run endpoints: trigger, list, live SSE progress, cancel, delete
+(§6.13 / §6.15 / §9.14)."""
 from __future__ import annotations
 
 import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.auth import require_reader
+from app import cancellation
+from app.auth import require_owner, require_reader, role_for
 from app.db import get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
 from app.schemas import RunConfig, RunCreate, RunOut
 from app.services import run_config
+from app.services.deletion import delete_run as delete_run_rows
 from app.sse import hub
 
 # A credential and the endpoint it authenticates against, for the reuse rule
@@ -121,13 +124,19 @@ async def trigger_run(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
+    return _run_out(run, incorrect_count=0)
+
+
+def _run_out(run: Run, incorrect_count: int) -> RunOut:
     return RunOut(
         id=run.id, eval_set_id=run.eval_set_id, triggered_by=run.triggered_by,
         name=run.name, config=RunConfig(**(run.config or {})),
         credentials_set=_credentials_set(run),
-        status=run.status, started_at=run.started_at, completed_at=run.completed_at,
-        pass_rate=run.pass_rate, total_count=run.total_count,
-        correct_count=run.correct_count, incorrect_count=0,
+        status=run.status, cancel_requested=bool(run.cancel_requested),
+        started_at=run.started_at, completed_at=run.completed_at,
+        pass_rate=float(run.pass_rate) if run.pass_rate is not None else None,
+        total_count=run.total_count, correct_count=run.correct_count,
+        incorrect_count=incorrect_count,
     )
 
 
@@ -144,18 +153,65 @@ async def list_runs(
     ).all()
     out = []
     for r in runs:
-        out.append(
-            RunOut(
-                id=r.id, eval_set_id=r.eval_set_id, triggered_by=r.triggered_by,
-                name=r.name, config=RunConfig(**(r.config or {})),
-                credentials_set=_credentials_set(r),
-                status=r.status, started_at=r.started_at, completed_at=r.completed_at,
-                pass_rate=float(r.pass_rate) if r.pass_rate is not None else None,
-                total_count=r.total_count, correct_count=r.correct_count,
-                incorrect_count=await _incorrect_count(session, r.id),
-            )
-        )
+        out.append(_run_out(r, await _incorrect_count(session, r.id)))
     return out
+
+
+@router.post("/{run_id}/cancel", response_model=RunOut)
+async def cancel_run(
+    eval_set_id: uuid.UUID,
+    run_id: uuid.UUID,
+    subject: str = Depends(require_reader),
+    session: AsyncSession = Depends(get_session),
+):
+    """Stop a running eval (§9.14).
+
+    Wider than the owner-only write rule on purpose: a viewer may trigger a run
+    (§6.16), and someone who can start a run against a real agent must be able to
+    stop it. Owners can stop anyone's.
+    """
+    run = await session.get(Run, run_id)
+    if run is None or run.eval_set_id != eval_set_id:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.status != "running":
+        raise HTTPException(
+            status_code=409, detail=f"run is already {run.status}; nothing to cancel"
+        )
+    if run.triggered_by != subject:
+        role = await role_for(session, eval_set_id, subject)
+        if role != "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="only an owner or the person who started this run can cancel it",
+            )
+
+    run.cancel_requested = True
+    await session.commit()
+    # The DB flag is the durable record; the event is what actually interrupts
+    # the in-flight agent call (see app/cancellation.py).
+    cancellation.signal(run_id)
+    return _run_out(run, await _incorrect_count(session, run_id))
+
+
+@router.delete("/{run_id}", status_code=204)
+async def delete_run(
+    eval_set_id: uuid.UUID,
+    run_id: uuid.UUID,
+    subject: str = Depends(require_owner),  # §6.16: deleting a run is owner-only
+    session: AsyncSession = Depends(get_session),
+):
+    run = await session.get(Run, run_id)
+    if run is None or run.eval_set_id != eval_set_id:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.status == "running":
+        # The orchestrator is still writing to these rows. Cancel first — that is
+        # what the stop button is for.
+        raise HTTPException(
+            status_code=409, detail="cancel the run before deleting it"
+        )
+    await delete_run_rows(session, run_id)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{run_id}/progress")
@@ -190,8 +246,16 @@ async def run_progress(
                     .where(QuestionResult.run_id == run_id)
                 )
             ) or 0
+            correct = (
+                await session.scalar(
+                    select(func.count()).select_from(QuestionResult)
+                    .where(QuestionResult.run_id == run_id,
+                           QuestionResult.verdict == "correct")
+                )
+            ) or 0
             yield {"event": "snapshot",
-                   "data": json.dumps({"status": run.status, "done": done, "total": total})}
+                   "data": json.dumps({"status": run.status, "done": done,
+                                       "total": total, "correct": correct})}
             if run.status != "running":
                 yield {"event": "run_completed",
                        "data": json.dumps({"status": run.status})}

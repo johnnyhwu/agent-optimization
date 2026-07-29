@@ -666,7 +666,9 @@ pk (eval_set_id, user_subject)
 > 完整跑起來。真實實作**尚未對接過正式環境**（只用 mock 驗過，見 §9.16）。
 >
 > 導讀：§9.2 是真假邊界（最重要）、§9.4 是 schema、§9.6 是 run 流程與失敗策略、
-> §9.15 是完整設定表、§9.16 是測試與「哪些已驗證／哪些沒有」、§9.14 是還缺什麼。
+> §9.15 是完整設定表、§9.16 是測試與「哪些已驗證／哪些沒有」、§9.14 是還缺什麼、
+> **§9.17 是後續補強：中止 run、刪除 eval set/run、執行中的完整 question list、
+> 以及外部依賴失敗時的錯誤可見性**。
 
 ### 9.1 交付形態與技術棧
 - **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`。
@@ -773,8 +775,10 @@ frontend/src/
 - **完全照 §6.14 建 7 張表**：`eval_sets / questions / question_skills / runs / question_results /
   span_analyses / eval_set_roles`。UUID 主鍵用 `gen_random_uuid()`（migration 先 `CREATE EXTENSION
   pgcrypto`）。`questions` 與 `eval_sets` 各有 `version` 供樂觀鎖。
-- **三個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）、
-  `0003_run_config`（`runs.name` / `runs.config` / `runs.secrets`，逐 run 設定）。
+- **四個 migration**：`0001_stage1_schema`（7 張表）、`0002_real_integration`（真實整合所需欄位）、
+  `0003_run_config`（`runs.name` / `runs.config` / `runs.secrets`，逐 run 設定）、
+  `0004_run_lifecycle`（`runs.cancel_requested` / `question_results.trace_error` /
+  `question_results.diagnosis_error`，見 §9.17）。
 - **★ `0003_run_config`**：`config`（非機密：base URL、模型、timeout、concurrency）與
   `secrets`（金鑰）刻意分成兩個 JSONB 欄位——沒有任何 response model 讀 `secrets`，
   「金鑰不外流」因此是結構上的保證，而不是靠人記得維護白名單。舊 run 的 `'{}'`
@@ -792,7 +796,9 @@ frontend/src/
 - **`source_format`（`'csv' | 'jsonl'`）記的是「開發者實際上傳的檔案格式」**，由前端隨建立請求送上。
   因為 CSV 在前端就被轉成 JSONL（§9.1），後端 payload 恆為 JSONL，此欄是唯一保留原始格式的地方。
 - **實作註**：`question_results.question_pk -> questions.id` 這條 FK **沒有 ON DELETE CASCADE**（刻意——
-  鎖定的 set 本就不刪題）；seed 清理舊資料時是**依 FK 順序手動刪子表**，非靠 cascade。
+  鎖定的 set 本就不刪題）。因此刪 eval set **不能只靠 Postgres cascade**（cascade 不保證會先刪
+  `question_results` 再刪 `questions`）；順序統一收在 `services/deletion.py`，seed 與兩個 DELETE
+  端點共用（見 §9.17）。
 
 ### 9.5 API 端點清單（實際存在）
 ```
@@ -808,9 +814,14 @@ PATCH/eval-sets/{id}                        # 改 name/description/metadata（�
 PUT  /eval-sets/{id}/roles                  # 整批覆寫分享名單 owner-only（操作者保留 owner）
 GET  /eval-sets/{id}/questions              # 題目清單
 PATCH/eval-sets/{id}/questions/{qpk}        # 改題（樂觀鎖→409；question_id 不變）owner
+DELETE /eval-sets/{id}                      # 刪除整個 set（含所有 run/結果/診斷）owner-only；
+                                            #   底下有 running run → 409（先中止）
 POST /eval-sets/{id}/runs                   # 觸發 run（owner 或 viewer）；body 帶 name/config/secrets
                                             #   /reuse_secrets_from_run_id，全部可省略
-GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count / name / config / credentials_set）
+GET  /eval-sets/{id}/runs                   # run 列表（含 incorrect_count / name / config / credentials_set
+                                            #   / cancel_requested）
+POST /eval-sets/{id}/runs/{run_id}/cancel   # 中止 run（owner 或該 run 的觸發者）；非 running → 409
+DELETE /eval-sets/{id}/runs/{run_id}        # 刪除一個 run owner-only；running → 409（先中止）
 GET  /eval-sets/{id}/runs/{run_id}/progress # SSE 即時進度
 GET  /eval-sets/{id}/results                # 左欄題目清單；?run_ids=..&mode=union|intersection|last_n&last_n=
 GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓 trace(截斷) + 讀 DB 的診斷
@@ -818,18 +829,19 @@ POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
 ```
 - `GET /results` 每題回傳含 **`agent_response` / `error_message` / `agent_latency_ms`**
   （§9.4 新欄位）與 `verdict / judge_score / judge_comment / status / trace_ready / has_analysis /
-  is_incorrect`。
-- `GET /results/{rid}/trace` 回傳 `trace_state`（`ready` | `generating` | `no_trace`）、
-  `spans[]`（含 `status_message`）、`analysis`、以及 **`agent_response` / `ground_truth_response` /
-  `error_message`**，讓中間欄可以並排顯示「agent 答了什麼 vs 期望答案」。
-- **沒有 run 取消端點**：run 一旦開始就無法中止（見 §9.14）。
+  is_incorrect`，以及 **`phase`**（`pending`|`answered`|`judged`|`failed`|`cancelled`，見 §9.17）。
+- `GET /results/{rid}/trace` 回傳 `trace_state`（`ready` | `generating` | `no_trace` | **`error`**）、
+  **`trace_error`** / **`diagnosis_error`**、`spans[]`（含 `status_message`）、`analysis`、以及
+  **`agent_response` / `ground_truth_response` / `error_message`**，讓中間欄可以並排顯示
+  「agent 答了什麼 vs 期望答案」。
 
 ### 9.6 Orchestrator（如實作，對照 §6.15）
 `POST /runs` 建立 `runs`(status=running，並存下該次的 `name` / `config` / `secrets`) 後，開一個
 背景 asyncio task 跑 `orchestrator.run_eval`：先用 `build_seams(run.config, run.secrets)` 建出這個
 run 專屬的四個 client，並從 `config["concurrency"]` 決定併發上限、`config["agent_timeout_s"]`
 決定單題逾時（**都是逐 run，不再讀全域 settings**）→
-run 開始**讀定 question 快照**（之後改題不影響這次 run）→ 每題：生 correlation_id → agent →
+run 開始**讀定 question 快照**（之後改題不影響這次 run）→ **一次把整份快照的 `question_results`
+全部建好**（`status='pending'`，見 §9.17）→ 每題：agent →
 judge → 寫 `question_results`（含 `agent_response` 與 `agent_latency_ms`）→ poll（backoff）等
 trace ready → 標 `trace_ready` → 若 incorrect：抓+截斷 trace → 診斷 → 寫 `span_analyses`（含
 caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count/correct_count` 存回 `runs`。
@@ -841,8 +853,9 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | 單題失敗（agent 不通、judge 回不了合法 JSON、timeout） | 該題 `status='failed'` 並**寫下 `error_message`**，run 繼續跑其餘題目（partial completion） |
 | judge 呼叫失敗 | **絕不預設為 correct**——那會灌水通過率。該題記為 failed、`verdict` 留 null |
 | 診斷失敗 | **不影響該題判定**。verdict 才是結果，診斷是加值；owner 可事後手動 re-diagnose |
-| trace store 暫時抓不到 | 不算該題失敗，只是 `trace_ready=false` |
+| trace store 暫時抓不到 | 不算該題失敗，只是 `trace_ready=false`，**並把原因寫進 `question_results.trace_error`**（§9.17）|
 | 任何非預期例外 | 仍會把 run 收成 `status='failed'`、寫 `runs.error_message`、**並送出 SSE 終止事件**。run 不會卡在 `running` 讓前端無限等待 |
+| 使用者按下中止 | 立刻放棄進行中的 agent/judge 呼叫，該題 `status='cancelled'`；未開始的題目留 `pending`；已判分的結果保留；run 收成 `status='cancelled'`、`pass_rate=None`（§9.17）|
 
 **其他執行控制**
 - **timeout**：agent 呼叫包 `asyncio.wait_for`（`AGENT_TIMEOUT_S`），client 自身另有 httpx timeout。
@@ -945,8 +958,11 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
   兩個 request 路徑（看 trace、re-diagnose）用同一個上限但**短 sleep**，因為它們跑在 request 裡，
   不能佔用 orchestrator 那種長退避；抓不到就回 `generating` / 409 讓使用者重試。
 - **進度**：SSE（`sse.py` 的 in-memory pub/sub，單程序 POC）。事件型別：`snapshot`（晚加入的訂閱者
-  補當前狀態）、`run_started`、`question_done`（含 `verdict / status / error_message / trace_ready /
-  done / total / correct`）、`run_completed`、15 秒無事件時的 `ping`。
+  補當前狀態，含 `total` / `done` / `correct` / `status`）、`run_started`、
+  **`question_started`**、**`question_answered`**、`question_done`（三者皆含
+  `question_pk / phase / verdict / status / error_message / trace_ready / done / total / correct`）、
+  `run_completed`（含 `status`，可能是 `cancelled`）、15 秒無事件時的 `ping`。
+  中間兩個事件是左欄「灰 → 白 → 綠/紅」三段顏色的來源（§9.17）。
 
 ### 9.11 seed 假資料（`python -m app.seed`）
 一個 eval set「Billing Agent Regression Suite」，角色 alice=owner、bob=viewer、carol=viewer（示範分享）；
@@ -995,9 +1011,7 @@ per-span 機率/熱點、人工重標 span、SkillOpt、per-request skill overri
 多租戶隔離、編輯的即時讀同步（目前靠重載/切換身分刷新）。
 
 **Stage 1 範圍內但確實還缺的**
-- **run 無法取消**：按下 Run eval 之後沒有中止的方法（沒有 cancel 端點、沒有停止鈕）。
-  假模式下 5 題十幾秒無所謂；真實 agent 一題可能數十秒，誤按大批題目只能等它跑完或重啟 backend。
-  補法不難：`runs` 加 `cancel_requested`、orchestrator 每題開始前檢查、加 `POST /runs/{id}/cancel`。
+- ~~**run 無法取消**~~ → **已補**，見 §9.17。
 - **Langfuse 只讀不寫**：§6.3 說 verdict 應同時寫成 Langfuse Score（`source=API`），**尚未做**。
   目前 app DB 是唯一真相，Langfuse UI 上看不到本平台判的分數。
 - **span tree 不重建**：Langfuse 回傳的 `parentObservationId` **完全未使用**，Stage 1 以
@@ -1079,7 +1093,7 @@ trace。
 
 ### 9.16 測試與驗證現況
 
-**單元測試**（`backend/tests/`，72 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
+**單元測試**（`backend/tests/`，95 個，`make test`；不需 DB 也不需網路，外部呼叫以 `respx` mock）
 - `test_agent_client.py`（13）：request body 的 `message` + `metadata.trace_data`（trace_id=session_id、
   user_id、tags）、`{"content": str}` 回應解析（含裸 JSON 字串與純文字兩種容錯 fallback）、
   非字串/缺 `content` 視為失敗、空回答視為失敗、307 redirect 會被 follow 而非誤判為空回應
@@ -1089,9 +1103,19 @@ trace。
   分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射。
 - `test_judge_and_diagnosis.py`（18）：verdict 正規化與非法值、門檻覆寫兩個方向、§6.7 截斷保留所有 span、
   越界 `span_index` 剔除、§6.9 四段 prompt 的順序、JSON 修復重試（成功與放棄各一）。
-- `test_orchestrator.py`（11）：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
-  judge 失敗**不**被當成 correct、診斷失敗不影響 verdict、trace store 出錯不讓題目失敗、
-  非預期例外把 run 收成 failed 並送出 SSE 終止事件、重試次數上限、併發。
+- `test_orchestrator.py`（15）：agent 例外只讓該題失敗而 run 仍完成、agent 自報失敗保留原因、
+  judge 失敗**不**被當成 correct、診斷失敗不影響 verdict 且原因落庫、trace store 出錯不讓題目失敗
+  且原因落庫、非預期例外把 run 收成 failed 並送出 SSE 終止事件、重試次數上限、併發；
+  以及 §9.17 的四項：第一次呼叫 agent 前所有 result 列就已建好、中止前未開始的題目留 `pending`、
+  中止會**放棄進行中的 agent 呼叫**（以 `asyncio.wait_for` 逾時當斷言）、已判分的結果在中止後保留。
+- `test_langfuse_client.py` 另增 3 項：401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼、
+  過長的錯誤 body 會被截斷。
+- `test_deletion.py`（5）：`delete_run` / `delete_eval_set` 的 DELETE 語句**順序**（子表先於父表，
+  特別是 `question_results` 必須早於 `questions`），以及一個「schema 新增子表卻忘了加進刪除順序」
+  的守門測試。
+- `test_run_lifecycle.py`（11）：cancel 的權限矩陣（owner ✓ / 觸發者 ✓ / 其他 viewer ✗）、
+  非 running 回 409、跨 eval set 回 404；delete run / delete eval set 為 owner-only 且
+  running 時回 409。
 - `test_run_config.py`（19）：`build_seams` 空設定等同純環境變數行為、`*_IMPL` 仍是主開關
   （設定填了真端點也不會把 fake seam 變 real）、逐 run 值覆寫 env、空白欄位退回 env、
   judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白欄位寫死成 env 值且
@@ -1121,3 +1145,87 @@ trace。
 > `{"content": str}`、貴方 LLM 端點是否支援 `response_format: json_object`、貴方 Langfuse
 > 版本的 token 欄位命名。前兩處在 client 內都刻意寫得寬容（`/execute` 回應接受裸 JSON
 > 字串或純文字當 fallback、`response_format` 被拒會自動退回），但真的接上去仍可能需要微調。
+
+---
+
+### 9.17 Run lifecycle 與錯誤可見性（後續補強）
+
+> 本節是 §9.1–§9.16 之後的一次補強，對應 §9.14 列出的「run 無法取消」，以及一個更根本的問題：
+> **接真實服務後，外部依賴壞掉時 UI 什麼都看不出來**。四個 seam 的 real 實作（agent / judge /
+> Langfuse / diagnosis）**維持原樣、`*_IMPL` 也仍預設 `fake`**——這次補的是它們失敗時的可見性。
+
+#### (a) 中止 run
+- **持久旗標 + in-process 事件**：`runs.cancel_requested`（`0004_run_lifecycle`）是耐久的真相，
+  給 UI 讀、也撐得過重啟；`app/cancellation.py` 的 `asyncio.Event` 則是「立刻」的機制。
+  只查 DB 旗標的話，正在 `await` 真 agent 的那一題最久要等 `AGENT_TIMEOUT_S`（預設 120s）才會停，
+  而停止鈕存在的理由正是那種時候。
+- **`_await_or_cancel`**：agent 與 judge 呼叫都與 cancel event 賽跑（`FIRST_COMPLETED`），
+  event 先到就 `task.cancel()`。實測按下中止到 run 變 `cancelled` 約 **44ms**（該題的 fake agent
+  當時還在 1–3s 的睡眠中）。
+- **狀態語意**：進行中的那題 → `status='cancelled'` + 原因；尚未開始的題目 → 留 `pending`
+  （run 因此誠實地讀作「停在 N/M」）；**已判分的題目結果一律保留**（成本已經付出去了），
+  只跳過 trace poll 與診斷。
+- **`pass_rate` 留 `None`**：半個 run 的通過率會拖低首頁 card 的趨勢線，而原因與 agent 無關；
+  `failed` run 本來就是這樣處理。
+- **權限**：owner 可中止任何 run；**viewer 可中止自己觸發的 run**（§6.16 允許 viewer 觸發 run，
+  能開就必須能關）。這條規則兩個既有 guard 都表達不了，故 `auth.role_for` 由私有改為公開。
+
+#### (b) 刪除 eval set / run
+- `DELETE /eval-sets/{id}` 與 `DELETE /eval-sets/{id}/runs/{run_id}`，皆 **owner-only**（§6.16），
+  UI 上都有確認對話框，並寫明會連帶刪掉幾個 run。
+- **執行中的 run 不能刪**（409）：orchestrator 還在寫那些列。要刪先中止——這正是停止鈕的用途。
+- **刪除順序收在 `services/deletion.py`**：`question_results -> questions` 這條 FK 沒有 CASCADE，
+  而 Postgres 不保證 cascade 會先刪 `question_results` 再刪 `questions`，所以子表一律顯式地由深往淺刪。
+  `seed.py` 原本內嵌同一份順序，現已改為呼叫它。
+
+#### (c) Run 執行中的完整 question list
+- orchestrator 在跑第一題**之前**就把整份快照的 `question_results` 全部建好（`status='pending'`）。
+  原本是逐題建立，於是慢 agent 執行時左欄會「一題一題冒出來」，看起來像這個 eval set 只有一題。
+  附帶好處：SSE `snapshot` 的 `total` 從第一秒起就是對的。
+- **`phase`** 由 `services/aggregation.result_phase(status, agent_response, verdict)` 推導（不落庫）：
+  `pending`（灰、pulse）→ `answered`（白底、空心點，「judging…」）→ `judged`（綠/紅）；另有
+  `failed` / `cancelled`。REST 與 SSE 共用同一個函式，兩邊的顏色不可能對不上。
+- 新增 SSE 事件 `question_started` / `question_answered`（§9.10），前端就地更新該列、不整份重抓。
+- **前端**：按下 Run eval 後**直接進入該 run 的詳情頁**；三欄之上新增 `RunStatusBar.jsx`
+  （堆疊長條 + 「x/y judged (n%) · x/y answered (n%) · z not started (n%)」+ 中止鈕）。
+  run history 頁的進度條改為由 run 列表驅動（狀態為 `running` 的都畫），中途離開再回來仍看得到。
+
+#### (d) Question list 的篩選 UI
+原本標題列是一個 `float: right` 的原生 checkbox「only wrong」。改為既有的 `.segmented` 分段控制項
+`All (n) | Wrong (n)`：附上計數才說得出「被藏起來的是什麼」，而不只是「怎麼取消隱藏」。
+
+#### (e) Trace / diagnosis 的錯誤可見性（本次的核心）
+病灶有兩處，兩處都把「設定壞掉」壓成了「還在 ingest」：
+1. `routers/results.py` 在 `trace_ready=false` 時**根本不去抓** trace，於是永遠回 `generating`。
+2. `_resolve_trace_spans` 的 `except Exception: return None` 把 host 打錯 / 401 / 逾時全吞掉。
+
+補法：
+- `integrations/base.py` 新增 **`TraceFetchError`**，與 `NotReady` 明確區分。`real/langfuse.py`
+  把 `httpx` 錯誤包成它，訊息帶 **host + HTTP 狀態碼 + response body 前 200 字**——401 這種情況，
+  body 才講得出到底哪裡錯。
+- `TraceView` 新增狀態 **`error`** 與欄位 **`trace_error`** / **`diagnosis_error`**。
+  `trace_ready=false` 時**照樣嘗試抓一次**（那個旗標只記錄 run 當下的結果，不重試等於讓設定錯誤
+  永遠顯示 generating）；`build_seams` 也包了 try——`TRACE_IMPL=real` 但沒設金鑰原本會是 **500**。
+- orchestrator 把 trace poll 的最後一次錯誤寫進 `question_results.trace_error`，
+  診斷失敗寫進 `question_results.diagnosis_error`（原本只有 `log.warning`，UI 上完全看不出
+  「模型掛了」與「根本沒送去診斷」的差別）。
+- `re-diagnose` 的 409 會帶上 trace 錯誤；診斷模型失敗回 **502 + 模型自己的錯誤訊息**，不再吞成 500。
+- 前端 `SpanList.jsx`：`error` 狀態顯示紅色 banner + 訊息 + **Retry**；`generating` 若有
+  run 當下的失敗原因也一併附註；診斷失敗有自己的 banner 與 Re-diagnose 按鈕。
+
+> **fake demo 的連帶調整**：既然檢視路徑現在會重試而非相信 `trace_ready`，seed 那題用來示範
+> 「generating」的題目就不再停得住了。`FakeTraceClient` 因此認得 correlation_id 中的
+> `notready` 標記（同 §9.2 的標記風格），seed 對該題改用帶標記的 correlation_id。
+
+#### (f) 本次的驗證方式（與 §9.16 不同，這次有真的跑起來）
+- 後端 **95 個單元測試**通過（新增 23 個）。
+- **真 Postgres**（本機 16）跑完 `alembic upgrade head`（含 `0004`）、`python -m app.seed`
+  **重複執行**（等於在真 DB 上驗證刪除順序）、以及完整的 API 動線：run 觸發後 5 題立刻全部
+  `pending`、phase 依序推進、中止 44ms 生效、權限矩陣（owner / 觸發者 / 其他 viewer）、
+  刪除的 403/409/204、SSE 事件序列。
+- **真瀏覽器**（Playwright + Chromium）走過首頁 → run 歷史 → 詳情三層：卡片垃圾桶、確認對話框、
+  自動跳轉詳情頁、5 題全灰起跑、狀態列百分比、中止、All/Wrong 分段篩選、viewer 看不到破壞性按鈕，
+  以及把 `LANGFUSE_HOST` 指到不存在的 host 後，中欄確實顯示紅色錯誤 banner 與真實原因。
+  過程中無任何 console / page error。
+- ⚠️ 仍**未對接真正的外部服務**（同 §9.16 末段的但書）：Langfuse 錯誤路徑是用不存在的 host 與
+  空金鑰驗的，成功路徑仍只有 mock。
