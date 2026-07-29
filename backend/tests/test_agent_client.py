@@ -16,7 +16,7 @@ EXECUTE_URL = f"{URL}/execute"
 
 @pytest.fixture
 def client(configure):
-    with configure(agent_base_url=URL, agent_api_key="", agent_timeout_s=5.0):
+    with configure(agent_base_url=URL, agent_timeout_s=5.0):
         yield HttpAgentClient()
 
 
@@ -140,9 +140,16 @@ async def test_4xx_fails_the_question_without_retrying(client):
 
 
 @respx.mock
-async def test_auth_header_applied(configure):
-    with configure(agent_base_url=URL, agent_api_key="s3cret"):
-        c = HttpAgentClient()
-        respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "x"}))
-        await c.call("q", "corr", "alice")
-        assert respx.calls[0].request.headers["Authorization"] == "Bearer s3cret"
+async def test_per_run_base_url_and_timeout_override_the_environment(configure):
+    # The run, not the process, decides which agent server a question goes to.
+    other = "https://agent-b.test"
+    with configure(agent_base_url=URL, agent_timeout_s=5.0):
+        c = HttpAgentClient(base_url=other, timeout_s=1.5)
+        respx.post(f"{other}/execute").mock(
+            return_value=httpx.Response(200, json={"content": "x"})
+        )
+        resp = await c.call("q", "corr", "alice")
+
+    assert resp.failed is False
+    assert str(respx.calls[0].request.url) == f"{other}/execute"
+    assert c.timeout_s == 1.5

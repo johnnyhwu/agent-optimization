@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import RunProgress from "./RunProgress.jsx";
 import QuestionEditor from "./QuestionEditor.jsx";
+import RunConfigDialog from "./RunConfigDialog.jsx";
+import RunConfigView from "./RunConfigView.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconPlay, IconGear } from "./icons.jsx";
+import { IconPlay, IconGear, IconFileText } from "./icons.jsx";
 
 const MODES = [
   ["union", "Union"],
@@ -22,6 +24,8 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const [lastN, setLastN] = useState(2);
   const [activeRun, setActiveRun] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
+  const [showRunConfig, setShowRunConfig] = useState(false);
+  const [viewConfigRun, setViewConfigRun] = useState(null);
 
   function load() {
     setError(null);
@@ -32,16 +36,15 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const toggle = (id) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
-  async function trigger() {
+  // Errors propagate so the dialog can show them inline and stay open with the
+  // developer's settings intact.
+  async function trigger(payload) {
     setError(null);
-    try {
-      const run = await api.triggerRun(evalSet.id);
-      setActiveRun(run.id);
-      toast.info("Run started");
-      load();
-    } catch (e) {
-      setError(e.message);
-    }
+    const run = await api.triggerRun(evalSet.id, payload);
+    setShowRunConfig(false);
+    setActiveRun(run.id);
+    toast.info("Run started");
+    load();
   }
 
   return (
@@ -57,7 +60,9 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           {myRole === "owner" && (
             <button onClick={() => setShowEditor(true)}><IconGear size={15} /> Edit questions</button>
           )}
-          <button className="primary" onClick={trigger}><IconPlay size={14} /> Run eval</button>
+          <button className="primary" onClick={() => setShowRunConfig(true)}>
+            <IconPlay size={14} /> Run eval
+          </button>
         </div>
       </div>
       {error && <div className="error">{error}</div>}
@@ -91,22 +96,64 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
       {runs && runs.length === 0 && <div className="empty">No runs yet — hit “Run eval”.</div>}
       {runs &&
         runs.map((r, i) => (
-          <div className={`runrow ${selected.includes(r.id) ? "sel" : ""}`} key={r.id} style={{ animationDelay: `${i * 30}ms` }}>
-            <input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggle(r.id)} style={{ width: "auto" }} />
+          // The whole row opens the run (same pattern as the eval-set cards);
+          // the checkbox keeps its own click for multi-select.
+          <div
+            className={`runrow ${selected.includes(r.id) ? "sel" : ""}`}
+            key={r.id}
+            style={{ animationDelay: `${i * 30}ms` }}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpenRuns([r.id], "union", 2)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpenRuns([r.id], "union", 2);
+              }
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selected.includes(r.id)}
+              onChange={() => toggle(r.id)}
+              onClick={(e) => e.stopPropagation()}
+              aria-label="Select run"
+              style={{ width: "auto" }}
+            />
             <div className="grow">
-              <div style={{ fontWeight: 600 }}>{new Date(r.started_at).toLocaleString()}</div>
-              <div className="muted" style={{ fontSize: 12 }}>by {r.triggered_by}</div>
+              <div style={{ fontWeight: 600 }}>{r.name || new Date(r.started_at).toLocaleString()}</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                by {r.triggered_by}
+                {r.name && ` · ${new Date(r.started_at).toLocaleString()}`}
+              </div>
             </div>
             <span className={`pill ${r.status}`}>{r.status}</span>
             <div style={{ width: 96, textAlign: "right", fontWeight: 600 }}>
               {r.pass_rate === null ? "—" : `${Math.round(r.pass_rate * 100)}% pass`}
             </div>
             <div style={{ width: 80, textAlign: "right" }} className="muted">{r.incorrect_count ?? 0} wrong</div>
-            <button onClick={() => onOpenRuns([r.id], "union", 2)}>Open</button>
+            <button
+              className="icon-btn"
+              aria-label="View run config"
+              title="View the config this run used"
+              onClick={(e) => { e.stopPropagation(); setViewConfigRun(r); }}
+            >
+              <IconFileText size={16} />
+            </button>
           </div>
         ))}
 
       {showEditor && <QuestionEditor evalSet={evalSet} onClose={() => setShowEditor(false)} />}
+      {showRunConfig && (
+        <RunConfigDialog
+          runs={runs || []}
+          onClose={() => setShowRunConfig(false)}
+          onRun={trigger}
+        />
+      )}
+      {viewConfigRun && (
+        <RunConfigView run={viewConfigRun} onClose={() => setViewConfigRun(null)} />
+      )}
     </div>
   );
 }

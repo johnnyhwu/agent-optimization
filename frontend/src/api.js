@@ -54,7 +54,9 @@ export const api = {
   updateQuestion: (id, qpk, payload) =>
     req("PATCH", `/eval-sets/${id}/questions/${qpk}`, payload),
   listRuns: (id) => req("GET", `/eval-sets/${id}/runs`),
-  triggerRun: (id) => req("POST", `/eval-sets/${id}/runs`),
+  // Env-derived prefill for the run-config dialog + which seams are live.
+  runConfigDefaults: () => req("GET", "/run-config/defaults"),
+  triggerRun: (id, payload) => req("POST", `/eval-sets/${id}/runs`, payload),
   results: (id, runIds, mode, lastN) => {
     const qs = new URLSearchParams();
     runIds.forEach((r) => qs.append("run_ids", r));

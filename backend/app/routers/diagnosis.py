@@ -15,15 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_owner
 from app.config import settings
 from app.db import get_session
-from app.integrations import diagnosis_client, trace_client
+from app.integrations import build_seams
 from app.integrations.base import NotReady, Verdict
-from app.models import Question, QuestionResult, SpanAnalysis
+from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.schemas import AnalysisOut, SuspectOut
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}", tags=["diagnosis"])
 
 
-async def _resolve_trace(correlation_id: str):
+async def _resolve_trace(correlation_id: str, trace_client):
     """Poll the trace store until ingestion lands (§6.12). Short sleeps: this is
     a request path, and a still-missing trace returns 409 for the user to retry."""
     for _ in range(settings.trace_poll_max_attempts):
@@ -50,7 +50,12 @@ async def re_diagnose(
     if result.verdict != "incorrect":
         raise HTTPException(status_code=400, detail="only incorrect questions are diagnosed")
 
-    trace = await _resolve_trace(result.correlation_id)
+    # Re-diagnose against the endpoints the run itself used, not whatever the
+    # environment happens to point at now.
+    run = await session.get(Run, result.run_id)
+    seams = build_seams(run.config if run else None, run.secrets if run else None)
+
+    trace = await _resolve_trace(result.correlation_id, seams.trace)
     if trace is None:
         raise HTTPException(status_code=409, detail="trace not ready yet; retry shortly")
 
@@ -60,7 +65,7 @@ async def re_diagnose(
         score=float(result.judge_score) if result.judge_score is not None else 0.0,
         comment=result.judge_comment,
     )
-    diag = await diagnosis_client.diagnose(trace, question.ground_truth_reasoning, verdict)
+    diag = await seams.diagnosis.diagnose(trace, question.ground_truth_reasoning, verdict)
 
     existing = await session.scalar(
         select(SpanAnalysis).where(SpanAnalysis.question_result_id == result_id)
@@ -71,7 +76,7 @@ async def re_diagnose(
     existing.overall_diagnosis = diag["overall_diagnosis"]
     existing.caveat = diag.get("caveat")
     existing.raw_llm_output = diag
-    existing.model_used = diagnosis_client.model_name
+    existing.model_used = seams.diagnosis.model_name
     if not result.trace_ready:
         result.trace_ready = True
     await session.commit()

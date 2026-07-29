@@ -65,21 +65,35 @@ def observation_to_span(obs: dict, index: int) -> Span:
 
 
 class LangfuseTraceClient:
-    def __init__(self, host: str | None = None) -> None:
+    def __init__(
+        self,
+        host: str | None = None,
+        public_key: str | None = None,
+        secret_key: str | None = None,
+        timeout_s: float | None = None,
+    ) -> None:
         self.host = (host or settings.langfuse_host).rstrip("/")
         if not self.host:
-            raise RuntimeError("TRACE_IMPL=real but LANGFUSE_HOST is empty.")
-        if not (settings.langfuse_public_key and settings.langfuse_secret_key):
             raise RuntimeError(
-                "TRACE_IMPL=real but LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are empty."
+                "TRACE_IMPL=real but no Langfuse host was given — set it in the run "
+                "config, or via LANGFUSE_HOST."
             )
+        self.public_key = public_key or settings.langfuse_public_key
+        self.secret_key = secret_key or settings.langfuse_secret_key
+        if not (self.public_key and self.secret_key):
+            raise RuntimeError(
+                "TRACE_IMPL=real but the Langfuse public/secret key pair is "
+                "incomplete — set it in the run config, or via "
+                "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY."
+            )
+        self.timeout_s = timeout_s or settings.langfuse_timeout_s
 
     async def _fetch_observations(self, correlation_id: str) -> list[dict]:
         url = f"{self.host}/api/public/v2/observations"
-        auth = (settings.langfuse_public_key, settings.langfuse_secret_key)
+        auth = (self.public_key, self.secret_key)
         collected: list[dict] = []
 
-        async with httpx.AsyncClient(timeout=settings.langfuse_timeout_s, auth=auth) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_s, auth=auth) as client:
             for page in range(1, _MAX_PAGES + 1):
                 resp = await client.get(
                     url,

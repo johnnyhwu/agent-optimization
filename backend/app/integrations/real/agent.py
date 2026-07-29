@@ -50,22 +50,17 @@ def _extract_text(resp: httpx.Response) -> str | None:
 class HttpAgentClient:
     """POST a question to the agent server's /execute endpoint and return its answer."""
 
-    def __init__(self, base_url: str | None = None) -> None:
+    def __init__(self, base_url: str | None = None, timeout_s: float | None = None) -> None:
         self.base_url = (base_url or settings.agent_base_url).rstrip("/")
         if not self.base_url:
             raise RuntimeError(
-                "AGENT_IMPL=real but AGENT_BASE_URL is empty — set it to the "
-                "agent server's base URL (e.g. http://agent-host:8080)."
+                "AGENT_IMPL=real but no agent base URL was given — set it in the "
+                "run config, or via AGENT_BASE_URL (e.g. http://agent-host:8080)."
             )
+        self.timeout_s = timeout_s or settings.agent_timeout_s
 
     def _headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if settings.agent_api_key:
-            value = settings.agent_api_key
-            if settings.agent_auth_scheme:
-                value = f"{settings.agent_auth_scheme} {value}"
-            headers[settings.agent_auth_header] = value
-        return headers
+        return {"Content-Type": "application/json"}
 
     def build_payload(
         self, question: str, correlation_id: str, user_id: str,
@@ -93,7 +88,7 @@ class HttpAgentClient:
         started = time.monotonic()
 
         async with httpx.AsyncClient(
-            timeout=settings.agent_timeout_s, follow_redirects=True
+            timeout=self.timeout_s, follow_redirects=True
         ) as client:
             resp = await client.post(
                 f"{self.base_url}/execute", json=payload, headers=self._headers()

@@ -5,15 +5,17 @@ A runnable end-to-end demo of **Stage 1** from [`docs/spec.md`](docs/spec.md)
 orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
 jumps the UI straight to the suspect span with its input/output/token detail.
 
-Everything external is **faked** behind a swappable interface — a real HTTP
-agent server, LLM judge, LLM diagnosis, and Langfuse trace fetch are stubbed
-with realistic latency. The point of the POC is to prove the **UI + data flow
-+ real app-DB schema (§6.14)**, not to integrate anything real yet. The app DB
-schema is the real thing, created by an Alembic migration.
+Every external dependency sits behind a swappable interface with **two
+implementations**: a fake one with realistic latency, and a real one (HTTP agent
+server, LLM judge, LLM diagnosis, Langfuse trace fetch). All four default to
+fake, so the demo runs on nothing but Docker; each can be switched to real
+independently — see [Going from fake to real](#going-from-fake-to-real). The app
+DB schema is the real thing, created by Alembic migrations.
 
 > **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
 > re-labeling, SkillOpt, skill write-back, annotation score sync,
-> real Langfuse/agent/LLM calls, multi-tenant isolation.
+> multi-tenant isolation. Writing back to Langfuse (verdicts as Scores, §6.3) is
+> also not done — the trace seam reads only.
 
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
@@ -82,6 +84,24 @@ Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
 See [`backend/.env.example`](backend/.env.example) for the full list.
 
+The `*_IMPL` switches are the master switch, but the connection settings are only
+**defaults**. "Run eval" opens a config dialog prefilled from them, where each run
+gets its own name, agent base URL and timeout, Langfuse host/keys/timeout, LLM
+endpoint and models, and concurrency (how many questions go to the agent at once).
+Each run stores what it was triggered with, so two runs can target different agent
+servers, and viewing a run's trace later uses the endpoints *that* run used. Blank
+fields fall back to the environment, so the fake demo still runs from an empty form.
+
+A blank field is resolved to the environment's value **when the run is triggered**,
+not left blank, so each run records a complete picture of what it used rather than
+a set of deltas against an environment that may since have changed. Every run row
+has a button opening that config, read-only — a finished run's settings are history.
+
+Credentials are write-only: `runs.secrets` is never serialized into a response
+(`list_runs` is open to viewers too). To avoid retyping them, pick an earlier run
+under "Use config from" — the backend copies that run's keys server-side, and only
+while the endpoint they authenticate against is unchanged.
+
 ```bash
 # minimum for "upload a real eval set, run it, see real results"
 AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
@@ -108,8 +128,10 @@ Notes:
   it is never left hanging in `running`.
 - A diagnosis failure never fails the question; the verdict stands and the owner
   can retry from the UI.
-- `RUN_CONCURRENCY` defaults to 1 (strictly sequential). Raise it to run
-  questions against the agent in parallel.
+- `RUN_CONCURRENCY` defaults to 1 (strictly sequential) and is the default for
+  the dialog's **Concurrency** field, which sets it per run.
+- `AGENT_TIMEOUT_S` and `LANGFUSE_TIMEOUT_S` are settable per run; `LLM_TIMEOUT_S`
+  is not — it stays process-wide.
 - `JUDGE_SCORE_THRESHOLD` is empty by default, meaning the judge's own verdict is
   used. Set a 0–1 number to derive the verdict from its score instead, so the
   pass/fail boundary can be retuned without touching the prompt.
@@ -134,9 +156,13 @@ Notes:
   and `backend/sample_eval_set.csv` are equivalent test files. The set is
   **locked** after creation (edit only, no add/delete). Editing keeps
   `question_id` and bumps `version`; a stale version returns **409**.
-- **Live run + partial completion:** "▶ Run eval" streams progress over SSE. A
-  question whose text contains the `⟦timeout⟧` marker fails while the run
-  finishes (partial completion).
+- **Live run + partial completion:** "▶ Run eval" opens the config dialog
+  (prefilled from the environment; seams still set to `fake` are greyed out),
+  then streams progress over SSE. A question whose text contains the `⟦timeout⟧`
+  marker fails while the run finishes (partial completion).
+- **Per-run config:** each run row has a button showing, read-only, the settings
+  that run used. Click a row anywhere to open the run itself; the checkbox and
+  the config button keep their own clicks.
 
 ## Where the important pieces live
 | Concern | File |
@@ -145,11 +171,15 @@ Notes:
 | Backend image (deps via uv) | `backend/Dockerfile` |
 | Frontend image (deps via pnpm) | `frontend/Dockerfile` |
 | App DB schema (§6.14), the 7 tables | `backend/alembic/versions/0001_stage1_schema.py` |
+| Columns the real integrations need | `backend/alembic/versions/0002_real_integration.py` |
+| Per-run config columns (`name`/`config`/`secrets`) | `backend/alembic/versions/0003_run_config.py` |
 | ORM models | `backend/app/models.py` |
 | **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
 | **Fake impls** (each `# REPLACE WITH REAL IMPL`) | `backend/app/integrations/fake.py` |
 | **Real impls** (agent / judge / Langfuse / diagnosis) | `backend/app/integrations/real/` |
-| Which impl backs each seam | `backend/app/integrations/__init__.py` |
+| Which impl backs each seam + per-run clients (`build_seams`) | `backend/app/integrations/__init__.py` |
+| Run-config defaults + trigger-time resolution | `backend/app/services/run_config.py` |
+| Run-config dialog / read-only view | `frontend/src/components/RunConfigDialog.jsx`, `RunConfigView.jsx` |
 | Judge + diagnosis prompts (§6.9 contract) | `backend/app/integrations/real/prompts.py` |
 | Integration preflight | `backend/app/check_integrations.py` |
 | **All latency values, one file** | `backend/app/fake_config.py` |
@@ -165,10 +195,18 @@ Notes:
 ## Swapping fake → real
 Each integration is a Python `Protocol` in `integrations/base.py`, with a fake
 implementation in `integrations/fake.py` and a real one in `integrations/real/`.
-`integrations/__init__.py` picks between them per seam from the `*_IMPL` settings
-— see [Going from fake to real](#going-from-fake-to-real). Nothing downstream
-imports a concrete class, so the orchestrator and routers are untouched by the
-choice. Simulated latencies live only in `app/fake_config.py`.
+`build_seams()` in `integrations/__init__.py` picks between them per seam from the
+`*_IMPL` settings — see [Going from fake to real](#going-from-fake-to-real).
+Nothing downstream imports a concrete class, so the orchestrator and routers are
+untouched by the choice. Simulated latencies live only in `app/fake_config.py`.
+
+`build_seams` takes the *run's* config, so which endpoint a real seam talks to is
+decided per run rather than per process. That is also why the clients are built
+per run instead of being module-level singletons: `trigger_run` spawns background
+tasks without a lock, so two concurrent runs would otherwise race over shared
+state. The same call rebuilds the seams on the view path (trace fetch,
+re-diagnose) from the run that produced the result, so a past run is always read
+back through the endpoints it actually used.
 
 ## Upload schema (§6.11)
 Both formats carry the same fields. **JSONL** — one JSON object per line:
