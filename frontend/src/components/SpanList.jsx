@@ -1,13 +1,79 @@
 import React from "react";
 
+// Some trace-store failures are worth explaining rather than quoting. A raw
+// ClickHouse dump tells a developer nothing about what to do next, and — because
+// it comes back from *our* API — reads as if this platform were at fault.
+//
+// The `events` / `events_core` table is Langfuse's own v4 schema, which some
+// self-hosted builds (~3.152+) query without having shipped the migration that
+// creates it. Nothing here generates SQL; Langfuse does.
+const KNOWN_TRACE_ERRORS = [
+  {
+    match: /unknown table expression|events_core/i,
+    title: "Your Langfuse server could not query its own storage.",
+    body:
+      "This is a known self-hosted Langfuse issue: builds from ~3.152 query a " +
+      "ClickHouse `events` table whose migration hasn't shipped. It is a " +
+      "Langfuse deployment problem, not an eval-platform one — re-run the " +
+      "ClickHouse migrations (check `schema_migrations` for `dirty = 1`), or " +
+      "pin the Langfuse image below 3.152.",
+  },
+  {
+    match: /HTTP 401|HTTP 403|invalid credentials/i,
+    title: "Langfuse rejected the credentials for this run.",
+    body:
+      "The public/secret key pair this run was triggered with is wrong or lacks " +
+      "access to the project. Re-enter it in the run config and trigger again.",
+  },
+  {
+    match: /ConnectError|ConnectTimeout|Could not reach/i,
+    title: "Langfuse was unreachable.",
+    body: "The host is wrong, down, or not routable from the backend container.",
+  },
+];
+
+function explainTraceError(raw) {
+  if (!raw) return null;
+  return KNOWN_TRACE_ERRORS.find((e) => e.match.test(raw)) || null;
+}
+
+// Renders the explanation when we have one, with the raw text kept behind a
+// disclosure — it's still the thing to paste into a bug report.
+function TraceErrorBody({ raw }) {
+  const known = explainTraceError(raw);
+  if (!known) return <div className="banner-detail">{raw}</div>;
+  return (
+    <>
+      {/* Prose, not the monospace treatment `.banner-detail` gives raw output. */}
+      <div className="banner-explain">
+        <strong>{known.title}</strong> {known.body}
+      </div>
+      <details className="banner-raw">
+        <summary>Technical detail</summary>
+        <pre>{raw}</pre>
+      </details>
+    </>
+  );
+}
+
 // Middle column (§6.13): top overall_diagnosis + caveat banner, then the vertical
 // span list with suspects marked (confidence high/med/low). Distinguishes
 // "generating (retrying)" from "no trace" (§6.12 / §7.1 #5) — and from "the trace
 // store rejected us", which used to be shown as "generating" forever.
 export default function SpanList({
-  trace, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing, onRetryTrace,
+  trace, refreshing, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing,
+  onRetryTrace,
 }) {
-  if (!trace) return <div className="col"><h4>Trace</h4><div className="notflagged">Select a question.</div></div>;
+  if (!trace) {
+    return (
+      <div className="col">
+        <h4>Trace &amp; diagnosis</h4>
+        <div className="notflagged">
+          {refreshing ? "Loading…" : "Select a question."}
+        </div>
+      </div>
+    );
+  }
 
   const suspectByIndex = {};
   (trace.analysis?.suspects || []).forEach((s) => (suspectByIndex[s.span_index] = s));
@@ -19,7 +85,12 @@ export default function SpanList({
 
   return (
     <div className="col">
-      <h4>Trace & diagnosis</h4>
+      <h4>
+        Trace &amp; diagnosis
+        {/* The panel keeps its content while a live question refetches, so this
+            dot is the only thing that says an update is on the way. */}
+        {refreshing && <span className="refreshing" title="Updating…" />}
+      </h4>
 
       {/* What the agent answered, next to what it was graded against. With a real
           agent this is the first thing to read — the verdict alone doesn't say
@@ -50,7 +121,7 @@ export default function SpanList({
       {trace.trace_state === "error" && (
         <div className="banner error-banner">
           <strong>✕ Could not load the trace.</strong>
-          <div className="banner-detail">{trace.trace_error}</div>
+          <TraceErrorBody raw={trace.trace_error} />
           {onRetryTrace && (
             <div style={{ marginTop: 8 }}>
               <button onClick={onRetryTrace}>↻ Retry</button>
@@ -63,15 +134,26 @@ export default function SpanList({
           ⏳ Trace is generating (Langfuse ingestion is async — retrying). This is not
           "no trace"; check back shortly.
           {trace.trace_error && (
-            <div className="banner-detail">
-              Last attempt during the run failed: {trace.trace_error}
-            </div>
+            <>
+              <div className="banner-detail">Last attempt during the run failed:</div>
+              <TraceErrorBody raw={trace.trace_error} />
+            </>
           )}
           {onRetryTrace && (
             <div style={{ marginTop: 8 }}>
               <button onClick={onRetryTrace}>↻ Retry</button>
             </div>
           )}
+        </div>
+      )}
+      {/* Distinct from "generating": nothing is being waited on because nothing
+          has been asked yet. Showing an ingestion message here — or, worse, a
+          trace-store error from a fetch that should never have happened — made a
+          brand-new run look like it had already failed. */}
+      {trace.trace_state === "not_started" && (
+        <div className="banner generating">
+          ⏳ Waiting for the agent — this question hasn't been sent yet. The trace
+          appears once it answers.
         </div>
       )}
       {trace.trace_state === "no_trace" && (

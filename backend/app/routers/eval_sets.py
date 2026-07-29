@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,54 +14,157 @@ from app.models import (
     EvalSet,
     EvalSetRole,
     Question,
+    QuestionResult,
     QuestionSkill,
     Run,
 )
-from app.routers._helpers import load_run_verdicts
 from app.schemas import (
     EvalSetCard,
     EvalSetCreate,
+    EvalSetPage,
     EvalSetUpdate,
     QuestionOut,
     RolesUpdate,
     ShareEntry,
 )
-from app.services.aggregation import regression_summary
+from app.services.aggregation import RunVerdicts, regression_summary
 from app.services.deletion import delete_eval_set as delete_eval_set_rows
 from app.services.upload import parse_jsonl
 
 router = APIRouter(prefix="/eval-sets", tags=["eval-sets"])
 
 
-async def _build_card(session: AsyncSession, es: EvalSet, subject: str) -> EvalSetCard:
-    runs = (
-        await session.scalars(
-            select(Run).where(Run.eval_set_id == es.id).order_by(Run.started_at.asc())
+# How many of a set's most recent runs the sparkline draws. The trend line is a
+# glance at recent direction, not an archive: without a cap, one long-lived eval
+# set makes the home page load its entire run history to render ~120px of SVG.
+TREND_RUNS = 20
+
+
+async def _build_cards(
+    session: AsyncSession, sets: list[EvalSet], subject: str
+) -> list[EvalSetCard]:
+    """Cards for a page of eval sets in a fixed number of queries.
+
+    Built for the whole page at once, deliberately. The per-set version issued
+    three queries each, one of which pulled *every question_result of every run*
+    of that set purely to compute a two-run regression summary — so a home page
+    with fifty sets of real history read hundreds of thousands of rows to render
+    a handful of numbers. Everything below is bounded by the page, not by history.
+    """
+    if not sets:
+        return []
+    set_ids = [es.id for es in sets]
+
+    # 1. Run count per set.
+    count_rows = (
+        await session.execute(
+            select(Run.eval_set_id, func.count())
+            .where(Run.eval_set_id.in_(set_ids))
+            .group_by(Run.eval_set_id)
         )
     ).all()
-    trend = [float(r.pass_rate) if r.pass_rate is not None else None for r in runs]
-    latest = next(
-        (float(r.pass_rate) for r in reversed(runs) if r.pass_rate is not None), None
+    run_counts = {es_id: n for es_id, n in count_rows}
+
+    # 2. The most recent TREND_RUNS runs per set, newest first. The window
+    #    function keeps this one query no matter how much history exists.
+    ranked = (
+        select(
+            Run.id,
+            Run.eval_set_id,
+            Run.pass_rate,
+            func.row_number()
+            .over(partition_by=Run.eval_set_id, order_by=Run.started_at.desc())
+            .label("rn"),
+        )
+        .where(Run.eval_set_id.in_(set_ids))
+        .subquery()
     )
-    newest_first = list(reversed(runs))
-    verdicts = await load_run_verdicts(session, newest_first)
-    reg = regression_summary(verdicts)
+    recent_rows = (
+        await session.execute(
+            select(ranked.c.id, ranked.c.eval_set_id, ranked.c.pass_rate, ranked.c.rn)
+            .where(ranked.c.rn <= TREND_RUNS)
+            .order_by(ranked.c.eval_set_id, ranked.c.rn)
+        )
+    ).all()
+
+    recent_by_set: dict[uuid.UUID, list] = {}
+    for row in recent_rows:
+        recent_by_set.setdefault(row.eval_set_id, []).append(row)
+
+    # 3. Regression needs only the latest two runs per set — regression_summary
+    #    reads runs_newest_first[0:2] and nothing else. Restricting the verdict
+    #    load to those is what removes the bulk of the old row volume.
+    regression_run_ids = [
+        row.id for rows in recent_by_set.values() for row in rows[:2]
+    ]
+    verdicts_by_run: dict[uuid.UUID, dict] = {}
+    if regression_run_ids:
+        verdict_rows = (
+            await session.execute(
+                select(
+                    QuestionResult.run_id,
+                    QuestionResult.question_pk,
+                    QuestionResult.verdict,
+                ).where(QuestionResult.run_id.in_(regression_run_ids))
+            )
+        ).all()
+        for run_id, qpk, verdict in verdict_rows:
+            if verdict is not None:
+                verdicts_by_run.setdefault(run_id, {})[qpk] = verdict
+
+    # 4. Share lists.
     role_rows = (
         await session.execute(
-            select(EvalSetRole.user_subject, EvalSetRole.role)
-            .where(EvalSetRole.eval_set_id == es.id)
+            select(EvalSetRole.eval_set_id, EvalSetRole.user_subject, EvalSetRole.role)
+            .where(EvalSetRole.eval_set_id.in_(set_ids))
             .order_by(EvalSetRole.role.asc(), EvalSetRole.user_subject.asc())
         )
     ).all()
-    roles = [ShareEntry(subject=s, role=r) for s, r in role_rows]
-    my_role = next((r.role for r in roles if r.subject == subject), None)
-    return EvalSetCard(
-        id=es.id, name=es.name, description=es.description, metadata=es.meta,
-        version=es.version, created_at=es.created_at, updated_at=es.updated_at,
-        run_count=len(runs), latest_pass_rate=latest, trend=trend,
-        regressed=reg["regressed"], improved=reg["improved"], my_role=my_role,
-        roles=roles,
-    )
+    roles_by_set: dict[uuid.UUID, list[ShareEntry]] = {}
+    for es_id, user_subject, role in role_rows:
+        roles_by_set.setdefault(es_id, []).append(
+            ShareEntry(subject=user_subject, role=role)
+        )
+
+    cards: list[EvalSetCard] = []
+    for es in sets:
+        recent = recent_by_set.get(es.id, [])  # newest first
+        # The sparkline reads left-to-right as oldest-to-newest.
+        trend = [
+            float(r.pass_rate) if r.pass_rate is not None else None
+            for r in reversed(recent)
+        ]
+        latest = next(
+            (float(r.pass_rate) for r in recent if r.pass_rate is not None), None
+        )
+        reg = regression_summary(
+            [
+                RunVerdicts(
+                    run_id=r.id,
+                    started_at=None,  # ordering already fixed by the query
+                    verdicts=verdicts_by_run.get(r.id, {}),
+                )
+                for r in recent[:2]
+            ]
+        )
+        roles = roles_by_set.get(es.id, [])
+        cards.append(
+            EvalSetCard(
+                id=es.id, name=es.name, description=es.description, metadata=es.meta,
+                version=es.version, created_at=es.created_at, updated_at=es.updated_at,
+                run_count=run_counts.get(es.id, 0),
+                latest_pass_rate=latest, trend=trend,
+                regressed=reg["regressed"], improved=reg["improved"],
+                my_role=next((r.role for r in roles if r.subject == subject), None),
+                roles=roles,
+            )
+        )
+    return cards
+
+
+async def _build_card(session: AsyncSession, es: EvalSet, subject: str) -> EvalSetCard:
+    """Single-set convenience wrapper over `_build_cards`."""
+    return (await _build_cards(session, [es], subject))[0]
 
 
 def _clean_shares(shares: list[ShareEntry], creator: str) -> dict[str, str]:
@@ -115,25 +218,56 @@ async def create_eval_set(
     return {"id": str(es.id), "question_count": len(parsed.questions)}
 
 
-@router.get("", response_model=list[EvalSetCard])
+@router.get("", response_model=EvalSetPage)
 async def list_eval_sets(
+    q: str | None = Query(None, description="case-insensitive name substring"),
+    metadata_key: str | None = Query(None),
+    metadata_value: str | None = Query(None),
+    sort: str = Query("created_at", pattern="^(created_at|name)$"),
+    limit: int = Query(24, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
 ):
-    """Cards for every eval set the caller has a role on (§6.13 top tier)."""
-    es_ids = (
-        await session.scalars(
-            select(EvalSetRole.eval_set_id).where(EvalSetRole.user_subject == subject)
-        )
-    ).all()
-    if not es_ids:
-        return []
+    """A page of cards for the eval sets the caller has a role on (§6.13 top tier).
+
+    Search, metadata filter and sort are applied in SQL rather than over the
+    loaded page — filtering only what happens to be on screen would make "find
+    my set" depend on how far the developer had scrolled, which defeats the
+    point of having a filter at all (§6.10).
+    """
+    base = (
+        select(EvalSet)
+        .join(EvalSetRole, EvalSetRole.eval_set_id == EvalSet.id)
+        .where(EvalSetRole.user_subject == subject)
+    )
+    if q:
+        base = base.where(EvalSet.name.ilike(f"%{q}%"))
+    if metadata_key:
+        if metadata_value:
+            # ->> yields text, so this compares the value as the string the
+            # upload stored (§6.14: Stage 1 treats metadata values as strings).
+            base = base.where(EvalSet.meta[metadata_key].astext == metadata_value)
+        else:
+            base = base.where(EvalSet.meta.has_key(metadata_key))  # noqa: W601
+
+    total = await session.scalar(
+        select(func.count()).select_from(base.subquery())
+    ) or 0
+
+    order = EvalSet.name.asc() if sort == "name" else EvalSet.created_at.desc()
+    # id as a tiebreaker: without it, sets sharing a created_at/name can swap
+    # places between pages and be shown twice or not at all.
     sets = (
         await session.scalars(
-            select(EvalSet).where(EvalSet.id.in_(es_ids)).order_by(EvalSet.created_at.desc())
+            base.order_by(order, EvalSet.id.asc()).limit(limit).offset(offset)
         )
     ).all()
-    return [await _build_card(session, es, subject) for es in sets]
+
+    items = await _build_cards(session, list(sets), subject)
+    return EvalSetPage(
+        items=items, total=total, has_more=offset + len(items) < total
+    )
 
 
 @router.get("/metadata/keys", response_model=list[str])

@@ -49,6 +49,21 @@ class RunTrend(BaseModel):
     started_at: datetime
 
 
+class Page(BaseModel):
+    """One slice of a list, plus what the UI needs to ask for the next.
+
+    `total` is what lets the page say "24 of 137" rather than only offering a
+    Load-more button with no sense of how much is left; `has_more` is computed
+    server-side so the client never has to reason about the arithmetic.
+    """
+    total: int
+    has_more: bool
+
+
+class EvalSetPage(Page):
+    items: list["EvalSetCard"]
+
+
 class EvalSetCard(BaseModel):
     id: uuid.UUID
     name: str
@@ -151,9 +166,18 @@ class RunOut(BaseModel):
     incorrect_count: int | None = None
 
 
+class RunPage(Page):
+    items: list[RunOut]
+
+
 class QuestionResultOut(BaseModel):
     id: uuid.UUID
     run_id: uuid.UUID
+    # Which run this row came from, in words. In a multi-run selection the row
+    # shown is a *representative* one that may belong to an older run than the
+    # one being watched — without a label, an old run's trace and errors are
+    # easily mistaken for the live run's.
+    run_label: str | None = None
     question_pk: uuid.UUID
     question_id: str
     question: str
@@ -204,7 +228,13 @@ class AnalysisOut(BaseModel):
 class TraceView(BaseModel):
     """Middle+right column payload for one question_result."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    trace_state: str  # 'ready' | 'generating' | 'no_trace' | 'error'
+    # 'ready'       spans below
+    # 'generating'  the agent answered; ingestion hasn't landed yet (§6.12)
+    # 'not_started' the agent hasn't been asked yet — nothing to fetch, and the
+    #               trace store is deliberately not called
+    # 'no_trace'    the question failed or was cancelled before answering
+    # 'error'       the trace store could not be read
+    trace_state: str
     # Why the trace could not be fetched. 'error' always carries one; 'generating'
     # carries the run-time failure when there was one, so a developer staring at
     # "still ingesting" can see that the last attempt actually got a 401.

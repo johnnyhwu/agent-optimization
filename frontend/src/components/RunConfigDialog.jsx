@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
+import RunPicker from "./RunPicker.jsx";
 import { IconPlay } from "./icons.jsx";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
@@ -17,16 +18,15 @@ const SECRET_PAIRS = [
   ["langfuse_secret_key", "langfuse_host"],
 ];
 
-function runLabel(run) {
-  return run.name || new Date(run.started_at).toLocaleString();
-}
-
-export default function RunConfigDialog({ runs, onClose, onRun }) {
+export default function RunConfigDialog({ evalSetId, onClose, onRun }) {
   const [defaults, setDefaults] = useState(null);
   const [impls, setImpls] = useState({});
   const [form, setForm] = useState(null);
   const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
   const [reuseFrom, setReuseFrom] = useState("");
+  // The run behind `reuseFrom`, kept here because RunPicker only ever holds the
+  // page it fetched and the endpoint-match rule below needs the run's config.
+  const [source, setSource] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,10 +51,6 @@ export default function RunConfigDialog({ runs, onClose, onRun }) {
   };
 
   // The source run's credentials only carry over while their endpoint matches.
-  const source = useMemo(
-    () => (runs || []).find((r) => r.id === reuseFrom),
-    [runs, reuseFrom]
-  );
   const needsRetype = useMemo(() => {
     if (!source || !form) return [];
     return SECRET_PAIRS.filter(
@@ -63,10 +59,15 @@ export default function RunConfigDialog({ runs, onClose, onRun }) {
     ).map(([secret]) => secret);
   }, [source, form, secrets]);
 
-  function applyReuse(runId) {
+  function applyReuse(runId, run) {
     setReuseFrom(runId);
-    const run = (runs || []).find((r) => r.id === runId);
-    if (!run) return;
+    setSource(run);
+    if (!run) {
+      // Back to the environment defaults, undoing whatever a previous pick
+      // copied in — otherwise "start from the defaults" silently keeps them.
+      setForm((f) => ({ ...(defaults || {}), name: f.name }));
+      return;
+    }
     // Keep the name (this is a new run) and only take the settings that run used;
     // anything it left blank falls back to the env default we started from.
     setForm((f) => {
@@ -121,26 +122,20 @@ export default function RunConfigDialog({ runs, onClose, onRun }) {
 
       {form && (
         <>
-          {runs && runs.length > 0 && (
-            <div className="field">
-              <label>Use config from</label>
-              <select value={reuseFrom} onChange={(e) => applyReuse(e.target.value)}>
-                <option value="">Start from the defaults</option>
-                {runs.map((r) => (
-                  <option key={r.id} value={r.id}>{runLabel(r)}</option>
-                ))}
-              </select>
-              {reuseFrom && (
-                <div className="hint">
-                  {needsRetype.length === 0
-                    ? "That run's keys carry over — no need to retype them."
-                    : `Endpoint changed, so re-enter: ${needsRetype
-                        .map((k) => (k === "llm_api_key" ? "LLM API Key" : "Langfuse Secret Key"))
-                        .join(", ")}.`}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="field">
+            <label>Use config from</label>
+            <RunPicker evalSetId={evalSetId} value={reuseFrom} onChange={applyReuse} />
+            {reuseFrom && (
+              <div className="hint">
+                {needsRetype.length === 0
+                  ? "That run's keys carry over — no need to retype them."
+                  : `Endpoint changed, so re-enter: ${needsRetype
+                      .map((k) => (k === "llm_api_key" ? "LLM API Key" : "Langfuse Secret Key"))
+                      .join(", ")}.`}
+              </div>
+            )}
+          </div>
+
 
           <div className="field">
             <label>Run name</label>

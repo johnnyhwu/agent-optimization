@@ -6,7 +6,7 @@ import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -16,7 +16,7 @@ from app.auth import require_owner, require_reader, role_for
 from app.db import get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
-from app.schemas import RunConfig, RunCreate, RunOut
+from app.schemas import RunConfig, RunCreate, RunOut, RunPage
 from app.services import run_config
 from app.services.deletion import delete_run as delete_run_rows
 from app.sse import hub
@@ -52,6 +52,30 @@ async def _incorrect_count(session: AsyncSession, run_id: uuid.UUID) -> int:
             .where(QuestionResult.run_id == run_id, QuestionResult.verdict == "incorrect")
         )
     ) or 0
+
+
+async def _incorrect_counts(
+    session: AsyncSession, run_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Incorrect counts for a page of runs in one query.
+
+    The per-run version above is fine for a single run; issuing it in a loop made
+    listing N runs cost N round trips, which is the kind of thing that only shows
+    up once someone has a few hundred runs of history.
+    """
+    if not run_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(QuestionResult.run_id, func.count())
+            .where(
+                QuestionResult.run_id.in_(run_ids),
+                QuestionResult.verdict == "incorrect",
+            )
+            .group_by(QuestionResult.run_id)
+        )
+    ).all()
+    return {run_id: n for run_id, n in rows}
 
 
 async def _resolve_secrets(
@@ -140,21 +164,52 @@ def _run_out(run: Run, incorrect_count: int) -> RunOut:
     )
 
 
-@router.get("", response_model=list[RunOut])
+@router.get("", response_model=RunPage)
 async def list_runs(
     eval_set_id: uuid.UUID,
+    q: str | None = Query(None, description="case-insensitive run name substring"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     subject: str = Depends(require_reader),
     session: AsyncSession = Depends(get_session),
 ):
+    """A page of runs, newest first.
+
+    Paged because a long-lived eval set accumulates runs indefinitely, and both
+    the history list and the "use config from" picker read this endpoint.
+    """
+    base = select(Run).where(Run.eval_set_id == eval_set_id)
+    if q:
+        base = base.where(Run.name.ilike(f"%{q}%"))
+
+    total = await session.scalar(select(func.count()).select_from(base.subquery())) or 0
+    # id as a tiebreaker so runs started in the same instant can't shuffle
+    # between pages and appear twice (or not at all).
     runs = (
         await session.scalars(
-            select(Run).where(Run.eval_set_id == eval_set_id).order_by(Run.started_at.desc())
+            base.order_by(Run.started_at.desc(), Run.id.asc()).limit(limit).offset(offset)
         )
     ).all()
-    out = []
-    for r in runs:
-        out.append(_run_out(r, await _incorrect_count(session, r.id)))
-    return out
+
+    counts = await _incorrect_counts(session, [r.id for r in runs])
+    items = [_run_out(r, counts.get(r.id, 0)) for r in runs]
+    return RunPage(items=items, total=total, has_more=offset + len(items) < total)
+
+
+@router.get("/{run_id}", response_model=RunOut)
+async def get_run(
+    eval_set_id: uuid.UUID,
+    run_id: uuid.UUID,
+    subject: str = Depends(require_reader),
+    session: AsyncSession = Depends(get_session),
+):
+    """One run. The detail view needs a specific run's status and triggered_by to
+    decide whether to offer the stop button; before this it read the whole run
+    list and searched it, which stopped working the moment that list was paged."""
+    run = await session.get(Run, run_id)
+    if run is None or run.eval_set_id != eval_set_id:
+        raise HTTPException(status_code=404, detail="run not found")
+    return _run_out(run, await _incorrect_count(session, run_id))
 
 
 @router.post("/{run_id}/cancel", response_model=RunOut)

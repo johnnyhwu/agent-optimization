@@ -100,6 +100,10 @@ async def re_diagnose(
     existing.model_used = seams.diagnosis.model_name
     if not result.trace_ready:
         result.trace_ready = True
+    # The trace was just read successfully, so whatever went wrong during the run
+    # no longer describes reality. Leaving it would keep a resolved failure on
+    # screen indefinitely.
+    result.trace_error = None
     await session.commit()
     await session.refresh(existing)
 

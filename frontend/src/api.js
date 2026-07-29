@@ -41,10 +41,22 @@ async function req(method, path, body) {
   return res.json();
 }
 
+// Only appends params the caller actually set, so an omitted filter keeps the
+// endpoint's own default rather than pinning it to a value chosen here.
+function qs(params) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") search.set(k, String(v));
+  });
+  const s = search.toString();
+  return s ? `?${s}` : "";
+}
+
 export const api = {
   me: () => req("GET", "/me"),
   users: () => req("GET", "/users"),
-  listEvalSets: () => req("GET", "/eval-sets"),
+  // Returns a page: { items, total, has_more }.
+  listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
   createEvalSet: (payload) => req("POST", "/eval-sets", payload),
   updateEvalSet: (id, payload) => req("PATCH", `/eval-sets/${id}`, payload),
@@ -54,7 +66,9 @@ export const api = {
   listQuestions: (id) => req("GET", `/eval-sets/${id}/questions`),
   updateQuestion: (id, qpk, payload) =>
     req("PATCH", `/eval-sets/${id}/questions/${qpk}`, payload),
-  listRuns: (id) => req("GET", `/eval-sets/${id}/runs`),
+  // Returns a page: { items, total, has_more }.
+  listRuns: (id, params = {}) => req("GET", `/eval-sets/${id}/runs${qs(params)}`),
+  getRun: (id, runId) => req("GET", `/eval-sets/${id}/runs/${runId}`),
   // Env-derived prefill for the run-config dialog + which seams are live.
   runConfigDefaults: () => req("GET", "/run-config/defaults"),
   triggerRun: (id, payload) => req("POST", `/eval-sets/${id}/runs`, payload),

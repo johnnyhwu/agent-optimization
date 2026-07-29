@@ -291,6 +291,15 @@ select { cursor: pointer; }
 }
 .col-head h4 { margin: 0; padding: 0; border: none; background: none; backdrop-filter: none; position: static; }
 
+/* Quiet "an update is on the way" dot in a column header. The panel deliberately
+   keeps its content while refetching a live question, so this is the only signal
+   that anything is happening — it must be noticeable without pulling the eye off
+   what is being read. */
+.refreshing {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  animation: pulse 1.1s ease-in-out infinite; flex: none;
+}
+
 .qitem { padding: 11px 16px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; gap: 10px; transition: background 0.12s, opacity 0.25s; }
 .qitem:hover { background: var(--panel-2); }
 .qitem.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
@@ -320,6 +329,20 @@ select { cursor: pointer; }
 .banner .banner-detail {
   margin-top: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 11.5px; line-height: 1.45; word-break: break-word;
+}
+/* A recognised failure explained in words, with the raw output tucked behind a
+   disclosure. A ClickHouse stack dump is the wrong first thing to read. */
+.banner .banner-explain { margin-top: 6px; line-height: 1.5; }
+.banner .banner-raw { margin-top: 8px; }
+.banner .banner-raw summary {
+  cursor: pointer; font-size: 11.5px; color: var(--muted); user-select: none;
+}
+.banner .banner-raw summary:hover { color: var(--text); }
+.banner .banner-raw pre {
+  margin: 6px 0 0; padding: 8px 10px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+  max-height: 180px; overflow: auto;
 }
 .banner.diagnosis { background: var(--panel-2); border: 1px solid var(--border); }
 .banner.caveat { background: var(--amber-soft); border: 1px solid var(--amber); color: var(--text); }
@@ -455,6 +478,57 @@ select { cursor: pointer; }
 .toast.success { border-left-color: var(--green); }
 .toast.error { border-left-color: var(--red); }
 .toast.info { border-left-color: var(--accent); }
+
+/* ---- paged lists ---- */
+/* Search grows to fill the toolbar; the filters after it keep their size. */
+.toolbar .search { flex: 1 1 220px; min-width: 160px; }
+
+/* Bottom of a paged list. The count is the point: "Load more" alone never says
+   whether there are two more or two hundred. */
+.list-footer {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 18px 0 8px; font-size: 13px;
+}
+
+/* ---- run picker (Use config from) ---- */
+.runpicker { position: relative; }
+.runpicker-trigger {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; text-align: left; font-weight: 400;
+}
+.runpicker-trigger .chev { color: var(--muted); font-size: 11px; }
+.runpicker-pop {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-2); overflow: hidden;
+  animation: popIn 0.13s var(--ease) both;
+}
+.runpicker-search {
+  border: none; border-bottom: 1px solid var(--border); border-radius: 0;
+  box-shadow: none;
+}
+.runpicker-search:focus { box-shadow: none; }
+/* Height is set inline from VISIBLE_ROWS * ROW_HEIGHT in RunPicker.jsx — ten
+   rows visible, the rest scrolled, which a native <select> cannot express. */
+.runpicker-list { overflow-y: auto; }
+.runpicker-option {
+  padding: 7px 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+  min-height: 46px; display: flex; flex-direction: column; justify-content: center;
+}
+.runpicker-option:last-child { border-bottom: none; }
+.runpicker-option.cursor { background: var(--panel-2); }
+.runpicker-option.sel { box-shadow: inset 3px 0 0 var(--accent); }
+.runpicker-option .rp-name {
+  font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.runpicker-option .rp-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.runpicker-option .rp-keys { color: var(--accent); }
+.runpicker-empty { padding: 18px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+.runpicker-foot {
+  padding: 7px 12px; font-size: 11px; color: var(--muted);
+  border-top: 1px solid var(--border); background: var(--panel-2);
+}
 
 /* ---- empty / loading ---- */
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
