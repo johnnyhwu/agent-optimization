@@ -1,0 +1,100 @@
+import { useEffect, useState } from "react";
+
+// The app's URL. Hash-based rather than history-based because the frontend is
+// served as a static bundle with no server-side rewrite — a deep path like
+// /evaluation/3 would 404 on reload, a deep hash never does.
+//
+// Routes:
+//   #/evaluation                                    the eval-set list
+//   #/evaluation/{esId}                             one set's run history
+//   #/evaluation/{esId}/runs/{id,id}?mode=&n=       the three-column detail
+//   #/playground
+//   #/optimize
+//
+// Everything the detail view needs is in the URL, so "look at this failing run"
+// is a link you can paste to someone, and Back walks back up the tiers.
+
+export const DEFAULT_ROUTE = "#/evaluation";
+
+// Route → hash. The single place that knows the shape, so callers build links by
+// intent rather than by string concatenation.
+export const href = {
+  evaluation: () => "#/evaluation",
+  evalSet: (esId) => `#/evaluation/${esId}`,
+  runs: (esId, runIds, mode, lastN) => {
+    const q = new URLSearchParams();
+    if (mode && mode !== "union") q.set("mode", mode);
+    if (mode === "last_n") q.set("n", String(lastN));
+    const s = q.toString();
+    return `#/evaluation/${esId}/runs/${runIds.join(",")}${s ? `?${s}` : ""}`;
+  },
+  playground: () => "#/playground",
+  optimize: () => "#/optimize",
+};
+
+export function navigate(to) {
+  if (window.location.hash === to) return;
+  window.location.hash = to;
+}
+
+// Replace rather than push, for corrections the user never asked for (an
+// unparseable hash, a set that no longer exists). Those must not become Back
+// targets, or Back would bounce off them forever.
+export function replace(to) {
+  window.location.replace(`${window.location.pathname}${window.location.search}${to}`);
+}
+
+export function parseHash(hash) {
+  const raw = (hash || "").replace(/^#\/?/, "");
+  const [path, search] = raw.split("?");
+  const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
+  const q = new URLSearchParams(search || "");
+
+  if (parts[0] === "playground") return { section: "playground" };
+  if (parts[0] === "optimize") return { section: "optimize" };
+
+  // Everything else is the evaluation section, including an empty hash — it is
+  // the app's home.
+  if (parts.length >= 3 && parts[1] && parts[2] === "runs" && parts[3]) {
+    const runIds = parts[3].split(",").filter(Boolean);
+    if (runIds.length) {
+      const mode = ["union", "intersection", "last_n"].includes(q.get("mode"))
+        ? q.get("mode")
+        : "union";
+      const n = Number(q.get("n"));
+      return {
+        section: "evaluation",
+        tier: "detail",
+        esId: parts[1],
+        runIds,
+        mode,
+        lastN: Number.isFinite(n) && n > 0 ? n : 2,
+      };
+    }
+  }
+  if (parts.length >= 2 && parts[0] === "evaluation" && parts[1]) {
+    return { section: "evaluation", tier: "runs", esId: parts[1] };
+  }
+  return { section: "evaluation", tier: "sets" };
+}
+
+export function useHashRoute() {
+  const [route, setRoute] = useState(() => parseHash(window.location.hash));
+
+  useEffect(() => {
+    const onChange = () => setRoute(parseHash(window.location.hash));
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+
+  // Anything unparseable renders the home section, so the address bar is
+  // corrected to say so — a stale `#/nonsense` above the eval-set list is a URL
+  // that lies about where you are, and it would be copied and shared as one.
+  useEffect(() => {
+    if (route.section === "evaluation" && route.tier === "sets" && window.location.hash !== DEFAULT_ROUTE) {
+      replace(DEFAULT_ROUTE);
+    }
+  }, [route]);
+
+  return route;
+}

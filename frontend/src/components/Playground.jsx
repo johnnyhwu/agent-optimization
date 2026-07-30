@@ -313,7 +313,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const activeSpanObj = trace?.spans?.find((s) => s.index === activeSpan) || null;
 
   return (
-    <div>
+    <div className="page-fill">
       <div className="page-head">
         <div>
           <h2>Playground</h2>

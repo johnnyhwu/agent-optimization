@@ -6,7 +6,47 @@
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 18px;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Type. All three faces are bundled (see main.jsx) rather than pulled from a
+     CDN: this ships as docker-compose and has to render the same offline and on
+     every OS. Display carries the personality and is used sparingly — headings,
+     the wordmark, stat numbers; Inter does the work; the mono is fixed rather
+     than "whatever ui-monospace resolves to", because payloads and traces are
+     the primary content here and they were rendering differently per machine. */
+  --font-display: "Space Grotesk Variable", "Space Grotesk", var(--font);
+  --font: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale, named for the job rather than the size, so a component asks for
+     "caption" and gets whatever caption is. */
+  --text-micro: 11px;    /* badges, pills, dense meta */
+  --text-caption: 12px;  /* labels, hints             */
+  --text-body: 13px;     /* dense body, list rows     */
+  --text-ui: 14px;       /* controls, default body    */
+  --text-title: 16px;    /* card titles               */
+  --text-section: 20px;  /* page heading              */
+  --text-display: 26px;  /* the one number that matters on a card */
+
+  --fw-normal: 400;
+  --fw-medium: 550;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+
+  /* Page geometry. One gutter and one max width, used by every level of the
+     shell — the breadcrumb used to set its own and drifted out of alignment
+     with the content below it. */
+  --page-max: 1400px;
+  --gutter: var(--space-6);
+  --rail-w: 216px;
+  --rail-w-collapsed: 60px;
 
   --accent: #6366f1;
   --accent-hover: #545bf0;
@@ -81,11 +121,14 @@ body {
   background-image: var(--bg-grad);
   background-attachment: fixed;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--text-ui);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, h4 { letter-spacing: -0.01em; }
+/* The display face earns its keep on headings only. Everywhere else Inter is
+   the more legible choice at 11–14px, which is most of this interface. */
+h1, h2 { font-family: var(--font-display); letter-spacing: -0.02em; }
 a { color: var(--accent); text-decoration: none; cursor: pointer; }
 a:hover { text-decoration: underline; }
 .muted { color: var(--muted); }
@@ -140,26 +183,110 @@ input:focus, textarea:focus, select:focus {
 }
 select { cursor: pointer; }
 
+/* ============================================================================
+   App shell — a fixed side rail and a scrolling main column.
+   ============================================================================ */
+/* The window is the frame: the rail is fixed to it and the main column does the
+   scrolling. That is what lets a three-column view end exactly at the bottom of
+   the window — with the document scrolling instead, "the height that's left"
+   isn't a quantity the layout knows. */
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  height: 100vh;
+}
+:root.rail-collapsed .app { grid-template-columns: var(--rail-w-collapsed) 1fr; }
+
+/* min-width: 0 so a wide payload inside a column can't push the whole shell
+   sideways. */
+.main { display: flex; flex-direction: column; min-width: 0; overflow-y: auto; }
+
+/* ---- side rail ---- */
+.rail {
+  height: 100%; display: flex; flex-direction: column;
+  padding: var(--space-3) var(--space-2);
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  z-index: 25;
+}
+.rail-brand {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-4);
+  color: var(--text); text-decoration: none;
+}
+.rail-brand:hover { text-decoration: none; }
+.rail-brand .logo {
+  width: 28px; height: 28px; border-radius: var(--radius-sm); flex: none;
+  background: linear-gradient(135deg, var(--accent), #22d3ee);
+  display: grid; place-items: center; color: #fff;
+  font-family: var(--font-display); font-weight: var(--fw-bold); font-size: var(--text-ui);
+  box-shadow: 0 4px 12px var(--accent-soft);
+}
+.rail-brand-name {
+  font-family: var(--font-display); font-size: 15px; font-weight: var(--fw-bold);
+  letter-spacing: -0.02em; white-space: nowrap;
+}
+.rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+/* Deliberately not the .segmented pill (which means "filter this page") and not
+   the inset accent bar (which means "this row of the list is selected"). A
+   destination you are currently at is a filled row. */
+.rail-item {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--muted); font-size: var(--text-ui); font-weight: var(--fw-medium);
+  text-decoration: none; white-space: nowrap;
+  transition: background 0.14s, color 0.14s;
+}
+.rail-item:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
+.rail-item.active {
+  background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold);
+}
+.rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rail-item svg { flex: none; }
+.rail-item.soon { cursor: default; opacity: 0.6; }
+.rail-item.soon:hover { background: none; color: var(--muted); }
+.rail-tag {
+  margin-left: auto; font-size: 10px; font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--panel-3); color: var(--muted);
+}
+.rail-collapse {
+  margin-top: auto; justify-content: flex-start; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3); font-size: var(--text-caption);
+}
+
+/* Collapsed: icons only. The labels are removed from the flow rather than
+   hidden, so the rail actually narrows; each item keeps its title tooltip. */
+:root.rail-collapsed .rail-label,
+:root.rail-collapsed .rail-brand-name,
+:root.rail-collapsed .rail-tag { display: none; }
+:root.rail-collapsed .rail-item,
+:root.rail-collapsed .rail-collapse,
+:root.rail-collapsed .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+
 /* ---- top bar ---- */
 .topbar {
   position: sticky; top: 0; z-index: 20;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 24px;
+  padding: var(--space-3) var(--gutter);
   background: color-mix(in srgb, var(--panel) 80%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand .logo {
-  width: 28px; height: 28px; border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), #22d3ee);
-  display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 14px;
-  box-shadow: 0 4px 12px var(--accent-soft);
+/* Capped and centred on the same geometry as .page, so the user box lines up
+   with the content's right edge instead of the window's. */
+.topbar-inner {
+  max-width: var(--page-max); margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
 }
-.topbar h1 { font-size: 15px; margin: 0; font-weight: 700; }
-.topbar .sub { font-size: 11px; color: var(--muted); margin-top: -2px; }
-.userbox { display: flex; align-items: center; gap: 10px; }
-.userbox .lbl { color: var(--muted); font-size: 12px; }
+.topbar-title {
+  font-family: var(--font-display); font-size: 15px; font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+}
+.userbox { display: flex; align-items: center; gap: var(--space-2); }
+.userbox .lbl { color: var(--muted); font-size: var(--text-caption); }
 .avatar {
   width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
   font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase;
@@ -171,46 +298,87 @@ select { cursor: pointer; }
 .rolechip.owner { color: var(--green); border-color: var(--green); background: var(--green-soft); }
 .rolechip.viewer { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
 
-/* ---- breadcrumb ---- */
-.breadcrumb { padding: 14px 24px 0; color: var(--muted); display: flex; gap: 7px; align-items: center; font-size: 13px; }
-.breadcrumb a { color: var(--muted); }
-.breadcrumb a:hover { color: var(--text); text-decoration: none; }
-.breadcrumb .sep { display: inline-flex; opacity: 0.5; }
-.breadcrumb .current { color: var(--text); font-weight: 600; }
+/* ---- page ----
+   One wrapper for everything under the top bar, breadcrumb included. The
+   breadcrumb used to sit outside it with its own padding and no max-width,
+   which is why it drifted left of the content on wide screens; sharing this
+   box makes that misalignment impossible rather than merely fixed. */
+.page {
+  max-width: var(--page-max); margin: 0 auto; width: 100%;
+  padding: var(--space-5) var(--gutter) var(--space-7);
+  /* `min-height: 0` is what makes this height *definite* — inherited from
+     .main's 100vh rather than measured from the content. Without it a column
+     flex container falls back to intrinsic sizing, every `flex: 1` below
+     resolves to max-content, and the three columns grow to the length of the
+     question list instead of the height of the window. */
+  flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+}
+/* A section that wants the leftover height rather than its natural one — the
+   three-column views. min-height: 0 keeps the columns scrolling internally
+   instead of growing the page. */
+.page-fill { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
-.container { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
-.page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; gap: 12px; }
-.page-head h2 { margin: 0; font-size: 20px; }
-.error { color: var(--red); background: var(--red-soft); border: 1px solid var(--red); padding: 10px 12px; border-radius: var(--radius-sm); margin: 10px 0; }
+/* ---- breadcrumb ---- */
+.breadcrumb { margin-bottom: var(--space-3); font-size: var(--text-body); color: var(--muted); }
+.breadcrumb ol {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-1);
+}
+.breadcrumb li { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }
+/* A crumb names a place; an eval set can be named anything, so cap it and keep
+   the full name in the tooltip rather than letting one push the page sideways. */
+.breadcrumb a, .breadcrumb .current {
+  max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: var(--radius-sm); padding: 1px 3px;
+}
+.breadcrumb a { color: var(--muted); }
+.breadcrumb a:hover { color: var(--text); text-decoration: none; background: var(--panel-2); }
+.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.breadcrumb .sep { display: inline-flex; opacity: 0.5; }
+.breadcrumb .current { color: var(--text); font-weight: var(--fw-semibold); }
+
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: var(--space-4); gap: var(--space-4); }
+/* The title wraps; the actions never do. An eval set can be named anything, and
+   a 130-character name used to squeeze "Run eval" onto two lines. */
+.page-head > *:first-child { min-width: 0; }
+.page-head > *:last-child { flex: none; }
+.page-head button { white-space: nowrap; }
+.page-head h2 { margin: 0; font-size: var(--text-section); overflow-wrap: anywhere; }
+.error { color: var(--red); background: var(--red-soft); border: 1px solid var(--red); padding: var(--space-3); border-radius: var(--radius-sm); margin: var(--space-2) 0; }
 
 /* ---- cards ---- */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
 .card {
   position: relative; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 18px; cursor: pointer;
+  border-radius: var(--radius-lg); padding: var(--space-4); cursor: pointer;
   box-shadow: var(--shadow-1);
   transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), border-color 0.18s;
   animation: fadeInUp 0.5s var(--ease) both;
 }
 .card:hover { transform: translateY(-4px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
 /* Room for the hover actions (gear + trash) so a long name doesn't run under them. */
-.card h3 { margin: 0 0 4px; font-size: 16px; padding-right: 58px; }
-.card .meta { color: var(--muted); font-size: 12px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.card h3 { margin: 0 0 var(--space-1); font-size: var(--text-title); padding-right: 58px; }
+.card .meta { color: var(--muted); font-size: var(--text-caption); margin-bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
 .card-actions {
-  position: absolute; top: 12px; right: 12px; display: flex; gap: 2px;
+  position: absolute; top: var(--space-3); right: var(--space-3); display: flex; gap: 2px;
   opacity: 0; transition: opacity 0.15s;
 }
 .card:hover .card-actions, .card-actions:focus-within { opacity: 1; }
-.card .stats { display: flex; gap: 20px; align-items: flex-end; }
-.stat .num { font-size: 24px; font-weight: 700; line-height: 1; }
-.stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.card .stats { display: flex; gap: var(--space-5); align-items: flex-end; }
+/* The number is the card, so it gets the display face and tabular figures —
+   pass rates read as a column when they line up. */
+.stat .num {
+  font-family: var(--font-display); font-size: var(--text-display);
+  font-weight: var(--fw-bold); line-height: 1; font-variant-numeric: tabular-nums;
+}
+.stat .lbl { font-size: var(--text-micro); color: var(--muted); margin-top: var(--space-1); }
 .spark-wrap { margin-left: auto; }
-.badges { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
-.badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 4px; }
+.badges { margin-top: var(--space-3); display: flex; gap: 6px; flex-wrap: wrap; }
+.badge { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: var(--space-1); }
 .badge.reg { color: var(--red); background: var(--red-soft); }
 .badge.imp { color: var(--green); background: var(--green-soft); }
-.tags { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
-.tag { font-size: 11px; color: var(--muted); background: var(--panel-2); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
+.tags { margin-top: var(--space-2); display: flex; gap: 6px; flex-wrap: wrap; }
+.tag { font-size: var(--text-micro); color: var(--muted); background: var(--panel-2); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
 .tag.people { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
 
 /* ---- run history ---- */
@@ -231,19 +399,23 @@ select { cursor: pointer; }
 .runrow input[type="checkbox"] { cursor: pointer; }
 .runrow.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .runrow .grow { flex: 1; }
-.pill { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); }
+.pill { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); }
 .pill.completed { color: var(--green); border-color: var(--green); background: var(--green-soft); }
 .pill.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .pill.failed { color: var(--red); border-color: var(--red); background: var(--red-soft); }
 .pill.cancelled { color: var(--muted); border-color: var(--border-strong); background: var(--panel-2); }
 
 .toolbar {
-  display: flex; gap: 10px; align-items: center; margin: 14px 0;
-  padding: 12px 14px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow-1);
+  display: flex; gap: var(--space-2); align-items: center; margin: var(--space-3) 0;
+  padding: var(--space-3); background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-1); flex-wrap: wrap;
 }
+/* An in-page control: "which slice of this page am I looking at". It is
+   deliberately a pill and deliberately not what the side rail looks like — the
+   two used to be the same component, which made section switching read as a
+   filter. */
 .segmented { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
-.segmented button { border: none; background: transparent; border-radius: 999px; padding: 5px 12px; box-shadow: none; color: var(--muted); font-size: 13px; }
+.segmented button { border: none; background: transparent; border-radius: 999px; padding: 5px 12px; box-shadow: none; color: var(--muted); font-size: var(--text-body); }
 .segmented button:hover { box-shadow: none; background: transparent; color: var(--text); }
 .segmented button.active { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
 .segmented.sm button { padding: 4px 10px; font-size: 12px; }
@@ -272,14 +444,17 @@ select { cursor: pointer; }
 .stackbar .s.pending { background: transparent; }
 
 /* ---- three-column detail ---- */
-.detail-meta { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
-/* The subtraction is everything above the columns: topbar, tab bar, breadcrumb,
-   the meta line and the run status bar. A variable rather than a literal because
-   the tab bar changed that total for every page at once, and because the
-   playground opts out of viewport-derived height entirely (see
-   .playground-three) — its composer grows and shrinks as panels open, so no
-   fixed subtraction could be right for both. */
-.three { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 14px; height: calc(100vh - var(--chrome-h, 320px)); min-height: 360px; }
+.detail-meta { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--text-body); }
+/* No viewport arithmetic. The columns take what the flex chain hands down
+   (.main → .page → .page-fill → here), so they end at the bottom of the window
+   whatever is stacked above them — a run status bar, a breadcrumb, or the
+   playground's composer, which triples in height when its panels open. The old
+   `calc(100vh - var(--chrome-h))` read a variable nothing ever set, so every
+   page got the same guessed subtraction. */
+.three {
+  display: grid; grid-template-columns: 320px 1fr 1fr; gap: var(--space-3);
+  flex: 1; min-height: 360px;
+}
 .col { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; box-shadow: var(--shadow-1); }
 .col h4 {
   margin: 0; padding: 14px 16px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -333,7 +508,7 @@ select { cursor: pointer; }
 
 .banner { margin: 12px 16px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 13px; animation: fadeIn 0.3s var(--ease) both; }
 .banner .banner-detail {
-  margin-top: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 6px; font-family: var(--font-mono);
   font-size: 11.5px; line-height: 1.45; word-break: break-word;
 }
 /* A recognised failure explained in words, with the raw output tucked behind a
@@ -377,7 +552,7 @@ select { cursor: pointer; }
 .answers pre {
   white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px; margin: 0;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; max-height: 180px; overflow: auto;
+  font-family: var(--font-mono); font-size: 12px; max-height: 180px; overflow: auto;
 }
 .answers .verdict { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; letter-spacing: 0.5px; }
 .answers .verdict.correct { background: var(--green); color: #fff; }
@@ -397,7 +572,7 @@ select { cursor: pointer; }
 .kv pre {
   white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px; margin: 0;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; max-height: 260px; overflow: auto;
+  font-family: var(--font-mono); font-size: 12px; max-height: 260px; overflow: auto;
 }
 /* ---- span payload (right column) ----
    An LLM call's request/response, rendered as the conversation it is rather than
@@ -412,13 +587,13 @@ select { cursor: pointer; }
 .payload-head .label { margin: 0; }
 .payload-meta {
   font-size: 11px; color: var(--muted); margin-bottom: 6px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .payload-empty { color: var(--muted); font-style: italic; font-size: 12px; }
 .kv .payload pre.body {
   white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;
-  margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin: 0; font-family: var(--font-mono);
   font-size: 12px; max-height: 320px; overflow: auto;
 }
 .kv .payload pre.payload-json { max-height: 460px; }
@@ -442,7 +617,7 @@ select { cursor: pointer; }
 .collapse-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .collapse-meta {
   font-size: 11px; color: var(--muted); flex: none;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .collapse-body { padding: 0 10px 10px; }
 
@@ -467,7 +642,7 @@ select { cursor: pointer; }
 
 .collapse.tools > summary .collapse-title { font-size: 12px; font-weight: 600; }
 .tooldesc { font-size: 12px; color: var(--muted); margin: 0 0 6px; line-height: 1.45; }
-.toolname { font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.toolname { font-size: 12px; font-family: var(--font-mono); }
 
 /* A tool call is the actionable part of an assistant turn: name it, then show
    the arguments re-indented (OpenAI ships them as a JSON string). */
@@ -478,7 +653,7 @@ select { cursor: pointer; }
 .toolcall-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .toolcall-name {
   font-size: 12px; font-weight: 600; color: var(--amber);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .tokens { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
@@ -512,7 +687,7 @@ select { cursor: pointer; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
 .field { margin-bottom: 14px; }
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
-.field textarea { min-height: 120px; font-family: ui-monospace, monospace; font-size: 12px; }
+.field textarea { min-height: 120px; font-family: var(--font-mono); font-size: 12px; }
 .hint { font-size: 12px; color: var(--muted); }
 /* Group heading inside the run-config dialog (Agent / Langfuse / LLM). */
 .cfg-section {
@@ -535,7 +710,7 @@ select { cursor: pointer; }
 .cfg-label { flex: 0 0 40%; color: var(--muted); font-size: 12px; font-weight: 600; }
 .cfg-value {
   flex: 1; min-width: 0; word-break: break-all;
-  font-family: ui-monospace, monospace; font-size: 12px;
+  font-family: var(--font-mono); font-size: 12px;
 }
 .cfg-value.empty { color: var(--muted); font-style: italic; font-family: inherit; }
 
@@ -633,10 +808,6 @@ select { cursor: pointer; }
 
 /* ==== playground (§10) ==== */
 
-/* Tab strip between the topbar and the breadcrumb. Reuses .segmented, so it is a
-   layout wrapper only. */
-.tabbar { padding: 12px 24px 0; max-width: 1400px; margin: 0 auto; }
-
 /* The composer: question, skill override, and the two optional ground truths. */
 .composer {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -700,15 +871,38 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
   padding: 12px 14px; font-size: 11px; color: var(--muted); line-height: 1.5;
   border-top: 1px solid var(--border);
 }
-/* A fraction of the viewport rather than "what's left of it": the composer above
-   these columns triples in height when the expected-answer and settings panels
-   open, so any fixed subtraction would either clip the columns or leave a gap
-   depending on what happens to be expanded. The page scrolls to reach them; each
-   column still scrolls internally. */
-.playground-three { height: 62vh; min-height: 420px; }
+/* The composer above these columns triples in height when the expected-answer
+   and settings panels open. With the flex chain that is no longer a problem to
+   work around — the columns simply take what is left, and the page scrolls once
+   they hit this floor. */
+.playground-three { min-height: 420px; }
+
+/* ---- responsive ----
+   The rail costs horizontal space the three-column views were already spending,
+   so both give it back in steps rather than all at once. */
+@media (max-width: 1280px) {
+  .three { grid-template-columns: 260px 1fr 1fr; }
+}
+@media (max-width: 1100px) {
+  /* Icons only, whatever the developer's saved preference — there isn't room
+     for both the labels and a usable middle column. */
+  .app, :root.rail-collapsed .app { grid-template-columns: var(--rail-w-collapsed) 1fr; }
+  .rail-label, .rail-brand-name, .rail-tag { display: none; }
+  .rail-item, .rail-collapse, .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+  .rail-collapse { display: none; }
+}
+@media (max-width: 900px) {
+  /* Side by side stops being readable well before it stops fitting. Stacked,
+     each panel keeps a workable height and the page scrolls between them. */
+  .three { grid-template-columns: 1fr; flex: none; }
+  .col { min-height: 320px; max-height: 70vh; }
+  :root { --gutter: var(--space-4); }
+}
 
 /* ---- empty / loading ---- */
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+.empty h2 { margin: 0 0 var(--space-2); font-size: var(--text-section); color: var(--text); }
+.empty p { margin: 0 auto var(--space-2); max-width: 46ch; }
 .skeleton { border-radius: var(--radius-lg); height: 150px; background: linear-gradient(90deg, var(--panel-2), var(--panel-3), var(--panel-2)); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
 
 /* ---- keyframes ---- */

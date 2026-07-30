@@ -130,3 +130,39 @@ export const IconCopy = (p) => (
     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
   </S>
 );
+
+/* ---- side-rail section icons ----
+   One per top-level section. Each names what the section is *for*, not what it
+   contains: measuring against a target, experimenting at the bench, improving
+   what came back. */
+
+// Evaluation: scoring answers against ground truth.
+export const IconTarget = (p) => (
+  <S {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="5" />
+    <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+  </S>
+);
+// Playground: one question at the bench, run as often as you like.
+export const IconBeaker = (p) => (
+  <S {...p}>
+    <path d="M9 3h6" />
+    <path d="M10 3v6.5L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 9.5V3" />
+    <path d="M7 15h10" />
+  </S>
+);
+// Optimize: the skill comes back better than it went in.
+export const IconSparkles = (p) => (
+  <S {...p}>
+    <path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" />
+    <path d="M18.5 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+  </S>
+);
+// Collapse / expand the rail.
+export const IconPanelLeft = (p) => (
+  <S {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <line x1="9" y1="4" x2="9" y2="20" />
+  </S>
+);
