@@ -1,14 +1,15 @@
 # Agent Eval — Stage 1 POC + Playground
 
-A runnable end-to-end demo of **Stage 1** from [`docs/spec.md`](docs/spec.md)
-(§6.6–§6.16, §7.1): upload an eval set, run an eval through a platform-owned
-orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
-jumps the UI straight to the suspect span with its input/output/token detail.
+A runnable end-to-end demo of **Stage 1** from
+[`docs/spec_v2.md`](docs/spec_v2.md): upload an eval set, run an eval through a
+platform-owned orchestrator, and for wrong answers show an LLM **clue-style
+diagnosis** that jumps the UI straight to the suspect span with its
+input/output/token detail.
 
-Plus the **Playground** (spec §10) — a second tab where one ad-hoc question goes
+Plus the **Playground** (Stage 4) — a second tab where one ad-hoc question goes
 to the agent with an **editable skill**, so the hypothesis you form while reading
 a failed trace can be tested without editing an eval set and running the whole
-thing. See [The playground](#the-playground-10).
+thing. See [The playground](#the-playground).
 
 Every external dependency sits behind a swappable interface with **two
 implementations**: a fake one with realistic latency, and a real one (HTTP agent
@@ -20,21 +21,27 @@ real thing, created by Alembic migrations.
 
 > **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
 > re-labeling, SkillOpt, skill write-back, annotation score sync,
-> multi-tenant isolation. Writing back to Langfuse (verdicts as Scores, §6.3) is
+> multi-tenant isolation. Writing back to Langfuse (verdicts as Scores) is
 > also not done — the trace seam reads only.
 
 **Contents** — [The problem](#the-problem) · [How it works](#how-it-works) ·
-[Life of a run](#life-of-a-run) · [The playground](#the-playground-10) · [Stack](#stack) ·
+[Life of a run](#life-of-a-run) · [The playground](#the-playground) · [Stack](#stack) ·
 [Run it](#run-it-one-command) · [Fake → real](#going-from-fake-to-real) ·
 [Trying the flows](#trying-the-flows) · [Where things live](#where-the-important-pieces-live) ·
 [API](#api-surface) · [Langfuse read strategies](#langfuse-read-strategies-and-the-events-table-error) ·
-[Paging](#paging-the-lists) · [Upload schema](#upload-schema-611)
+[Paging](#paging-the-lists) · [Upload schema](#upload-schema)
 
 > **New to this codebase?** Read [The problem](#the-problem) and
-> [Life of a run](#life-of-a-run) below, then [`docs/spec.md`](docs/spec.md) §9
-> (As-Built) for the design reasoning. Note that spec §1–§8 is *historical design
-> context* — where it disagrees with §9, §9 wins. This README is the operating
-> manual; the spec is the design and implementation record.
+> [Life of a run](#life-of-a-run) below, then
+> **[`docs/spec_v2.md`](docs/spec_v2.md)** — the single authoritative technical
+> document, covering what the system is for, why it is designed this way, and
+> exactly what is and isn't built. It is self-contained: it can be read without
+> the code. This README is the operating manual; the spec is the design and
+> implementation record.
+>
+> `docs/spec.md` (no `_v2`) is a **superseded archive** of the original design
+> discussion. It predates the Playground entirely and still describes an agent
+> protocol that changed. Read it only for the history of decisions not taken.
 
 ## The problem
 
@@ -62,7 +69,7 @@ Why the hedging matters: the whole feature rests on the assumption that an error
 can be pinned to a single span. That assumption is often wrong (compounding
 errors, several valid paths, faults in a tool rather than the skill). Overstating
 confidence would send developers down the wrong path with false authority — see
-spec §4.3 and §6.7.
+spec_v2 §4.1 and §4.4.
 
 ## How it works
 
@@ -71,11 +78,13 @@ spec §4.3 and §6.7.
   browser ────────► │  Eval platform  (this repo)                 │
   (React, :5173)    │                                             │
                     │  FastAPI ──► Orchestrator (asyncio task)    │
+                    │     │        └── Playground (in memory)     │
                     │     │              │                        │
                     │     │              ├─► AgentClient  ────────┼─► agent server
                     │     │              ├─► JudgeClient  ────────┼─► LLM endpoint
                     │     │              ├─► TraceClient  ────────┼─► Langfuse
-                    │     │              └─► DiagnosisClient ─────┼─► LLM endpoint
+                    │     │              ├─► DiagnosisClient ─────┼─► LLM endpoint
+                    │     │              └─► SkillClient ─────────┼─► agent server
                     │     ▼                                       │
                     │  Postgres: eval sets, questions, runs,      │
                     │            results, diagnoses, roles        │
@@ -85,11 +94,11 @@ spec §4.3 and §6.7.
 
 Two ideas carry most of the design:
 
-**1. Four swappable seams.** Each external dependency is a Python `Protocol`
+**1. Five swappable seams.** Each external dependency is a Python `Protocol`
 with two implementations — a fake one with realistic latency, and a real one.
-`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` pick between them
-**independently**, all defaulting to fake. So the whole product runs on nothing
-but Docker, and you can bring up one real service at a time.
+`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` / `SKILL_IMPL` pick
+between them **independently**, all defaulting to fake. So the whole product runs
+on nothing but Docker, and you can bring up one real service at a time.
 
 **2. Langfuse owns traces; this app owns everything Langfuse has no concept of.**
 Span input/output/token counts are fetched live from Langfuse at view time and
@@ -134,7 +143,7 @@ treated as a pass. A diagnosis failure leaves the verdict intact. An unexpected
 error still finalizes the run and still closes the SSE stream — a run is never
 left stuck in `running`.
 
-## The playground (§10)
+## The playground
 
 The diagnosis tells you *where* a trace went wrong. The usual next thought is
 "if the skill said X instead, this would have worked" — and before the playground
@@ -156,7 +165,7 @@ button.
   attempt's question, skill text and settings back into the composer so the next
   attempt differs by exactly the one thing you are testing. There is no automatic
   "did it improve" — LLMs have temperature, so pressing the button twice is the
-  honest comparison (spec §4.8).
+  honest comparison (spec_v2 §16, risk 8).
 - **Coming from a failed question:** the three-column view has a *"Try this in the
   playground"* link that carries the question, both ground-truth fields and that
   run's endpoints over.
@@ -233,17 +242,17 @@ make down       # docker compose down
 
 ## Going from fake to real
 Out of the box every external dependency is faked, so the demo runs with nothing
-but Docker. The five seams (§9.2, §10.2) each have their own switch, so you can
+but Docker. The five seams (spec_v2 §3.2) each have their own switch, so you can
 bring them up **one at a time** — a real agent while the judge is still fake, and
 so on.
 
 | env var | seam | what `real` means |
 |---|---|---|
-| `AGENT_IMPL` | `AgentClient` | POST `{"message", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data` (§6.2) |
+| `AGENT_IMPL` | `AgentClient` | POST `{"message", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data` (spec_v2 §3.3) |
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
-| `DIAGNOSIS_IMPL` | `DiagnosisClient` | §6.9 clue-style diagnosis over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
-| `SKILL_IMPL` | `SkillClient` | read the agent's skills for the playground: `GET {AGENT_BASE_URL}/skills` and `/skills/{name}` (§10.2). Read-only, so it is the cheapest one to switch on first |
+| `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec_v2 §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
+| `SKILL_IMPL` | `SkillClient` | read the agent's skills for the playground: `GET {AGENT_BASE_URL}/skills` and `/skills/{name}` (spec_v2 §3.2). Read-only, so it is the cheapest one to switch on first |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
@@ -280,7 +289,7 @@ Then check the wiring before spending a run on it:
 make preflight   # OK / FAIL per seam, with the reason
 ```
 
-**Prerequisite for the trace seam (§6.2):** the agent server must read
+**Prerequisite for the trace seam (spec_v2 §3.3):** the agent server must read
 `metadata.trace_data.trace_id` out of the `/execute` request body and use it
 as its Langfuse trace id. Without that the platform has no way to find the
 trace it just caused. The full metadata shape sent on every call is:
@@ -291,7 +300,7 @@ trace it just caused. The full metadata shape sent on every call is:
 correlation unit); `user_id` is the subject who triggered the run. A playground
 attempt sends the same shape with `tags: ["playground"]`, plus
 `metadata.skill_override` when a candidate skill was supplied
-([the playground](#the-playground-10)) — an eval run never sends that key at all.
+([the playground](#the-playground)) — an eval run never sends that key at all.
 
 Notes:
 - A question that fails (agent unreachable, judge unparseable, timeout) is
@@ -313,13 +322,13 @@ Notes:
   pass/fail boundary can be retuned without touching the prompt.
 
 ## Trying the flows
-- **Fake login switch (§6.16):** top-right dropdown flips between the seeded users
+- **Fake login switch (spec_v2 §11.2):** top-right dropdown flips between the seeded users
   `alice` (**owner**) and `bob` (**viewer**). As `bob`, the "Edit questions" and
   "Re-diagnose" controls disappear and write APIs return 403; runs are still
   allowed. (Backend default identity is `FAKE_USER_SUBJECT`, default `alice`.)
-- **Three tiers (§6.13):** cards → run history → 3-column detail, with a
+- **Three tiers (spec_v2 §10.1):** cards → run history → 3-column detail, with a
   breadcrumb for one-click back.
-- **Playground (§10):** the second tab. Ask anything and watch the phase steps
+- **Playground:** the second tab. Ask anything and watch the phase steps
   (Agent → Judge → Trace → Diagnosis) advance **without leaving the page**; the
   stages you gave no ground truth for are struck through rather than left looking
   pending. Pick `billing` under *Skill override*, edit the text, ask again, then
@@ -386,7 +395,7 @@ Notes:
 | Container topology (db + backend + frontend) | `docker-compose.yml` |
 | Backend image (deps via uv) | `backend/Dockerfile` |
 | Frontend image (deps via pnpm) | `frontend/Dockerfile` |
-| App DB schema (§6.14), the 7 tables | `backend/alembic/versions/0001_stage1_schema.py` |
+| App DB schema (spec_v2 §5.1), the 7 tables | `backend/alembic/versions/0001_stage1_schema.py` |
 | Columns the real integrations need | `backend/alembic/versions/0002_real_integration.py` |
 | Per-run config columns (`name`/`config`/`secrets`) | `backend/alembic/versions/0003_run_config.py` |
 | Cancellation flag + the two error columns | `backend/alembic/versions/0004_run_lifecycle.py` |
@@ -405,18 +414,18 @@ Notes:
 | View-path trace read + span mapping (never truncated) | `backend/app/services/trace_view.py` |
 | Run-config defaults + trigger-time resolution | `backend/app/services/run_config.py` |
 | Run-config dialog / read-only view | `frontend/src/components/RunConfigDialog.jsx`, `RunConfigView.jsx` |
-| Judge + diagnosis prompts (§6.9 contract) | `backend/app/integrations/real/prompts.py` |
+| Judge + diagnosis prompts (spec_v2 §8 contract) | `backend/app/integrations/real/prompts.py` |
 | Integration preflight | `backend/app/check_integrations.py` |
 | **All latency values, one file** | `backend/app/fake_config.py` |
-| Orchestrator (§6.15) | `backend/app/orchestrator.py` |
+| Orchestrator (spec_v2 §6) | `backend/app/orchestrator.py` |
 | Run cancellation signal (durable flag + in-process event) | `backend/app/cancellation.py` |
 | FK-safe delete order (run / eval set) | `backend/app/services/deletion.py` |
-| Optimistic-lock 409 (§6.16) | `backend/app/routers/eval_sets.py`, `questions.py` |
+| Optimistic-lock 409 (spec_v2 §4.12) | `backend/app/routers/eval_sets.py`, `questions.py` |
 | Card aggregates + paging/filter/sort | `backend/app/routers/eval_sets.py` |
 | Trace view state machine (incl. `not_started`) | `backend/app/routers/results.py` |
 | Manual re-diagnose (owner-only) | `backend/app/routers/diagnosis.py` |
-| Roles / fake login (§6.16) | `backend/app/auth.py` |
-| §6.7 body truncation (diagnosis prompt only) | `backend/app/services/truncation.py` |
+| Roles / fake login (spec_v2 §11) | `backend/app/auth.py` |
+| Body truncation, diagnosis prompt only (spec_v2 §4.4) | `backend/app/services/truncation.py` |
 | Span input/output rendered as a chat exchange | `frontend/src/components/SpanPayload.jsx` |
 | Incorrect modes + regression + `phase` | `backend/app/services/aggregation.py` |
 | SSE hub | `backend/app/sse.py` |
@@ -432,7 +441,7 @@ Notes:
 
 Interactive docs are served by the running backend at
 **http://localhost:8000/docs** (OpenAPI schema at `/openapi.json`). The annotated
-list, with the authorization rule for each endpoint, is spec §9.5. In brief:
+list, with the authorization rule for each endpoint, is spec_v2 §9. In brief:
 
 | Group | Endpoints |
 |---|---|
@@ -537,7 +546,7 @@ createdb agenteval_test
 TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/test_pagination.py
 ```
 
-## Upload schema (§6.11)
+## Upload schema
 Both formats carry the same fields. **JSONL** — one JSON object per line:
 ```jsonl
 {"question": "...", "ground_truth_response": "...", "ground_truth_reasoning_process_description": "...", "skill": ["billing"], "question_id": "q_optional"}
