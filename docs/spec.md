@@ -31,7 +31,8 @@
 > **一句話現況**：真實的 React UI + 真實的 app-DB schema + 真實的 orchestration/權限/樂觀鎖/
 > SSE 邏輯；四個外部依賴（HTTP agent、LLM judge、LLM 診斷、Langfuse 取 trace）**假、真兩套
 > 實作都已寫好**，由四個環境變數逐一切換，**預設全部走假的**，所以不接任何外部服務也能完整跑完。
-> 真實實作已用 mock 端到端驗證過，但**尚未對接貴方的正式環境**（詳見 §9.2 與 §9.16）。
+> **Langfuse 那一個 seam 已經對接過真環境**，真實 trace 讀得回來也渲染得出來（§9.19）；
+> 另外三個（agent / judge / diagnosis）仍只用 mock 端到端驗證過（詳見 §9.2 與 §9.16）。
 >
 > ⚠️ 兩個常見的踩雷點：§1.1／§6.2 寫的 **A2A protocol 已經不是現況**（agent server 改成單一
 > `POST /execute`，見 §9.12），而 §6.14 的 schema 之後又加了四個 migration（見 §9.4）。
@@ -681,9 +682,10 @@ pk (eval_set_id, user_subject)
 > **一句話現況**：Stage 1 的 app 本身（DB schema、orchestration、權限、樂觀鎖、SSE、三層 UI、
 > 診斷落庫與讀取）**全是真的**；四個外部依賴（HTTP agent、LLM judge、Langfuse trace、LLM 診斷）
 > **假、真兩套實作都已寫好**，用四個環境變數逐一切換，**預設走假的**，因此不接任何外部服務也能
-> 完整跑起來。真實實作**尚未對接過正式環境**（只用 mock 驗過，見 §9.16）。
+> 完整跑起來。**Langfuse 的真實讀取已對接過真環境並讀得回 trace**（見 §9.19）；agent / judge /
+> diagnosis 三個 seam 的真實實作仍只用 mock 驗過（見 §9.16）。
 >
-> **§9 的地圖**（§9.1–§9.16 描述現況；§9.17–§9.18 是兩次後續補強的「改了什麼、為什麼」，
+> **§9 的地圖**（§9.1–§9.16 描述現況；§9.17–§9.19 是三次後續補強的「改了什麼、為什麼」，
 > 其中被修正的現況已同步回前面各節，所以前後不會互相矛盾）：
 >
 > | 節 | 內容 | 什麼時候看 |
@@ -697,7 +699,7 @@ pk (eval_set_id, user_subject)
 > | §9.7 | 診斷的 I/O 契約 | 想調診斷品質 |
 > | §9.8 / §9.8b | 權限、分享、上傳介面 | |
 > | §9.9 | 前端三層 UI（含即時更新機制） | 想改前端 |
-> | §9.10 | 截斷 / 快取 / SSE 事件表 | |
+> | §9.10 | 截斷（只剩診斷路徑）／快取／SSE 事件表 | |
 > | §9.11 | seed 假資料的內容 | 想看 demo 資料為什麼長這樣 |
 > | §9.12 | **與 §1–§8 設計文件的差異總表** | 讀過前半段後**務必看這張表** |
 > | §9.13 | 如何執行 | |
@@ -706,6 +708,7 @@ pk (eval_set_id, user_subject)
 > | §9.16 | 測試清單與「哪些已驗證／哪些沒有」 | 想知道能信到什麼程度 |
 > | §9.17 | 補強一：中止 run、刪除、執行中的完整 question list、錯誤可見性 | 想知道演進脈絡 |
 > | §9.18 | 補強二：三欄即時更新、Langfuse 雙端點、未開始題目不誤報、run 選單上限、清單分頁與效能 | 同上 |
+> | §9.19 | 補強三：span payload 的結構化渲染（不再截斷、改用收合）、中欄分成三個具名分區 | 同上 |
 
 ### 9.1 交付形態與技術棧
 - **一個獨立 app**：`backend/`（Python）+ `frontend/`（React）+ `docker-compose.yml`。
@@ -720,7 +723,7 @@ pk (eval_set_id, user_subject)
   對外整合用 `httpx`（agent HTTP / Langfuse）與 `openai` SDK（OpenAI 相容端點）。
 - **Frontend**：React + Vite，純手寫 CSS 設計系統（無 UI 框架依賴），含 light/dark 主題與動畫。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立（不是 in-memory；schema 本身就是重點）。
-- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 **122 個測試**。其中 111 個
+- **測試**：`pytest` + `pytest-asyncio` + `respx`（httpx mock），共 **127 個測試**。其中 116 個
   **不需要 DB 也不需要網路**（`make test` 只跑這些）；另外 11 個分頁測試需要真 Postgres，未設
   `TEST_DATABASE_URL` 時自動 skip（見 §9.16）。
 - **上傳格式**：支援 **JSONL 與 CSV 檔案**。開發者一律**上傳檔案**（不再手貼 JSONL），檔案在**前端解析**
@@ -796,12 +799,13 @@ backend/
     cancellation.py     # 中止 run：耐久旗標 + in-process asyncio.Event（§9.17(a)）
     check_integrations.py # 前置檢查：ping 設為 real 的 seam
     sse.py              # 每個 run 的 in-memory 進度 pub/sub
-    services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7) / aggregation(三 mode+regression)
+    services/           # upload(JSONL 解析+question_id 生成) / truncation(§6.7，只給診斷 prompt 用)
+                        #   aggregation(三 mode+regression)
                         #   run_config(逐 run 設定的 env 預設值 + 觸發時寫死有效值)
                         #   deletion(FK 安全的刪除順序，seed 與兩個 DELETE 端點共用)
     routers/            # eval_sets / questions / runs / results / diagnosis
     seed.py             # 假資料（見 §9.11 種的內容）
-  tests/                # 9 個檔案、122 個測試，逐一說明見 §9.16
+  tests/                # 9 個檔案、127 個測試，逐一說明見 §9.16
   sample_eval_set.jsonl  sample_eval_set.csv   # 兩種格式的範例檔（內容等價）
 frontend/src/
   App.jsx api.js        # 三層檢視狀態機；API client（帶 X-User-Subject）
@@ -810,7 +814,8 @@ frontend/src/
   components/           # EvalSetList/Sparkline/UploadDialog/ConfigDialog/ShareEditor/QuestionEditor
                         # RunHistory/RunConfigDialog/RunPicker(有上限的 run 選單)/RunConfigView(唯讀)
                         # RunProgress(SSE)/RunStatusBar(執行中的堆疊長條+中止鈕)
-                        # RunDetail/QuestionList/SpanList/SpanDetail
+                        # RunDetail/QuestionList/SpanList(中欄分區)/SpanDetail
+                        # SpanPayload(★ chat 形狀的 span input/output 收合渲染)
                         # ListFooter(Load more + 捲動哨兵)/ConfirmDialog
                         # Breadcrumb/Modal/Toast/ThemeToggle/icons
 ```
@@ -883,7 +888,7 @@ POST /eval-sets/{id}/runs/{run_id}/cancel   # 中止 run（owner 或該 run 的�
 DELETE /eval-sets/{id}/runs/{run_id}        # 刪除一個 run owner-only；running → 409（先中止）
 GET  /eval-sets/{id}/runs/{run_id}/progress # SSE 即時進度
 GET  /eval-sets/{id}/results                # 左欄題目清單；?run_ids=..&mode=union|intersection|last_n&last_n=
-GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓 trace(截斷) + 讀 DB 的診斷
+GET  /eval-sets/{id}/results/{rid}/trace    # 中+右欄：即時抓 trace(完整 body) + 讀 DB 的診斷
 POST /eval-sets/{id}/results/{rid}/re-diagnose  # 手動重診斷 owner-only
 ```
 （`/docs`、`/redoc`、`/openapi.json` 是 FastAPI 內建的，未列。）
@@ -1036,13 +1041,36 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
     每次刷新都跳的話，正在讀某個 span 的人會被硬拉走。
   - 手動 Retry 與 re-diagnose 走一個獨立的 nonce（重新產生的診斷不會改變 `has_analysis`，
     光靠指紋看不出來）。
+- **★ 新增（span payload 結構化渲染 + 中欄分區，接上真實 Langfuse 之後）**
+  - **右欄不再是兩塊 JSON dump。** Langfuse 存的是 agent SDK 交給它的東西，沒有 schema 可驗；
+    但一個 LLM generation 實務上就是 chat-completions 的請求／回應——進去是
+    `{"tools": [...], "messages": [...]}`，出來是一則 assistant message。`SpanPayload.jsx`
+    照這個形狀渲染：tools 一個可收合區塊（每個 tool 再收合，顯示 name / description /
+    parameters），messages 每則一個可收合列，列頭是 **role 色籤**（system / user / assistant /
+    tool）＋一行摘要（該則的開頭，或 `→ tool_name()`）＋字數。assistant 的 `tool_calls` 另外
+    以工具名＋重新縮排後的 arguments 呈現（OpenAI 是把 arguments 塞成 JSON 字串）。
+  - **兩條規則**：(1) **認得就渲染，認不得也要能看**——每個分支都 fallback 到 pretty-print
+    JSON，不認得的 payload 不會炸掉也不會消失；(2) **收合，不切斷**。每個 Input / Output
+    區塊右上角有 **Pretty | JSON** 切換，JSON 模式是完整未截斷的原始 payload，這是規則 (1)
+    的保險。
+  - **預設展開狀態**：tools 收起、所有 message 收起、**只展開最後一則**與 Output。最後一則
+    是這個 span 真正在講的事，其餘是需要時才追溯的脈絡。
+  - 後端配合：`Span` 多了 `input_json` / `output_json`（trace store 原本的物件），
+    `SpanOut.input/output` 型別放寬成物件或字串；`observation_to_span` 連「被 agent 序列化成
+    JSON 字串」的 payload 也會 parse 回來。假層 `build_fake_trace` 也改成同樣的 chat 形狀，
+    所以純 Docker 的 demo 就能驗證這條渲染路徑。
+  - **中間欄改成三個具名分區**：**Answer**（agent 回答＋verdict／期望答案／judge comment）、
+    **Diagnosis**、**Trace · n spans**。四種互不相干的內容擠在同一條捲軸裡，沒有分界就是一片
+    文字牆。trace 狀態橫幅（generating / error / not_started / no_trace）也一併移進 Trace 分區
+    ——它們講的是下面那份 span 列表，不是答案或診斷。
 
 ### 9.10 截斷 / 快取 / 進度（如實作）
-- **§6.7 截斷**：只截**單一 span 過長的 input/output body**（保留頭尾、中間省略），**絕不砍 span**；
-  門檻 `SPAN_BODY_MAX_CHARS`（預設 800）。**兩個地方都套用同一個 `truncate_body`**：
-  1. **檢視時**（`GET .../trace`）——UI 上會標示 "truncated"。
-  2. **餵給診斷 LLM 前**（`real/diagnosis.py`）——§6.9 要求 LLM input 也要截斷。
-     （早期只做了第 1 點；真實 trace 不截會直接把 context window 撐爆。）
+- **§6.7 截斷：只剩「餵給診斷 LLM 前」這一處**（`real/diagnosis.py`，門檻
+  `SPAN_BODY_MAX_CHARS`，預設 800）。只截**單一 span 過長的 input/output body**（保留頭尾、
+  中間省略），**絕不砍 span**——這是為了 context window，是硬限制。
+  **檢視路徑（`GET .../trace`）已不再截斷**：截斷會把開發者點開 span 想看的證據本身砍掉，
+  而且會讓 JSON 變成無法 parse 的碎片。長度改由 UI 用「收合」處理（見 §9.9 的 span payload
+  渲染），不是用「切掉」。
 - **§6.12 快取**：診斷在 run 當下（trace ready 後）生成並落庫；事後點開**直接讀 DB**；唯一重算入口是
   owner 手動 re-diagnose。
 - **§6.12 非同步 ingestion**：抓 trace 前 poll + 指數退避。**參數在 `config.py`
@@ -1099,7 +1127,7 @@ caveat）→ 每題透過 SSE 推進度。完成時算好 `pass_rate/total_count
 | 部署形態 | 未提（只提 docker-compose 起 Postgres）| **db / backend / frontend 各一個 container**；backend 依賴用 uv、frontend 用 pnpm |
 | 錯誤處理 | 未提 | orchestrator 有完整失敗策略（§9.6），run 不會卡在 `running` |
 | 連線設定的作用域 | 未提（隱含是部署層級的環境變數）| **改為逐 run**：觸發時用 dialog 設定並寫入 `runs.config`/`runs.secrets`；`*_IMPL` 仍是全域主開關。金鑰只進不出，沿用舊 run 由後端複製且與端點綁定（§9.15）|
-| 測試 | 未提 | **122 個測試**：111 個不需 DB 或網路（respx mock），11 個分頁測試需真 Postgres 且未設 `TEST_DATABASE_URL` 時 skip |
+| 測試 | 未提 | **127 個測試**：116 個不需 DB 或網路（respx mock），11 個分頁測試需真 Postgres 且未設 `TEST_DATABASE_URL` 時 skip |
 | 清單規模 | 未提 | **兩個清單皆分頁**（`{items,total,has_more}` + 無限捲動），且卡片與 run 列表的查詢數**與頁面大小無關**（§9.18(e)）|
 | 三欄詳情的即時性 | 未提（§6.15 只說 run 進度要即時推送）| **三欄都跟著 SSE 更新**：開啟中的題目以指紋觸發重抓 trace，agent 回答 / verdict / 診斷都當場出現（§9.18(a)）|
 
@@ -1205,9 +1233,9 @@ trace。
 
 ### 9.16 測試與驗證現況
 
-**單元測試**（`backend/tests/`，共 **122 個**，9 個檔案）
+**單元測試**（`backend/tests/`，共 **127 個**，9 個檔案）
 
-`make test` 跑其中 **111 個**——不需 DB 也不需網路，外部呼叫一律以 `respx` mock。剩下 11 個
+`make test` 跑其中 **116 個**——不需 DB 也不需網路，外部呼叫一律以 `respx` mock。剩下 11 個
 （`test_pagination.py`）需要一個真 Postgres，未設 `TEST_DATABASE_URL` 時整個檔案自動 skip，
 所以 `make test` 的「零外部依賴」承諾沒有被打破：
 
@@ -1220,7 +1248,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/t
   非字串/缺 `content` 視為失敗、空回答視為失敗、307 redirect 會被 follow 而非誤判為空回應
   （實測中撞到過：server 端路由是 `/execute/` 帶尾斜線時常見的 trailing-slash 307）、
   5xx raise（交給重試）vs 4xx 直接失敗、逐 run 的 base URL / timeout 覆寫環境變數。
-- `test_langfuse_client.py`（21）：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
+- `test_langfuse_client.py`（24）：空頁→`NotReady`、時間排序與重新編號、observation 型別過濾、
   分頁、`traceId` 與 Basic auth、`usageDetails` 與舊版 `usage` 兩種 token 欄位、ERROR level 映射；
   401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼、過長的錯誤 body 會被截斷；
   以及 §9.18(b) 的**兩條讀取策略**：trace API 與列表端點對映出的 span 完全相同、404 → `NotReady`
@@ -1248,7 +1276,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/t
   手動輸入優先、跨 eval set 一律 404）；以及**金鑰不外流的值層級斷言**——
   序列化一個帶哨兵金鑰的 `RunOut`，斷言兩個哨兵值都不出現在 payload 任何位置
   （比檢查欄位名稱可靠，因為 `credentials_set` 讓 router 合法地讀到 `runs.secrets`）。
-- `test_results.py`（6）：trace 檢視的狀態機。核心是 §9.18(c) 的迴歸測試——**`pending` 的題目回
+- `test_results.py`（8）：trace 檢視的狀態機。核心是 §9.18(c) 的迴歸測試——**`pending` 的題目回
   `not_started` 且對 trace store 發出零個請求**（用一個會記錄呼叫次數的 stub 斷言）；即使該列上
   留著上一次的 `trace_error` 也不會顯示。另有 `answered` 之後才會去抓、trace 就緒回 spans、
   `failed` 回 `no_trace` 不發請求、trace store 失敗回 `error` 而非 `generating`。
@@ -1262,7 +1290,7 @@ TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/t
 
 **已驗證的端到端行為**
 - **fake 模式**：與真實整合加入前**行為完全相同**（卡片 3 runs / 趨勢 0.8→0.6→0.4、
-  三種 incorrect mode 各異、SSE 五題含 `⟦timeout⟧` 部分完成、診斷與 caveat、§6.7 截斷、
+  三種 incorrect mode 各異、SSE 五題含 `⟦timeout⟧` 部分完成、診斷與 caveat、
   403/409、上傳與 version bump、三層 UI）。
 - **real 模式**：以**自建 mock 的 agent HTTP / OpenAI 相容 / Langfuse 服務**跑過完整流程——
   上傳 → run → 真回答與判分落庫、correlation_id 從 agent metadata 一路對回 Langfuse `traceId`、
@@ -1276,11 +1304,14 @@ TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/t
   檢視 → 用『Use config from』再跑一次 → 事後看 trace」這條完整 UI 動線尚未實跑。
   `0003_run_config` 的 migration 只用 alembic offline（`--sql`）確認過產出的 DDL 正確。
 
-> ⚠️ **尚未對接真正的服務**。上述 real 模式驗證用的是 mock，能證明 correlation 環路、
-> 失敗策略與資料流都正確；**證明不了**貴方 agent server 的 `/execute` 是否真的回
-> `{"content": str}`、貴方 LLM 端點是否支援 `response_format: json_object`、貴方 Langfuse
-> 版本的 token 欄位命名。前兩處在 client 內都刻意寫得寬容（`/execute` 回應接受裸 JSON
+> ⚠️ **agent / judge / diagnosis 三個 seam 尚未對接真正的服務**。上述 real 模式驗證用的是
+> mock，能證明 correlation 環路、失敗策略與資料流都正確；**證明不了**貴方 agent server 的
+> `/execute` 是否真的回 `{"content": str}`、貴方 LLM 端點是否支援
+> `response_format: json_object`。兩處在 client 內都刻意寫得寬容（`/execute` 回應接受裸 JSON
 > 字串或純文字當 fallback、`response_format` 被拒會自動退回），但真的接上去仍可能需要微調。
+>
+> **Langfuse 不在此列**：真環境已對接，trace 讀得回來，token 欄位命名（`usageDetails` 與舊版
+> `usage`）兩種都已處理。見 §9.19。
 
 ---
 
@@ -1363,8 +1394,8 @@ TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/t
   自動跳轉詳情頁、5 題全灰起跑、狀態列百分比、中止、All/Wrong 分段篩選、viewer 看不到破壞性按鈕，
   以及把 `LANGFUSE_HOST` 指到不存在的 host 後，中欄確實顯示紅色錯誤 banner 與真實原因。
   過程中無任何 console / page error。
-- ⚠️ 仍**未對接真正的外部服務**（同 §9.16 末段的但書）：Langfuse 錯誤路徑是用不存在的 host 與
-  空金鑰驗的，成功路徑仍只有 mock。
+- ⚠️ 當時仍**未對接真正的外部服務**：Langfuse 錯誤路徑是用不存在的 host 與空金鑰驗的，
+  成功路徑只有 mock。**Langfuse 這一項之後已解除**（§9.19）。
 
 ---
 
@@ -1506,5 +1537,55 @@ ClickHouse 產生的**。自架版本約 3.152.0 起會查一張屬於 v4 wide-o
 - **Langfuse 錯誤路徑**：用一個回傳真實 `Unknown table expression 'events'` 500 body 的 mock，
   確認**兩條策略都被嘗試**、錯誤訊息含兩者、瀏覽器中顯示白話說明且原始 SQL 收在可展開區塊；
   同時確認**同一個 run 中尚未回答的題目完全沒有對 Langfuse 發出任何請求**（(c) 的直接驗證）。
-- ⚠️ 仍**未對接真正的 Langfuse 服務**：成功路徑仍只有 mock。(b) 的 fallback 能不能繞過貴方那台
-  Langfuse 的 `events` 問題，要接上去才知道。
+- 當時**尚未對接真正的 Langfuse 服務**，成功路徑只有 mock。**這一點之後已經解除**：真實
+  Langfuse 上的 trace 現在讀得回來，見 §9.19。
+
+---
+
+### 9.19 讀得回真實 trace 之後：span payload 的結構化渲染
+
+> §9.18 收尾時 Langfuse 的成功路徑還只有 mock。實際接上去之後，讀取本身是通的，但**右欄顯示
+> 的東西不對**——真實 span 的 body 不是假層那種一行字串，而是一次 LLM call 的完整請求／回應。
+> 本節記錄的是這件事帶出的兩處修正。四個 seam 的 real 實作**維持原樣**，`*_IMPL` 也仍預設 `fake`。
+
+#### (a) 右欄把拿到的結構丟掉了
+
+**症狀**：點一個 span，看到兩塊被切到 800 字的 JSON。開發者點開 span 是想知道「這次 LLM call
+到底看到什麼、又產出什麼」，得到的卻是一段讀不完也讀不懂的碎片。
+
+**病灶兩處**：
+1. `observation_to_span` 把 `obs["input"]` 一律用 `as_text()` 壓成 JSON 字串，結構在進到 API
+   之前就沒了。
+2. `GET .../trace` 又對它套一次 `truncate_body`。截斷本身沒錯——錯在套用的位置：§6.7 是為了
+   **診斷 LLM 的 context window**，套在檢視路徑上砍掉的是開發者要看的證據，順帶讓 JSON 變成
+   無法 parse 的碎片。
+
+**補法**：
+- `Span` 多兩個欄位 `input_json` / `output_json`（trace store 原本的物件；連被 agent 序列化成
+  JSON 字串的 payload 也 parse 回來）。`input` / `output` 仍是文字，因為診斷 prompt 是從它們組的。
+- `SpanOut.input/output` 型別放寬成「物件或字串」，**檢視路徑不再截斷**。
+- 前端新增 `SpanPayload.jsx`，照 chat-completions 的形狀渲染（tools / 每則 message / tool_calls），
+  細節與預設收合狀態見 §9.9。長度改用**收合**處理，不用切的。
+- 假層 `build_fake_trace` 也改成同樣的 chat 形狀，純 Docker 的 demo 就能驗證這條路徑。
+
+**取捨**：整條 trace 的完整 body 會一次回給前端。以真實 trace（約 8 個 generation，每個帶 tool
+定義與愈來愈長的 messages）估計是每題數百 KB——以這個 POC「點一次抓一次、跑在 localhost」的
+檢視路徑來說可以接受，trace 再大才需要改成逐 span 延遲載入。
+
+#### (b) 中間欄四種內容擠在一條捲軸裡
+
+Agent 回答、期望答案、judge 評語、診斷、span 列表，五段內容沒有任何分界。改成三個具名分區
+（**Answer / Diagnosis / Trace · n spans**），trace 狀態橫幅一併移進 Trace 分區——它們講的是
+下面那份 span 列表，不是答案也不是診斷。內容一項沒增沒減，只是把界線畫出來。
+
+#### (c) 本次的驗證方式
+
+- **後端單元測試 127 個通過**（新增 5 個：結構化 body 保留、JSON 字串 payload 會被 parse、
+  純文字沒有結構形式、超長 body 檢視時不截斷、結構化 body 以物件形式送出）。
+  `test_judge_and_diagnosis.py` 的 §6.7 截斷測試**原封不動且仍通過**——這就是「診斷路徑沒被動到」
+  的守門測試。
+- **真 Postgres 16 + 真瀏覽器**（Playwright + Chromium，無任何 console / page error）：走完
+  卡片 → run 歷史 → 三欄詳情，確認 tools 與前面的 message 預設收起、最後一則與 Output 預設展開、
+  role 色籤、Pretty|JSON 切換兩個區塊都可用、那個刻意超長的 tool 結果在自己的框內捲動而
+  **畫面上再也沒有 "truncated" 字樣**；`generating` 橫幅出現在 Trace 分區內、正確題目的 Diagnosis
+  分區顯示「Correct answer — no diagnosis generated.」；light/dark 兩個主題都確認過。

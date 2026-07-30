@@ -4,7 +4,8 @@
   runs, with is_incorrect computed per the requested mode (union/intersection/
   last_n).
 - GET .../results/{result_id}/trace : middle+right columns — live-fetched trace
-  (truncated per §6.7) + stored diagnosis (read from DB, §6.12).
+  (full bodies; §6.7 truncation applies only before the diagnosis LLM) + stored
+  diagnosis (read from DB, §6.12).
 """
 from __future__ import annotations
 
@@ -30,7 +31,6 @@ from app.schemas import (
     TraceView,
 )
 from app.services.aggregation import incorrect_by_mode, result_phase
-from app.services.truncation import truncate_body
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}", tags=["results"])
 
@@ -219,13 +219,17 @@ async def get_trace(
             if trace is not None:
                 state = "ready"
                 for s in trace.spans:
-                    in_body, in_trunc = truncate_body(s.input)
-                    out_body, out_trunc = truncate_body(s.output)
+                    # Full bodies, structured where the trace store had structure.
+                    # §6.7 truncation stays on the diagnosis path (an LLM context
+                    # window is a real limit); applying it here only shredded the
+                    # evidence a developer opened the span to read. The UI
+                    # collapses instead of cutting.
                     spans.append(
                         SpanOut(
                             index=s.index, tool_name=s.tool_name, status=s.status,
-                            input=in_body, output=out_body, token_usage=s.token_usage,
-                            input_truncated=in_trunc, output_truncated=out_trunc,
+                            input=s.input_json if s.input_json is not None else s.input,
+                            output=s.output_json if s.output_json is not None else s.output,
+                            token_usage=s.token_usage,
                             status_message=s.status_message,
                         )
                     )

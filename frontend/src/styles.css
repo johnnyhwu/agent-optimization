@@ -350,8 +350,22 @@ select { cursor: pointer; }
 .banner.generating { background: var(--accent-soft); border: 1px solid var(--accent); }
 .banner.error-banner { background: var(--red-soft); border: 1px solid var(--red); color: var(--text); }
 
+/* ---- middle column: labelled sections ----
+   Answer, diagnosis and the span list are four unrelated kinds of content in one
+   scrolling column. Without a band between them the eye can't tell where one
+   ends, so each gets a sticky-free header strip and a hard rule above it. */
+.section + .section { border-top: 1px solid var(--border-strong); }
+.section-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 10px 16px 0; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+}
+.section-title { font-weight: 700; color: var(--text); opacity: 0.75; }
+.section-count { font-variant-numeric: tabular-nums; }
+
 /* Agent answer vs expected answer, above the diagnosis in the middle column. */
-.answers { padding: 14px 16px 4px; border-bottom: 1px solid var(--border); }
+.answers { padding: 10px 16px 14px; }
+.answers .judge-comment { font-size: 12px; line-height: 1.5; color: var(--muted); }
 .answers .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 5px; }
 .answers .label + pre { margin-bottom: 12px; }
 .answers pre {
@@ -379,7 +393,88 @@ select { cursor: pointer; }
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px; margin: 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; max-height: 260px; overflow: auto;
 }
-.trunc { color: var(--amber); font-size: 11px; font-weight: 600; }
+/* ---- span payload (right column) ----
+   An LLM call's request/response, rendered as the conversation it is rather than
+   as a JSON dump. Nothing is cut — length is handled by collapsing and by
+   scrolling inside each box — so these rules exist mainly to keep a 40k-char
+   prompt from swallowing the column. */
+.payload { margin-top: 16px; }
+.payload-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 6px; min-height: 26px;
+}
+.payload-head .label { margin: 0; }
+.payload-meta {
+  font-size: 11px; color: var(--muted); margin-bottom: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.payload-empty { color: var(--muted); font-style: italic; font-size: 12px; }
+.kv .payload pre.body {
+  white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;
+  margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px; max-height: 320px; overflow: auto;
+}
+.kv .payload pre.payload-json { max-height: 460px; }
+
+/* Native <details>, so keyboard and find-in-page work without any of our code. */
+.collapse {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel); margin-bottom: 6px;
+}
+.collapse > summary {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  padding: 7px 10px; list-style: none; border-radius: var(--radius-sm);
+}
+.collapse > summary::-webkit-details-marker { display: none; }
+.collapse > summary::before {
+  content: "▸"; color: var(--muted); font-size: 10px; flex: none;
+  transition: transform 0.12s var(--ease);
+}
+.collapse[open] > summary::before { transform: rotate(90deg); }
+.collapse > summary:hover { background: var(--panel-2); }
+.collapse-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.collapse-meta {
+  font-size: 11px; color: var(--muted); flex: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.collapse-body { padding: 0 10px 10px; }
+
+/* Role is the fastest way to tell whose turn this is — colour it, don't spell it
+   out in prose. */
+.role {
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: 0.5px; flex: none;
+  border: 1px solid transparent;
+}
+.role.system, .role.developer { color: var(--muted); background: var(--panel-3); }
+.role.user { color: var(--accent); background: var(--accent-soft); }
+.role.assistant { color: var(--green); background: var(--green-soft); }
+.role.tool, .role.function { color: var(--amber); background: var(--amber-soft); }
+.role.other { color: var(--muted); background: var(--panel-2); }
+
+.msg-preview {
+  font-size: 12px; color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.msglist .msg[open] > summary .msg-preview { opacity: 0.55; }
+
+.collapse.tools > summary .collapse-title { font-size: 12px; font-weight: 600; }
+.tooldesc { font-size: 12px; color: var(--muted); margin: 0 0 6px; line-height: 1.45; }
+.toolname { font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* A tool call is the actionable part of an assistant turn: name it, then show
+   the arguments re-indented (OpenAI ships them as a JSON string). */
+.toolcall {
+  margin-top: 8px; border-left: 2px solid var(--amber);
+  padding-left: 9px;
+}
+.toolcall-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.toolcall-name {
+  font-size: 12px; font-weight: 600; color: var(--amber);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 .tokens { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .tokens .t { font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
 .notflagged { color: var(--muted); padding: 22px 16px; font-style: italic; }

@@ -87,7 +87,9 @@ but Docker, and you can bring up one real service at a time.
 
 **2. Langfuse owns traces; this app owns everything Langfuse has no concept of.**
 Span input/output/token counts are fetched live from Langfuse at view time and
-**never copied into our database**. Our database holds what Langfuse cannot
+**never copied into our database**. They arrive whole — the UI collapses long
+bodies rather than cutting them, because a truncated span body destroys the
+evidence you opened the span to read. Our database holds what Langfuse cannot
 express: eval sets, stable question ids, runs, verdicts, and the LLM diagnoses.
 The link between the two is a **correlation id**.
 
@@ -264,11 +266,19 @@ Notes:
 - **Incorrect modes:** in run history, multi-select runs and pick
   **union / intersection / last-N** — the seed data makes all three differ.
   Selection is kept by run id, so it survives loading more pages.
-- **Diagnosis:** click an incorrect question; the middle column shows the
-  clue-style `overall_diagnosis`, a **caveat** banner when present, and suspect
-  spans marked high/med/low with the top one auto-selected. The right column
-  shows that span's input/output/token and its reason + evidence (or
-  "not flagged").
+- **Diagnosis:** click an incorrect question. The middle column reads as three
+  labelled sections — **Answer** (what the agent said, what was expected, the
+  judge's comment), **Diagnosis** (the clue-style `overall_diagnosis` plus a
+  **caveat** banner when present), and **Trace** (the span list with suspects
+  marked high/med/low, top one auto-selected, and any trace-state banner).
+- **Reading a span:** the right column renders the span body as the LLM call it
+  is, not as a JSON dump — the tool catalogue in one collapsible, then each
+  `messages[]` entry with a role chip (system / user / assistant / tool), a
+  one-line summary and its `tool_calls` with re-indented arguments. **Nothing is
+  truncated**: tools and earlier turns start collapsed, the last turn and the
+  output start open, and a **Pretty | JSON** toggle shows the full raw payload
+  for anything the renderer doesn't recognise. Below that, the span's diagnosis
+  reason + evidence (or "not flagged").
 - **Upload:** "+ Upload eval set" — choose a **JSONL or CSV** file (or click
   "load sample"); it is parsed into an **editable preview table** where you can
   fix any cell and add/remove rows before saving. `backend/sample_eval_set.jsonl`
@@ -334,7 +344,8 @@ Notes:
 | Trace view state machine (incl. `not_started`) | `backend/app/routers/results.py` |
 | Manual re-diagnose (owner-only) | `backend/app/routers/diagnosis.py` |
 | Roles / fake login (§6.16) | `backend/app/auth.py` |
-| §6.7 body truncation | `backend/app/services/truncation.py` |
+| §6.7 body truncation (diagnosis prompt only) | `backend/app/services/truncation.py` |
+| Span input/output rendered as a chat exchange | `frontend/src/components/SpanPayload.jsx` |
 | Incorrect modes + regression + `phase` | `backend/app/services/aggregation.py` |
 | SSE hub | `backend/app/sse.py` |
 | Seed data | `backend/app/seed.py` |
