@@ -47,6 +47,13 @@ class Span:
     # Langfuse `statusMessage`: why an observation is at ERROR level. Only ever
     # populated by the real trace client.
     status_message: str | None = None
+    # The body as the trace store actually held it, when it was structured — an
+    # LLM generation's `{"tools": [...], "messages": [...]}` request and the
+    # assistant message it produced. The UI renders that per message instead of
+    # dumping JSON; `input`/`output` above stay text because the diagnosis
+    # prompt is built from them.
+    input_json: object | None = None
+    output_json: object | None = None
 
 
 @dataclass

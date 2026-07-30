@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -202,11 +202,17 @@ class SpanOut(BaseModel):
     index: int
     tool_name: str
     status: str
-    input: str
-    output: str
+    # The span body exactly as the trace store held it: an object/array when the
+    # agent logged something structured (an LLM call's `{tools, messages}` and
+    # the assistant message it produced), a plain string otherwise.
+    #
+    # Never truncated. §6.7's cut still applies before the diagnosis LLM, where
+    # a context window is the constraint — but cutting it here destroyed the
+    # very evidence the span view exists to show, and left the JSON unparseable
+    # for the UI. The UI collapses long bodies instead.
+    input: Any = ""
+    output: Any = ""
     token_usage: dict
-    input_truncated: bool = False
-    output_truncated: bool = False
     status_message: str | None = None  # Langfuse statusMessage on ERROR spans
 
 

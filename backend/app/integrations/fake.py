@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import random
 
 from app import fake_config as fc
@@ -47,37 +48,141 @@ async def _sleep_between(lo: float, hi: float) -> None:
     await asyncio.sleep(random.uniform(lo, hi))
 
 
+# The tool catalogue every fake generation is offered, shaped like the OpenAI
+# `tools` array a real agent sends — the span view renders it as such.
+_FAKE_TOOL_SPECS = {
+    "read_skill": ("Load the developer-written playbook for a class of question.",
+                   {"skill": {"type": "string", "description": "skill name"}}),
+    "sql_query": ("Run a read-only SQL query against the warehouse.",
+                  {"sql": {"type": "string", "description": "a SELECT statement"}}),
+    "vector_search": ("Semantic search over the knowledge base.",
+                      {"query": {"type": "string"}, "top_k": {"type": "integer"}}),
+    "summarize": ("Condense intermediate results into a short brief.",
+                  {"text": {"type": "string"}}),
+    "format_response": ("Render the final answer in the customer-facing format.",
+                        {"answer": {"type": "string"}}),
+    "generate_response": ("Produce the final natural-language answer.",
+                          {"answer": {"type": "string"}}),
+}
+
+
+def _dump(value: object) -> str:
+    """Text rendering of a span body, matching what the real client's `as_text`
+    produces — this is the form the diagnosis prompt is built from."""
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _fake_tool_defs() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": list(properties)[:1],
+                },
+            },
+        }
+        for name, (description, properties) in _FAKE_TOOL_SPECS.items()
+    ]
+
+
+_FAKE_SYSTEM_PROMPT = (
+    "You are a domain support agent. Pick the skill that matches the question, "
+    "follow its playbook step by step, and call tools rather than guessing. "
+    "Never invent figures: every number in the final answer must come from a "
+    "tool result. When the playbook and the data disagree, say so explicitly "
+    "instead of silently choosing one."
+)
+
+
 def build_fake_trace(correlation_id: str) -> Trace:
     """Deterministic span tree for a correlation_id.
 
     Shared by the orchestrator (diagnosis input) and the span-detail view so the
-    diagnosis's span_index always lines up with what the UI renders. One span is
-    given an over-long body to exercise §6.7 truncation at view time.
+    diagnosis's span_index always lines up with what the UI renders.
+
+    Each span is shaped like a real LLM generation — input is the
+    `{"tools": [...], "messages": [...]}` request with the conversation
+    accumulated so far, output is the assistant message it produced — so the
+    fake demo exercises the same structured rendering a real Langfuse trace
+    gets. One span is given a deliberately huge tool result: it used to prove
+    §6.7 truncation, and now proves the collapsed view copes with a payload
+    nobody wants dumped on screen.
     """
     rng = _rng(correlation_id)
     n = rng.randint(5, 8)
     tools = ["read_skill", "sql_query", "sql_query", "vector_search", "summarize",
              "sql_query", "format_response", "generate_response"]
+    tool_defs = _fake_tool_defs()
+    question = f"(question behind correlation {correlation_id[:8]})"
+
+    # The conversation grows span by span, exactly as it does in a real agent
+    # loop: every generation sees everything that came before it.
+    messages: list[dict] = [
+        {"role": "system", "content": _FAKE_SYSTEM_PROMPT},
+        {"role": "user", "content": question},
+    ]
+
     spans: list[Span] = []
-    long_span = rng.randint(1, n - 2)  # a middle span gets a huge body
+    long_span = rng.randint(1, n - 2)  # a middle span gets a huge tool result
     for i in range(n):
         tool = tools[i % len(tools)]
+        last = i == n - 1
         out = f"result rows for step {i}: " + ", ".join(f"row{j}" for j in range(4))
         if i == long_span:
-            # Over-long body -> truncated (head+tail kept) when served to the UI.
             out = ("BEGIN_LONG_OUTPUT " + "x-data-cell " * 400 + "END_LONG_OUTPUT")
+
+        request = {"model": "fake-model-v1", "tools": tool_defs,
+                   "messages": [dict(m) for m in messages]}
+
+        if last:
+            # Final turn: prose, no tool call.
+            assistant = {
+                "role": "assistant",
+                "content": f"Based on the {i} tool results above, the answer is: {out}",
+            }
+        else:
+            call_id = f"call_{i:02d}"
+            assistant = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool,
+                        "arguments": json.dumps({"step": i, "tool": tool}),
+                    },
+                }],
+            }
+
         spans.append(
             Span(
                 index=i,
                 tool_name=tool,
                 status="success",
-                input=f"input context for span {i} (tool={tool})",
-                output=out,
+                input=_dump(request),
+                output=_dump(assistant),
                 token_usage={"input": rng.randint(80, 400),
                              "output": rng.randint(40, 300),
                              "total": rng.randint(120, 700)},
+                input_json=request,
+                output_json=assistant,
             )
         )
+
+        messages.append(assistant)
+        if not last:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": assistant["tool_calls"][0]["id"],
+                "name": tool,
+                "content": out,
+            })
     return Trace(correlation_id=correlation_id, spans=spans)
 
 

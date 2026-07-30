@@ -173,6 +173,31 @@ def test_structured_input_is_rendered_as_text():
     assert "select 1" in span.input
 
 
+# --- The structured body survives the mapping --------------------------------
+# The text rendering is what the diagnosis prompt is built from; the object is
+# what the span view renders per message. Flattening to text only, as this
+# client used to, left the UI with a JSON dump of an LLM call.
+
+def test_structured_body_is_kept_alongside_the_text():
+    request = {"tools": [{"type": "function"}], "messages": [{"role": "user", "content": "hi"}]}
+    span = observation_to_span(_obs(input=request, output={"role": "assistant"}), 0)
+    assert span.input_json == request
+    assert span.output_json == {"role": "assistant"}
+    assert "hi" in span.input  # …and the text form is untouched
+
+
+def test_a_body_logged_as_a_json_string_is_parsed():
+    """Some agents hand Langfuse an already-serialized payload."""
+    span = observation_to_span(_obs(input='{"messages": [{"role": "user"}]}'), 0)
+    assert span.input_json == {"messages": [{"role": "user"}]}
+
+
+def test_prose_bodies_have_no_structured_form():
+    span = observation_to_span(_obs(input="just a sentence", output="{not json"), 0)
+    assert span.input_json is None
+    assert span.output_json is None
+
+
 # --- Failures must be distinguishable from "not ingested yet" ----------------
 
 @respx.mock

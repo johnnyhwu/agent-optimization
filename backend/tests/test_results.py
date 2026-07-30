@@ -15,6 +15,7 @@ import uuid
 
 import pytest
 
+from app.config import settings
 from app.integrations import Seams
 from app.integrations.base import NOT_READY, Span, Trace
 from app.models import Question, QuestionResult, Run, SpanAnalysis
@@ -152,6 +153,43 @@ async def test_ready_trace_returns_spans(call_get_trace):
 
     assert view.trace_state == "ready"
     assert [s.tool_name for s in view.spans] == ["sql"]
+
+
+async def test_span_bodies_are_not_truncated_on_the_view_path(call_get_trace):
+    """§6.7's cut belongs to the diagnosis prompt, where a context window is the
+    constraint. Applying it here shredded the evidence the span view exists to
+    show — and left structured payloads unparseable for the UI."""
+    huge = "x" * (settings.span_body_max_chars * 5)
+    client = RecordingTraceClient(
+        outcome=Trace(
+            correlation_id="corr-1",
+            spans=[Span(index=0, tool_name="sql", status="success", input="i", output=huge)],
+        )
+    )
+    result = make_result(status="done", agent_response="hello", verdict="incorrect")
+    view = await call_get_trace(result, client)
+
+    assert view.spans[0].output == huge
+
+
+async def test_structured_span_body_is_served_as_an_object(call_get_trace):
+    """So the UI can render an LLM call per message rather than a JSON dump."""
+    request = {"tools": [], "messages": [{"role": "user", "content": "hi"}]}
+    client = RecordingTraceClient(
+        outcome=Trace(
+            correlation_id="corr-1",
+            spans=[Span(
+                index=0, tool_name="generate", status="success",
+                input="{flattened text}", output="o",
+                input_json=request, output_json={"role": "assistant", "content": "hey"},
+            )],
+        )
+    )
+    result = make_result(status="done", agent_response="hello", verdict="incorrect")
+    view = await call_get_trace(result, client)
+
+    assert view.spans[0].input == request
+    assert view.spans[0].output == {"role": "assistant", "content": "hey"}
 
 
 async def test_failed_question_reports_no_trace_without_fetching(call_get_trace):

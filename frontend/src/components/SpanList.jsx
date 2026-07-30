@@ -56,8 +56,23 @@ function TraceErrorBody({ raw }) {
   );
 }
 
-// Middle column (§6.13): top overall_diagnosis + caveat banner, then the vertical
-// span list with suspects marked (confidence high/med/low). Distinguishes
+// This column carries four unrelated kinds of content — what the agent said,
+// what it should have said, why it was judged that way, and the trace itself.
+// Run together they read as one wall of text, so each gets a labelled band.
+function Section({ title, count, children }) {
+  return (
+    <section className="section">
+      <div className="section-head">
+        <span className="section-title">{title}</span>
+        {count != null && <span className="section-count">{count}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+// Middle column (§6.13): answer, then overall_diagnosis + caveat banner, then the
+// vertical span list with suspects marked (confidence high/med/low). Distinguishes
 // "generating (retrying)" from "no trace" (§6.12 / §7.1 #5) — and from "the trace
 // store rejected us", which used to be shown as "generating" forever.
 export default function SpanList({
@@ -83,6 +98,49 @@ export default function SpanList({
     </button>
   ) : null;
 
+  // One of these always renders, so the section is never an empty labelled band.
+  let diagnosis;
+  if (trace.analysis) {
+    diagnosis = (
+      <>
+        <div className="banner diagnosis">
+          <strong>Diagnosis (clue, not a verdict):</strong> {trace.analysis.overall_diagnosis}
+          {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
+        </div>
+        {trace.analysis.caveat && (
+          <div className="banner caveat">⚠ Caveat: {trace.analysis.caveat}</div>
+        )}
+      </>
+    );
+  } else if (trace.diagnosis_error) {
+    // An undiagnosed incorrect question used to look identical whether the
+    // model errored or was never asked.
+    diagnosis = (
+      <div className="banner error-banner">
+        <strong>✕ Diagnosis failed.</strong>
+        <div className="banner-detail">{trace.diagnosis_error}</div>
+        {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
+      </div>
+    );
+  } else if (trace.verdict === "correct") {
+    diagnosis = (
+      <div className="banner diagnosis muted">Correct answer — no diagnosis generated.</div>
+    );
+  } else if (trace.verdict === "incorrect" && reDiagnoseButton) {
+    diagnosis = (
+      <div className="banner diagnosis">
+        No diagnosis stored for this question yet.
+        <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>
+      </div>
+    );
+  } else {
+    diagnosis = (
+      <div className="banner diagnosis muted">
+        No diagnosis — a question is diagnosed once it has been judged incorrect.
+      </div>
+    );
+  }
+
   return (
     <div className="col">
       <h4>
@@ -92,10 +150,15 @@ export default function SpanList({
         {refreshing && <span className="refreshing" title="Updating…" />}
       </h4>
 
+      {/* Above the sections, because it explains all of them at once. */}
+      {trace.error_message && (
+        <div className="banner error-banner">✕ This question failed: {trace.error_message}</div>
+      )}
+
       {/* What the agent answered, next to what it was graded against. With a real
           agent this is the first thing to read — the verdict alone doesn't say
           what went wrong. */}
-      {(trace.agent_response || trace.ground_truth_response) && (
+      <Section title="Answer">
         <div className="answers">
           <div className="label">
             Agent answer
@@ -105,110 +168,83 @@ export default function SpanList({
           <div className="label">Expected answer</div>
           <pre>{trace.ground_truth_response || "—"}</pre>
           {trace.judge_comment && (
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-              <strong>Judge:</strong> {trace.judge_comment}
-            </div>
-          )}
-        </div>
-      )}
-
-      {trace.error_message && (
-        <div className="banner error-banner">✕ This question failed: {trace.error_message}</div>
-      )}
-
-      {/* The whole point of separating this from "generating": a wrong host or a
-          rejected key is a thing the developer must go and fix, not wait out. */}
-      {trace.trace_state === "error" && (
-        <div className="banner error-banner">
-          <strong>✕ Could not load the trace.</strong>
-          <TraceErrorBody raw={trace.trace_error} />
-          {onRetryTrace && (
-            <div style={{ marginTop: 8 }}>
-              <button onClick={onRetryTrace}>↻ Retry</button>
-            </div>
-          )}
-        </div>
-      )}
-      {trace.trace_state === "generating" && (
-        <div className="banner generating">
-          ⏳ Trace is generating (Langfuse ingestion is async — retrying). This is not
-          "no trace"; check back shortly.
-          {trace.trace_error && (
             <>
-              <div className="banner-detail">Last attempt during the run failed:</div>
-              <TraceErrorBody raw={trace.trace_error} />
+              <div className="label">Judge</div>
+              <div className="judge-comment">{trace.judge_comment}</div>
             </>
           )}
-          {onRetryTrace && (
-            <div style={{ marginTop: 8 }}>
-              <button onClick={onRetryTrace}>↻ Retry</button>
-            </div>
-          )}
         </div>
-      )}
-      {/* Distinct from "generating": nothing is being waited on because nothing
-          has been asked yet. Showing an ingestion message here — or, worse, a
-          trace-store error from a fetch that should never have happened — made a
-          brand-new run look like it had already failed. */}
-      {trace.trace_state === "not_started" && (
-        <div className="banner generating">
-          ⏳ Waiting for the agent — this question hasn't been sent yet. The trace
-          appears once it answers.
-        </div>
-      )}
-      {trace.trace_state === "no_trace" && (
-        <div className="banner generating">No trace — the agent call failed for this question.</div>
-      )}
+      </Section>
 
-      {trace.analysis && (
-        <>
-          <div className="banner diagnosis">
-            <strong>Diagnosis (clue, not a verdict):</strong> {trace.analysis.overall_diagnosis}
-            {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
-          </div>
-          {trace.analysis.caveat && (
-            <div className="banner caveat">⚠ Caveat: {trace.analysis.caveat}</div>
-          )}
-        </>
-      )}
-      {/* An undiagnosed incorrect question used to look identical whether the
-          model errored or was never asked. */}
-      {!trace.analysis && trace.diagnosis_error && (
-        <div className="banner error-banner">
-          <strong>✕ Diagnosis failed.</strong>
-          <div className="banner-detail">{trace.diagnosis_error}</div>
-          {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
-        </div>
-      )}
-      {trace.trace_state === "ready" && !trace.analysis && !trace.diagnosis_error &&
-        trace.verdict === "incorrect" && reDiagnoseButton && (
-        <div className="banner diagnosis">
-          No diagnosis stored for this question yet.
-          <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>
-        </div>
-      )}
-      {trace.trace_state === "ready" && !trace.analysis && trace.verdict === "correct" && (
-        <div className="banner diagnosis muted">Correct answer — no diagnosis generated.</div>
-      )}
+      <Section title="Diagnosis">{diagnosis}</Section>
 
-      {trace.spans.map((s) => {
-        const suspect = suspectByIndex[s.index];
-        return (
-          <div
-            key={s.index}
-            className={`spanrow ${activeSpan === s.index ? "active" : ""}`}
-            onClick={() => onPickSpan(s.index)}
-          >
-            <span className="idx">#{s.index}</span> <strong>{s.tool_name}</strong>
-            {suspect && <span className={`conf ${suspect.confidence}`}>{suspect.confidence}</span>}
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-              {s.status}
-              {s.status_message && <span> · {s.status_message}</span>}
-              {(s.input_truncated || s.output_truncated) && <span className="trunc"> · body truncated</span>}
-            </div>
+      <Section title="Trace" count={trace.trace_state === "ready" ? `${trace.spans.length} spans` : null}>
+        {/* The trace-state banners live here rather than at the top of the
+            column: they are all statements about the span list below, not about
+            the answer or the diagnosis. */}
+
+        {/* The whole point of separating this from "generating": a wrong host or a
+            rejected key is a thing the developer must go and fix, not wait out. */}
+        {trace.trace_state === "error" && (
+          <div className="banner error-banner">
+            <strong>✕ Could not load the trace.</strong>
+            <TraceErrorBody raw={trace.trace_error} />
+            {onRetryTrace && (
+              <div style={{ marginTop: 8 }}>
+                <button onClick={onRetryTrace}>↻ Retry</button>
+              </div>
+            )}
           </div>
-        );
-      })}
+        )}
+        {trace.trace_state === "generating" && (
+          <div className="banner generating">
+            ⏳ Trace is generating (Langfuse ingestion is async — retrying). This is not
+            "no trace"; check back shortly.
+            {trace.trace_error && (
+              <>
+                <div className="banner-detail">Last attempt during the run failed:</div>
+                <TraceErrorBody raw={trace.trace_error} />
+              </>
+            )}
+            {onRetryTrace && (
+              <div style={{ marginTop: 8 }}>
+                <button onClick={onRetryTrace}>↻ Retry</button>
+              </div>
+            )}
+          </div>
+        )}
+        {/* Distinct from "generating": nothing is being waited on because nothing
+            has been asked yet. Showing an ingestion message here — or, worse, a
+            trace-store error from a fetch that should never have happened — made a
+            brand-new run look like it had already failed. */}
+        {trace.trace_state === "not_started" && (
+          <div className="banner generating">
+            ⏳ Waiting for the agent — this question hasn't been sent yet. The trace
+            appears once it answers.
+          </div>
+        )}
+        {trace.trace_state === "no_trace" && (
+          <div className="banner generating">No trace — the agent call failed for this question.</div>
+        )}
+
+        {trace.spans.map((s) => {
+          const suspect = suspectByIndex[s.index];
+          return (
+            <div
+              key={s.index}
+              className={`spanrow ${activeSpan === s.index ? "active" : ""}`}
+              onClick={() => onPickSpan(s.index)}
+            >
+              <span className="idx">#{s.index}</span> <strong>{s.tool_name}</strong>
+              {suspect && <span className={`conf ${suspect.confidence}`}>{suspect.confidence}</span>}
+              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                {s.status}
+                {s.status_message && <span> · {s.status_message}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </Section>
     </div>
   );
 }

@@ -41,6 +41,8 @@ hide the reason the primary path failed.
 """
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from app.config import settings
@@ -92,6 +94,29 @@ def _token_usage(obs: dict) -> dict:
     return {k: v for k, v in usage.items() if v is not None}
 
 
+def _structured(value: object) -> object | None:
+    """The payload as an object, or None when it is just prose.
+
+    Langfuse stores whatever the agent's SDK handed it. For an LLM generation
+    that is the chat-completions request/response — the thing the span view
+    exists to show — so it is kept alongside the flattened text rather than
+    left for the UI to re-parse out of a JSON dump. Some agents log that object
+    already serialized, hence the string branch.
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text[:1] in ("{", "["):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return None
+            if isinstance(parsed, (dict, list)):
+                return parsed
+    return None
+
+
 def observation_to_span(obs: dict, index: int) -> Span:
     level = (obs.get("level") or "DEFAULT").upper()
     return Span(
@@ -102,6 +127,8 @@ def observation_to_span(obs: dict, index: int) -> Span:
         output=as_text(obs.get("output")),
         token_usage=_token_usage(obs),
         status_message=obs.get("statusMessage") or None,
+        input_json=_structured(obs.get("input")),
+        output_json=_structured(obs.get("output")),
     )
 
 

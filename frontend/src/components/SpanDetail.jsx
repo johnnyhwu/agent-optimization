@@ -1,7 +1,14 @@
 import React from "react";
 
+import Payload from "./SpanPayload.jsx";
+
 // Right column (§6.13): upper = span input/output/token (≈ Langfuse span detail);
 // lower = this span's diagnosis reason+evidence, or "not flagged".
+//
+// The bodies are rendered by `SpanPayload`, which knows the chat-completions
+// shape an LLM generation logs. They arrive whole — the view path no longer
+// truncates, because cutting a body destroyed the evidence this column exists
+// to show. Length is handled by collapsing and scrolling instead.
 export default function SpanDetail({ span, suspect }) {
   if (!span)
     return (
@@ -15,22 +22,17 @@ export default function SpanDetail({ span, suspect }) {
       <h4>
         Span #{span.index} · {span.tool_name}
       </h4>
-      <div className="kv">
+      {/* Keyed by span: disclosures the developer opened belong to the span they
+          opened them on, not to whichever span next occupies this column. */}
+      <div className="kv" key={span.index}>
         <div className="tokens">
           <div className="t">in: <strong>{span.token_usage.input ?? "—"}</strong></div>
           <div className="t">out: <strong>{span.token_usage.output ?? "—"}</strong></div>
           <div className="t">total: <strong>{span.token_usage.total ?? "—"}</strong></div>
         </div>
 
-        <div className="label">
-          Input {span.input_truncated && <span className="trunc">(truncated)</span>}
-        </div>
-        <pre>{span.input}</pre>
-
-        <div className="label">
-          Output {span.output_truncated && <span className="trunc">(truncated — §6.7 body cut, span kept)</span>}
-        </div>
-        <pre>{span.output}</pre>
+        <Payload label="Input" value={span.input} />
+        <Payload label="Output" value={span.output} />
 
         <div className="label">Diagnosis for this span</div>
         {suspect ? (
