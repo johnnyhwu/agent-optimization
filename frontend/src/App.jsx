@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { api, getSubject, setSubject } from "./api.js";
+import { href, navigate, useHashRoute } from "./useHashRoute.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
 import Playground from "./components/Playground.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
+import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
 import ThemeToggle from "./components/ThemeToggle.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
 
@@ -15,17 +17,25 @@ function avatarColor(name) {
   return AVATAR_COLORS[h];
 }
 
-// In-app view state machine: two tabs, and within the eval-set tab the three
-// tiers of §6.13. `view` stays exactly what it was — the playground is a sibling
-// of that whole state machine, not a fourth tier, because it belongs to no eval
-// set (§10.5).
+// The whole view state lives in the URL (see useHashRoute): which section, which
+// eval set, which runs, which incorrect mode. The three tiers of §6.13 are the
+// depth of the evaluation route rather than a separate state machine, so Back
+// walks back up them and a run detail is a link you can send to someone.
+//
+// The playground is a sibling section, not a fourth tier, because it belongs to
+// no eval set (§10.5) — and Optimize will join it as a third.
 export default function App() {
+  const route = useHashRoute();
   const [subject, setSubj] = useState(getSubject());
   const [users, setUsers] = useState([subject]);
   const [me, setMe] = useState(null);
-  const [tab, setTab] = useState("sets");
-  const [view, setView] = useState({ tier: "sets" });
+  const [collapsed, setCollapsed] = useRailCollapsed();
+  // The set named by the route. Held as an object because the run history and
+  // the breadcrumb show its name, while the URL can only carry its id.
+  const [evalSet, setEvalSet] = useState(null);
+  const [setError, setSetError] = useState(null);
   // A question handed over from the three-column view, to prefill the composer.
+  // Deliberately not in the URL: it is a one-shot handoff, not a location.
   const [playgroundSeed, setPlaygroundSeed] = useState(null);
 
   useEffect(() => {
@@ -35,90 +45,168 @@ export default function App() {
     api.me().then(setMe).catch(() => setMe(null));
   }, [subject]);
 
+  // Resolve the route's eval-set id. Opening a set from the list hands the
+  // object over directly (see onOpen below), so this only actually fetches when
+  // someone arrives by link, reload or Back.
+  const esId = route.section === "evaluation" ? route.esId : undefined;
+  useEffect(() => {
+    if (!esId) {
+      setEvalSet(null);
+      setSetError(null);
+      return undefined;
+    }
+    if (evalSet && String(evalSet.id) === String(esId)) return undefined;
+    let cancelled = false;
+    setSetError(null);
+    api
+      .getEvalSet(esId)
+      .then((es) => !cancelled && setEvalSet(es))
+      .catch((e) =>
+        !cancelled &&
+        setSetError(
+          e.status === 404
+            ? "That eval set no longer exists, or isn't shared with you."
+            : e.message
+        )
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [esId, subject]);
+
   function switchUser(s) {
     setSubject(s);
     setSubj(s);
-    setView({ tier: "sets" }); // roles change; go home
+    setEvalSet(null);
+    navigate(href.evaluation()); // roles change; go home
   }
-  const roleFor = (esId) => (me && me.roles ? me.roles[esId] : undefined);
+  const roleFor = (id) => (me && me.roles ? me.roles[id] : undefined);
+
+  // The set is resolved when it matches the route. Rendering the run history
+  // against the *previous* set for a frame would fire its requests at the wrong
+  // id, so the tiers below wait for this.
+  const resolved = evalSet && String(evalSet.id) === String(esId) ? evalSet : null;
 
   return (
     <ToastProvider>
-      <div className="topbar">
-        <div className="brand">
-          <div className="logo">AE</div>
-          <div>
-            <h1>Agent Eval</h1>
-            <div className="sub">Trace error-localization · Stage 1 + playground</div>
+      <div className="app">
+        <SideRail section={route.section} collapsed={collapsed} onToggle={setCollapsed} />
+
+        <div className="main">
+          <header className="topbar">
+            <div className="topbar-inner">
+              <div className="topbar-title">{sectionTitle(route.section)}</div>
+              <div className="userbox">
+                <ThemeToggle />
+                <span className="lbl">Signed in as</span>
+                <div className="avatar" style={{ background: avatarColor(subject) }}>
+                  {subject.slice(0, 1)}
+                </div>
+                <select
+                  value={subject}
+                  onChange={(e) => switchUser(e.target.value)}
+                  aria-label="Switch user"
+                  style={{ width: "auto" }}
+                >
+                  {users.map((u) => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </header>
+
+          <div className="page">
+            {route.section === "evaluation" && (
+              <>
+                <Breadcrumb route={route} evalSet={resolved} />
+                {setError && (
+                  <div className="error">
+                    {setError} <a href={href.evaluation()}>Back to eval sets</a>
+                  </div>
+                )}
+                {route.tier === "sets" && (
+                  <EvalSetList
+                    key={subject}
+                    subject={subject}
+                    onOpen={(es) => {
+                      setEvalSet(es); // already loaded — don't refetch it
+                      navigate(href.evalSet(es.id));
+                    }}
+                  />
+                )}
+                {route.tier === "runs" &&
+                  (resolved ? (
+                    <RunHistory
+                      evalSet={resolved}
+                      myRole={roleFor(resolved.id)}
+                      onOpenRuns={(runIds, mode, lastN) =>
+                        navigate(href.runs(resolved.id, runIds, mode, lastN))
+                      }
+                    />
+                  ) : (
+                    !setError && <div className="skeleton" />
+                  ))}
+                {route.tier === "detail" &&
+                  (resolved ? (
+                    <RunDetail
+                      key={`${resolved.id}:${route.runIds.join(",")}:${route.mode}:${route.lastN}`}
+                      evalSet={resolved}
+                      runIds={route.runIds}
+                      mode={route.mode}
+                      lastN={route.lastN}
+                      myRole={roleFor(resolved.id)}
+                      // Carrying a question over is the whole reason the
+                      // playground exists: the hypothesis being tested was
+                      // formed while looking at this trace.
+                      onSendToPlayground={(seed) => {
+                        setPlaygroundSeed(seed);
+                        navigate(href.playground());
+                      }}
+                    />
+                  ) : (
+                    !setError && <div className="skeleton" />
+                  ))}
+              </>
+            )}
+
+            {route.section === "playground" && (
+              <Playground
+                subject={subject}
+                seed={playgroundSeed}
+                onSeedApplied={() => setPlaygroundSeed(null)}
+              />
+            )}
+
+            {route.section === "optimize" && <OptimizePlaceholder />}
           </div>
         </div>
-        <div className="userbox">
-          <ThemeToggle />
-          <span className="lbl">Signed in as</span>
-          <div className="avatar" style={{ background: avatarColor(subject) }}>
-            {subject.slice(0, 1)}
-          </div>
-          <select value={subject} onChange={(e) => switchUser(e.target.value)} style={{ width: "auto" }}>
-            {users.map((u) => (
-              <option key={u} value={u}>{u}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="tabbar">
-        <div className="segmented">
-          <button
-            className={tab === "sets" ? "active" : ""}
-            onClick={() => setTab("sets")}
-          >
-            Eval Sets
-          </button>
-          <button
-            className={tab === "playground" ? "active" : ""}
-            onClick={() => setTab("playground")}
-          >
-            Playground
-          </button>
-        </div>
-      </div>
-
-      {tab === "sets" && <Breadcrumb view={view} setView={setView} />}
-
-      <div className="container">
-        {tab === "playground" && (
-          <Playground
-            subject={subject}
-            seed={playgroundSeed}
-            onSeedApplied={() => setPlaygroundSeed(null)}
-          />
-        )}
-        {tab === "sets" && view.tier === "sets" && (
-          <EvalSetList key={subject} onOpen={(es) => setView({ tier: "runs", es })} subject={subject} />
-        )}
-        {tab === "sets" && view.tier === "runs" && (
-          <RunHistory
-            evalSet={view.es}
-            myRole={roleFor(view.es.id)}
-            onOpenRuns={(runIds, mode, lastN) => setView({ tier: "detail", es: view.es, runIds, mode, lastN })}
-          />
-        )}
-        {tab === "sets" && view.tier === "detail" && (
-          <RunDetail
-            evalSet={view.es}
-            runIds={view.runIds}
-            mode={view.mode}
-            lastN={view.lastN}
-            myRole={roleFor(view.es.id)}
-            // Carrying a question over is the whole reason the playground exists:
-            // the hypothesis being tested was formed while looking at this trace.
-            onSendToPlayground={(seed) => {
-              setPlaygroundSeed(seed);
-              setTab("playground");
-            }}
-          />
-        )}
       </div>
     </ToastProvider>
+  );
+}
+
+function sectionTitle(section) {
+  if (section === "playground") return "Playground";
+  if (section === "optimize") return "Optimize";
+  return "Evaluation";
+}
+
+// Reachable only by typing the URL — the rail doesn't link here yet. Says what
+// the section will do and where the work happens today, rather than "coming
+// soon" with no direction.
+function OptimizePlaceholder() {
+  return (
+    <div className="empty">
+      <h2>Optimize isn’t built yet</h2>
+      <p>
+        This is where eval results will be grouped by skill and fed to the
+        optimizer to produce an improved skill.
+      </p>
+      <p>
+        For now, edit a skill by hand in the{" "}
+        <a href={href.playground()}>playground</a> and see what it changes.
+      </p>
+    </div>
   );
 }

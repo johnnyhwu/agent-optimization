@@ -243,7 +243,7 @@ export default function RunDetail({
   const canReDiagnose = myRole === "owner" && activeResult?.verdict === "incorrect";
 
   return (
-    <div>
+    <div className="page-fill">
       {error && <div className="error">{error}</div>}
       {results && liveRunId && (
         <RunStatusBar
@@ -274,7 +274,9 @@ export default function RunDetail({
             <IconSend size={12} /> Try this in the playground
           </button>
         )}
-        {runIds.length} run(s) · incorrect mode: <strong>{mode === "last_n" ? `last-${lastN}` : mode}</strong>
+        {/* How many runs is the breadcrumb's job; this line says what was done
+            with them. */}
+        Incorrect mode: <strong>{mode === "last_n" ? `last-${lastN}` : mode}</strong>
         {runStatus && runStatus !== "running" && runIds.length === 1 && (
           <> · run <strong>{runStatus}</strong></>
         )}
