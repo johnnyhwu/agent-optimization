@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     judge_impl: Impl = "fake"
     trace_impl: Impl = "fake"
     diagnosis_impl: Impl = "fake"
+    # The playground's skill catalogue (§10.2). Read-only against the agent
+    # server, so it is the cheapest seam to switch on first.
+    skill_impl: Impl = "fake"
 
     # --- Agent HTTP server (§6.2) -------------------------------------------
     # Base URL of the FastAPI agent server; the client POSTs to {base}/execute.
@@ -99,6 +102,14 @@ class Settings(BaseSettings):
     trace_poll_max_attempts: int = 8
     # How much of an exception message is kept in question_results.error_message.
     error_message_max_chars: int = 2000
+
+    # --- Playground (§10) ---------------------------------------------------
+    # Playground attempts are deliberately not persisted, so they live in this
+    # process's memory. The cap is not decoration: one attempt holds a whole
+    # trace, which for a real agent is hundreds of KB of span bodies (§9.19), so
+    # an unbounded store would leak the process's memory one attempt at a time.
+    # Oldest attempts are evicted first, per subject.
+    playground_max_attempts_per_user: int = 20
 
     @field_validator("judge_score_threshold", mode="before")
     @classmethod

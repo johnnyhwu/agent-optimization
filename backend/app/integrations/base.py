@@ -1,13 +1,14 @@
-"""The four integration seams as Protocols + shared data types (§6.15).
+"""The five integration seams as Protocols + shared data types (§6.15, §10.2).
 
 A real implementation swaps in behind the SAME interface — the orchestrator and
 routers depend only on these Protocols, never on a concrete module.
 
 Seams:
-    AgentClient.call(question, correlation_id, user_id, tags)         -> AgentResponse
+    AgentClient.call(question, correlation_id, user_id, tags, skill_override) -> AgentResponse
     JudgeClient.judge(question, response, ground_truth)               -> Verdict
     TraceClient.fetch_trace(correlation_id)                           -> Trace | NotReady
     DiagnosisClient.diagnose(trace, ground_truth_reasoning, verdict)  -> dict (§6.9 JSON)
+    SkillClient.list_skills() / .get_skill(name)                      -> the agent's skills
 """
 from __future__ import annotations
 
@@ -62,6 +63,34 @@ class Trace:
     spans: list[Span]
 
 
+@dataclass
+class SkillSummary:
+    """One entry of the agent's skill catalogue (§10.2)."""
+    name: str
+    description: str | None = None
+
+
+@dataclass
+class Skill:
+    """A skill's full text, as the agent server currently holds it."""
+    name: str
+    content: str
+    description: str | None = None
+
+
+@dataclass
+class SkillOverride:
+    """A candidate skill to use for ONE agent call instead of the stored one.
+
+    The playground's whole point (§4.7 / §6.5): try an edited skill without
+    writing it back to the agent server. `name` travels with the content because
+    the agent has to know *which* skill this replaces — a nameless blob of text
+    tells it nothing about where to substitute it.
+    """
+    name: str
+    content: str
+
+
 class NotReady:
     """Sentinel: Langfuse ingestion hasn't landed the trace yet (§6.12)."""
 
@@ -85,9 +114,12 @@ class TraceFetchError(RuntimeError):
 class AgentClient(Protocol):
     # `user_id` is the subject who triggered the run; `tags` lets the caller
     # attach labels (e.g. the eval set name) to the agent's Langfuse metadata.
+    # `skill_override` is keyword-with-a-default on purpose: an eval run never
+    # sends one, so the run path is untouched by the playground existing.
     async def call(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None = None,
+        skill_override: "SkillOverride | None" = None,
     ) -> AgentResponse: ...
 
 
@@ -109,6 +141,25 @@ class DiagnosisClient(Protocol):
     # exposes which model produced a diagnosis.
     model_name: str
 
+    # `judge_verdict` is optional because the playground allows an expected
+    # reasoning process with no expected answer (§10.4): there is a flow to
+    # compare the trace against, but nothing was graded. An eval run always has
+    # a verdict — it only diagnoses questions the judge marked incorrect.
     async def diagnose(
-        self, trace: Trace, ground_truth_reasoning: str, judge_verdict: Verdict
+        self, trace: Trace, ground_truth_reasoning: str,
+        judge_verdict: Verdict | None,
     ) -> dict: ...
+
+
+@runtime_checkable
+class SkillClient(Protocol):
+    """Read the agent's skill catalogue, so the playground can edit from the
+    real starting point rather than from a blank textarea (§10.2).
+
+    Read-only by design: writing an optimized skill back to the agent server
+    needs versioning and rollback (§4.9) and belongs to Stage 3.
+    """
+
+    async def list_skills(self) -> list[SkillSummary]: ...
+
+    async def get_skill(self, name: str) -> Skill: ...

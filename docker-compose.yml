@@ -32,11 +32,13 @@ services:
       # CORS origin of the Vite dev server, as seen by the browser.
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
 
-      # --- Integration selection (§9.2). Default fake = the seeded demo. ---
+      # --- Integration selection (§9.2, §10.2). Default fake = the seeded demo. ---
       AGENT_IMPL: ${AGENT_IMPL:-fake}
       JUDGE_IMPL: ${JUDGE_IMPL:-fake}
       TRACE_IMPL: ${TRACE_IMPL:-fake}
       DIAGNOSIS_IMPL: ${DIAGNOSIS_IMPL:-fake}
+      # The playground's skill catalogue; reads {AGENT_BASE_URL}/skills.
+      SKILL_IMPL: ${SKILL_IMPL:-fake}
 
       # --- Real integrations. Credentials come from the host environment or a
       # repo-root .env; they are never baked into the image. ---
@@ -55,6 +57,9 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_TIMEOUT_S: ${LANGFUSE_TIMEOUT_S:-60}
       RUN_CONCURRENCY: ${RUN_CONCURRENCY:-1}
+      # Playground attempts are held in memory (§10.3), so this caps how many
+      # each user keeps before the oldest finished ones are dropped.
+      PLAYGROUND_MAX_ATTEMPTS_PER_USER: ${PLAYGROUND_MAX_ATTEMPTS_PER_USER:-20}
     ports:
       - "8000:8000"
     volumes:

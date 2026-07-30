@@ -10,7 +10,7 @@ from app.auth import current_subject
 from app.config import settings
 from app.db import get_session
 from app.models import EvalSetRole
-from app.routers import diagnosis, eval_sets, questions, results, runs
+from app.routers import diagnosis, eval_sets, playground, questions, results, runs
 from app.services import run_config
 
 app = FastAPI(title="Agent Eval — Stage 1 POC")
@@ -28,6 +28,7 @@ app.include_router(questions.router)
 app.include_router(runs.router)
 app.include_router(results.router)
 app.include_router(diagnosis.router)
+app.include_router(playground.router)
 
 
 @app.get("/health")
@@ -42,7 +43,8 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
     Only the non-secret settings — credentials are write-only, so the form starts
     them blank and the developer either types them or borrows an earlier run's.
     `impls` lets the dialog grey out the seams still set to `fake`, whose
-    connection settings would have no effect.
+    connection settings would have no effect. The playground's config panel is
+    the same form and reads the same values.
     """
     return {
         "defaults": run_config.defaults(),
@@ -51,6 +53,10 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
             "judge": settings.judge_impl,
             "trace": settings.trace_impl,
             "diagnosis": settings.diagnosis_impl,
+            # The playground's skill catalogue (§10.2). Fake means the skills
+            # shown are canned, which the picker says so nobody edits a fake
+            # skill expecting the real agent to have it.
+            "skill": settings.skill_impl,
         },
     }
 

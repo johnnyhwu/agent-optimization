@@ -112,11 +112,33 @@ async def check_trace() -> bool:
         return False
 
 
+async def check_skill() -> bool:
+    if settings.skill_impl != "real":
+        _line(SKIP, "skill", "SKILL_IMPL=fake")
+        return True
+    if not settings.agent_base_url:
+        _line(FAIL, "skill", "AGENT_BASE_URL is empty (the skills live on the agent server)")
+        return False
+    from app.integrations.real.skills import HttpSkillClient
+
+    try:
+        # Unlike the agent check this is a real call: /skills is a GET, so there
+        # is no reason to settle for "something is listening".
+        skills = await HttpSkillClient().list_skills()
+    except Exception as exc:  # noqa: BLE001
+        _line(FAIL, "skill", f"{settings.agent_base_url}: {exc}")
+        return False
+    names = ", ".join(s.name for s in skills[:5]) or "(catalogue is empty)"
+    _line(OK, "skill", f"{len(skills)} skill(s): {names}")
+    return True
+
+
 async def main() -> int:
     print("Integration preflight")
     print(
         f"  modes: agent={settings.agent_impl} judge={settings.judge_impl} "
-        f"trace={settings.trace_impl} diagnosis={settings.diagnosis_impl}"
+        f"trace={settings.trace_impl} diagnosis={settings.diagnosis_impl} "
+        f"skill={settings.skill_impl}"
     )
     print()
     results = [
@@ -124,6 +146,7 @@ async def main() -> int:
         await check_judge(),
         await check_trace(),
         await check_diagnosis(),
+        await check_skill(),
     ]
     print()
     if all(results):

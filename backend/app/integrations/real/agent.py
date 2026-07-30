@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.integrations.base import AgentResponse
+from app.integrations.base import AgentResponse, SkillOverride
 
 
 class AgentHttpError(RuntimeError):
@@ -65,8 +65,9 @@ class HttpAgentClient:
     def build_payload(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None,
+        skill_override: SkillOverride | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "message": question,
             "metadata": {
                 "trace_data": {
@@ -79,12 +80,25 @@ class HttpAgentClient:
                 },
             },
         }
+        if skill_override is not None:
+            # Only present when the playground asked for one, so an eval run's
+            # request body is byte-for-byte what it was before §10 existed. The
+            # agent server is expected to use this text for THIS call only and
+            # never persist it (§10.7).
+            payload["metadata"]["skill_override"] = {
+                "name": skill_override.name,
+                "content": skill_override.content,
+            }
+        return payload
 
     async def call(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None = None,
+        skill_override: SkillOverride | None = None,
     ) -> AgentResponse:
-        payload = self.build_payload(question, correlation_id, user_id, tags)
+        payload = self.build_payload(
+            question, correlation_id, user_id, tags, skill_override
+        )
         started = time.monotonic()
 
         async with httpx.AsyncClient(

@@ -75,16 +75,21 @@ function Section({ title, count, children }) {
 // vertical span list with suspects marked (confidence high/med/low). Distinguishes
 // "generating (retrying)" from "no trace" (§6.12 / §7.1 #5) — and from "the trace
 // store rejected us", which used to be shown as "generating" forever.
+//
+// `playground` switches the two places that assume a graded eval question
+// (§10.5): an attempt may have no expected answer at all, so promising an
+// "Expected answer" row and explaining that diagnosis follows an incorrect
+// verdict would both be false there.
 export default function SpanList({
   trace, refreshing, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing,
-  onRetryTrace,
+  onRetryTrace, playground = false, emptyHint,
 }) {
   if (!trace) {
     return (
       <div className="col">
         <h4>Trace &amp; diagnosis</h4>
         <div className="notflagged">
-          {refreshing ? "Loading…" : "Select a question."}
+          {refreshing ? "Loading…" : emptyHint || "Select a question."}
         </div>
       </div>
     );
@@ -126,6 +131,21 @@ export default function SpanList({
     diagnosis = (
       <div className="banner diagnosis muted">Correct answer — no diagnosis generated.</div>
     );
+  } else if (playground) {
+    // In the playground the switch is the expected reasoning process, not the
+    // verdict: with one supplied there is a diagnosis, without one there is
+    // nothing to compare the trace against.
+    diagnosis = reDiagnoseButton ? (
+      <div className="banner diagnosis">
+        No diagnosis for this attempt yet.
+        <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>
+      </div>
+    ) : (
+      <div className="banner diagnosis muted">
+        No diagnosis — add an expected reasoning process to have the trace
+        compared against it.
+      </div>
+    );
   } else if (trace.verdict === "incorrect" && reDiagnoseButton) {
     diagnosis = (
       <div className="banner diagnosis">
@@ -151,8 +171,15 @@ export default function SpanList({
       </h4>
 
       {/* Above the sections, because it explains all of them at once. */}
+      {/* In the playground the message is already a whole sentence — and one of
+          them describes a deliberate stop, which "hit a problem" would
+          misrepresent — so it stands on its own. */}
       {trace.error_message && (
-        <div className="banner error-banner">✕ This question failed: {trace.error_message}</div>
+        <div className="banner error-banner">
+          {playground
+            ? trace.error_message
+            : `✕ This question failed: ${trace.error_message}`}
+        </div>
       )}
 
       {/* What the agent answered, next to what it was graded against. With a real
@@ -165,8 +192,20 @@ export default function SpanList({
             {trace.verdict && <span className={`verdict ${trace.verdict}`}>{trace.verdict}</span>}
           </div>
           <pre>{trace.agent_response || "— (no answer recorded)"}</pre>
-          <div className="label">Expected answer</div>
-          <pre>{trace.ground_truth_response || "—"}</pre>
+          {/* An attempt with no expected answer was never graded, so a row
+              promising one with a dash in it would misrepresent the attempt
+              rather than describe it. */}
+          {(!playground || trace.ground_truth_response) && (
+            <>
+              <div className="label">Expected answer</div>
+              <pre>{trace.ground_truth_response || "—"}</pre>
+            </>
+          )}
+          {playground && !trace.ground_truth_response && (
+            <div className="hint">
+              No expected answer given — this attempt was not judged.
+            </div>
+          )}
           {trace.judge_comment && (
             <>
               <div className="label">Judge</div>

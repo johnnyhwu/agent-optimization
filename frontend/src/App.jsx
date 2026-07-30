@@ -3,6 +3,7 @@ import { api, getSubject, setSubject } from "./api.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
+import Playground from "./components/Playground.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
 import ThemeToggle from "./components/ThemeToggle.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
@@ -14,12 +15,18 @@ function avatarColor(name) {
   return AVATAR_COLORS[h];
 }
 
-// In-app view state machine for the three tiers (§6.13).
+// In-app view state machine: two tabs, and within the eval-set tab the three
+// tiers of §6.13. `view` stays exactly what it was — the playground is a sibling
+// of that whole state machine, not a fourth tier, because it belongs to no eval
+// set (§10.5).
 export default function App() {
   const [subject, setSubj] = useState(getSubject());
   const [users, setUsers] = useState([subject]);
   const [me, setMe] = useState(null);
+  const [tab, setTab] = useState("sets");
   const [view, setView] = useState({ tier: "sets" });
+  // A question handed over from the three-column view, to prefill the composer.
+  const [playgroundSeed, setPlaygroundSeed] = useState(null);
 
   useEffect(() => {
     api.users().then((r) => setUsers(r.users)).catch(() => {});
@@ -42,7 +49,7 @@ export default function App() {
           <div className="logo">AE</div>
           <div>
             <h1>Agent Eval</h1>
-            <div className="sub">Trace error-localization · Stage 1</div>
+            <div className="sub">Trace error-localization · Stage 1 + playground</div>
           </div>
         </div>
         <div className="userbox">
@@ -59,26 +66,56 @@ export default function App() {
         </div>
       </div>
 
-      <Breadcrumb view={view} setView={setView} />
+      <div className="tabbar">
+        <div className="segmented">
+          <button
+            className={tab === "sets" ? "active" : ""}
+            onClick={() => setTab("sets")}
+          >
+            Eval Sets
+          </button>
+          <button
+            className={tab === "playground" ? "active" : ""}
+            onClick={() => setTab("playground")}
+          >
+            Playground
+          </button>
+        </div>
+      </div>
+
+      {tab === "sets" && <Breadcrumb view={view} setView={setView} />}
 
       <div className="container">
-        {view.tier === "sets" && (
+        {tab === "playground" && (
+          <Playground
+            subject={subject}
+            seed={playgroundSeed}
+            onSeedApplied={() => setPlaygroundSeed(null)}
+          />
+        )}
+        {tab === "sets" && view.tier === "sets" && (
           <EvalSetList key={subject} onOpen={(es) => setView({ tier: "runs", es })} subject={subject} />
         )}
-        {view.tier === "runs" && (
+        {tab === "sets" && view.tier === "runs" && (
           <RunHistory
             evalSet={view.es}
             myRole={roleFor(view.es.id)}
             onOpenRuns={(runIds, mode, lastN) => setView({ tier: "detail", es: view.es, runIds, mode, lastN })}
           />
         )}
-        {view.tier === "detail" && (
+        {tab === "sets" && view.tier === "detail" && (
           <RunDetail
             evalSet={view.es}
             runIds={view.runIds}
             mode={view.mode}
             lastN={view.lastN}
             myRole={roleFor(view.es.id)}
+            // Carrying a question over is the whole reason the playground exists:
+            // the hypothesis being tested was formed while looking at this trace.
+            onSendToPlayground={(seed) => {
+              setPlaygroundSeed(seed);
+              setTab("playground");
+            }}
           />
         )}
       </div>

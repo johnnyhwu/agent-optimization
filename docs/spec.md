@@ -15,8 +15,9 @@
 > |---|---|---|
 > | **§1–§5** | 原始背景、對 Langfuse 能力邊界的查證、找出的風險、定案的架構決策 | **設計脈絡**。說明「為什麼是這樣設計」，不描述程式碼 |
 > | **§6** | 分階段藍圖與 Stage 1 的逐項定案 | **設計意圖**。多數已實作，但細節有出入 |
-> | **§7–§8** | 驗收清單與開放問題 | 部分已完成，狀態以 §9 為準 |
-> | **§9** | **Stage 1 實作現況（As-Built）** | **唯一權威的「現在到底做了什麼」** |
+> | **§7–§8** | 驗收清單與開放問題 | 部分已完成，狀態以 §9 / §10 為準 |
+> | **§9** | **Stage 1 實作現況（As-Built）** | **唯一權威的「Stage 1 到底做了什麼」** |
+> | **§10** | **Stage 4：Playground 實作現況（As-Built）** | **唯一權威的「Playground 到底做了什麼」**。這是原三階段藍圖之外新增的階段 |
 >
 > **§1–§8 與 §9 衝突時，一律以 §9 為準。** §1–§8 刻意保留原貌（包含後來被推翻的假設），
 > 因為那是理解設計取捨的脈絡；但它們**不是**目前程式碼的描述。
@@ -1589,3 +1590,228 @@ Agent 回答、期望答案、judge 評語、診斷、span 列表，五段內容
   role 色籤、Pretty|JSON 切換兩個區塊都可用、那個刻意超長的 tool 結果在自己的框內捲動而
   **畫面上再也沒有 "truncated" 字樣**；`generating` 橫幅出現在 Trace 分區內、正確題目的 Diagnosis
   分區顯示「Correct answer — no diagnosis generated.」；light/dark 兩個主題都確認過。
+
+---
+
+## 10. Stage 4：Playground 實作現況（As-Built）
+
+> 本節與 §9 同性質：描述**已經寫進 codebase 且可執行**的東西，是 Playground 的權威現況來源。
+>
+> **Stage 4 不在 §6.6 的三階段藍圖裡。** 它是後來新增的階段，補的是 Stage 1 動線末端的一個缺口：
+> 開發者在三欄詳情看完診斷、心裡有了「如果 skill 這樣改應該就會對」的假設之後，**沒有任何便宜的
+> 方式驗證那個假設**——唯一的路是改 eval set、跑一整個 run。Playground 就是那條便宜的路：
+> **一題、一組設定、一份可改的 skill，按一次就跑**。
+>
+> **一句話現況**：真實的 UI + 真實的 orchestration；**完全不落庫**（沒有 migration）；
+> 新增第五個 seam（skill 目錄），fake/real 兩套都寫好，預設 fake。
+> 判分與診斷**都是選填的**：給了期望答案才判分，給了期望流程才診斷。
+
+### 10.1 範圍與刻意不做
+
+| 做了 | 沒做（刻意） |
+|---|---|
+| 單題即時試打：問題 → agent → trace → span 檢視 | **不落庫**：沒有 `playground_*` 表、沒有 migration |
+| per-request **skill override**（改 skill 重跑，不寫回） | **不寫回 agent server**（需版本控制 / rollback，§4.9 → Stage 3）|
+| 選填的 judge（期望答案）與 diagnosis（期望流程） | **不做「一按跑 N 次取多數」**（§6.5 的建議）——一次一次手動跑 |
+| 本 session 的 attempt 清單 + 切換 + clone 回編輯區 | **不做並排 diff / skill diff** |
+| 從三欄詳情把題目帶進 playground | **正式 eval run 不支援 skill override**（只有 playground 有）|
+| 中止進行中的 attempt | **不做多輪對話**（agent 是 stateless，`/execute` 是單次呼叫）|
+
+### 10.2 第五個 seam：`SkillClient`
+
+沿用既有四個 seam 一模一樣的圖樣（Protocol + fake + real + `*_IMPL` 開關），所以不接 agent server
+也能完整驗證這條路徑。
+
+| Seam | 介面 | 假實作 | 真實實作 |
+|---|---|---|---|
+| `SkillClient` | `list_skills() -> [SkillSummary]`、`get_skill(name) -> Skill` | `fake.py::FakeSkillClient`：三個罐頭 skill（`billing` / `reporting` 對齊 seed 的 skill tag）| `real/skills.py::HttpSkillClient`：`GET {base}/skills`、`GET {base}/skills/{name}` |
+
+- **`SKILL_IMPL=fake|real`**（預設 `fake`）。**共用 `AGENT_BASE_URL` / `AGENT_TIMEOUT_S`**——
+  skill 就住在回答問題的那台 server 上，多一個 base URL 只是多一個會設錯的地方。
+- **`build_seams(..., include_skill=False)`**：skill client 是**選擇性建構**的。
+  理由是隔離故障面——`SKILL_IMPL=real` 但沒設 base URL 會 raise，而 run 路徑完全不讀 skill 目錄；
+  若無條件建構，一個設錯的 skill seam 會讓**觸發 run 與看 trace 全部 500**。只有 playground 的
+  skill 端點會傳 `include_skill=True`。
+- **讀不到就要大聲**：目錄讀失敗回 **503 + 原因**，絕不回空陣列。
+  「這個 agent 沒有 skill」與「你的 URL 錯了」長得一樣的話，開發者會默默地憑記憶重打一份 skill，
+  然後測到錯的文字。空目錄本身是合法答案（agent 還沒有 skill）；**有內容但沒有一個有名字**才是失敗。
+- **解析寬容**（比照 `real/agent.py`）：目錄接受 `{"skills":[…]}` / `{"items":…}` / 裸 list /
+  純字串名；skill 內容接受 `content` / `text` / `skill` / `body`，或整個 body 就是純文字。
+
+### 10.3 資料落點：完全 ephemeral
+
+**`app/playground.py`** 有一個 module-level 的 `OrderedDict` store，key 是 attempt id。
+**沒有任何一張表、沒有任何 migration。**
+
+這是決定，不是省略：**attempt 是一次拋棄式實驗，run 是一筆歷史紀錄**。不落庫換到三件事——
+不用 migration、不用權限列、eval 歷史裡不會混進「這個 run 是真的嗎」的模稜兩可——代價只有一個，
+而 UI 直說了那一個：**backend 重啟就沒了**（含 `uvicorn --reload` 的自動重啟）。
+
+- **單 process 假設**：與既有的 in-memory SSE hub（§9.10）同一個限制，多 worker 部署要先有共享 bus。
+- **`PLAYGROUND_MAX_ATTEMPTS_PER_USER`（預設 20）**：上限不是裝飾。一個 attempt 握著一整條 trace，
+  真實 agent 是數百 KB 的 span body（§9.19 的取捨），無上限的記憶體 store 會一次一個 attempt 地
+  吃掉 process 的記憶體。**淘汰最舊的，但絕不淘汰還在跑的**——那會讓背景 task 變成孤兒。
+- **`get(attempt_id, subject)`**：別人的 attempt 一律 **404 而非 403**。scratch work 是私有的，
+  所以「某個 id 上是否存在一個 attempt」也不是別人該知道的事。
+
+### 10.4 判分與診斷都是選填的
+
+| 給了什麼 | 會發生什麼 |
+|---|---|
+| 只有問題 | agent → trace。**judge 與 diagnosis 完全不被呼叫**（不是呼叫了丟掉——那是帳單）|
+| ＋期望答案 | 加上 judge，出現 verdict / score / comment |
+| ＋期望流程 | 加上 diagnosis（§6.9 的線索式輸出，含 caveat）|
+| 只有期望流程、沒有期望答案 | **有診斷、沒有 verdict** |
+
+最後一列迫使一個契約變更：**`DiagnosisClient.diagnose(..., judge_verdict: Verdict | None)`**。
+`build_diagnosis_messages` 的第四塊**照樣存在**，只是改寫成「沒有判分：未提供期望答案，
+所以什麼都沒被評分。**不要假設最終答案是錯的**」。§6.9 的四塊順序一格都沒動。
+把整塊拿掉才是錯的做法——模型會自行推論「答案錯了」然後去找一個可能不存在的故障。
+
+診斷的觸發條件也與 run 不同：**run 只診斷 judge 判錯的題**，playground **只看有沒有期望流程**。
+一個描述了期望流程的開發者想知道 trace 在哪裡偏離，而他可能根本沒提供期望答案。
+
+### 10.5 端點與權限
+
+```
+GET    /playground/skills                       # 目錄；失敗 → 503 + 原因
+GET    /playground/skills/{name}                # 單一 skill；不存在 → 404
+POST   /playground/attempts                     # 建立 + 起背景 task，201（回 detail）
+GET    /playground/attempts                     # 我的 attempt 清單（新到舊，不分頁）
+GET    /playground/attempts/{id}                # 詳情，含 TraceView 形狀的 trace
+POST   /playground/attempts/{id}/cancel         # 非 running → 409
+DELETE /playground/attempts/{id}                # running → 409（先中止）
+POST   /playground/attempts/{id}/re-diagnose    # 無 trace / 無期望流程 → 409；模型失敗 → 502
+GET    /playground/attempts/{id}/progress       # SSE，?subject=
+```
+
+- **權限**：`require_owner` / `require_reader` 都宣告 `eval_set_id: uuid.UUID = Path(...)`，
+  所以在沒有 eval set 的路徑上**用不上**。規則改為 `current_subject` + 「attempt 屬於建立者」。
+- **清單不分頁**：store 本來就有 per-subject 上限（§10.3），數量上限是結構保證的。
+- **回傳 trace 時直接沿用既有的 `TraceView`**（`schemas.py`）——這是整個整合最省的一步：
+  前端 `SpanList` / `SpanDetail` / `SpanPayload` **零修改**就能渲染，連 §9.19 的結構化 span
+  渲染、五種 `trace_state` 橫幅、診斷/caveat 橫幅全部免費繼承。
+- `TraceView` **新增 `ground_truth_reasoning`**（`results.py` 也一併回傳）：三欄詳情要把題目
+  「帶進 playground」時，期望流程得跟著走。
+- **金鑰只進不出**，與 run 同一條規則：`PlaygroundAttempt.secrets` 沒有任何 response model
+  裝得下它。「借用舊 run 的金鑰」那條規則（`runs.py::_resolve_secrets`）**不適用**——
+  playground 不落庫、也沒有 run 可借，改由前端在該 browser session 的 state 裡留著，
+  所以一個 session 只需輸入一次。
+- **設定在觸發當下寫死**（`run_config.resolve`），與 §9.15 同理：attempt 記的是「有效值」，
+  所以事後看得出它到底用了什麼。
+
+### 10.6 兩處抽取（先做的重構，不是新功能）
+
+Playground 沒有複製既有邏輯，而是先把它抽出來。兩處都以既有測試當守門：
+
+| 新檔 | 內容 | 為什麼 |
+|---|---|---|
+| **`app/pipeline.py`** | 單題四步（`call_agent` / `call_judge` / `wait_for_trace` / `run_diagnosis`）＋ retry / timeout / cancel 三個政策（`with_retries` / `await_or_cancel` / `RunCancelled` / `clip`）| 這些原本全部**內嵌在 `orchestrator._process_question` 裡、與 DB 寫入交織**，沒有可重用的單題函式。**DB 寫入與 `_publish_progress` 留在 orchestrator 原地**——那些是「一個 run」的性質（一列一題、done/total 計數），playground 一個都沒有 |
+| **`app/services/trace_view.py`** | `resolve_trace_spans`（檢視路徑的短 poll）＋ `span_to_out`（`input_json` 優先、**檢視路徑不截斷**）| 原本已經是**兩份幾乎相同的複製**（`results.py` 與 `diagnosis.py`，§9.14 自己點出過），playground 會變第三份 |
+
+- `AgentClient.call` 的 `skill_override` 是**尾端、keyword、有預設**；而且 `pipeline.call_agent`
+  **只在有 override 時才把它傳出去**，所以一次 eval run 的呼叫（與 request body）與 §10 出現之前
+  **完全相同**，連沒長出這個參數的 AgentClient 實作都照樣能用。
+
+### 10.7 skill override：怎麼傳，以及**平台無法保證什麼**
+
+有 override 時，`real/agent.py` 在 `/execute` 的 body 加上（沒有時**整個 key 都不存在**）：
+
+```json
+{"message": "...", "metadata": {"trace_data": {...}, "skill_override": {"name": "billing", "content": "..."}}}
+```
+
+**agent server 端需要做的三件事**（repo 外的相依，全部是加法，不動既有契約）：
+
+1. `POST /execute` 讀 `metadata.skill_override`，有值時**這一次呼叫**改用該 skill 文字，
+   不落磁碟、不影響其他 request（§4.7 / §6.5 的 per-request override）。
+2. `GET /skills` → `{"skills":[{"name","description"}]}`
+3. `GET /skills/{name}` → `{"name","content"}`
+
+> ⚠️ **誠實的但書：平台無法自動驗證 agent 真的採用了 override。** 這與 §4.8 的非決定性是同一個
+> 問題。實務上唯一的證據是：注入的 skill 文字會出現在該次 trace **第一個 span 的 system message**
+> 裡，而 `SpanPayload.jsx` 就是照 chat-completions 形狀渲染的（§9.19），所以**看得到**。
+> 這句話寫在 UI 的 hint 裡，不假裝有自動驗證。
+> 假層也照同一條路徑做：`FakeAgentClient` 記下 override，`build_fake_trace` 把它接在 system
+> prompt 後面，所以純 Docker 的 demo 就能驗證「override 有沒有送到」這件事看起來是什麼樣子。
+
+### 10.8 前端
+
+- **頂層分頁**（`Eval Sets | Playground`）用既有的 `.segmented`（不需要新 CSS）。原本三層的 `view`
+  state 一動不動——playground 是那整個狀態機的**兄弟，不是第四層**，因為它不屬於任何 eval set。
+  麵包屑只在 eval 分頁顯示（否則 playground 會掉出一個誤導的孤兒「Eval Sets」麵包屑）。
+- **新元件**：`Playground` / `PlaygroundComposer` / `SkillEditor` / `AttemptList` / `PhaseSteps`，
+  以及從 `RunConfigDialog` **抽出**的 `RunConfigFields`（defaults 抓取 + fake seam 變灰 +
+  金鑰只進不出，兩邊共用而不是 fork 260 行）。
+- **照抄 §9.18(a) 的兩個機制**：開啟中的 attempt **存 id、每次 render 重新查**；
+  **指紋**（`phase|verdict|status|trace_ready|has_analysis` + nonce）驅動 trace 重抓，
+  事件驅動、不輪詢、重抓不清空畫面、只在換 attempt 或診斷首次出現時才跳 suspect。
+- **`PhaseSteps` 而非 `RunProgress`/`RunStatusBar`**：後兩者是**聚合形狀**的（0/1 的長條、
+  total=1 的堆疊長條都沒有意義）。單題要的是「四個呼叫裡現在卡在哪一個」。
+  不適用的階段**畫刪除線而不是隱藏**——那是一個選擇而非還在等待，而且加上期望答案時整排不該變形。
+- **`SpanList` 加 `playground` prop**：它本身與 run/result 幾乎零耦合，但有兩處假設了「被評分過的
+  eval 題目」——無條件 render「Expected answer」（缺值顯示 `—`），以及診斷區的 fallback 文案寫
+  「a question is diagnosed once it has been judged incorrect」。在 playground 兩句都是假話。
+- **`.three` 的高度**：原本硬編碼 `calc(100vh - 210px)`。新增分頁條改變了**所有既有頁面**的
+  chrome 高度，所以改成 `var(--chrome-h, 320px)`；**playground 則完全不用視窗推導的高度**
+  （`height: 62vh`）——它的 composer 展開兩個面板時高度會變三倍，任何固定減法都會在某個狀態下
+  裁切或留白。
+
+### 10.9 設定新增
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| **`SKILL_IMPL`** | `fake` | 第五個 seam。**只讀不寫、風險最低，可以最先開**（§10.10）|
+| **`PLAYGROUND_MAX_ATTEMPTS_PER_USER`** | `20` | 記憶體 store 的 per-subject 上限（§10.3）|
+| `fake_config.SKILL_FETCH_LATENCY_S` | `0.15` | 假目錄的延遲。刻意很短——它在開發者打字時被讀取，該像讀本機檔案 |
+
+`make preflight`（`app/check_integrations.py`）多一個 `skill` 檢查；`GET /run-config/defaults`
+的 `impls` 多一個 `skill`，所以 UI 能標示「這些 skill 是罐頭的」。
+
+### 10.10 建議的帶起順序（接在 §9.15 的表之前）
+
+| 步驟 | 設定 | 這一步該看到什麼 |
+|---|---|---|
+| **0** | `SKILL_IMPL=real` + `AGENT_BASE_URL` | Playground 的下拉出現**真實的** skill 名稱與內容。只讀、無副作用，是風險最低的一步 |
+| 1–4 | 同 §9.15 | |
+| 5 | agent server 支援 `metadata.skill_override` | 注入的 skill 文字出現在真實 Langfuse trace 第一個 span 的 system message 裡 |
+
+### 10.11 測試與驗證現況
+
+**單元測試**：新增 **54 個**（總計 **170 個通過 + 11 skipped**）。playground 不碰 DB，
+所以新測試**不需要 `TEST_DATABASE_URL`**，`make test` 維持不需 DB 也不需網路。
+
+- `tests/test_skill_client.py`（13）：目錄的四種 body 形狀、空目錄合法 vs 無名字則失敗、
+  4xx/5xx 帶狀態碼與 body、transport 錯誤帶 host、skill 文字的三種鍵、缺 base URL 的訊息、
+  逐 attempt base URL 覆寫 env。
+- `tests/test_playground.py`（39）：四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、
+  **沒填期望流程 → diagnosis 呼叫次數為 0**（斷言呼叫次數而非「verdict 是 None」——後者在
+  「呼叫了但丟掉」的情況下也會通過，而那是一筆帳單）；`judge_verdict=None` 時 prompt 第四塊
+  說「未判分」且四塊順序不變；skill override 傳到 agent；agent 失敗 / judge 失敗 / diagnosis 失敗
+  / trace store 失敗四種政策；**中止會放棄進行中的 agent 呼叫**（以 30s stub + `wait_for` 2s 斷言）；
+  中止時保留已拿到的答案；SSE 五個事件與指紋欄位；store 上限淘汰最舊**但不淘汰還在跑的**；
+  跨 subject 404；金鑰不外流的**值層級**斷言；五種 `trace_state`；檢視路徑不截斷。
+- `tests/test_agent_client.py` **+2**：有 override 時 `metadata.skill_override` 出現、
+  **沒有時整個 key 不存在且 metadata 只有 `trace_data`**（既有契約的迴歸守門）。
+- **`test_results.py` / `test_judge_and_diagnosis.py` 一行未改且全過**——這是兩處抽取
+  （§10.6）沒有改變行為的守門證據。`test_orchestrator.py` 只改了兩處符號引用
+  （`orchestrator._with_retries` → `pipeline.with_retries`，函式搬家），18 個斷言一個沒動。
+
+**真瀏覽器端到端**（真 Postgres 16 + Playwright/Chromium，**33 項檢查全通過、
+無任何 console / page error**）：
+- 既有動線迴歸：卡片 → run 歷史 → 三欄詳情，**三欄沒有被裁切、頁面不再垂直捲動**
+  （`--chrome-h` 改動的風險面）。
+- 三欄詳情的「Try this in the playground」把問題／期望答案／期望流程／該 run 的設定一起帶過去，
+  且期望欄位面板**帶著值抵達時自動是展開的**。
+- skill 目錄載入 → 選 `billing` → 內容帶出 → 改文字 → 出現 `edited` 標記。
+- 送出後**留在原地不做任何切換**：phase stepper 依序推進，中欄自己長出答案 → verdict → span 列表
+  → 診斷（這一項直接驗證了指紋重抓機制）。
+- **改過的 skill 文字出現在 span payload 裡**（§10.7 的那個唯一證據），
+  且畫面上沒有任何 "truncated" 字樣。
+- 只有問題的 attempt：judge 與 diagnosis 兩個階段畫刪除線，中欄說「未提供期望答案，此 attempt
+  未被判分」與「加上期望流程才會產生診斷」，而不是顯示一個空的期望答案。
+- 執行中按停止 → 立刻停；clone 回填編輯區；light/dark 兩個主題都確認過。
+
+> ⚠️ **與 §9.16 相同的但書**：以上全部在 **fake 模式**下驗證。`SKILL_IMPL=real` 的
+> `HttpSkillClient` 只有 respx 單元測試，**沒有對接過真正的 agent server**；
+> `metadata.skill_override` 也還沒有任何 agent server 讀它（§10.7 的三件事都還沒做）。

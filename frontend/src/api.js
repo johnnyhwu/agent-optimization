@@ -86,4 +86,18 @@ export const api = {
     req("POST", `/eval-sets/${id}/results/${resultId}/re-diagnose`),
   progressUrl: (id, runId) =>
     `${BASE}/eval-sets/${id}/runs/${runId}/progress?subject=${encodeURIComponent(subject)}`,
+
+  // --- Playground (§10). Attempts live in the backend's memory, not the DB, so
+  // there is nothing to paginate and a backend restart empties the list.
+  listSkills: () => req("GET", "/playground/skills"),
+  getSkill: (name) => req("GET", `/playground/skills/${encodeURIComponent(name)}`),
+  listAttempts: () => req("GET", "/playground/attempts"),
+  createAttempt: (payload) => req("POST", "/playground/attempts", payload),
+  getAttempt: (attemptId) => req("GET", `/playground/attempts/${attemptId}`),
+  cancelAttempt: (attemptId) => req("POST", `/playground/attempts/${attemptId}/cancel`),
+  deleteAttempt: (attemptId) => req("DELETE", `/playground/attempts/${attemptId}`),
+  reDiagnoseAttempt: (attemptId) =>
+    req("POST", `/playground/attempts/${attemptId}/re-diagnose`),
+  attemptProgressUrl: (attemptId) =>
+    `${BASE}/playground/attempts/${attemptId}/progress?subject=${encodeURIComponent(subject)}`,
 };

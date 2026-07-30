@@ -95,13 +95,26 @@ def format_spans(spans: list[Span]) -> str:
 
 
 def build_diagnosis_messages(
-    spans: list[Span], ground_truth_reasoning: str, judge_verdict: Verdict
+    spans: list[Span], ground_truth_reasoning: str, judge_verdict: Verdict | None
 ) -> list[dict]:
     """§6.9: four blocks, fixed order — task framing (system), expected process,
-    truncated trace, judge outcome."""
-    judge_block = f"The judge marked this answer **{judge_verdict.verdict}**."
-    if judge_verdict.comment:
-        judge_block += f'\nJudge comment: "{judge_verdict.comment}"'
+    truncated trace, judge outcome.
+
+    The fourth block stays in place when there is no verdict (the playground
+    allows an expected process with no expected answer, §10.4). Saying "nothing
+    was graded" is not the same as omitting the block: without it the model is
+    left to infer whether the answer was wrong, and it will assume it was.
+    """
+    if judge_verdict is None:
+        judge_block = (
+            "No judgement was made: no expected answer was supplied, so nothing "
+            "was graded. Do not assume the final answer was wrong — compare the "
+            "trace against the expected process above and report where it diverges."
+        )
+    else:
+        judge_block = f"The judge marked this answer **{judge_verdict.verdict}**."
+        if judge_verdict.comment:
+            judge_block += f'\nJudge comment: "{judge_verdict.comment}"'
 
     user = (
         "# Expected reasoning process\n"

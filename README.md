@@ -1,16 +1,22 @@
-# Agent Eval — Stage 1 POC
+# Agent Eval — Stage 1 POC + Playground
 
 A runnable end-to-end demo of **Stage 1** from [`docs/spec.md`](docs/spec.md)
 (§6.6–§6.16, §7.1): upload an eval set, run an eval through a platform-owned
 orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
 jumps the UI straight to the suspect span with its input/output/token detail.
 
+Plus the **Playground** (spec §10) — a second tab where one ad-hoc question goes
+to the agent with an **editable skill**, so the hypothesis you form while reading
+a failed trace can be tested without editing an eval set and running the whole
+thing. See [The playground](#the-playground-10).
+
 Every external dependency sits behind a swappable interface with **two
 implementations**: a fake one with realistic latency, and a real one (HTTP agent
-server, LLM judge, LLM diagnosis, Langfuse trace fetch). All four default to
-fake, so the demo runs on nothing but Docker; each can be switched to real
-independently — see [Going from fake to real](#going-from-fake-to-real). The app
-DB schema is the real thing, created by Alembic migrations.
+server, LLM judge, LLM diagnosis, Langfuse trace fetch, agent skill catalogue).
+All five default to fake, so the demo runs on nothing but Docker; each can be
+switched to real independently — see
+[Going from fake to real](#going-from-fake-to-real). The app DB schema is the
+real thing, created by Alembic migrations.
 
 > **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
 > re-labeling, SkillOpt, skill write-back, annotation score sync,
@@ -18,7 +24,7 @@ DB schema is the real thing, created by Alembic migrations.
 > also not done — the trace seam reads only.
 
 **Contents** — [The problem](#the-problem) · [How it works](#how-it-works) ·
-[Life of a run](#life-of-a-run) · [Stack](#stack) ·
+[Life of a run](#life-of-a-run) · [The playground](#the-playground-10) · [Stack](#stack) ·
 [Run it](#run-it-one-command) · [Fake → real](#going-from-fake-to-real) ·
 [Trying the flows](#trying-the-flows) · [Where things live](#where-the-important-pieces-live) ·
 [API](#api-surface) · [Langfuse read strategies](#langfuse-read-strategies-and-the-events-table-error) ·
@@ -128,6 +134,51 @@ treated as a pass. A diagnosis failure leaves the verdict intact. An unexpected
 error still finalizes the run and still closes the SSE stream — a run is never
 left stuck in `running`.
 
+## The playground (§10)
+
+The diagnosis tells you *where* a trace went wrong. The usual next thought is
+"if the skill said X instead, this would have worked" — and before the playground
+the only way to test that was to edit an eval set and run the whole thing. The
+**Playground** tab is the cheap path: one question, one editable skill, one
+button.
+
+- **Only the question is required.** The two ground-truth fields are switches, not
+  paperwork: an **expected answer** turns judging on, an **expected reasoning
+  process** turns diagnosis on. With neither, you get the answer and the trace —
+  which is often all you wanted.
+- **Skill override.** Pick one of the agent's skills, edit its text, and it is sent
+  with *this one call* as `metadata.skill_override`. Nothing is written back to
+  the agent server.
+- **Attempts are not saved.** They live in the backend's memory (capped per user),
+  so a backend restart clears the list. That is deliberate — an attempt is scratch
+  work, a run is a record — and it means no migration and nothing to clean up.
+- **Iterating.** The left column lists this session's attempts; **Clone** copies an
+  attempt's question, skill text and settings back into the composer so the next
+  attempt differs by exactly the one thing you are testing. There is no automatic
+  "did it improve" — LLMs have temperature, so pressing the button twice is the
+  honest comparison (spec §4.8).
+- **Coming from a failed question:** the three-column view has a *"Try this in the
+  playground"* link that carries the question, both ground-truth fields and that
+  run's endpoints over.
+
+> **The platform cannot verify that the agent honoured your override.** The one
+> piece of evidence is that the injected skill text shows up in the trace's first
+> span system message, which the span view renders — so you can see it. The UI
+> says as much rather than implying a check that does not exist.
+
+Three things are needed on the **agent server** for the real path (all additive):
+
+```
+POST /execute        also reads metadata.skill_override = {"name", "content"},
+                     using that text for this call only and never persisting it
+GET  /skills         -> {"skills": [{"name", "description"}]}
+GET  /skills/{name}  -> {"name", "content"}
+```
+
+With `SKILL_IMPL=fake` (the default) the catalogue is three canned skills, and the
+picker says so — so the whole flow, including seeing an override appear in a span,
+is demonstrable on nothing but Docker.
+
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
   progress. Containerized; Python deps installed with **uv**.
@@ -182,8 +233,9 @@ make down       # docker compose down
 
 ## Going from fake to real
 Out of the box every external dependency is faked, so the demo runs with nothing
-but Docker. The four seams of §9.2 each have their own switch, so you can bring
-them up **one at a time** — a real agent while the judge is still fake, and so on.
+but Docker. The five seams (§9.2, §10.2) each have their own switch, so you can
+bring them up **one at a time** — a real agent while the judge is still fake, and
+so on.
 
 | env var | seam | what `real` means |
 |---|---|---|
@@ -191,6 +243,7 @@ them up **one at a time** — a real agent while the judge is still fake, and so
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | §6.9 clue-style diagnosis over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
+| `SKILL_IMPL` | `SkillClient` | read the agent's skills for the playground: `GET {AGENT_BASE_URL}/skills` and `/skills/{name}` (§10.2). Read-only, so it is the cheapest one to switch on first |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
@@ -218,6 +271,9 @@ while the endpoint they authenticate against is unchanged.
 # minimum for "upload a real eval set, run it, see real results"
 AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=...
+
+# the playground's skill catalogue — read-only, so this one is safe to try first
+SKILL_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 ```
 Then check the wiring before spending a run on it:
 ```bash
@@ -232,7 +288,10 @@ trace it just caused. The full metadata shape sent on every call is:
 {"trace_data": {"trace_id": "...", "session_id": "...", "user_id": "...", "tags": ["eval_<eval_set_name>"]}}
 ```
 `trace_id` and `session_id` are the same value (each question is its own
-correlation unit); `user_id` is the subject who triggered the run.
+correlation unit); `user_id` is the subject who triggered the run. A playground
+attempt sends the same shape with `tags: ["playground"]`, plus
+`metadata.skill_override` when a candidate skill was supplied
+([the playground](#the-playground-10)) — an eval run never sends that key at all.
 
 Notes:
 - A question that fails (agent unreachable, judge unparseable, timeout) is
@@ -260,6 +319,13 @@ Notes:
   allowed. (Backend default identity is `FAKE_USER_SUBJECT`, default `alice`.)
 - **Three tiers (§6.13):** cards → run history → 3-column detail, with a
   breadcrumb for one-click back.
+- **Playground (§10):** the second tab. Ask anything and watch the phase steps
+  (Agent → Judge → Trace → Diagnosis) advance **without leaving the page**; the
+  stages you gave no ground truth for are struck through rather than left looking
+  pending. Pick `billing` under *Skill override*, edit the text, ask again, then
+  open the first span — the edited text is there in the system message, which is
+  the only evidence that an override took effect. From a failed question, *"Try
+  this in the playground"* carries everything over.
 - **Finding an eval set:** the toolbar above the cards searches by name, filters
   by a custom metadata key/value, and sorts by newest or name. All of it runs in
   SQL, so it searches every set you can see — not just the pages already loaded.
@@ -327,10 +393,16 @@ Notes:
 | Indexes for the two list endpoints | `backend/alembic/versions/0005_list_indexes.py` |
 | ORM models | `backend/app/models.py` |
 | Request/response models (incl. `Page`) | `backend/app/schemas.py` |
-| **The four swappable seams** (Protocols) | `backend/app/integrations/base.py` |
+| **The five swappable seams** (Protocols) | `backend/app/integrations/base.py` |
 | **Fake impls** (each `# REPLACE WITH REAL IMPL`) | `backend/app/integrations/fake.py` |
-| **Real impls** (agent / judge / Langfuse / diagnosis) | `backend/app/integrations/real/` |
+| **Real impls** (agent / judge / Langfuse / diagnosis / skills) | `backend/app/integrations/real/` |
 | Which impl backs each seam + per-run clients (`build_seams`) | `backend/app/integrations/__init__.py` |
+| **The four per-question steps** + retry/timeout/cancel policy | `backend/app/pipeline.py` |
+| **Playground store + executor** (in memory, no tables) | `backend/app/playground.py` |
+| Playground endpoints (creator-only, 404 for others) | `backend/app/routers/playground.py` |
+| Playground UI (composer, attempts, phase steps) | `frontend/src/components/Playground.jsx` and `PlaygroundComposer/SkillEditor/AttemptList/PhaseSteps.jsx` |
+| Config fields shared by the run dialog and the playground | `frontend/src/components/RunConfigFields.jsx` |
+| View-path trace read + span mapping (never truncated) | `backend/app/services/trace_view.py` |
 | Run-config defaults + trigger-time resolution | `backend/app/services/run_config.py` |
 | Run-config dialog / read-only view | `frontend/src/components/RunConfigDialog.jsx`, `RunConfigView.jsx` |
 | Judge + diagnosis prompts (§6.9 contract) | `backend/app/integrations/real/prompts.py` |
@@ -369,12 +441,19 @@ list, with the authorization rule for each endpoint, is spec §9.5. In brief:
 | Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
 | Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
+| Playground | `GET /playground/skills`, `/skills/{name}`, `POST·GET /playground/attempts`, `GET·DELETE /playground/attempts/{id}`, `POST .../cancel`, `POST .../re-diagnose`, `GET .../progress` (SSE) |
 
 Authorization is a FastAPI dependency, not scattered per-endpoint: writes and
 re-diagnose require **owner**; reads and triggering a run accept **owner or
 viewer**; cancelling accepts an owner *or* whoever started that run. Identity
 comes from the `X-User-Subject` header (`?subject=` for SSE, which cannot set
 headers).
+
+The playground endpoints are outside that scheme, because an attempt belongs to no
+eval set: an attempt is visible only to the subject who created it, and someone
+else's is a **404 rather than a 403** — whether an attempt exists at a given id is
+not theirs to learn either. A 404 is also what you get after a backend restart
+dropped the in-memory store, and the UI says so in those words.
 
 `GET .../results/{rid}/trace` returns a `trace_state` of `ready`, `generating`
 (ingestion still landing), `not_started` (the agent hasn't been asked yet — no

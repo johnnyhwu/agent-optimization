@@ -5,6 +5,7 @@ import RunStatusBar from "./RunStatusBar.jsx";
 import SpanList from "./SpanList.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import { useToast } from "./Toast.jsx";
+import { IconSend } from "./icons.jsx";
 
 // Bottom tier (§6.13): three columns. Left = question list (per-mode incorrect),
 // middle = trace + diagnosis + caveat, right = span detail. Clicking a question
@@ -19,7 +20,9 @@ import { useToast } from "./Toast.jsx";
 // refetched whenever the fields that change it move (see `traceKey` below), so
 // the agent's answer, the verdict and the diagnosis appear as they happen
 // rather than on the next navigation.
-export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
+export default function RunDetail({
+  evalSet, runIds, mode, lastN, myRole, onSendToPlayground,
+}) {
   const toast = useToast();
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
@@ -38,6 +41,9 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
   const [runStatus, setRunStatus] = useState(null);
   const [cancelling, setCancelling] = useState(false);
   const [triggeredBy, setTriggeredBy] = useState(null);
+  // The run's own settings, so a question handed to the playground is retried
+  // against the endpoints it actually ran against rather than today's defaults.
+  const [runConfig, setRunConfig] = useState(null);
   const subject = getSubject();
 
   const activeResult = results?.find((r) => r.id === activeResultId) || null;
@@ -67,6 +73,7 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
       .then((run) => {
         setRunStatus(run.status);
         setTriggeredBy(run.triggered_by);
+        setRunConfig(run.config || null);
         setCancelling(Boolean(run.cancel_requested));
       })
       .catch(() => {});
@@ -248,6 +255,25 @@ export default function RunDetail({ evalSet, runIds, mode, lastN, myRole }) {
         />
       )}
       <p className="detail-meta">
+        {/* The handoff to the playground (§10.5). Offered on the open question
+            rather than per row: the hypothesis worth testing is formed after
+            reading a trace, not while scanning the list. */}
+        {onSendToPlayground && activeResult && (
+          <button
+            className="linkish"
+            style={{ marginRight: 10 }}
+            onClick={() =>
+              onSendToPlayground({
+                question: activeResult.question,
+                ground_truth_response: trace?.ground_truth_response || "",
+                ground_truth_reasoning: trace?.ground_truth_reasoning || "",
+                config: runConfig,
+              })
+            }
+          >
+            <IconSend size={12} /> Try this in the playground
+          </button>
+        )}
         {runIds.length} run(s) · incorrect mode: <strong>{mode === "last_n" ? `last-${lastN}` : mode}</strong>
         {runStatus && runStatus !== "running" && runIds.length === 1 && (
           <> · run <strong>{runStatus}</strong></>
