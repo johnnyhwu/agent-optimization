@@ -273,7 +273,13 @@ select { cursor: pointer; }
 
 /* ---- three-column detail ---- */
 .detail-meta { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
-.three { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 14px; height: calc(100vh - 210px); }
+/* The subtraction is everything above the columns: topbar, tab bar, breadcrumb,
+   the meta line and the run status bar. A variable rather than a literal because
+   the tab bar changed that total for every page at once, and because the
+   playground opts out of viewport-derived height entirely (see
+   .playground-three) — its composer grows and shrinks as panels open, so no
+   fixed subtraction could be right for both. */
+.three { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 14px; height: calc(100vh - var(--chrome-h, 320px)); min-height: 360px; }
 .col { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; box-shadow: var(--shadow-1); }
 .col h4 {
   margin: 0; padding: 14px 16px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -624,6 +630,82 @@ select { cursor: pointer; }
   padding: 7px 12px; font-size: 11px; color: var(--muted);
   border-top: 1px solid var(--border); background: var(--panel-2);
 }
+
+/* ==== playground (§10) ==== */
+
+/* Tab strip between the topbar and the breadcrumb. Reuses .segmented, so it is a
+   layout wrapper only. */
+.tabbar { padding: 12px 24px 0; max-width: 1400px; margin: 0 auto; }
+
+/* The composer: question, skill override, and the two optional ground truths. */
+.composer {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px 12px; margin-bottom: 14px; box-shadow: var(--shadow-1);
+}
+.composer .field { margin-bottom: 10px; }
+.composer textarea.composer-question { min-height: 72px; font-family: var(--font); font-size: 14px; }
+.composer-toggles { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.composer-toggles .grow { flex: 1; }
+.composer-toggles > button.active { border-color: var(--accent); color: var(--accent); }
+.composer-toggles .count {
+  margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.composer-truth, .composer-config {
+  margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border);
+  animation: fadeIn 0.15s var(--ease);
+}
+.composer-truth { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .composer-truth { grid-template-columns: 1fr; } }
+.composer-truth textarea { min-height: 80px; }
+
+.skill-editor textarea.skill-text { min-height: 130px; }
+.skill-editor .badge { background: var(--amber-soft); color: var(--amber); margin-left: 6px; }
+.hint.error-text { color: var(--red); }
+
+/* A button that reads as a link: used for small inline actions inside prose. */
+button.linkish {
+  background: none; border: none; padding: 0; color: var(--accent);
+  font-size: 12px; font-weight: 600; box-shadow: none; gap: 4px;
+}
+button.linkish:hover { text-decoration: underline; }
+button.linkish:disabled { color: var(--muted); text-decoration: none; }
+
+/* Per-question progress. A stacked bar over a total of one says nothing; which of
+   the four calls is outstanding says everything. */
+.attempt-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 12px;
+}
+.phasesteps { display: flex; align-items: center; gap: 14px; font-size: 12px; }
+.phasestep { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.phasestep .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--panel-3);
+  border: 1px solid var(--border-strong); flex: none;
+}
+.phasestep.done { color: var(--text); }
+.phasestep.done .dot { background: var(--green); border-color: transparent; }
+.phasestep.active { color: var(--accent); font-weight: 600; }
+.phasestep.active .dot { background: var(--accent); border-color: transparent; animation: pulse 1.1s ease-in-out infinite; }
+/* Struck through rather than hidden: a stage that does not apply was a choice,
+   not something still pending, and the row must not change shape when the
+   developer adds an expected answer. */
+.phasestep.skipped { text-decoration: line-through; opacity: 0.55; }
+.phasestep.failed { color: var(--red); font-weight: 600; }
+
+.attempt-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.attempt-tags .tag.muted { opacity: 0.7; }
+.attempt-actions { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.attempt-actions button { padding: 4px 6px; font-size: 11px; }
+.attempt-footnote {
+  padding: 12px 14px; font-size: 11px; color: var(--muted); line-height: 1.5;
+  border-top: 1px solid var(--border);
+}
+/* A fraction of the viewport rather than "what's left of it": the composer above
+   these columns triples in height when the expected-answer and settings panels
+   open, so any fixed subtraction would either clip the columns or leave a gap
+   depending on what happens to be expanded. The page scrolls to reach them; each
+   column still scrolls internally. */
+.playground-three { height: 62vh; min-height: 420px; }
 
 /* ---- empty / loading ---- */
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }

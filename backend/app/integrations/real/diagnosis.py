@@ -86,7 +86,8 @@ class LlmDiagnosisClient:
         self.llm = llm
 
     async def diagnose(
-        self, trace: Trace, ground_truth_reasoning: str, judge_verdict: Verdict
+        self, trace: Trace, ground_truth_reasoning: str,
+        judge_verdict: Verdict | None,
     ) -> dict:
         spans = truncate_spans(trace.spans)
         messages = build_diagnosis_messages(spans, ground_truth_reasoning, judge_verdict)

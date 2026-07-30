@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from app import cancellation, orchestrator
+from app import cancellation, orchestrator, pipeline
 from app.integrations import Seams
 from app.integrations.base import AgentResponse, Trace, Verdict
 from app.models import Question, QuestionResult, Run, SpanAnalysis
@@ -324,7 +324,7 @@ async def test_retries_are_bounded_and_then_give_up(configure):
         raise asyncio.TimeoutError()
 
     with pytest.raises(asyncio.TimeoutError):
-        await orchestrator._with_retries(always_times_out, 2, "test call")
+        await pipeline.with_retries(always_times_out, 2, "test call")
     assert attempts["n"] == 3  # initial attempt + 2 retries
 
 
@@ -337,7 +337,7 @@ async def test_retry_succeeds_on_a_later_attempt():
             raise ConnectionError("transient")
         return "ok"
 
-    assert await orchestrator._with_retries(flaky, 2, "test call") == "ok"
+    assert await pipeline.with_retries(flaky, 2, "test call") == "ok"
     assert attempts["n"] == 2
 
 

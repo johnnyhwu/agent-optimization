@@ -8,6 +8,7 @@ import httpx
 import pytest
 import respx
 
+from app.integrations.base import SkillOverride
 from app.integrations.real.agent import AgentHttpError, HttpAgentClient
 
 URL = "https://agent.test"
@@ -52,6 +53,39 @@ async def test_tags_default_to_empty_list(client):
 
     body = json.loads(respx.calls[0].request.content)
     assert body["metadata"]["trace_data"]["tags"] == []
+
+
+@respx.mock
+async def test_no_skill_override_key_without_one(client):
+    """An eval run's request body must be what it always was (§10.7).
+
+    The playground is the only caller that sends an override, so its existence
+    must not add a key — or change one — for every other call.
+    """
+    respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
+    await client.call("q", "corr-1", "bob", ["eval_billing"])
+
+    metadata = json.loads(respx.calls[0].request.content)["metadata"]
+    assert "skill_override" not in metadata
+    assert set(metadata) == {"trace_data"}
+
+
+@respx.mock
+async def test_skill_override_travels_in_metadata(client):
+    respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
+    await client.call(
+        "q", "corr-1", "bob", ["playground"],
+        skill_override=SkillOverride(name="billing", content="# Billing (edited)"),
+    )
+
+    metadata = json.loads(respx.calls[0].request.content)["metadata"]
+    assert metadata["skill_override"] == {
+        "name": "billing",
+        "content": "# Billing (edited)",
+    }
+    # The correlation mechanism is untouched by the override riding along.
+    assert metadata["trace_data"]["trace_id"] == "corr-1"
+    assert metadata["trace_data"]["tags"] == ["playground"]
 
 
 @respx.mock

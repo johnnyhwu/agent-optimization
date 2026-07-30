@@ -5,7 +5,6 @@ Stage 1's only re-compute trigger. Viewer role is blocked by require_owner
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,29 +15,12 @@ from app.auth import require_owner
 from app.config import settings
 from app.db import get_session
 from app.integrations import build_seams
-from app.integrations.base import NotReady, Verdict
+from app.integrations.base import Verdict
 from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.schemas import AnalysisOut, SuspectOut
+from app.services.trace_view import resolve_trace_spans
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}", tags=["diagnosis"])
-
-
-async def _resolve_trace(correlation_id: str, trace_client):
-    """Poll the trace store until ingestion lands (§6.12). Short sleeps: this is
-    a request path, and a still-missing trace returns 409 for the user to retry.
-
-    Returns (trace_or_None, error_or_None) so the 409 can say *why* — "Langfuse
-    refused the key" and "ingestion is a few seconds behind" call for very
-    different reactions from the developer."""
-    for _ in range(settings.trace_poll_max_attempts):
-        try:
-            trace = await trace_client.fetch_trace(correlation_id)
-        except Exception as exc:  # noqa: BLE001 - reported, not raised
-            return None, f"{type(exc).__name__}: {exc}"
-        if not isinstance(trace, NotReady):
-            return trace, None
-        await asyncio.sleep(0.05)
-    return None, None
 
 
 @router.post("/results/{result_id}/re-diagnose", response_model=AnalysisOut)
@@ -62,7 +44,7 @@ async def re_diagnose(
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a server bug
         raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
 
-    trace, trace_error = await _resolve_trace(result.correlation_id, seams.trace)
+    trace, trace_error = await resolve_trace_spans(result.correlation_id, seams.trace)
     if trace is None:
         detail = (
             f"could not fetch the trace: {trace_error}"

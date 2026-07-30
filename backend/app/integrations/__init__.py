@@ -1,10 +1,10 @@
 """Integration seams (§6.15 external deps).
 
 Which implementation backs each seam is chosen per seam by the `*_IMPL` settings
-(`AGENT_IMPL`, `JUDGE_IMPL`, `TRACE_IMPL`, `DIAGNOSIS_IMPL`, each `fake` or
-`real`), so the real integrations can be brought up one at a time — a real agent
-while the judge is still fake, and so on. Everything downstream depends on the
-Protocols in `base.py` and never on a concrete class.
+(`AGENT_IMPL`, `JUDGE_IMPL`, `TRACE_IMPL`, `DIAGNOSIS_IMPL`, `SKILL_IMPL`, each
+`fake` or `real`), so the real integrations can be brought up one at a time — a
+real agent while the judge is still fake, and so on. Everything downstream
+depends on the Protocols in `base.py` and never on a concrete class.
 
 *Which endpoint* a real seam talks to is per run, not per process: the run
 carries its own base URLs, models and timeouts (chosen in the UI at trigger
@@ -30,24 +30,32 @@ from app.integrations.base import (
     AgentClient,
     DiagnosisClient,
     JudgeClient,
+    SkillClient,
     TraceClient,
 )
 from app.integrations.fake import (
     FakeAgentClient,
     FakeDiagnosisClient,
     FakeJudgeClient,
+    FakeSkillClient,
     FakeTraceClient,
 )
 
 
 @dataclass
 class Seams:
-    """The four clients one run executes against."""
+    """The clients one run — or one playground attempt — executes against.
+
+    `skill` has a default because an eval run never reads the skill catalogue:
+    only the playground does (§10). Callers that predate it keep working, and a
+    test can still build a Seams with just the seam it cares about.
+    """
 
     agent: AgentClient
     judge: JudgeClient
     trace: TraceClient
     diagnosis: DiagnosisClient
+    skill: SkillClient | None = None
 
 
 def _get(config: dict | None, key: str):
@@ -60,8 +68,18 @@ def _get(config: dict | None, key: str):
     return value
 
 
-def build_seams(config: dict | None = None, secrets: dict | None = None) -> Seams:
-    """Build the clients for one run. Blank config falls back to the environment."""
+def build_seams(
+    config: dict | None = None,
+    secrets: dict | None = None,
+    include_skill: bool = False,
+) -> Seams:
+    """Build the clients for one run. Blank config falls back to the environment.
+
+    `include_skill` is opt-in because a misconfigured skill seam must not be able
+    to break the eval path: `SKILL_IMPL=real` with no agent base URL raises, and
+    nothing in a run reads the skill catalogue. Only the playground asks for it,
+    and only the playground's skill endpoints answer for it.
+    """
     agent: AgentClient
     if settings.agent_impl == "real":
         from app.integrations.real.agent import HttpAgentClient
@@ -111,7 +129,19 @@ def build_seams(config: dict | None = None, secrets: dict | None = None) -> Seam
     else:
         trace = FakeTraceClient()
 
-    return Seams(agent=agent, judge=judge, trace=trace, diagnosis=diagnosis)
+    skill: SkillClient | None = None
+    if include_skill:
+        if settings.skill_impl == "real":
+            from app.integrations.real.skills import HttpSkillClient
+
+            skill = HttpSkillClient(
+                base_url=_get(config, "agent_base_url"),
+                timeout_s=_get(config, "agent_timeout_s"),
+            )
+        else:
+            skill = FakeSkillClient()
+
+    return Seams(agent=agent, judge=judge, trace=trace, diagnosis=diagnosis, skill=skill)
 
 
 __all__ = ["Seams", "build_seams"]

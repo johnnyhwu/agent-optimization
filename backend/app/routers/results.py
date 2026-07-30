@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,10 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_reader
-from app.config import settings
 from app.db import get_session
 from app.integrations import build_seams
-from app.integrations.base import NotReady
 from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.routers._helpers import load_run_verdicts
 from app.schemas import (
@@ -31,6 +28,7 @@ from app.schemas import (
     TraceView,
 )
 from app.services.aggregation import incorrect_by_mode, result_phase
+from app.services.trace_view import resolve_trace_spans, span_to_out
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}", tags=["results"])
 
@@ -130,29 +128,6 @@ async def list_results(
     return out
 
 
-async def _resolve_trace_spans(correlation_id: str, trace_client):
-    """Light poll of the trace store for the view path.
-
-    Returns (trace_or_None, error_or_None). The error is returned rather than
-    swallowed: an unreachable Langfuse, a rejected key and a trace that is still
-    being ingested all produce "no spans", and showing the same "still
-    generating" message for all three is indistinguishable from the platform
-    being broken.
-
-    Short sleeps on purpose: this runs inside a request, so it must not block for
-    the orchestrator's much longer ingestion backoff. If the trace still isn't
-    there the view falls back to the "generating" state and the user retries."""
-    for _ in range(settings.trace_poll_max_attempts):
-        try:
-            trace = await trace_client.fetch_trace(correlation_id)
-        except Exception as exc:  # noqa: BLE001 - reported, not raised
-            return None, f"{type(exc).__name__}: {exc}"
-        if not isinstance(trace, NotReady):
-            return trace, None
-        await asyncio.sleep(0.05)
-    return None, None
-
-
 @router.get("/results/{result_id}/trace", response_model=TraceView)
 async def get_trace(
     eval_set_id: uuid.UUID,
@@ -213,26 +188,15 @@ async def get_trace(
             # Fetched even when trace_ready is false: that flag only records what
             # the orchestrator managed at run time, and never retrying means a
             # misconfigured trace store shows "generating" forever.
-            trace, fetch_error = await _resolve_trace_spans(
+            trace, fetch_error = await resolve_trace_spans(
                 result.correlation_id, seams.trace
             )
             if trace is not None:
                 state = "ready"
-                for s in trace.spans:
-                    # Full bodies, structured where the trace store had structure.
-                    # §6.7 truncation stays on the diagnosis path (an LLM context
-                    # window is a real limit); applying it here only shredded the
-                    # evidence a developer opened the span to read. The UI
-                    # collapses instead of cutting.
-                    spans.append(
-                        SpanOut(
-                            index=s.index, tool_name=s.tool_name, status=s.status,
-                            input=s.input_json if s.input_json is not None else s.input,
-                            output=s.output_json if s.output_json is not None else s.output,
-                            token_usage=s.token_usage,
-                            status_message=s.status_message,
-                        )
-                    )
+                # Full bodies, structured where the trace store had structure —
+                # see services/trace_view.span_to_out for why the view path does
+                # not truncate.
+                spans = [span_to_out(s) for s in trace.spans]
             elif fetch_error is not None:
                 state = "error"
                 trace_error = fetch_error
@@ -251,5 +215,6 @@ async def get_trace(
         verdict=result.verdict, judge_comment=result.judge_comment,
         agent_response=result.agent_response,
         ground_truth_response=question.ground_truth_response if question else None,
+        ground_truth_reasoning=question.ground_truth_reasoning if question else None,
         error_message=result.error_message,
     )

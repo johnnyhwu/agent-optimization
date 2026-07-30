@@ -255,4 +255,88 @@ class TraceView(BaseModel):
     # real agent this is the first thing a developer wants to read.
     agent_response: str | None = None
     ground_truth_response: str | None = None
+    # The expected process the diagnosis was made against. Carried so the view can
+    # hand a question over to the playground (§10.5) with the same expectations
+    # attached — the hypothesis being tested was formed while reading this trace.
+    ground_truth_reasoning: str | None = None
     error_message: str | None = None
+
+
+# --- Playground (§10) -------------------------------------------------------
+
+class SkillSummaryOut(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class SkillOut(BaseModel):
+    name: str
+    content: str
+    description: str | None = None
+
+
+class SkillOverrideIn(BaseModel):
+    """A candidate skill to use for this one call instead of the stored one.
+
+    `name` is required alongside the text: the agent has to know which skill this
+    replaces, and a nameless blob tells it nothing about where to substitute it.
+    """
+    name: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+
+
+class PlaygroundCreate(BaseModel):
+    """Body of POST /playground/attempts.
+
+    Only `question` is required. The two ground-truth fields are switches, not
+    paperwork: an expected answer turns judging on, an expected reasoning process
+    turns diagnosis on (§10.4). A developer trying a question out often has
+    neither, and demanding them would defeat the point.
+    """
+
+    question: str = Field(min_length=1)
+    ground_truth_response: str | None = None
+    ground_truth_reasoning: str | None = None
+    skill_override: SkillOverrideIn | None = None
+    # Same per-run settings the eval path uses, so an attempt can target the same
+    # endpoints a given run did.
+    config: RunConfig = Field(default_factory=RunConfig)
+    secrets: RunSecrets = Field(default_factory=RunSecrets)
+
+
+class PlaygroundAttemptOut(BaseModel):
+    """One attempt, as the list and the header show it."""
+
+    id: uuid.UUID
+    created_at: datetime
+    question: str
+    # Whether each optional stage applies at all, so the UI can say "not judged"
+    # rather than leaving an empty verdict looking like a failure.
+    has_expected_answer: bool
+    has_expected_reasoning: bool
+    skill_name: str | None = None
+    # True when a candidate skill was sent with the call. The platform cannot
+    # verify the agent actually used it (§10.7) — this only reports what was sent.
+    skill_overridden: bool = False
+    status: str  # running | done | failed | cancelled
+    phase: str  # pending | answered | judged | traced | diagnosed
+    verdict: str | None = None
+    judge_score: float | None = None
+    agent_latency_ms: int | None = None
+    error_message: str | None = None
+    # Non-secret settings only: RunConfig has no credential fields.
+    config: RunConfig = Field(default_factory=RunConfig)
+
+
+class PlaygroundAttemptDetail(PlaygroundAttemptOut):
+    """One attempt plus its trace, in the same shape the run detail view uses.
+
+    Reusing `TraceView` is the point: the middle and right columns are the same
+    components, so the playground gets structured span rendering, the diagnosis
+    banners and the five trace states without a second implementation.
+    """
+
+    ground_truth_response: str | None = None
+    ground_truth_reasoning: str | None = None
+    skill_content: str | None = None
+    trace: TraceView

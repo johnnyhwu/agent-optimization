@@ -1,4 +1,4 @@
-"""Fake implementations of the four seams (Stage 1 POC).
+"""Fake implementations of the five seams (Stage 1 POC + §10 playground).
 
 Every method simulates realistic latency (values from app/fake_config.py) and
 returns deterministic-but-plausible data so the UI + data flow can be exercised
@@ -19,12 +19,16 @@ import asyncio
 import hashlib
 import json
 import random
+import time
 
 from app import fake_config as fc
 from app.integrations.base import (
     NOT_READY,
     AgentResponse,
     NotReady,
+    Skill,
+    SkillOverride,
+    SkillSummary,
     Span,
     Trace,
     Verdict,
@@ -33,6 +37,13 @@ from app.integrations.base import (
 # In-process poll counter so fetch_trace returns NotReady for the first
 # TRACE_NOT_READY_POLLS calls per correlation_id (simulates async ingestion).
 _poll_counts: dict[str, int] = {}
+
+# Skill overrides the fake agent was asked to use, keyed by correlation_id, so
+# the fake trace built later can show them in its system prompt (§10.7). The
+# real path has no equivalent bookkeeping: there the injected text shows up in
+# the trace because the agent genuinely used it, which is the only evidence the
+# platform can ever offer that an override took effect.
+_skill_overrides: dict[str, SkillOverride] = {}
 
 # A correlation id containing this never becomes ready — the seed uses it to keep
 # the "trace is generating" UI state reachable.
@@ -120,10 +131,21 @@ def build_fake_trace(correlation_id: str) -> Trace:
     tool_defs = _fake_tool_defs()
     question = f"(question behind correlation {correlation_id[:8]})"
 
+    system = _FAKE_SYSTEM_PROMPT
+    override = _skill_overrides.get(correlation_id)
+    if override is not None:
+        # The override has to be *visible in the trace*, not just accepted: that
+        # is the only way a developer can confirm the agent used the candidate
+        # skill rather than its own (§10.7). The fake agent puts it where a real
+        # one would — in the system prompt of every generation.
+        system += (
+            f"\n\n# Skill: {override.name} (overridden for this call)\n{override.content}"
+        )
+
     # The conversation grows span by span, exactly as it does in a real agent
     # loop: every generation sees everything that came before it.
     messages: list[dict] = [
-        {"role": "system", "content": _FAKE_SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": question},
     ]
 
@@ -200,17 +222,30 @@ class FakeAgentClient:
     async def call(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None = None,
+        skill_override: SkillOverride | None = None,
     ) -> AgentResponse:
+        if skill_override is not None:
+            # Remembered so build_fake_trace can show it (see _skill_overrides).
+            _skill_overrides[correlation_id] = skill_override
+        started = time.monotonic()
         await _sleep_between(fc.AGENT_LATENCY_MIN_S, fc.AGENT_LATENCY_MAX_S)
+        # Reported like the real client's: the fake genuinely slept for this long,
+        # and a blank latency column in the UI would look like missing plumbing
+        # rather than a fake being fake.
+        latency_ms = int((time.monotonic() - started) * 1000)
         if "⟦timeout⟧" in question:
             return AgentResponse(
                 response="", correlation_id=correlation_id, failed=True,
                 error="Simulated agent timeout (⟦timeout⟧ marker).",
+                latency_ms=latency_ms,
             )
         verdict = _intended_verdict(question)
         # Encode intended verdict into the response so the fake judge is consistent.
         body = "Here is the agent's answer based on the retrieved data."
-        return AgentResponse(response=f"[[v:{verdict}]] {body}", correlation_id=correlation_id)
+        return AgentResponse(
+            response=f"[[v:{verdict}]] {body}", correlation_id=correlation_id,
+            latency_ms=latency_ms,
+        )
 
 
 class FakeJudgeClient:
@@ -255,7 +290,7 @@ class FakeDiagnosisClient:
     model_name = "fake-diagnosis-v0"
 
     async def diagnose(self, trace: Trace, ground_truth_reasoning: str,
-                       judge_verdict: Verdict) -> dict:
+                       judge_verdict: Verdict | None) -> dict:
         await _sleep_between(fc.DIAGNOSIS_LATENCY_MIN_S, fc.DIAGNOSIS_LATENCY_MAX_S)
         rng = _rng(trace.correlation_id + "diag")
         spans = trace.spans
@@ -294,3 +329,55 @@ class FakeDiagnosisClient:
             "suspects": suspects,
             "caveat": caveat,
         }
+
+
+# The catalogue the fake agent "has". Two of the names match the skill tags the
+# seeded eval set uses (billing / reporting), so "open an incorrect question in
+# the playground" lands on a skill that actually exists in fake mode.
+_FAKE_SKILLS: dict[str, tuple[str, str]] = {
+    "billing": (
+        "Invoices, balances, refunds and payment status.",
+        "# Billing skill\n"
+        "1. Identify the customer or order the question is about.\n"
+        "2. Query the `invoices` table with the SQL tool, filtered to that "
+        "customer and the period asked for.\n"
+        "3. Sum outstanding balances; never add figures that no tool returned.\n"
+        "4. State the amount and the period explicitly in the answer.\n",
+    ),
+    "reporting": (
+        "Aggregate reports, trends and churn analysis.",
+        "# Reporting skill\n"
+        "1. Establish the reporting period before querying anything.\n"
+        "2. Retrieve the raw events with the SQL tool, then aggregate.\n"
+        "3. Rank the drivers and keep the top three.\n"
+        "4. Report each figure with the period it covers.\n",
+    ),
+    "escalation": (
+        "Routing a question the other skills cannot answer.",
+        "# Escalation skill\n"
+        "1. Say plainly which part of the question you cannot answer.\n"
+        "2. Name the team that owns it.\n"
+        "3. Never guess a figure to avoid escalating.\n",
+    ),
+}
+
+
+class FakeSkillClient:
+    # REPLACE WITH REAL IMPL: GET {agent}/skills and GET {agent}/skills/{name}
+    # from the agent server (§10.2 / §10.7).
+    async def list_skills(self) -> list[SkillSummary]:
+        await asyncio.sleep(fc.SKILL_FETCH_LATENCY_S)
+        return [
+            SkillSummary(name=name, description=description)
+            for name, (description, _content) in _FAKE_SKILLS.items()
+        ]
+
+    async def get_skill(self, name: str) -> Skill:
+        await asyncio.sleep(fc.SKILL_FETCH_LATENCY_S)
+        entry = _FAKE_SKILLS.get(name)
+        if entry is None:
+            # Same shape of failure the real client reports for a 404, so the
+            # router's error handling is exercised in fake mode too.
+            raise KeyError(f"no such skill: {name}")
+        description, content = entry
+        return Skill(name=name, content=content, description=description)

@@ -41,11 +41,16 @@ Cancellation (§9.14) is cooperative but immediate: the cancel event is raced
 against the in-flight agent/judge call rather than checked between questions,
 because one real agent question can take tens of seconds — which is precisely
 when someone reaches for the stop button.
+
+The four per-question steps themselves, and the retry / timeout / cancel policies
+around them, live in `app/pipeline.py` — the playground (§10) runs the same
+sequence for one ad-hoc question. What stays here is everything that is about a
+*run*: the question snapshot, the `question_results` rows, the done/total
+counters, and the progress events.
 """
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -56,92 +61,19 @@ from app import cancellation
 from app.config import settings
 from app.db import SessionLocal
 from app.integrations import Seams, build_seams
-from app.integrations.base import NotReady
 from app.models import EvalSet, Question, QuestionResult, Run, SpanAnalysis
+from app.pipeline import (
+    RunCancelled,
+    call_agent,
+    call_judge,
+    clip,
+    run_diagnosis,
+    wait_for_trace,
+)
 from app.services.aggregation import result_phase
 from app.sse import hub
 
 log = logging.getLogger(__name__)
-
-# Errors worth retrying: transient transport/server problems. A bad request or a
-# malformed judge response will fail the same way every time, so those bubble up
-# on the first attempt.
-_RETRYABLE = (asyncio.TimeoutError, ConnectionError, OSError)
-
-
-class RunCancelled(Exception):
-    """Raised inside a question when the run was cancelled mid-call."""
-
-
-def _clip(message: str) -> str:
-    return message[: settings.error_message_max_chars]
-
-
-async def _with_retries(coro_factory, attempts: int, what: str):
-    """Run an awaitable factory with bounded exponential backoff."""
-    last: Exception | None = None
-    for attempt in range(max(attempts, 0) + 1):
-        try:
-            return await coro_factory()
-        except _RETRYABLE as exc:  # noqa: PERF203 - retry loop
-            last = exc
-            if attempt >= attempts:
-                break
-            delay = 2.0**attempt
-            log.warning("%s failed (%s); retrying in %.1fs", what, exc, delay)
-            await asyncio.sleep(delay)
-    raise last if last is not None else RuntimeError(f"{what} failed")
-
-
-async def _await_or_cancel(coro, cancel_event: asyncio.Event):
-    """Await `coro`, abandoning it the moment cancellation is signalled.
-
-    Waiting for the current call to return would make "stop" mean "stop in up to
-    two minutes" against a real agent, so the in-flight task is cancelled rather
-    than awaited.
-    """
-    task = asyncio.ensure_future(coro)
-    waiter = asyncio.ensure_future(cancel_event.wait())
-    try:
-        await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        waiter.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await waiter
-
-    if task.done():
-        return task.result()
-
-    task.cancel()
-    with contextlib.suppress(BaseException):
-        await task
-    raise RunCancelled()
-
-
-async def _poll_trace_ready(correlation_id: str, trace_client, cancel_event: asyncio.Event):
-    """Poll the trace store with backoff until ready or capped (§6.12).
-
-    Returns (trace_or_None, last_error_or_None). The error is kept rather than
-    only logged: without it the UI cannot tell a misconfigured trace store from
-    ingestion that simply hasn't landed yet.
-    """
-    backoff = settings.trace_poll_backoff_s or [1.0]
-    last_error: str | None = None
-    for attempt in range(settings.trace_poll_max_attempts):
-        if cancel_event.is_set():
-            return None, last_error
-        try:
-            trace = await trace_client.fetch_trace(correlation_id)
-        except Exception as exc:  # trace store hiccup must not fail the question
-            log.warning("fetch_trace(%s) failed: %s", correlation_id, exc)
-            last_error = _clip(f"{type(exc).__name__}: {exc}")
-            trace = None
-        else:
-            last_error = None
-        if trace is not None and not isinstance(trace, NotReady):
-            return trace, None
-        await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)])
-    return None, last_error
 
 
 async def run_eval(run_id: uuid.UUID) -> None:
@@ -287,7 +219,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     async def fail(message: str) -> None:
         async with lock:
             result.status = "failed"
-            result.error_message = _clip(message)
+            result.error_message = clip(message)
             await session.commit()
             state["done"] += 1
             snap = (state["done"], state["correct"])
@@ -307,16 +239,9 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
 
     # 1) agent
     try:
-        agent_resp = await _await_or_cancel(
-            _with_retries(
-                lambda: asyncio.wait_for(
-                    seams.agent.call(item["question"], correlation_id, user_id, tags),
-                    timeout=agent_timeout_s,
-                ),
-                settings.agent_max_retries,
-                "agent call",
-            ),
-            cancel_event,
+        agent_resp = await call_agent(
+            seams, item["question"], correlation_id, user_id, tags,
+            agent_timeout_s, cancel_event,
         )
     except RunCancelled:
         await cancel("Run cancelled while waiting for the agent.")
@@ -344,14 +269,8 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         await cancel("Run cancelled before judging; the agent's answer was kept.")
         return
     try:
-        verdict = await _await_or_cancel(
-            _with_retries(
-                lambda: seams.judge.judge(
-                    item["question"], agent_resp.response, item["ground_truth"]
-                ),
-                settings.llm_max_retries,
-                "judge call",
-            ),
+        verdict = await call_judge(
+            seams, item["question"], agent_resp.response, item["ground_truth"],
             cancel_event,
         )
     except RunCancelled:
@@ -383,7 +302,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     #    just skips the extras.
     trace = None
     if not cancel_event.is_set():
-        trace, trace_error = await _poll_trace_ready(correlation_id, seams.trace, cancel_event)
+        trace, trace_error = await wait_for_trace(correlation_id, seams.trace, cancel_event)
         async with lock:
             result.trace_ready = trace is not None
             result.trace_error = trace_error
@@ -398,11 +317,11 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     #    retry from the UI via re-diagnose.
     if verdict.verdict == "incorrect" and trace is not None and not cancel_event.is_set():
         try:
-            diag = await seams.diagnosis.diagnose(trace, item["reasoning"], verdict)
+            diag = await run_diagnosis(seams, trace, item["reasoning"], verdict)
         except Exception as exc:  # noqa: BLE001
             log.warning("diagnosis failed for %s: %s", correlation_id, exc)
             async with lock:
-                result.diagnosis_error = _clip(f"{type(exc).__name__}: {exc}")
+                result.diagnosis_error = clip(f"{type(exc).__name__}: {exc}")
                 await session.commit()
         else:
             async with lock:
@@ -438,13 +357,13 @@ async def _finalize_failed(session, run_id: uuid.UUID, exc: Exception) -> None:
         if run is not None:
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
-            run.error_message = _clip(f"{type(exc).__name__}: {exc}")
+            run.error_message = clip(f"{type(exc).__name__}: {exc}")
             await session.commit()
     except Exception:  # noqa: BLE001 - the SSE terminator still has to go out
         log.exception("could not persist failed state for run %s", run_id)
     await hub.publish(
         run_id,
-        {"type": "run_completed", "status": "failed", "error": _clip(str(exc))},
+        {"type": "run_completed", "status": "failed", "error": clip(str(exc))},
     )
 
 
