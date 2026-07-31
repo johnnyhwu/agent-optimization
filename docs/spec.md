@@ -30,12 +30,12 @@
 |---|---|
 | [1](#1-背景與問題) | 背景與問題（為什麼要有這個系統） |
 | [2](#2-產品願景與分階段策略) | 產品願景與分階段策略（現在在哪一階段） |
-| [3](#3-系統架構) | 系統架構、五個 seam、correlation 機制 |
+| [3](#3-系統架構) | 系統架構、六個 seam、correlation 機制 |
 | [4](#4-關鍵設計決策) | 關鍵設計決策與理由 |
 | [5](#5-資料模型) | 資料模型（7 張表 + 記憶體 store） |
 | [6](#6-一次-eval-run-的生命週期) | 一次 eval run 的生命週期與失敗策略 |
 | [7](#7-stage-4playground) | Stage 4：Playground |
-| [8](#8-llm-契約judge-與-diagnosis) | LLM 契約（judge 與 diagnosis） |
+| [8](#8-llm-契約judgediagnosis-與-synthesis) | LLM 契約（judge、diagnosis 與 synthesis） |
 | [9](#9-api-全表) | API 全表與權限 |
 | [10](#10-前端資訊架構) | 前端資訊架構、三個關鍵機制、排版陷阱與設計系統 |
 | [11](#11-權限身分與並發) | 權限、身分與並發 |
@@ -154,12 +154,15 @@
 | **Stage 1** | 錯題自動抓 trace → LLM 白話診斷可疑 span → 跳轉該 span 顯示 input/output/token。**不做**機率、熱點、人工重標、SkillOpt | **✅ 已實作**（POC 完整可跑）|
 | **Stage 2** | per-span 出錯機率熱點、reasoning ↔ span 的 step 拆解軟對齊、可編輯標註 / 重標 span（並寫回 Langfuse Score）| ❌ 未開始 |
 | **Stage 3** | SkillOpt 自動優化、整份 eval set 用候選 skill 重跑驗證改善、skill 寫回 agent server（含版本控制 / rollback）| ❌ 未開始 |
-| **Stage 4** | **Playground**：單題即時試打 + per-request skill override 的迭代沙盒 | **✅ 已實作** |
+| **Stage 4** | **Playground**：單題即時試打 + per-request **workspace override**（agent 的 config 與 skill 檔）的迭代沙盒，加上把試出來的題目**升級成新 eval set** 的 shortlist | **✅ 已實作** |
 
 **Stage 4 不在原本的三階段藍圖裡**，是後來新增的。它補的是 Stage 1 動線末端的缺口：
 開發者看完診斷、心裡有了「如果 skill 這樣改應該就會對」的假設之後，
 **原本沒有任何便宜的方式驗證那個假設**——唯一的路是改 eval set、跑一整個 run。
 Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不寫回、不做「驗證改善」的自動判定）。
+
+它後來還長出第二個用途：在 playground 問的題目，通常是**現有 eval set 沒有的**——
+那正是它被拿到這裡問的原因。shortlist（§7.6）讓那幾題不必被手抄進上傳檔才留得下來。
 
 > **Stage 1 的價值主張**：它解決 §1.2 痛點的約 80%，而且不需要機率、熱點或 SkillOpt。
 > Stage 1 的診斷準確度在真實資料上跑起來之後的觀察，**是決定要不要投入 Stage 2 的關鍵依據**。
@@ -177,14 +180,14 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 │  Frontend (React + Vite)                                     │
 │    側邊欄三個 section（Evaluation / Playground / Optimize）      │
 │    ├── Evaluation：三層下鑽（卡片 → run 歷史 → 三欄詳情）        │
-│    ├── Playground：單題試打 + skill 編輯                        │
+│    ├── Playground：單題試打 + agent workspace 編輯 + shortlist   │
 │    └── Optimize：SkillOpt 的位置，尚未實作（見 §10.1）           │
 │                                                              │
 │  Backend (FastAPI async)                                     │
 │    ├── Orchestrator：讀 eval set → 逐題打 agent → judge →      │
 │    │                 等 trace → 診斷 → 落庫 → SSE 推進度        │
 │    ├── Playground：單題版本，狀態只在記憶體                      │
-│    └── 五個 seam（fake / real 各一套）                          │
+│    └── 六個 seam（fake / real 各一套）                          │
 │                                                              │
 │  App DB (PostgreSQL)：Langfuse 沒有的概念 + 指回 Langfuse 的索引  │
 └───────┬─────────────────────────────┬────────────────────────┘
@@ -209,19 +212,26 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 - **部署形態**：`db` / `backend` / `frontend` **各自一個 container**，由 `docker-compose.yml` 編排。
   host 端唯一需求是 docker（含 compose）——不需要 host 的 Python venv 或 node_modules。
 
-### 3.2 五個 seam（最重要的一節）
+### 3.2 六個 seam（最重要的一節）
 
 每個外部依賴各藏在一個 **Python Protocol** 後面，**fake 與 real 兩套實作都已存在**，
-由五個環境變數逐一切換（`*_IMPL=fake|real`）。**預設五個都是 `fake`**，所以不接任何外部服務
+由六個環境變數逐一切換（`*_IMPL=fake|real`）。**預設六個都是 `fake`**，所以不接任何外部服務
 也能跑完整 demo；要接真的可以一個一個開，不必一次全換。
 
 | Seam | 介面 | 假實作 | 真實實作 |
 |---|---|---|---|
-| `AgentClient` | `call(question, correlation_id, user_id, tags, skill_override=None) -> AgentResponse` | 睡 1–3s，回假 response | `POST {base}/execute`，body 見 §3.3 |
+| `AgentClient` | `call(question, correlation_id, user_id, tags, workspace=None) -> AgentResponse` | 睡 1–3s，回假 response | `POST {base}/execute`，body 見 §3.3 |
 | `JudgeClient` | `judge(question, response, ground_truth) -> Verdict` | 睡 0.5–1s，二元判定 | OpenAI 相容端點，LLM 同時吐 verdict + score + comment |
 | `TraceClient` | `fetch_trace(correlation_id) -> Trace \| NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | Langfuse，**兩條讀取策略依序嘗試**（見 §3.5） |
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, judge_verdict \| None) -> dict` | 睡 2–4s，回 §8.2 的 JSON | §8.2 四段式 prompt + 輸出驗證 + span_index 越界剔除 |
-| `SkillClient` | `list_skills()`、`get_skill(name)` | 三個罐頭 skill | `GET {base}/skills`、`GET {base}/skills/{name}` |
+| `SynthesisClient` | `synthesize(trace, question, agent_response) -> str` | 依假 trace 生出編號步驟 | §8.3 的 prompt，**與 judge/diagnosis 共用同一個 LLM client** |
+| `WorkspaceClient` | `get_workspace()`、`get_version()` | 罐頭 config + 四個 skill 檔 | `GET {base}/get_workspace`、`GET {base}/get_config_version` |
+
+> **為什麼是 `WorkspaceClient` 而不是 `SkillClient`**：skill 在 agent server 上**是一個目錄**
+> （`SKILL.md` 加上它的 `references/`），而且決定 agent 行為的另一半住在旁邊的 `config.json`。
+> 一個「名稱 → 一段文字」的介面表達不出 reference 檔，也表達不出「如果 model 換大一點呢」
+> 這個同樣常見的假設。**一次讀完整份 workspace**，也順便讓快照天然一致——不會拿這一分鐘的
+> config 配上一分鐘前的 skill 還宣稱那是同一份。
 
 **兩個軸是分開的**：
 - **`*_IMPL` 決定 fake / real**，是全域主開關。
@@ -230,10 +240,13 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
   > 為什麼不是全域可變設定：`trigger_run` 開背景 task 時沒有鎖，若改動全域 settings，
   > **兩個併行的 run 會互相污染端點**。
 
-**`SkillClient` 是選擇性建構的**（`build_seams(..., include_skill=True)`）：
-> `SKILL_IMPL=real` 但沒設 base URL 會 raise，而 run 路徑完全不讀 skill 目錄。
-> 若無條件建構，一個設錯的 skill seam 會讓**觸發 run 與看 trace 全部 500**。
-> 只有 Playground 的 skill 端點會要求它。
+**`WorkspaceClient` 是選擇性建構的**（`build_seams(..., include_workspace=True)`）：
+> `WORKSPACE_IMPL=real` 但沒設 base URL 會 raise，而 run 路徑完全不讀 agent 的 config 或 skill 檔。
+> 若無條件建構，一個設錯的 workspace seam 會讓**觸發 run 與看 trace 全部 500**。
+> 只有 Playground 的 workspace 端點會要求它。
+>
+> `SynthesisClient` 則是無條件建構的：它跟 judge / diagnosis 共用同一個 LLM client，
+> 沒有自己的端點可以設錯。
 
 **假層的可控觸發（demo / 測試用）**：假層會辨識題目文字裡的標記——
 `⟦timeout⟧` → 該題 agent「逾時」變 failed；`⟦wrong⟧` → judge 判 incorrect；
@@ -259,7 +272,10 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
       "user_id":    "<觸發者的 subject>",
       "tags":       ["eval_<eval set 名稱>"]
     },
-    "skill_override": { "name": "billing", "content": "…" }
+    "workspace": {
+      "config": { "agents": { "defaults": { "model": "…" } } },
+      "skills": { "billing/SKILL.md": "…", "billing/references/refunds.md": "…" }
+    }
   }
 }
 ```
@@ -267,8 +283,15 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 - `trace_id` 與 `session_id` **是同一個值**：每題都是自己的 correlation 單位，
   所以也是自己的 Langfuse session。
 - `tags` 在 eval run 是 `["eval_<eval set 名稱>"]`，在 Playground 是 `["playground"]`。
-- **`metadata.skill_override` 只在 Playground 提供候選 skill 時才出現**；
+- **`metadata.workspace` 只在 Playground 改過 agent 的 config 或 skill 檔時才出現**；
   eval run 的 request body 與 Stage 4 出現之前**完全相同**（連 key 都不會多）。
+  兩半各自可省略：只改 config 就不送 `skills`，反之亦然。
+- **兩半在 agent server 上的套用方式刻意不同**（完整契約見
+  `docs/agent_server_stage4_endpoints.md`）：
+  - `config` 是**稀疏 overlay**，deep merge 到 agent 自己的 `config.json` 上。
+    非如此不可——平台拿到的快照已經把機密拿掉了，整份取代會讓 agent 沒有 API key。
+  - `skills` 是**這次呼叫的完整檔案集**，整份取代 agent 的目錄。
+    只有取代表達得出「把某個 reference 檔刪掉試試看」。
 - 回應：`{"content": "<agent 的回答>"}`。client 對回應寬容——裸 JSON 字串或純文字都接受；
   空回答視為失敗（判一個空字串會產生毫無意義的 incorrect，反而蓋住真正的問題）。
 
@@ -430,14 +453,26 @@ Stage 1 **不做** step 拆解軟對齊；直接把整段 `ground_truth_reasonin
 - **測試斷言的是「呼叫次數為 0」，不是「verdict 是 None」**。
   > 後者在「呼叫了但把結果丟掉」的情況下也會通過，而那是一筆真實的 LLM 帳單。
 
-### 4.10 skill override 是 per-request，而且平台無法保證它生效
+### 4.10 workspace override 是 per-request，而且平台無法保證它生效
 
-- 候選 skill 只影響**這一次呼叫**，不寫回 agent server。
+- 改過的 config 與 skill 檔只影響**這一次呼叫**，不寫回 agent server。
   > 寫回需要版本控制與 rollback（Stage 3 的範圍）。
 - ⚠️ **平台無法自動驗證 agent 真的採用了 override**。
-  唯一的證據是：注入的 skill 文字會出現在該次 trace **第一個 span 的 system message** 裡，
+  唯一的證據是：注入的文字會出現在該次 trace **第一個 span 的 system message** 裡，
   而 span 檢視就是照 chat-completions 形狀渲染的，所以**看得到**。
   這句話寫在 UI 的說明文字裡，**不假裝有自動驗證**。
+  > 假層走同一條路徑（把 override 接在假 trace 的 system prompt 後面），所以純 Docker 的 demo
+  > 也看得到「override 有沒有送到」長什麼樣子。
+
+### 4.10a 編輯的基準：快照 + 版本字串
+
+Playground 的編輯器同時握著**兩份東西**：agent server 給的快照，與開發者改出來的工作副本。
+兩份都留才回答得了「這個欄位還原成什麼」與「我到底改了什麼」。
+
+**送出前會先問一次版本**（`GET {base}/get_config_version`）。與快照不同時跳對話框，
+讓開發者選「重新讀取（丟掉編輯）」或「照樣送出」。
+> 拿一份中途被別人改掉的 skill 去問問題，得到的結論不能信——**而且事後看不出來**。
+> 版本檢查失敗（agent server 沒回應）不擋送出：那只損失檢查，不該損失實驗。
 
 ### 4.11 錯誤必須看得見，而且要能分辨種類
 
@@ -596,8 +631,14 @@ migration 全部手寫；每個檔案有長篇 docstring 解釋**每個欄位為
 ### 5.3 Playground 的記憶體 store（沒有表）
 
 一個 module-level `OrderedDict`，key 是 attempt id，value 是一個 dataclass，
-含 question / 兩個選填 ground truth / skill override / 有效 config / secrets /
-correlation_id / status / phase / agent 回答與延遲 / verdict / trace 物件 / 診斷 / 三個錯誤欄位。
+含 question / 兩個選填 ground truth / workspace override / **override 當下的 skill 檔快照** /
+有效 config / secrets / correlation_id / status / phase / agent 回答與延遲 / verdict /
+trace 物件 / 診斷 / 三個錯誤欄位。
+
+> **為什麼要存快照**：`skills` 是整份取代（§3.3），所以少了基準就無從分辨
+> 「哪幾個檔案真的被改過」——每個檔案看起來都像改過。這份基準是後端自己跟 agent server 要的，
+> 不信瀏覽器送來的值，而且有獨立的 5 秒 timeout：它只是一行摘要，不該讓人等兩分鐘才知道
+> 問題送出去了。
 
 - **per-subject 上限 `PLAYGROUND_MAX_ATTEMPTS_PER_USER`（預設 20），超過淘汰最舊**。
   > 上限不是裝飾：一個 attempt 握著一整條 trace，真實 agent 是**數百 KB** 的 span body。
@@ -615,7 +656,7 @@ correlation_id / status / phase / agent 回答與延遲 / verdict / trace 物件
 **立刻回 201**，並開一個背景 asyncio task：
 
 ```
-用 build_seams(run.config, run.secrets) 建出這個 run 專屬的五個 client
+用 build_seams(run.config, run.secrets) 建出這個 run 專屬的 client
   → 讀定 question 快照（之後改題不影響這次 run）
   → 一次把整份快照的 question_results 全部建好（status='pending'）
   → 送出 SSE run_started（帶 total）
@@ -722,27 +763,31 @@ trace_ready / has_analysis / trace_error / diagnosis_error / done / total / corr
 ### 7.1 它解決什麼
 
 Stage 1 的診斷告訴你 trace 在哪裡出錯。下一個念頭通常是
-「**如果 skill 說 X 而不是 Y，這題就會對**」——而在 Stage 4 之前，驗證這個假設的唯一方式是
-改一個 eval set、跑一整個 run。Playground 是那條便宜的路：**一題、一組設定、一份可改的 skill，
-按一次就跑**。
+「**如果 skill 說 X 而不是 Y，這題就會對**」，或「**如果 model 換大一點呢**」——而在 Stage 4
+之前，驗證這個假設的唯一方式是改一個 eval set、跑一整個 run。Playground 是那條便宜的路：
+**一題、一份可改的 agent config 與 skill 檔，按一次就跑**。
+
+而在 playground 問的題目，通常是**現有 eval set 沒有的題目**——那正是它被拿到這裡問的原因。
+所以還有第二件事：把值得留下的那幾題**收進 shortlist，再變成一個新的 eval set**（§7.6）。
 
 ### 7.2 範圍
 
 | 做了 | 沒做（刻意）|
 |---|---|
-| 單題即時試打：問題 → agent → trace → span 檢視 | **不落庫**，沒有 migration |
-| per-request **skill override**（改 skill 重跑）| **不寫回 agent server**（Stage 3）|
+| 單題即時試打：問題 → agent → trace → span 檢視 | attempt **不落庫**，沒有 migration |
+| per-request **workspace override**：改 agent 的 config 值、改／增／刪 skill 檔 | **不寫回 agent server**（Stage 3）|
 | 選填的 judge（期望答案）與 diagnosis（期望流程）| **不做「一按跑 N 次取多數」**——一次一次手動跑 |
 | 本 session 的 attempt 清單 + 切換 + clone 回編輯區 | **不做並排 diff / skill diff** |
-| 從三欄詳情把題目帶進 playground | **正式 eval run 不支援 skill override**（只有 playground 有）|
-| 中止進行中的 attempt | **不做多輪對話**（agent 是 stateless，`/execute` 是單次呼叫）|
+| **shortlist → 建立新 eval set**（§7.6）| **正式 eval run 不支援 workspace override**（只有 playground 有）|
+| 從三欄詳情把題目帶進 playground | **不做多輪對話**（agent 是 stateless，`/execute` 是單次呼叫）|
+| 中止進行中的 attempt | **不改既有 eval set**——它建立後就鎖定（§4.6）|
 
 ### 7.3 一次 attempt 的流程
 
 ```
 建立 attempt（config 在此刻寫死成有效值）→ 存進記憶體 store → 開背景 task → 201 立刻回
 
-① agent（tags=["playground"]，有 override 就帶上）→ phase=answered
+① agent（tags=["playground"]，有 workspace override 就帶上）→ phase=answered
 ② 有期望答案才 judge                              → phase=judged
 ③ poll trace                                     → phase=traced
 ④ 有期望流程且 trace 有到才 diagnose               → phase=diagnosed
@@ -762,18 +807,24 @@ prompt 的第四塊**照樣存在**，只是改寫成
 「沒有判分：未提供期望答案，所以什麼都沒被評分。**不要假設最終答案是錯的**」。
 > 把整塊拿掉才是錯的做法——模型會自行推論「答案錯了」，然後去找一個可能不存在的故障。
 
-### 7.4 skill 目錄與 override
+### 7.4 agent workspace 的讀取與 override
 
-- **skill 從哪來**：`SkillClient` 讀 agent server 的目錄（`SKILL_IMPL=real`），
-  或三個罐頭 skill（`fake`，名稱對齊 seed 的 skill tag）。
-  **讀不到就手貼**——目錄是便利，不是必要條件。
-- **讀不到要大聲**：目錄讀失敗回 **503 + 原因**，絕不回空陣列。
+- **從哪來**：`WorkspaceClient` 一次讀完整份（`WORKSPACE_IMPL=real` 打
+  `GET {base}/get_workspace`），或一份罐頭 workspace（`fake`；skill 目錄名對齊 seed 的
+  skill tag，且 `billing` 帶一個 `references/` 檔，因為「skill 是一個目錄」正是舊模型表達不出
+  的東西）。回傳四樣：`version` / `config`（已移除機密）/ `redacted_paths` / `skills`
+  （扁平的 `{相對路徑: 檔案內容}`）。
+- **讀不到要大聲**：讀失敗回 **503 + 原因**，絕不回一份空 workspace。
   > 「這個 agent 沒有 skill」與「你的 URL 錯了」長得一樣的話，開發者會默默地憑記憶重打一份 skill，
-  > 然後測到錯的文字。空目錄本身是合法答案；**有內容但沒有一個有名字**才是失敗。
-- **override 怎麼傳**：`metadata.skill_override = {"name", "content"}`（見 §3.3）。
-  `name` 必須跟著 content 走——agent 得知道這份文字**取代哪一個 skill**。
-- **怎麼確認生效**：見 §4.10。假層也走同一條路徑（記下 override，接在 fake trace 的 system prompt
-  後面），所以純 Docker 的 demo 就能看到「override 有沒有送到」長什麼樣子。
+  > 然後測到錯的文字。空 workspace 本身是合法答案；**形狀不對**才是失敗。
+- **機密**：agent server 自己的 API key 不會送過來，但**路徑會**（`redacted_paths`）。
+  UI 因此把該欄位畫成「存在但隱藏、不可編輯」，而不是讓它憑空消失。
+  > 消失的欄位會誘使人自己補一個同名 key，把真的金鑰蓋掉。
+  > 前端另外會把落在這些路徑上的值從送出的 overlay 濾掉——萬一某個 agent server 是用
+  > `"***"` 遮罩而不是刪除，這道防護會擋下「把真金鑰設成三個星號」。
+- **override 怎麼傳**：`metadata.workspace = {config?, skills?}`（見 §3.3），
+  config 稀疏 merge、skills 整份取代。
+- **怎麼確認生效**：見 §4.10。
 
 ### 7.5 權限
 
@@ -782,9 +833,52 @@ prompt 的第四塊**照樣存在**，只是改寫成
 > scratch work 是私有的，所以「某個 id 上是否存在一個 attempt」也不是別人該知道的事。
 > 404 也是 backend 重啟清掉 store 之後會看到的東西，UI 就是這麼說明的。
 
+### 7.6 Shortlist：把 playground 的題目變成 eval set
+
+在 playground 問的題目通常是既有 eval set 沒有的。在 shortlist 之前，留下它的唯一方法是
+手動抄進一份上傳檔——實務上就是**留不下來**。
+
+**流程**：attempt 列的 `+` 把它加進 shortlist → 頁首的 `Shortlist N` 開一個對話框
+（左：清單；右：逐題編輯；下：新 eval set 的欄位）→ 建立。
+
+**shortlist 存的是複本，而且住在瀏覽器**
+
+| 為什麼不存 attempt id | 為什麼不存後端 |
+|---|---|
+| attempt 有 per-user 上限會被淘汰，backend 重啟也會全清。存 id 的話，**正好在人迭代最兇的時候**條目會失效 | attempt 本來就不落庫（§4.8）。差別在於 shortlist 是離開 scratch 的那座橋，被一次重啟清掉特別難受——localStorage 免 migration、扛得住重啟、依 subject 分 key |
+
+加入當下複製的是「建立一題所需的全部東西」：題目、答案、流程，加上對話框要用來示警的來源旗標。
+
+**對話框是審閱步驟，不是表單**——兩個捷徑會安靜地摧毀正在被建立的東西：
+
+| 捷徑 | 後果 | 因此 |
+|---|---|---|
+| 直接把 agent 的回答當期望答案 | 這題等於在主張「agent 現在的答案就是對的」：**它永遠會過，也永遠抓不到答案是錯的**。這是有用的 regression baseline、無用的品質標準，而兩者在通過率裡長得一模一樣 | 預填但掛上琥珀色 `unverified` 標記，欄位下方把後果寫成一句話；使用者一改動標記就消失 |
+| 自動用 trace 合成期望流程 | 診斷（§8.2）就是拿 trace 對照期望流程找分歧。**流程若是從同一條 trace 生出來的，就永遠找不到分歧** | 放一個 `Draft from trace` 按鈕，由使用者自己觸發；文案明說「草稿描述的是那一次做了什麼，請改寫成每次都該發生什麼」 |
+
+**還有一個這個系統特有的坑**：帶著 workspace override 跑出來的 attempt，它的答案是
+**目前部署的 agent 產不出來的**（skill 寫不回去是 Stage 3）。對話框對這種 attempt 顯示警示、
+列出改過的 config path 與檔名，並說明要自己去 agent server 套用。**警示但不阻擋**——
+刻意這樣提升也是合理的操作。
+
+**建立時可以一併複製既有 eval set 的題目**
+
+eval set 建立後就鎖定（§4.6），所以「舊題目加上這幾題新的」只可能是一個**用兩邊組出來的新 set**。
+對話框列出你有權限讀的 set，勾選就複製它們的題目。
+
+- **複製在 server 做**（`POST /eval-sets/from-shortlist`），權限檢查、去重與 id 政策都留在後端，
+  也省掉「為了上傳而先把五百題下載下來」。
+- **question_id 一律重新產生**（含複製進來的）。
+  > 兩列都自稱是 `q_1a2b3c4d`，在其中一邊被編輯的那一刻就開始各說各話。
+- **重複的題目文字會被跳過並計數**，數字寫在成功訊息裡。
+  > 被勾選的兩個 set 常常同源；同一個 run 裡問同一題兩次是成本，不是資訊。
+  > 安靜地少幾題才是最糟的。
+- shortlist 的題目排在複製進來的前面，所以文字相同時**留下的是使用者剛編輯過的那一份**。
+- skill tag 一併複製；來源 set 一個字都不會被改到；讀不到的 set 在**寫入任何東西之前**回 404。
+
 ---
 
-## 8. LLM 契約（judge 與 diagnosis）
+## 8. LLM 契約（judge、diagnosis 與 synthesis）
 
 ### 8.1 Judge
 
@@ -842,6 +936,38 @@ prompt 的第四塊**照樣存在**，只是改寫成
   再失敗就 raise——**絕不默默塞一個預設值**。
 - 也會處理模型自作主張加上的 ```json code fence。
 
+### 8.3 Synthesis（shortlist 的「Draft from trace」）
+
+**它做什麼**：把一條 trace 變成一份 step-by-step 的「agent 做了什麼」，當作期望流程的**草稿**。
+
+**為什麼需要它**：`questions.ground_truth_reasoning` 是 NOT NULL——從 playground 升上來的題目
+**沒有它就建不出來**。而一個剛看著 agent 答對的開發者，不該被要求憑記憶重打一份他螢幕上就看得到
+的流程。
+
+**輸入**：題目 + agent 的回答 + 截斷後的 trace（與 §4.4 同一套截斷）。
+> 回答要一起送，因為最後一步要描述「呈現了什麼」，而最後一個 span 的 output 常常是 tool 結果、
+> 不是使用者看到的那句話。
+
+**輸出**（強制 JSON）：`{"reasoning_process": "1. …\n2. …\n3. …"}`
+
+**顆粒度是這個 prompt 的重點**（也是最容易做壞的地方）：
+
+- 一個有意義的動作一個編號步驟：讀了哪個 skill、呼叫了哪個 tool、產出最終答案。
+- tool 呼叫要寫**哪個 tool、要了什麼、回來什麼**——用一句話，不是逐字稿。
+- **不要**重貼完整 payload、row dump、長 SQL、id 或 timestamp。
+- 重複的相同呼叫合併成一步（「對三個月份各查了一次 invoices」）。
+- 3–8 步。
+
+**兩個刻意的限制**
+
+1. **只在按鈕上跑，不自動跑。** 草稿描述的是 agent *做了什麼*；那是不是它*該做*的，是只有人能下的
+   判斷。自動生成也等於為一堆沒人要的草稿付 LLM 帳單。
+2. **不寫回 attempt。** 端點只回傳文字。寫上去等於把一次觀察到的執行，變成下一次執行被評分的標準
+   ——而沒有人同意過這件事。
+
+**它不是第六個外部依賴**：`SynthesisClient` 與 judge / diagnosis 共用同一個 LLM client 與同一套
+JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
+
 ---
 
 ## 9. API 全表
@@ -856,7 +982,7 @@ prompt 的第四塊**照樣存在**，只是改寫成
 | `GET /health` | — | |
 | `GET /users` | — | 假使用者名單 + 目前身分 |
 | `GET /me` | — | 目前 subject 與其在各 eval set 的角色 |
-| `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **五個 `*_IMPL` 現況** |
+| `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **六個 `*_IMPL` 現況** |
 | `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares` |
 | `GET /eval-sets` | — | 我有權限的卡片。分頁 + 篩選：`?limit&offset&q&metadata_key&metadata_value&sort`，回 `{items,total,has_more}` |
 | `GET /eval-sets/metadata/keys` | — | 掃 JSONB 得既有 metadata key |
@@ -875,14 +1001,16 @@ prompt 的第四塊**照樣存在**，只是改寫成
 | `GET /eval-sets/{id}/results` | R | 左欄題目清單；`?run_ids=..&mode=union\|intersection\|last_n&last_n=` |
 | `GET /eval-sets/{id}/results/{rid}/trace` | R | 中+右欄：即時抓 trace（完整 body）+ 讀 DB 的診斷 |
 | `POST /eval-sets/{id}/results/{rid}/re-diagnose` | O | 手動重診斷（避免 viewer 產生 LLM 成本）|
-| `GET /playground/skills` | — | agent 的 skill 目錄；失敗 → **503 + 原因** |
-| `GET /playground/skills/{name}` | — | 單一 skill；不存在 → 404 |
+| `POST /eval-sets/from-shortlist` | — | 用 shortlist 的題目 + 複製既有 set 的題目建立新 set（§7.6）；讀不到的來源 set → 404（**寫入前**檢查）；沒有任何題目 → 422 |
+| `GET /playground/workspace` | — | agent 的 config（已移除機密）+ 全部 skill 檔 + 版本；失敗 → **503 + 原因** |
+| `GET /playground/workspace/version` | — | 只有版本字串，送出前的過期檢查用 |
 | `POST /playground/attempts` | — | 建立 + 起背景 task，201（回 detail）|
 | `GET /playground/attempts` | — | 我的 attempt 清單（新到舊，**不分頁**——store 本來就有上限）|
 | `GET /playground/attempts/{id}` | C | 詳情，含與 run 相同形狀的 trace payload |
 | `POST /playground/attempts/{id}/cancel` | C | 非 running → 409 |
 | `DELETE /playground/attempts/{id}` | C | running → 409（先中止）|
 | `POST /playground/attempts/{id}/re-diagnose` | C | 無 trace / 無期望流程 → 409；模型失敗 → **502 + 模型自己的錯誤訊息** |
+| `POST /playground/attempts/{id}/synthesize-reasoning` | C | 用 trace 生一份期望流程草稿（§8.3）；無 trace → 409；模型失敗或回空字串 → **502**。**不會寫回 attempt** |
 | `GET /playground/attempts/{id}/progress` | C | **SSE** |
 
 **幾個回傳值的重點**
@@ -897,7 +1025,11 @@ prompt 的第四塊**照樣存在**，只是改寫成
   > **Playground 的 attempt detail 沿用同一個 payload 形狀**——這是整個整合最省的一步：
   > 前端的中欄與右欄元件零修改就能渲染。
 - **金鑰永不外流**，owner 也一樣。只透過 `credentials_set`（slot 名稱 `llm` / `langfuse`）
-  顯示某個 slot 有沒有值。
+  顯示某個 slot 有沒有值。**agent server 自己的金鑰也一樣**：`GET /playground/workspace` 只帶
+  `redacted_paths`，不帶值。
+- `GET /playground/attempts` 每筆回 `workspace_overridden` / `config_overrides`（點路徑陣列）/
+  `edited_skill_files`（相對路徑陣列），讓清單一眼看出這次不是跑在 agent 自己的 workspace 上。
+- `POST /eval-sets/from-shortlist` 回 `{id, question_count, duplicates_skipped}`。
 
 ---
 
@@ -912,14 +1044,32 @@ prompt 的第四塊**照樣存在**，只是改寫成
 └─ Optimize [Soon]   ← Stage 3 的位置，尚未實作
 
 Evaluation（三層下鑽）                        Playground
-├─ 首頁：eval set 卡片                        ├─ 編輯區（問題 / skill / 選填期望 / 設定）
+├─ 首頁：eval set 卡片                        ├─ 編輯區（問題 + 四個面板，見下）
 │   run 數、最近通過率、趨勢小折線、            ├─ phase stepper（Agent→Judge→Trace→Diagnosis）
-│   regression 摘要數、成員數、齒輪            └─ 三欄：attempt 清單 │ trace+診斷 │ span 細節
+│   regression 摘要數、成員數、齒輪            ├─ 三欄：attempt 清單 │ trace+診斷 │ span 細節
+│                                          └─ Shortlist 對話框（§7.6）
 ├─ 中層：某 set 的 run 歷史
 │   多選 run + union / intersection / last-N
 └─ 底層：三欄詳情
     題目清單 │ trace + 診斷 │ span 細節
 ```
+
+**Playground 的編輯區是一排對等的面板切換，一次只開一個**
+
+`Agent config` · `Skill files` · `Expected answer & process` · `Endpoints & keys`
+
+原本不是這樣：agent 自己的 `config.json` 藏在一顆叫 **Config** 的按鈕後面，而**這個平台**要打的
+端點藏在一顆叫 **Settings** 的按鈕後面，兩排長得一模一樣的按鈕、兩個都叫某種 settings。
+現在每顆按鈕都直說自己在編輯什麼，而且：
+
+- **一次只開一個面板，且每個面板都有高度上限**。編輯區坐在三欄之上，兩個面板同時展開會把
+  三欄——以及送出按鈕——推出視窗底部。
+- **編輯數量的 badge 留在按鈕上（琥珀色）**，面板收起來也看得到「下一題不會跑在 agent 自己的
+  workspace 上」。
+- **config 用收合樹渲染，不是攤平的表單**。攤平之後，區分 `tools.sql_query` 底下的 `enabled` 與
+  `tools.vector_search` 底下的 `enabled` 的，只剩名稱旁邊一行小灰字。樹是開發者本來就在用的
+  心智模型：群組預設收合並標示值的數量，一列一個值讓控制項對齊同一條邊，
+  **有編輯的群組會自己展開**（clone 帶進來的 override 不會被藏在收起的三角形後面）。
 
 **為什麼是三層**：開發者長期使用、會累積很多 eval set，每個 set 又跑過很多 run。
 單一頁面裝不下，而且**麵包屑 + 一鍵返回是必做而非 nice-to-have**——
@@ -1146,11 +1296,12 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源 |
 | `ERROR_MESSAGE_MAX_CHARS` | `2000` | 落庫錯誤訊息的長度上限 |
 | `SPAN_BODY_MAX_CHARS` | `800` | §4.4 單一 span body 截斷門檻（**只用於診斷 prompt**）|
-| **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SKILL_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
-| `AGENT_BASE_URL` | 空 | agent server base URL；client 打 `{base}/execute`、`{base}/skills` |
+| **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SYNTHESIS_IMPL`** / **`WORKSPACE_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
+| `AGENT_BASE_URL` | 空 | agent server base URL；client 打 `{base}/execute`、`{base}/get_workspace`、`{base}/get_config_version` |
 | `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | |
 | `LLM_BASE_URL` / `LLM_API_KEY` | （內部 litellm 端點）/ 空 | **OpenAI 相容**端點，可指向 self-hosted |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
+| `SYNTHESIS_MODEL` | `Qwen3.6-27B` | §8.3 的草稿模型；與 judge / diagnosis 共用 `LLM_BASE_URL` |
 | `JUDGE_MODEL` / `DIAGNOSIS_MODEL` | 皆 `Qwen3.6-27B` | 兩個用途可用不同模型 |
 | `JUDGE_SCORE_THRESHOLD` | 空（採信 LLM 的 verdict）| 設 0–1 數字則改由分數推導 verdict |
 | `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | （內部端點）/ 空 / 空 | HTTP Basic auth |
@@ -1197,12 +1348,13 @@ SEED=1 ./scripts/dev.sh    # build image → 起 Postgres → migrate → seed �
 
 | 步驟 | 設定 | 這一步該看到什麼 |
 |---|---|---|
-| **0** | `SKILL_IMPL=real` + `AGENT_BASE_URL` | Playground 的下拉出現**真實的** skill 名稱與內容。**只讀、無副作用，風險最低** |
+| **0** | `WORKSPACE_IMPL=real` + `AGENT_BASE_URL` | Playground 的編輯器出現**真實的** config 與 skill 檔。**只讀、無副作用，風險最低** |
 | 1 | `AGENT_IMPL=real` + `AGENT_BASE_URL` | 題目打得到真 agent；`agent_response` 有真實回答（判分仍是假的）|
 | 2 | 加 `JUDGE_IMPL=real` + `LLM_BASE_URL` / `JUDGE_MODEL` | 通過率與 judge comment 開始有意義 |
 | 3 | 加 `TRACE_IMPL=real` + `LANGFUSE_*` | 點錯題看得到真實 span（**前提是 agent server 已套用 correlation_id**）|
 | 4 | 加 `DIAGNOSIS_IMPL=real` + `DIAGNOSIS_MODEL` | 診斷、caveat、可疑 span 都由真 LLM 產生 |
-| 5 | agent server 支援 `metadata.skill_override` | 注入的 skill 文字出現在真實 trace 第一個 span 的 system message 裡 |
+| 5 | 加 `SYNTHESIS_IMPL=real` + `SYNTHESIS_MODEL` | shortlist 的「Draft from trace」產出真實的步驟草稿 |
+| 6 | agent server 支援 `metadata.workspace` | 注入的 skill 文字與 config 值出現在真實 trace 第一個 span 的 system message 裡 |
 
 **前置檢查**：`make preflight` 會逐一 ping 設為 `real` 的 seam，回報每個 OK / FAIL 與原因。
 > 設定打錯時，這比跑一次 eval 才發現快得多。
@@ -1213,22 +1365,23 @@ SEED=1 ./scripts/dev.sh    # build image → 起 Postgres → migrate → seed �
 
 **這一節的目的是讓你知道能信到什麼程度。**
 
-### 14.1 單元測試：181 個
+### 14.1 單元測試：206 個
 
-`make test` 跑其中 **170 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
-LLM 路徑以 monkeypatch）。剩下 11 個（`test_pagination.py`）需要一個真 Postgres，
-未設 `TEST_DATABASE_URL` 時整個檔案自動 skip。
+`make test` 跑其中 **186 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
+LLM 路徑以 monkeypatch）。剩下 20 個（`test_pagination.py` 全部，加上 `test_shortlist.py`
+建立 eval set 的那一半）需要一個真 Postgres，未設 `TEST_DATABASE_URL` 時自動 skip。
 
 | 檔案 | 數量 | 涵蓋 |
 |---|---|---|
-| `test_agent_client.py` | 15 | request body 的 `message` + `metadata.trace_data`；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.skill_override` 出現、沒有時整個 key 不存在** |
+| `test_agent_client.py` | 17 | request body 的 `message` + `metadata.trace_data`；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.workspace` 出現、沒有時整個 key 不存在**；只改一半時另一半整個省略（`config` 缺席 ≠ `config: null`）；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」）|
 | `test_langfuse_client.py` | 24 | 空頁 → NotReady；時間排序與重新編號；observation 型別過濾；分頁；Basic auth；`usageDetails` 與舊版 `usage` 兩種 token 欄位；ERROR level 映射；401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼；**兩條讀取策略**（兩者映出的 span 完全相同、404 → NotReady、auto 命中第一條時不會多打第二條、第一條壞掉會 fallback、**全失敗時兩條的原因都在訊息裡**）|
 | `test_judge_and_diagnosis.py` | 18 | verdict 正規化與非法值；門檻覆寫兩個方向；**§4.4 截斷保留所有 span**；越界 `span_index` 剔除；§8.2 四段 prompt 的順序；JSON 修復重試（成功與放棄各一）|
 | `test_orchestrator.py` | 18 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位 |
-| `test_playground.py` | 39 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；skill override 傳到 agent；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷 |
+| `test_playground.py` | 47 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；workspace override 傳到 agent；**編輯過的檔案是對著送出當下的快照算的**（沒有基準的話每個檔案都會被算成改過）；空 override 不送出；baseline 跟 agent server 要而不是信瀏覽器；agent 連不上時只損失摘要不損失 attempt；**override 的文字出現在假 trace 第一個 span 的 system message**、沒有 override 的 attempt 則乾淨；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷 |
 | `test_run_config.py` | 19 | `build_seams` 空設定等同純環境變數行為；`*_IMPL` 仍是主開關；逐 run 值覆寫 env；空白欄位退回 env；judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白寫死；金鑰沿用的端點配對規則；**金鑰不外流的值層級斷言**（序列化一個帶哨兵金鑰的 model，斷言哨兵不出現在 payload 任何位置——比檢查欄位名可靠）|
-| `test_skill_client.py` | 13 | 目錄的四種 body 形狀；**空目錄合法 vs 有內容但無名字則失敗**；4xx/5xx 帶狀態碼與 body；transport 錯誤帶 host；skill 文字的三種鍵與純文字；缺 base URL 的訊息；逐 attempt base URL 覆寫 |
-| `test_run_lifecycle.py` | 11 | cancel 的權限矩陣（owner ✓ / 觸發者 ✓ / 其他 viewer ✗）；非 running → 409；跨 eval set → 404；delete 為 owner-only 且 running 時 409 |
+| `test_workspace_client.py` | 13 | 整份 workspace 讀取；**config 保持巢狀不被攤平**；空 workspace 合法 vs 形狀不對則失敗；沒有 version 仍可用（只是失去過期檢查）；skills 不是 `{路徑: 文字}` 時報錯並指名是哪一筆；4xx/5xx 帶狀態碼與 body；非 JSON body 不猜；transport 錯誤帶 host；版本端點沒有 version 時報錯（**回空字串會被讀成「沒變」而讓檢查失效**）|
+| `test_shortlist.py` | 15（**8 個需 DB**）| synthesis：草稿來自 trace、**不寫回 attempt**、無 trace → 409、模型錯誤原文回傳、空草稿算失敗、別人的 attempt → 404。建立：只用 shortlist 建立；複製既有 set 的題目；**複製件拿到新的 question_id**；skill tag 一併複製；重複題目文字被跳過並計數；同文字時 shortlist 的版本勝出；**讀不到的 set 回 404 且什麼都沒建**；空的建立請求 → 422；建立者是 owner 且分享名單生效 |
+| `test_run_lifecycle.py` | 9 | cancel 的權限矩陣（owner ✓ / 觸發者 ✓ / 其他 viewer ✗）；非 running → 409；跨 eval set → 404；delete 為 owner-only 且 running 時 409 |
 | `test_results.py` | 8 | trace 檢視的狀態機。核心是**`pending` 的題目回 `not_started` 且對 trace store 發出零個請求**（用會記錄呼叫次數的 stub 斷言）|
 | `test_deletion.py` | 5 | `delete_run` / `delete_eval_set` 的 DELETE **順序**（子表先於父表，特別是 `question_results` 必須早於 `questions`），以及一個「schema 新增子表卻忘了加進刪除順序」的守門測試 |
 | `test_pagination.py` | 11（**需 DB**）| `limit`/`offset`/`total`/`has_more`；翻完所有頁**每張卡剛好出現一次**；只列出有權限的 set；搜尋與 metadata 篩選在 SQL 生效；趨勢受上限；regression 用最新兩個 run。**最重要的兩個是查詢數守門測試**：`GET /eval-sets` 與 `GET /runs` 在 `limit=1` 與 `limit=20` 時發出的查詢數必須**完全相同**——斷言時間會 flaky，斷言查詢數不會 |
@@ -1245,10 +1398,18 @@ LLM 路徑以 monkeypatch）。剩下 11 個（`test_pagination.py`）需要一�
 中止 44ms 生效；權限矩陣；刪除的 403/409/204；light/dark 兩個主題。
 
 **Playground**：同上環境，**33 項檢查全通過、無 console error**。含既有三層動線迴歸
-（三欄沒有被裁切、頁面不再垂直捲動）、從錯題帶入、skill 目錄載入與編輯、
+（三欄沒有被裁切、頁面不再垂直捲動）、從錯題帶入、workspace 載入與編輯、
 **送出後留在原地看中欄自己長出答案 → verdict → trace → 診斷**、
 **改過的 skill 文字出現在 span payload 裡**、只有問題的 attempt 的兩個階段畫刪除線、
 中止、clone、兩個主題。
+
+**workspace 編輯器與 shortlist**：真 Postgres + 真 backend + 真瀏覽器，light/dark 兩主題、
+1440 與 1180 兩種寬度。改一個 config 值 → 面板收起來後琥珀色數字還在 → 送出 → attempt 顯示
+「sent with an override of 1 config value」；改／刪 skill 檔後**磁碟上的 workspace 沒有被改到、
+版本字串沒有變**；下一個沒有 override 的 attempt trace 乾淨。
+shortlist：加入 → `Draft from trace` → 勾一個既有 set → 建立 → 跳到新 set 且顯示
+「Created with 3 questions」，用 API 確認升上來的那題帶著生成的流程、複製進來的兩題保留 skill tag
+且拿到新 id；**重新整理頁面後 shortlist 還在**（localStorage），建立後清空。
 
 **Langfuse 錯誤路徑**：用一個回傳真實 `Unknown table expression 'events'` 500 body 的 mock，
 確認兩條策略都被嘗試、錯誤訊息含兩者、瀏覽器顯示白話說明且原始 SQL 收在可展開區塊。
@@ -1260,8 +1421,9 @@ LLM 路徑以 monkeypatch）。剩下 11 個（`test_pagination.py`）需要一�
 | **Langfuse 讀取** | **已對接真環境**，真實 trace 讀得回來也渲染得出來。token 欄位兩種命名都處理過 |
 | **agent server（`/execute`）** | ❌ **只用自建 mock 驗過**。證明不了貴方的 `/execute` 是否真的回 `{"content": str}`。client 刻意寫得寬容，但真接上去仍可能需要微調 |
 | **LLM 端點（judge / diagnosis）** | ❌ **只用 mock 驗過**。證明不了貴方端點是否支援 `response_format: json_object`（被拒會自動退回，但仍未實測）|
-| **skill 目錄（`/skills`）** | ❌ **只有 respx 單元測試**，沒有對接過真正的 agent server |
-| **`metadata.skill_override`** | ❌ **還沒有任何 agent server 讀它**。§17 的三件事都還沒做 |
+| **agent workspace（`/get_workspace`、`/get_config_version`）** | ⚠️ **平台這一側只有 respx 單元測試**。agent server 那一側已依 `docs/agent_server_stage4_endpoints.md` 實作，但兩邊**尚未在本文件更新時完成對接驗證** |
+| **`metadata.workspace`** | ⚠️ 同上。特別要在真環境確認的是 **config 是 deep merge 而不是整份取代**——取代會讓 agent 沒有 API key，而那是一個很晚才會發現的失敗 |
+| **synthesis（`SYNTHESIS_IMPL=real`）** | ❌ **只用假層驗過**。真模型產出的顆粒度（會不會貼整段 SQL、會不會寫成十五步）需要真資料才知道，prompt 大概率要調 |
 | **診斷品質本身** | ❌ **完全未知**。診斷準確度只能在真實資料上跑起來後觀察——而那正是決定要不要投入 Stage 2 的依據 |
 | **`LLM_TIMEOUT_S` 的逐 run 版本** | ❌ 未做。`AGENT_TIMEOUT_S` 與 `LANGFUSE_TIMEOUT_S` 都能逐次調整，唯獨 LLM 的 timeout 仍是全域設定 |
 
@@ -1288,6 +1450,8 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 | **`LLM_TIMEOUT_S` 沒有逐 run 版本** | 補法很小：`RunConfig` 加欄位、defaults 加一行、往 client factory 傳進去、對話框加一格 |
 | **run config 無法比對** | 唯讀檢視一次只能看一個 run；要並排 diff 兩個 run 的設定還得自己切換 |
 | **真登入** | 目前是假登入（§11.2）。換掉一個依賴即可 |
+| **shortlist 只在單一瀏覽器** | 它存在 localStorage（§7.6）。換一台機器或換一個瀏覽器就看不到自己的 shortlist。要跨裝置就得落庫，而那要一張表與一次 migration |
+| **升上來的題目沒有血緣紀錄** | 新 set 不會記載「這幾題來自哪個 set / 哪個 attempt」。`questions` 沒有 metadata 欄位，寫進 eval set 的 metadata 又會污染使用者自己的篩選鍵 |
 | **Playground 不落庫的連帶限制** | backend 重啟清空 attempt；多 worker 部署會壞（與 SSE hub 同一個限制）|
 | **窄視窗只到「能用」** | 側邊欄在 1100px 以下自動收成圖示、三欄在 900px 以下改為堆疊，已驗證 780px 不出現水平捲軸。但這是**桌面工具**，手機尺寸沒有設計過 |
 | **設計 token 只套一半** | `--text-*` / `--space-*` 只用在這次動到的表面；`.upload-table`、`.payload`、`.spanrow` 等仍是硬寫數值（§10.5）|
@@ -1306,7 +1470,7 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 | 4 | **correct/incorrect 的判準**：LLM judge 可能給連續分數或「部分正確」，二元化門檻要定義 | ✅ **已定案**：LLM 同時吐 verdict + score；另有可選的 `JUDGE_SCORE_THRESHOLD` 由分數推導。🟡「部分正確」的分級**未做** |
 | 5 | **skill-selection 錯誤沒被涵蓋**：題目標了「該用 skill X」，但 agent 可能**讀錯 skill**（常見 bug）。若錯在選錯 skill，錯誤歸因與優化對象都會指錯 | 🟡 **未專門處理**。Stage 1 只能靠 `caveat` 粗略承接。原設計建議：額外比對「agent 實際讀的 skill」vs「題目標註的 skill」，不一致時把讀 skill 的那個 span 標為高機率錯誤來源 |
 | 6 | **SkillOpt 的施力點假設過強**：假設「錯 → 優化 skill 就能修」，但錯誤可能在 SQL tool、base model 或 skill 以外 | 🟡 **已用 caveat 預先承接**（§4.2）：有 caveat 的題目在 Stage 3 預設不納入樣本 |
-| 7 | **重跑實驗需要 agent server 端的新能力**：per-request skill override | ✅ **平台側已做**（Stage 4）。❌ **agent server 側還沒做**（§17）|
+| 7 | **重跑實驗需要 agent server 端的新能力**：per-request workspace override | ✅ **平台側已做**（Stage 4）。✅ **agent server 側也已依契約實作**，但兩邊尚未完成對接驗證（§14.3、§17）|
 | 8 | **非決定性讓「trace 是否不同」不可靠**：LLM 有溫度，重跑幾乎必然有差異 | ✅ **設計上承認**：Playground 不做「一按跑 N 次取多數」，也不做自動的改善判定；由開發者自己多按幾次。Stage 3 若要自動驗證改善，應以 score / outcome 比較（甚至重跑 N 次取多數），**而非比對 raw trace diff** |
 | 9 | **「存回 agent server」是新平台對 agent server 的寫入耦合**：需要 skill 更新 API + 版本控制 / rollback | 🔴 **Stage 3，未做** |
 | 10 | **成本 / 規模**：把整條 trace 餵給 LLM 做錯誤定位，token 成本可能很高 | ✅ **已處理**：只截 body 不砍 span（§4.4）；診斷生成一次就落庫、只有手動才重算（§4.5）|
@@ -1327,16 +1491,28 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 
 **這些都在本 repo 之外，需要 agent server 團隊配合。**
 
+**完整契約寫在 [`docs/agent_server_stage4_endpoints.md`](agent_server_stage4_endpoints.md)**——
+那份是寫給 agent server 實作者看的：每個端點的 input / output / 處理步驟 / curl 驗收清單，
+不預設讀者知道這個平台的存在。以下只列需求與狀態。
+
 | # | 需求 | 為什麼必要 | 狀態 |
 |---|---|---|---|
-| 1 | `POST /execute` 讀 `metadata.trace_data.trace_id`，**用它當 Langfuse trace id** | 沒有這一步，平台無從找回自己剛觸發的 trace，**整個錯誤定位功能失效** | ✅ 已確認可實作，無 blocker |
-| 2 | `POST /execute` 讀 `metadata.skill_override = {"name","content"}`，有值時**這一次呼叫**改用該 skill 文字，**不落磁碟、不影響其他 request** | Playground 的迭代沙盒（Stage 4）與 Stage 3 的重跑實驗都靠它 | ❌ **未做** |
-| 3 | `GET /skills` → `{"skills":[{"name","description"}]}` | 讓 Playground 從真實的 skill 文字開始編輯，而不是從空白 textarea | ❌ **未做** |
-| 4 | `GET /skills/{name}` → `{"name","content"}` | 同上 | ❌ **未做** |
+| 1 | `POST /execute` 讀 `metadata.trace_data.trace_id`，**用它當 Langfuse trace id** | 沒有這一步，平台無從找回自己剛觸發的 trace，**整個錯誤定位功能失效** | ✅ 已實作 |
+| 2 | `GET /get_workspace` → `{"version", "config", "redacted_paths", "skills"}`：`config.json` 移除機密後的內容 + 每個 skill 檔（`{相對路徑: 文字}`）+ 版本字串 | 讓 Playground 從**真實的** config 與 skill 檔開始編輯，而不是從空白 textarea | ✅ 已實作 |
+| 3 | `GET /get_config_version` → `{"version"}`，與上面同一個字串 | 送出前的過期檢查（§4.10a）。單獨一個端點是因為它被問得頻繁得多 | ✅ 已實作 |
+| 4 | `POST /execute` 讀 `metadata.workspace = {config?, skills?}`，**只影響這一次呼叫、不落磁碟、不影響其他 request** | Playground 的迭代沙盒（Stage 4）與 Stage 3 的重跑實驗都靠它 | ✅ 已實作 |
 | 5 | skill 更新 API + 版本控制 / rollback | Stage 3 的「存回 agent server」 | 🔴 Stage 3，未規劃 |
 
 **第 2–4 項都是加法**，不改動既有 `/execute` 契約：沒有 override 時 request body 與現在**完全相同**
-（連 `skill_override` 這個 key 都不會出現）。
+（連 `workspace` 這個 key 都不會出現）。
+
+**兩條規則撐著整個設計，也是最容易被「順手優化」掉的**（詳見那份契約的 §5.2 / §5.3）：
+
+1. **傳入的 `config` 是 deep merge 到 agent 自己的 `config.json` 上，不是整份取代。**
+   平台拿到的快照已經把機密刪掉了，整份取代會讓 agent 沒有 API key——而那是一個很晚才會發現的失敗。
+2. **傳入的 `skills` 是整份取代。** 沒有取代就表達不出「把某個 reference 檔刪掉試試看」。
+
+> 這兩者刻意不對稱。實作者若把它們「統一」，其中一個就會壞掉。
 
 ---
 
@@ -1353,9 +1529,13 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
    診斷指對的比例大概多少？caveat 出現的頻率？多少題其實錯在 tool 而不在 skill？
    > **這一步的觀察是整個專案最重要的一份資料。** 它決定 Stage 2（機率熱點）值不值得做，
    > 也決定 Stage 3（SkillOpt）的前提假設站不站得住。在此之前投入 Stage 2/3 是在賭博。
-4. **同時把 §17 的第 2–4 項推給 agent server 團隊**（都是小改動），
-   Playground 就能從「看得到 trace」升級成「真的能改 skill 重試」。
-5. **補 §15.2 的小缺口**時，優先考慮 **verdict 寫回 Langfuse Score**——
+4. **完成 agent server 那一側的對接驗證**（§17 的 2–4 項已經實作，但兩邊還沒一起跑過）。
+   優先確認的順序是：`get_workspace` 讀得回來 → 帶 `metadata.workspace` 送一題、
+   **確認 agent 仍然叫得動 LLM**（這一項在驗 config 是 merge 而不是取代）→
+   注入的文字出現在 trace 第一個 span 的 system message 裡。
+5. **開 `SYNTHESIS_IMPL=real` 並調 prompt**（§8.3）。假層產出的顆粒度是設計出來的，
+   真模型會不會貼整段 SQL、會不會寫成十五步，只有真資料知道。
+6. **補 §15.2 的小缺口**時，優先考慮 **verdict 寫回 Langfuse Score**——
    那讓兩個系統的真相一致，成本也不高。
 
 **如果你要修改程式碼，先讀這四段**：§4（設計決策的理由）、§6.2（失敗策略）、
