@@ -326,6 +326,60 @@ class PlaygroundCreate(BaseModel):
     secrets: RunSecrets = Field(default_factory=RunSecrets)
 
 
+class SynthesisOut(BaseModel):
+    """A drafted expected process, plus which model drafted it.
+
+    Not stored on the attempt: it is a starting point for the shortlist's editor
+    (§10.8), and the developer is expected to change it before it becomes a
+    question's ground truth.
+    """
+
+    reasoning_process: str
+    model_used: str
+
+
+class ShortlistQuestion(BaseModel):
+    """One question a developer promoted out of the playground (§10.8).
+
+    All three fields are required because `questions` requires all three — an
+    eval set with a blank expected process would be un-diagnosable, so the
+    shortlist dialog cannot submit until they are filled in.
+    """
+
+    question: str = Field(min_length=1)
+    ground_truth_response: str = Field(min_length=1)
+    ground_truth_reasoning: str = Field(min_length=1)
+    skills: list[str] = Field(default_factory=list)
+
+
+class EvalSetFromShortlist(BaseModel):
+    """Body of POST /eval-sets/from-shortlist.
+
+    Same identity fields as a normal upload, plus the two sources of questions:
+    the shortlisted ones, and whole eval sets to copy questions out of. The
+    second exists because an eval set is locked after creation (§4.6) — the only
+    way to end up with "the old questions plus these new ones" is to build a new
+    set from both.
+    """
+
+    name: str = Field(min_length=1)
+    description: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+    shares: list[ShareEntry] = Field(default_factory=list)
+    questions: list[ShortlistQuestion] = Field(default_factory=list)
+    # Copied in listed order, after the shortlisted questions.
+    include_eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class EvalSetFromShortlistOut(BaseModel):
+    id: uuid.UUID
+    question_count: int
+    # Questions dropped because an identical question text was already in the
+    # new set. Reported rather than silently skipped: "I selected two sets and
+    # got fewer questions than they hold" needs an answer on screen.
+    duplicates_skipped: int = 0
+
+
 class PlaygroundAttemptOut(BaseModel):
     """One attempt, as the list and the header show it."""
 

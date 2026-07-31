@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     judge_impl: Impl = "fake"
     trace_impl: Impl = "fake"
     diagnosis_impl: Impl = "fake"
+    # Drafts an expected reasoning process from a trace, for a question being
+    # promoted out of the playground (§10.8). Shares the LLM endpoint with the
+    # judge and the diagnosis.
+    synthesis_impl: Impl = "fake"
     # The playground's view of the agent's config + skill files (§10.2).
     # Read-only against the agent server, so it is the cheapest seam to switch
     # on first.
@@ -66,6 +70,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     judge_model: str = "Qwen3.6-27B"
     diagnosis_model: str = "Qwen3.6-27B"
+    synthesis_model: str = "Qwen3.6-27B"
     # Optional override: when set, the verdict is derived from the judge's
     # continuous score (score >= threshold -> correct) instead of trusting the
     # verdict field the model returned. §6.7 deliberately left this knob open.

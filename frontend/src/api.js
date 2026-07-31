@@ -59,6 +59,11 @@ export const api = {
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
   createEvalSet: (payload) => req("POST", "/eval-sets", payload),
+  // Promote shortlisted playground questions into a new eval set, optionally
+  // copying in the questions of sets that already exist (§10.8). A set is locked
+  // after creation, so "the old questions plus these" can only be a new set.
+  createEvalSetFromShortlist: (payload) =>
+    req("POST", "/eval-sets/from-shortlist", payload),
   updateEvalSet: (id, payload) => req("PATCH", `/eval-sets/${id}`, payload),
   deleteEvalSet: (id) => req("DELETE", `/eval-sets/${id}`),
   updateRoles: (id, shares) => req("PUT", `/eval-sets/${id}/roles`, { shares }),
@@ -101,6 +106,11 @@ export const api = {
   deleteAttempt: (attemptId) => req("DELETE", `/playground/attempts/${attemptId}`),
   reDiagnoseAttempt: (attemptId) =>
     req("POST", `/playground/attempts/${attemptId}/re-diagnose`),
+  // Draft an expected process from an attempt's trace. On a button, never
+  // automatic: the draft says what the agent did, and only a person can decide
+  // whether that is what should be expected.
+  synthesizeReasoning: (attemptId) =>
+    req("POST", `/playground/attempts/${attemptId}/synthesize-reasoning`),
   attemptProgressUrl: (attemptId) =>
     `${BASE}/playground/attempts/${attemptId}/progress?subject=${encodeURIComponent(subject)}`,
 };

@@ -1,5 +1,5 @@
 import React from "react";
-import { IconCopy, IconStop, IconTrash } from "./icons.jsx";
+import { IconCopy, IconPlus, IconStop, IconTrash } from "./icons.jsx";
 import { overrideCounts } from "../workspace_util.js";
 
 // Left column of the playground: this session's attempts, newest first.
@@ -50,6 +50,7 @@ function note(a) {
 
 export default function AttemptList({
   attempts, activeId, onPick, onClone, onCancel, onDelete,
+  shortlistedIds, onShortlist,
 }) {
   return (
     <div className="col">
@@ -100,6 +101,23 @@ export default function AttemptList({
             )}
           </div>
           <div className="attempt-actions">
+            {/* Only a finished attempt has an answer to promote, and the
+                shortlist copies that answer in as the starting ground truth. */}
+            <button
+              className={shortlistedIds?.has(a.id) ? "active" : ""}
+              disabled={a.status === "running" || shortlistedIds?.has(a.id)}
+              title={
+                shortlistedIds?.has(a.id)
+                  ? "Already shortlisted"
+                  : "Shortlist this question for a new eval set"
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                onShortlist(a);
+              }}
+            >
+              <IconPlus size={13} />
+            </button>
             <button
               title="Copy this attempt's question, workspace edits and settings into the composer"
               onClick={(e) => {

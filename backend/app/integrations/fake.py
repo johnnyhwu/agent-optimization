@@ -1,4 +1,4 @@
-"""Fake implementations of the five seams (Stage 1 POC + §10 playground).
+"""Fake implementations of the six seams (Stage 1 POC + §10 playground).
 
 Every method simulates realistic latency (values from app/fake_config.py) and
 returns deterministic-but-plausible data so the UI + data flow can be exercised
@@ -400,6 +400,29 @@ _FAKE_SKILL_FILES: dict[str, str] = {
         "3. Never guess a figure to avoid escalating.\n"
     ),
 }
+
+
+class FakeSynthesisClient:
+    # REPLACE WITH REAL IMPL: app/integrations/real/synthesis.py (§10.8).
+    model_name = "fake-synthesis"
+
+    async def synthesize(self, trace: Trace, question: str, agent_response: str) -> str:
+        """The same shape a real draft has: numbered steps, one per action.
+
+        Built from the trace rather than canned, so the fake demo shows what the
+        button actually does — including that the steps follow the spans the
+        developer can see beside them.
+        """
+        await _sleep_between(fc.DIAGNOSIS_LATENCY_MIN_S, fc.DIAGNOSIS_LATENCY_MAX_S)
+        steps = [
+            f"{i + 1}. Called `{span.tool_name}` and used what it returned."
+            for i, span in enumerate(trace.spans[:-1])
+        ]
+        steps.append(
+            f"{len(steps) + 1}. Produced the final answer presenting "
+            f"{(agent_response or 'the result').strip()[:80]}"
+        )
+        return "\n".join(steps)
 
 
 class FakeWorkspaceClient:

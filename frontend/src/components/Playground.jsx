@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import AttemptList from "./AttemptList.jsx";
 import Modal from "./Modal.jsx";
+import ShortlistDialog from "./ShortlistDialog.jsx";
 import PhaseSteps from "./PhaseSteps.jsx";
 import PlaygroundComposer from "./PlaygroundComposer.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import SpanList from "./SpanList.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconRefresh } from "./icons.jsx";
+import { IconBookmark, IconRefresh } from "./icons.jsx";
 import {
   diffConfig,
   editedFiles,
@@ -15,6 +16,8 @@ import {
   sameSkills,
   stripRedacted,
 } from "../workspace_util.js";
+import * as shortlist from "../shortlist.js";
+import { href, navigate } from "../useHashRoute.js";
 
 // The playground (§10): one question at a time, against an editable copy of the
 // agent's own config and skill files.
@@ -78,6 +81,13 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // edit, and sending anyway may be exactly what was intended.
   const [stale, setStale] = useState(null);
 
+  // Questions on their way out of the playground and into an eval set (§10.8).
+  // Copies, not references: an attempt is evicted at the per-user cap and lost
+  // on a backend restart, and losing a shortlist entry to either would be worst
+  // exactly when someone is iterating hardest.
+  const [shortlistItems, setShortlistItems] = useState([]);
+  const [shortlistOpen, setShortlistOpen] = useState(false);
+
   const active = attempts.find((a) => a.id === activeId) || null;
 
   useEffect(() => {
@@ -98,6 +108,26 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   useEffect(() => {
     loadWorkspace();
   }, []);
+
+  useEffect(() => {
+    setShortlistItems(shortlist.readShortlist(subject));
+  }, [subject]);
+
+  async function addToShortlist(attempt) {
+    try {
+      // Fetched rather than read off the list row for the same reason cloning
+      // is: the answer and both ground-truth fields only exist on the detail
+      // payload, and a shortlist entry missing them is one the developer has to
+      // retype from memory.
+      const full = await api.getAttempt(attempt.id);
+      setShortlistItems(
+        shortlist.add(subject, shortlist.itemFromAttempt(attempt, full))
+      );
+      toast.success("Shortlisted");
+    } catch (e) {
+      toast.error(e.message);
+    }
+  }
 
   async function loadWorkspace() {
     setWsLoading(true);
@@ -424,9 +454,21 @@ export default function Playground({ subject, seed, onSeedApplied }) {
             in the backend's memory until it restarts.
           </p>
         </div>
-        <button onClick={reload} title="Reload the attempt list">
-          <IconRefresh size={14} /> Refresh
-        </button>
+        <div className="page-head-actions">
+          <button
+            className={shortlistItems.length ? "active" : ""}
+            onClick={() => setShortlistOpen(true)}
+            title="Review shortlisted questions and create an eval set from them"
+          >
+            <IconBookmark size={14} /> Shortlist
+            {shortlistItems.length > 0 && (
+              <span className="count">{shortlistItems.length}</span>
+            )}
+          </button>
+          <button onClick={reload} title="Reload the attempt list">
+            <IconRefresh size={14} /> Refresh
+          </button>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -473,6 +515,8 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           onClone={clone}
           onCancel={cancel}
           onDelete={remove}
+          shortlistedIds={new Set(shortlistItems.map((i) => i.id))}
+          onShortlist={addToShortlist}
         />
         <SpanList
           trace={trace}
@@ -491,6 +535,26 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           suspect={activeSpanObj ? suspectByIndex[activeSpanObj.index] : null}
         />
       </div>
+
+      {shortlistOpen && (
+        <ShortlistDialog
+          items={shortlistItems}
+          subject={subject}
+          onChange={(id, fields) => setShortlistItems(shortlist.update(subject, id, fields))}
+          onRemove={(id) => setShortlistItems(shortlist.remove(subject, id))}
+          onClose={() => setShortlistOpen(false)}
+          onCreated={(evalSetId) => {
+            // The shortlist has done its job; keeping it would invite the same
+            // questions being promoted twice into two different sets.
+            setShortlistItems(shortlist.clear(subject));
+            setShortlistOpen(false);
+            // Built by intent rather than by string: the hash shape lives in
+            // one place, and a hand-written one silently falls back to the
+            // eval-set list instead of opening what was just created.
+            navigate(href.evalSet(evalSetId));
+          }}
+        />
+      )}
 
       {stale && (
         <Modal

@@ -152,6 +152,12 @@ export const IconBeaker = (p) => (
     <path d="M7 15h10" />
   </S>
 );
+// Shortlist: questions set aside to become an eval set.
+export const IconBookmark = (p) => (
+  <S {...p}>
+    <path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1z" />
+  </S>
+);
 // Optimize: the skill comes back better than it went in.
 export const IconSparkles = (p) => (
   <S {...p}>

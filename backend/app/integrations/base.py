@@ -1,4 +1,4 @@
-"""The five integration seams as Protocols + shared data types (§6.15, §10.2).
+"""The six integration seams as Protocols + shared data types (§6.15, §10.2).
 
 A real implementation swaps in behind the SAME interface — the orchestrator and
 routers depend only on these Protocols, never on a concrete module.
@@ -9,6 +9,7 @@ Seams:
     TraceClient.fetch_trace(correlation_id)                           -> Trace | NotReady
     DiagnosisClient.diagnose(trace, ground_truth_reasoning, verdict)  -> dict (§6.9 JSON)
     WorkspaceClient.get_workspace() / .get_version()                  -> the agent's config + skills
+    SynthesisClient.synthesize(trace, question, response)             -> a draft expected process
 """
 from __future__ import annotations
 
@@ -189,6 +190,21 @@ class DiagnosisClient(Protocol):
         self, trace: Trace, ground_truth_reasoning: str,
         judge_verdict: Verdict | None,
     ) -> dict: ...
+
+
+@runtime_checkable
+class SynthesisClient(Protocol):
+    """Draft an expected reasoning process from a trace the agent produced.
+
+    Offered on a button, never run automatically (§10.8): the output describes
+    what the agent did, and turning that into what is *expected* is a judgement
+    only the developer can make. Synthesising for every attempt would also be a
+    real LLM bill for drafts nobody asked for.
+    """
+
+    model_name: str
+
+    async def synthesize(self, trace: Trace, question: str, agent_response: str) -> str: ...
 
 
 @runtime_checkable
