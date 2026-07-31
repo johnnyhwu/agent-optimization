@@ -7,14 +7,16 @@ diagnosis** that jumps the UI straight to the suspect span with its
 input/output/token detail.
 
 Plus the **Playground** (Stage 4) — a second section where one ad-hoc question
-goes to the agent with an **editable skill**, so the hypothesis you form while
-reading a failed trace can be tested without editing an eval set and running the
-whole thing. See [The playground](#the-playground).
+goes to the agent with an **editable copy of its config and skill files**, so the
+hypothesis you form while reading a failed trace can be tested without editing an
+eval set and running the whole thing — and the questions worth keeping can be
+promoted into a new eval set. See [The playground](#the-playground).
 
 Every external dependency sits behind a swappable interface with **two
 implementations**: a fake one with realistic latency, and a real one (HTTP agent
-server, LLM judge, LLM diagnosis, Langfuse trace fetch, agent skill catalogue).
-All five default to fake, so the demo runs on nothing but Docker; each can be
+server, LLM judge, LLM diagnosis, LLM synthesis, Langfuse trace fetch, the agent's
+own workspace).
+All six default to fake, so the demo runs on nothing but Docker; each can be
 switched to real independently — see
 [Going from fake to real](#going-from-fake-to-real). The app DB schema is the
 real thing, created by Alembic migrations.
@@ -271,15 +273,15 @@ make migrate    # alembic upgrade head, in the backend container
 make seed       # python -m app.seed, in the backend container
 make backend    # backend container: uvicorn app.main:app --reload on :8000
 make frontend   # frontend container: vite dev server on :5173
-make test       # backend unit tests (no DB or external service needed; the 11
-                #   database-backed paging tests skip — see "Paging the lists")
+make test       # backend unit tests (no DB or external service needed; the 20
+                #   database-backed tests skip — see "Paging the lists")
 make preflight  # ping whichever integrations are set to real
 make down       # docker compose down
 ```
 
 ## Going from fake to real
 Out of the box every external dependency is faked, so the demo runs with nothing
-but Docker. The five seams (spec §3.2) each have their own switch, so you can
+but Docker. The six seams (spec §3.2) each have their own switch, so you can
 bring them up **one at a time** — a real agent while the judge is still fake, and
 so on.
 
@@ -588,11 +590,13 @@ already loaded.
 
 Both endpoints issue a **fixed number of queries regardless of page size**;
 `backend/tests/test_pagination.py` asserts it. Those tests need a database and
-skip without one, so `make test` stays DB-free:
+skip without one, so `make test` stays DB-free. The same is true of the half of
+`test_shortlist.py` that creates eval sets — copying questions, checking
+permissions and de-duplicating are all SQL:
 
 ```bash
 createdb agenteval_test
-TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest tests/test_pagination.py
+TEST_DATABASE_URL='postgresql+asyncpg://localhost/agenteval_test' pytest
 ```
 
 ## Upload schema
