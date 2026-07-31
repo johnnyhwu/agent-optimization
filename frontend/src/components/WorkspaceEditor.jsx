@@ -3,19 +3,28 @@ import {
   editedFiles,
   flattenLeaves,
   getAt,
+  isLeaf,
   isRedacted,
   sameValue,
   setAt,
   skillOf,
 } from "../workspace_util.js";
-import { IconRefresh } from "./icons.jsx";
+import { IconChevronRight, IconPlus, IconRefresh, IconTrash } from "./icons.jsx";
 
 // Edit the agent's config and skill files for one call (§10.2 / §10.7).
 //
 // The editor is a working copy of the whole workspace: what the agent server
 // gave us (`snapshot`) stays untouched so every field can be reverted to it, and
 // `edit` is what the developer has done to it. Turning that into a request is
-// the composer's job, not this component's.
+// the composer's job, not this component's; which of the two panels is showing
+// is the composer's too, so all four of the composer's panels behave alike.
+//
+// **The config is a tree, not a form.** Flattening it produced a wall of boxes
+// where the only thing telling `enabled` under `tools.sql_query` apart from
+// `enabled` under `tools.vector_search` was small grey text beside the name. The
+// hierarchy is how the developer already thinks about config.json, so it is the
+// structure here too: collapsed groups, an edit count on each, and one value per
+// row so the controls line up down a single edge.
 //
 // Three things this deliberately does NOT claim:
 //   * That the override took effect. The platform cannot verify that — the
@@ -25,17 +34,22 @@ import { IconRefresh } from "./icons.jsx";
 //     the header says rather than letting someone edit a fake skill expecting
 //     the real agent to have it.
 //   * That a redacted field is absent. The agent server withholds its own API
-//     keys, and the field is shown disabled rather than dropped: a field that
-//     vanishes invites someone to re-add it by hand and shadow the real value.
+//     keys, and the field is shown in place, disabled, rather than dropped: a
+//     field that vanishes invites someone to re-add it and shadow the real value.
 //
 // A workspace that cannot be read is an error with its reason, never a blank
 // form — losing the starting point silently would have the developer retype a
 // skill from memory and then test the wrong text.
+
+// Marks a config leaf the agent server withheld. A symbol rather than a string
+// so no real config value can ever be mistaken for one.
+const REDACTED = Symbol("redacted");
+
 export default function WorkspaceEditor({
-  snapshot, edit, onChange, loading, error, onReload, fakeSeam,
+  tab, snapshot, edit, onChange, loading, error, onReload, fakeSeam,
 }) {
-  const [tab, setTab] = useState("config");
   const [openFile, setOpenFile] = useState(null);
+  const [openGroups, setOpenGroups] = useState({});
   // JSON that does not parse yet is held here rather than pushed into the
   // working copy: half-typed text is not a value, and propagating it would put
   // a string where the agent expects a list.
@@ -46,7 +60,7 @@ export default function WorkspaceEditor({
     return (
       <div className="workspace-editor">
         <div className="hint error-text">
-          Could not read the agent's workspace: {error}
+          Could not read the agent's workspace: {error}{" "}
           <button className="linkish" onClick={onReload}>
             <IconRefresh size={12} /> retry
           </button>
@@ -62,18 +76,23 @@ export default function WorkspaceEditor({
     );
   }
 
-  // A secret the agent server masked rather than removed would otherwise get an
-  // editable box, and typing over the mask would send the mask itself as the
-  // new key. Redacted paths are shown below, disabled, whichever way they came.
-  const leaves = flattenLeaves(edit.config).filter(
-    ({ path }) => !isRedacted(path, snapshot.redacted_paths)
+  const changed = new Set(
+    flattenLeaves(edit.config)
+      .filter(({ path, value }) => !sameValue(getAt(snapshot.config, path), value))
+      .map(({ path }) => path)
   );
-  const changedPaths = leaves
-    .filter(({ path, value }) => !sameValue(getAt(snapshot.config, path), value))
-    .map(({ path }) => path);
   const changedFiles = editedFiles(snapshot.skills, edit.skills);
   const files = Object.keys(edit.skills).sort();
+  const deletedFiles = Object.keys(snapshot.skills).filter((p) => !(p in edit.skills)).sort();
   const active = openFile && openFile in edit.skills ? openFile : null;
+
+  // The tree the config panel renders: the working copy with each withheld
+  // secret put back as a placeholder, so `api_key` appears under
+  // `agents.defaults` where it lives rather than in a list of orphans.
+  const tree = snapshot.redacted_paths.reduce(
+    (acc, path) => (getAt(acc, path) === undefined ? setAt(acc, path, REDACTED) : acc),
+    edit.config
+  );
 
   const setConfig = (path, value) =>
     onChange({ ...edit, config: setAt(edit.config, path, value) });
@@ -107,182 +126,156 @@ export default function WorkspaceEditor({
     setJsonDrafts({});
   }
 
-  const dirty = changedPaths.length + changedFiles.length;
+  const dirty = changed.size + changedFiles.length;
 
   return (
     <div className="workspace-editor">
-      <div className="workspace-head">
-        <div className="workspace-tabs">
-          <button
-            className={tab === "config" ? "active" : ""}
-            onClick={() => setTab("config")}
-          >
-            Config
-            {changedPaths.length > 0 && <span className="count">{changedPaths.length}</span>}
-          </button>
-          <button
-            className={tab === "skills" ? "active" : ""}
-            onClick={() => setTab("skills")}
-          >
-            Skill files
-            {changedFiles.length > 0 && <span className="count">{changedFiles.length}</span>}
-          </button>
-        </div>
+      <div className="workspace-bar">
+        <span className="workspace-source">
+          {fakeSeam ? (
+            <>
+              <strong>WORKSPACE_IMPL=fake</strong> — a canned workspace, not the agent's.
+            </>
+          ) : snapshot.version ? (
+            <>
+              From the agent server at <code>{snapshot.version}</code>.
+            </>
+          ) : (
+            <>From the agent server, which reports no version — staleness cannot be checked.</>
+          )}{" "}
+          Applies to the next question only; nothing is written back.
+        </span>
         <div className="grow" />
         {dirty > 0 && (
           <button className="linkish" onClick={resetAll}>
-            reset everything
+            Reset all {dirty}
           </button>
         )}
-        <button onClick={onReload} disabled={loading} title="Re-read the agent's workspace">
-          <IconRefresh size={13} /> {loading ? "Reading…" : "Reload"}
+        <button
+          className="icon-btn"
+          onClick={onReload}
+          disabled={loading}
+          title="Re-read the agent's config and skill files"
+          aria-label="Reload the workspace"
+        >
+          <IconRefresh size={14} />
         </button>
       </div>
 
-      <div className="hint workspace-source">
-        {fakeSeam ? (
-          <>WORKSPACE_IMPL=fake — this is a canned workspace, not the agent's.</>
+      {tab === "config" &&
+        (Object.keys(tree).length === 0 ? (
+          <div className="hint">This agent reports no configuration.</div>
         ) : (
-          <>
-            From the agent server
-            {snapshot.version ? (
-              <>
-                {" "}
-                at version <code>{snapshot.version}</code>
-              </>
-            ) : (
-              <> (which reports no version, so staleness cannot be checked)</>
-            )}
-            .
-          </>
-        )}{" "}
-        Edits apply to the next question only — nothing is written back.
-      </div>
-
-      {tab === "config" && (
-        <div className="config-grid">
-          {leaves.map(({ path, key, parent, value }) => {
-            const original = getAt(snapshot.config, path);
-            const changed = !sameValue(original, value);
-            return (
-              <ConfigField
-                key={path}
-                name={key}
-                parent={parent}
-                value={value}
-                changed={changed}
-                draft={jsonDrafts[path]}
-                onDraft={(text) => setJsonDrafts({ ...jsonDrafts, [path]: text })}
-                onClearDraft={() => {
-                  const next = { ...jsonDrafts };
-                  delete next[path];
-                  setJsonDrafts(next);
-                }}
-                onChange={(v) => setConfig(path, v)}
-                onRevert={() => setConfig(path, original)}
-              />
-            );
-          })}
-          {snapshot.redacted_paths.map((path) => (
-            <div className="field config-field" key={path}>
-              <label>
-                <strong>{path.split(".").pop()}</strong>
-                <span className="muted">{path.split(".").slice(0, -1).join(".")}</span>
-              </label>
-              <input value="" disabled placeholder="hidden by the agent server" />
-              <div className="hint">
-                A secret. The agent uses its own value; it is never sent here and
-                cannot be overridden.
-              </div>
-            </div>
-          ))}
-          {leaves.length === 0 && snapshot.redacted_paths.length === 0 && (
-            <div className="hint">This agent reports no configuration.</div>
-          )}
-        </div>
-      )}
+          <div className="ws-tree">
+            <ConfigNodes
+              node={tree}
+              prefix=""
+              snapshot={snapshot}
+              changed={changed}
+              openGroups={openGroups}
+              setOpenGroups={setOpenGroups}
+              jsonDrafts={jsonDrafts}
+              setJsonDrafts={setJsonDrafts}
+              onSet={setConfig}
+            />
+          </div>
+        ))}
 
       {tab === "skills" && (
         <div className="skills-pane">
           <div className="skill-files">
-            {files.map((path, i) => {
-              const group = skillOf(path);
-              const newGroup = i === 0 || skillOf(files[i - 1]) !== group;
-              return (
-                <React.Fragment key={path}>
-                  {newGroup && <div className="skill-group">{group || "/"}</div>}
-                  <button
-                    className={`skill-file${active === path ? " active" : ""}`}
-                    onClick={() => setOpenFile(path)}
-                  >
-                    <span className="path">{path.slice(group ? group.length + 1 : 0)}</span>
-                    {snapshot.skills[path] !== edit.skills[path] && (
-                      <span className="badge">{path in snapshot.skills ? "edited" : "new"}</span>
-                    )}
-                  </button>
-                </React.Fragment>
-              );
-            })}
-            {Object.keys(snapshot.skills)
-              .filter((p) => !(p in edit.skills))
-              .sort()
-              .map((path) => (
+            <div className="skill-scroll">
+              {files.map((path, i) => {
+                const group = skillOf(path);
+                const newGroup = i === 0 || skillOf(files[i - 1]) !== group;
+                const state =
+                  snapshot.skills[path] === edit.skills[path]
+                    ? null
+                    : path in snapshot.skills
+                      ? "edited"
+                      : "new";
+                return (
+                  <React.Fragment key={path}>
+                    {newGroup && <div className="skill-group">{group || "/"}</div>}
+                    <button
+                      className={`skill-file${active === path ? " active" : ""}`}
+                      onClick={() => setOpenFile(path)}
+                      title={path}
+                    >
+                      <span className="path">{path.slice(group ? group.length + 1 : 0)}</span>
+                      {state && <span className="badge">{state}</span>}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+              {deletedFiles.length > 0 && <div className="skill-group">Deleted for this call</div>}
+              {deletedFiles.map((path) => (
                 <button
                   key={path}
                   className="skill-file deleted"
                   onClick={() => restoreFile(path)}
-                  title="Restore this file"
+                  title={`Restore ${path}`}
                 >
                   <span className="path">{path}</span>
-                  <span className="badge">deleted</span>
+                  <IconRefresh size={12} />
                 </button>
               ))}
-            <div className="skill-add">
-              <input
-                value={newPath}
-                placeholder="billing/references/new.md"
-                onChange={(e) => setNewPath(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addFile()}
-              />
-              <button onClick={addFile} disabled={!newPath.trim()}>
-                Add
-              </button>
+              {files.length === 0 && deletedFiles.length === 0 && (
+                <div className="hint">This agent has no skill files.</div>
+              )}
             </div>
-            {files.length === 0 && Object.keys(snapshot.skills).length === 0 && (
-              <div className="hint">This agent has no skill files.</div>
-            )}
+
+            <div className="skill-add">
+              <label>New file</label>
+              <div className="skill-add-row">
+                <input
+                  value={newPath}
+                  placeholder="billing/references/new.md"
+                  onChange={(e) => setNewPath(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addFile()}
+                />
+                <button onClick={addFile} disabled={!newPath.trim()} title="Add this file">
+                  <IconPlus size={13} />
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="skill-body">
             {active ? (
-              <div className="field">
-                <label>
-                  {active}
+              <>
+                <div className="skill-body-head">
+                  <span className="skill-path">{active}</span>
                   {snapshot.skills[active] !== edit.skills[active] && (
-                    <span className="badge">edited</span>
+                    <span className="badge">
+                      {active in snapshot.skills ? "edited" : "new"}
+                    </span>
                   )}
+                  <div className="grow" />
                   <button
-                    className="linkish"
+                    className="icon-btn"
                     onClick={() => restoreFile(active)}
                     disabled={snapshot.skills[active] === edit.skills[active]}
                     title="Restore the text as the agent server has it"
+                    aria-label="Revert this file"
                   >
-                    <IconRefresh size={12} /> revert
+                    <IconRefresh size={14} />
                   </button>
                   <button
-                    className="linkish"
+                    className="icon-btn danger-btn"
                     onClick={() => removeFile(active)}
                     title="Run the next question without this file"
+                    aria-label="Delete this file for the next call"
                   >
-                    delete
+                    <IconTrash size={14} />
                   </button>
-                </label>
+                </div>
                 <textarea
                   className="skill-text"
                   value={edit.skills[active]}
                   onChange={(e) => setFile(active, e.target.value)}
                 />
-              </div>
+              </>
             ) : (
               <div className="hint">Pick a file to edit it.</div>
             )}
@@ -291,7 +284,7 @@ export default function WorkspaceEditor({
       )}
 
       {dirty > 0 && (
-        <div className="hint">
+        <div className="hint workspace-foot">
           Sent with this one call as <code>metadata.workspace</code>. Whether the
           agent honoured it is visible in the trace — the text appears in the
           first span's system message.
@@ -301,60 +294,110 @@ export default function WorkspaceEditor({
   );
 }
 
-// One config value. The label carries the path, so a field named `model` says
-// which `model` it is — the config is nested and several branches reuse names.
-function ConfigField({
-  name, parent, value, changed, draft, onDraft, onClearDraft, onChange, onRevert,
-}) {
-  const label = (
-    <label>
-      <strong>{name}</strong>
-      {parent && <span className="muted">{parent}</span>}
-      {changed && <span className="badge">edited</span>}
-      {changed && (
-        <button className="linkish" onClick={onRevert} title="Restore the agent's value">
-          <IconRefresh size={12} /> revert
-        </button>
-      )}
-    </label>
+// One level of the config tree: leaves first, then nested groups. Leaves before
+// groups because a leaf is one line and a group is a whole section — reading a
+// level's own values shouldn't mean scrolling past its children.
+function ConfigNodes({ node, prefix, ...rest }) {
+  const entries = Object.entries(node);
+  const leaves = entries.filter(([, v]) => v === REDACTED || isLeaf(v));
+  const groups = entries.filter(([, v]) => v !== REDACTED && !isLeaf(v));
+
+  return (
+    <>
+      {leaves.map(([key, value]) => (
+        <ConfigRow key={key} name={key} path={prefix + key} value={value} {...rest} />
+      ))}
+      {groups.map(([key, value]) => (
+        <ConfigGroup key={key} name={key} path={prefix + key} node={value} {...rest} />
+      ))}
+    </>
   );
+}
 
+function ConfigGroup({ name, path, node, ...rest }) {
+  const { changed, openGroups, setOpenGroups } = rest;
+  const leaves = flattenLeaves(node);
+  const editedHere = leaves.filter(({ path: p }) => changed.has(`${path}.${p}`)).length;
+  // Collapsed by default — but a group holding an edit opens itself, so an
+  // override carried in by a clone is never hidden behind a closed triangle.
+  const open = openGroups[path] ?? editedHere > 0;
+
+  return (
+    <div className={`ws-node${open ? " open" : ""}`}>
+      <button
+        className="ws-node-head"
+        onClick={() => setOpenGroups({ ...openGroups, [path]: !open })}
+        aria-expanded={open}
+      >
+        <IconChevronRight size={12} />
+        <span className="ws-node-name">{name}</span>
+        <span className="ws-node-meta">
+          {leaves.length} {leaves.length === 1 ? "value" : "values"}
+        </span>
+        {editedHere > 0 && <span className="badge">{editedHere} edited</span>}
+      </button>
+      {open && (
+        <div className="ws-children">
+          <ConfigNodes node={node} prefix={`${path}.`} {...rest} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One config value: name on the left, control on the right, so the controls line
+// up down a single edge whatever the key lengths are. The full path is the
+// title — inside the tree the parent names are already on screen.
+function ConfigRow({
+  name, path, value, snapshot, changed, jsonDrafts, setJsonDrafts, onSet,
+}) {
+  if (value === REDACTED || isRedacted(path, snapshot.redacted_paths)) {
+    return (
+      <div className="ws-field" title={path}>
+        <span className="ws-field-key">{name}</span>
+        <div className="ws-field-control">
+          <input value="" disabled placeholder="hidden by the agent server" />
+        </div>
+        <span className="ws-field-note">secret — the agent uses its own</span>
+      </div>
+    );
+  }
+
+  const original = getAt(snapshot.config, path);
+  const isChanged = changed.has(path);
+  const draft = jsonDrafts[path];
+  const setDraft = (text) => setJsonDrafts({ ...jsonDrafts, [path]: text });
+  const clearDraft = () => {
+    const next = { ...jsonDrafts };
+    delete next[path];
+    setJsonDrafts(next);
+  };
+
+  let control;
+  let wide = false;
   if (typeof value === "boolean") {
-    return (
-      <div className="field config-field">
-        {label}
-        <label className="checkline">
-          <input
-            type="checkbox"
-            checked={value}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          <span>{value ? "true" : "false"}</span>
-        </label>
-      </div>
+    control = (
+      <label className="checkline">
+        <input type="checkbox" checked={value} onChange={(e) => onSet(path, e.target.checked)} />
+        <span>{value ? "true" : "false"}</span>
+      </label>
     );
-  }
-
-  if (typeof value === "number") {
-    return (
-      <div className="field config-field">
-        {label}
-        <input
-          type="number"
-          value={value}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            // A cleared or unparseable box keeps the raw text rather than
-            // silently sending 0 — an accidental 0 is a real setting, and the
-            // developer would never see that it happened.
-            onChange(e.target.value === "" || !Number.isFinite(n) ? e.target.value : n);
-          }}
-        />
-      </div>
+  } else if (typeof value === "number") {
+    control = (
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          // A cleared or unparseable box keeps the raw text rather than silently
+          // sending 0 — an accidental 0 is a real setting, and the developer
+          // would never see that it happened.
+          onSet(path, e.target.value === "" || !Number.isFinite(n) ? e.target.value : n);
+        }}
+      />
     );
-  }
-
-  if (value !== null && typeof value === "object") {
+  } else if (value !== null && typeof value === "object") {
+    wide = true;
     const text = draft !== undefined ? draft : JSON.stringify(value, null, 2);
     let invalid = false;
     if (draft !== undefined) {
@@ -364,36 +407,54 @@ function ConfigField({
         invalid = true;
       }
     }
-    return (
-      <div className="field config-field wide">
-        {label}
+    control = (
+      <>
         <textarea
           className="config-json"
           value={text}
           onChange={(e) => {
-            onDraft(e.target.value);
+            setDraft(e.target.value);
             try {
-              onChange(JSON.parse(e.target.value));
+              onSet(path, JSON.parse(e.target.value));
             } catch {
               // Keep the last valid value in the working copy; the draft above
               // is what the developer sees until it parses again.
             }
           }}
-          onBlur={() => !invalid && onClearDraft()}
+          onBlur={() => !invalid && clearDraft()}
         />
         {invalid && <div className="hint error-text">Not valid JSON yet — not sent.</div>}
-      </div>
+      </>
+    );
+  } else {
+    control = (
+      <input
+        value={value === null ? "" : String(value)}
+        placeholder={value === null ? "null" : ""}
+        onChange={(e) => onSet(path, e.target.value)}
+      />
     );
   }
 
   return (
-    <div className="field config-field">
-      {label}
-      <input
-        value={value === null ? "" : String(value)}
-        placeholder={value === null ? "null" : ""}
-        onChange={(e) => onChange(e.target.value)}
-      />
+    <div className={`ws-field${wide ? " wide" : ""}${isChanged ? " changed" : ""}`} title={path}>
+      <span className="ws-field-key">{name}</span>
+      <div className="ws-field-control">{control}</div>
+      {isChanged ? (
+        <button
+          className="icon-btn"
+          onClick={() => {
+            onSet(path, original);
+            clearDraft();
+          }}
+          title={`Restore the agent's value: ${JSON.stringify(original)}`}
+          aria-label={`Revert ${name}`}
+        >
+          <IconRefresh size={13} />
+        </button>
+      ) : (
+        <span className="ws-field-spacer" />
+      )}
     </div>
   );
 }

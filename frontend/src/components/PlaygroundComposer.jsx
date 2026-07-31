@@ -1,29 +1,47 @@
 import React, { useState } from "react";
 import RunConfigFields from "./RunConfigFields.jsx";
 import WorkspaceEditor from "./WorkspaceEditor.jsx";
-import { IconGear, IconSend } from "./icons.jsx";
+import { diffConfig, editedFiles, flattenLeaves } from "../workspace_util.js";
+import { IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget } from "./icons.jsx";
 
 // What gets sent: a question, optionally an edited copy of the agent's config and
-// skill files, optionally the two ground-truth fields, and the connection
-// settings.
+// skill files, optionally the two ground-truth fields, and this platform's own
+// endpoints.
 //
 // Only the question is required, and that is the point of the whole tab (§10.4).
-// The two ground-truth boxes are switches — an expected answer turns judging on,
-// an expected reasoning process turns diagnosis on — so they are collapsed by
-// default with the consequence stated, rather than presented as a form to fill in
-// before anything happens.
+// Everything else is a panel behind one toolbar, and **only one panel is open at
+// a time**, for two reasons this layout learned the hard way:
+//
+//   * The composer sits above the three columns that are the actual working
+//     surface. Two panels open at once pushed the columns — and the send button
+//     — off the bottom of the window.
+//   * The panels used to be two rows of identical-looking buttons: the agent's
+//     workspace on one, this platform's settings on the other, one labelled
+//     "Config" and the other "Settings". Two words for two unrelated things, in
+//     the same visual register. One row of peers, each naming what it actually
+//     edits, removes the guess.
 export default function PlaygroundComposer({
   draft, setDraft, form, set, setNum, secrets, setSecrets, impls, onSend, busy,
   workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
   onReloadWorkspace,
 }) {
-  const [showTruth, setShowTruth] = useState(
-    Boolean(draft.ground_truth_response || draft.ground_truth_reasoning)
-  );
-  const [showConfig, setShowConfig] = useState(false);
+  // null | "config" | "skills" | "truth" | "endpoints"
+  const [panel, setPanel] = useState(null);
+  const toggle = (name) => setPanel((p) => (p === name ? null : name));
 
   const field = (key) => (e) => setDraft({ ...draft, [key]: e.target.value });
   const canSend = draft.question.trim().length > 0 && !busy;
+
+  // Counts stay on the toolbar so an edit is visible from the closed state.
+  // Otherwise closing a panel hides the fact that the next question will not run
+  // against the agent's own workspace.
+  const configCount =
+    workspace && workspaceEdit
+      ? flattenLeaves(diffConfig(workspace.config, workspaceEdit.config) || {}).length
+      : 0;
+  const fileCount =
+    workspace && workspaceEdit ? editedFiles(workspace.skills, workspaceEdit.skills).length : 0;
+  const truthSet = Boolean(draft.ground_truth_response || draft.ground_truth_reasoning);
 
   return (
     <div className="composer">
@@ -43,37 +61,73 @@ export default function PlaygroundComposer({
         />
       </div>
 
-      <WorkspaceEditor
-        snapshot={workspace}
-        edit={workspaceEdit}
-        onChange={onWorkspaceEdit}
-        loading={workspaceLoading}
-        error={workspaceError}
-        onReload={onReloadWorkspace}
-        fakeSeam={impls.workspace === "fake"}
-      />
-
       <div className="composer-toggles">
-        <button
-          className={showTruth ? "active" : ""}
-          onClick={() => setShowTruth((v) => !v)}
-        >
-          Expected answer &amp; process
-          {(draft.ground_truth_response || draft.ground_truth_reasoning) && (
-            <span className="count">set</span>
-          )}
-        </button>
-        <button className={showConfig ? "active" : ""} onClick={() => setShowConfig((v) => !v)}>
-          <IconGear size={13} /> Settings
-        </button>
+        <Toggle
+          label="Agent config"
+          title="The agent's own config.json — applied to this question only"
+          icon={<IconGear size={13} />}
+          active={panel === "config"}
+          count={configCount}
+          onClick={() => toggle("config")}
+        />
+        <Toggle
+          label="Skill files"
+          title="The agent's SKILL.md and reference files — applied to this question only"
+          icon={<IconFileText size={13} />}
+          active={panel === "skills"}
+          count={fileCount}
+          onClick={() => toggle("skills")}
+        />
+        <Toggle
+          label="Expected answer & process"
+          title="Optional — an expected answer turns judging on, an expected process turns diagnosis on"
+          icon={<IconTarget size={13} />}
+          active={panel === "truth"}
+          flag={truthSet ? "set" : null}
+          onClick={() => toggle("truth")}
+        />
+        <Toggle
+          label="Endpoints & keys"
+          title="Which agent, LLM and Langfuse this platform talks to"
+          icon={<IconBeaker size={13} />}
+          active={panel === "endpoints"}
+          onClick={() => toggle("endpoints")}
+        />
         <div className="grow" />
         <button className="primary" disabled={!canSend} onClick={onSend}>
           <IconSend size={14} /> {busy ? "Sending…" : "Ask the agent"}
         </button>
       </div>
 
-      {showTruth && (
-        <div className="composer-truth">
+      {/* Loud even from the closed state: a workspace nobody can read is the
+          reason someone retypes a skill from memory and tests the wrong text. */}
+      {workspaceError && panel !== "config" && panel !== "skills" && (
+        <div className="hint error-text composer-alert">
+          <IconAlert size={13} /> Could not read the agent's workspace — open{" "}
+          <button className="linkish" onClick={() => setPanel("config")}>
+            Agent config
+          </button>{" "}
+          for the reason.
+        </div>
+      )}
+
+      {(panel === "config" || panel === "skills") && (
+        <div className="composer-panel">
+          <WorkspaceEditor
+            tab={panel}
+            snapshot={workspace}
+            edit={workspaceEdit}
+            onChange={onWorkspaceEdit}
+            loading={workspaceLoading}
+            error={workspaceError}
+            onReload={onReloadWorkspace}
+            fakeSeam={impls.workspace === "fake"}
+          />
+        </div>
+      )}
+
+      {panel === "truth" && (
+        <div className="composer-panel composer-truth">
           <div className="field">
             <label>Expected answer — optional</label>
             <textarea
@@ -98,8 +152,8 @@ export default function PlaygroundComposer({
         </div>
       )}
 
-      {showConfig && (
-        <div className="composer-config">
+      {panel === "endpoints" && (
+        <div className="composer-panel">
           <RunConfigFields
             form={form}
             set={set}
@@ -110,11 +164,26 @@ export default function PlaygroundComposer({
             showConcurrency={false}
           />
           <div className="hint">
-            These settings stay for the rest of this browser session, so keys are
-            typed once. They are never sent back to the browser.
+            Where this platform sends the question — not the agent's own settings.
+            These stay for the rest of this browser session, so keys are typed
+            once, and they are never sent back to the browser.
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+// One panel toggle. `count` is an edit count — amber, because it means the next
+// question will differ from what the agent server itself is configured with.
+// `flag` is a plain state word.
+function Toggle({ label, title, icon, active, count, flag, onClick }) {
+  return (
+    <button className={active ? "active" : ""} title={title} onClick={onClick}>
+      {icon}
+      {label}
+      {count > 0 && <span className="count edited">{count}</span>}
+      {flag && <span className="count">{flag}</span>}
+    </button>
   );
 }
