@@ -37,6 +37,9 @@ services:
       JUDGE_IMPL: ${JUDGE_IMPL:-fake}
       TRACE_IMPL: ${TRACE_IMPL:-fake}
       DIAGNOSIS_IMPL: ${DIAGNOSIS_IMPL:-fake}
+      # Drafts an expected reasoning process from a trace, on the shortlist's
+      # button. Shares the LLM endpoint with the judge and the diagnosis.
+      SYNTHESIS_IMPL: ${SYNTHESIS_IMPL:-fake}
       # The playground's view of the agent's config + skill files; reads
       # {AGENT_BASE_URL}/get_workspace.
       WORKSPACE_IMPL: ${WORKSPACE_IMPL:-fake}
@@ -52,6 +55,7 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       JUDGE_MODEL: ${JUDGE_MODEL:-Qwen3.6-27B}
       DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-Qwen3.6-27B}
+      SYNTHESIS_MODEL: ${SYNTHESIS_MODEL:-Qwen3.6-27B}
       JUDGE_SCORE_THRESHOLD: ${JUDGE_SCORE_THRESHOLD:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-ai4bi.cpoap-dev.dev.tsmc.com}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}

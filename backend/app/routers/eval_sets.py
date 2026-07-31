@@ -21,6 +21,8 @@ from app.models import (
 from app.schemas import (
     EvalSetCard,
     EvalSetCreate,
+    EvalSetFromShortlist,
+    EvalSetFromShortlistOut,
     EvalSetPage,
     EvalSetUpdate,
     QuestionOut,
@@ -29,7 +31,7 @@ from app.schemas import (
 )
 from app.services.aggregation import RunVerdicts, regression_summary
 from app.services.deletion import delete_eval_set as delete_eval_set_rows
-from app.services.upload import parse_jsonl
+from app.services.upload import generate_question_id, parse_jsonl
 
 router = APIRouter(prefix="/eval-sets", tags=["eval-sets"])
 
@@ -216,6 +218,125 @@ async def create_eval_set(
             session.add(QuestionSkill(question_pk=q.id, skill_name=skill, ordinal=ordinal))
     await session.commit()
     return {"id": str(es.id), "question_count": len(parsed.questions)}
+
+
+@router.post("/from-shortlist", status_code=201, response_model=EvalSetFromShortlistOut)
+async def create_eval_set_from_shortlist(
+    payload: EvalSetFromShortlist,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Create an eval set from shortlisted playground questions plus, optionally,
+    copies of the questions in eval sets the caller can already read (§10.8).
+
+    The second source is why this endpoint exists at all: a set is locked after
+    creation (§4.6), so "the old questions plus these new ones" can only be a new
+    set built from both. Doing the copy here rather than in the browser keeps the
+    permission check, the de-duplication and the id policy on the server — and
+    avoids downloading a few hundred questions just to upload them again.
+
+    **New question ids throughout.** A copied question is a new question in a new
+    set, not the same question in two places: reusing the id would leave two rows
+    claiming to be `q_1a2b3c4d` that a later edit can silently make disagree.
+    """
+    # Every included set must be readable by the caller. Checked before anything
+    # is created, so a rejected request leaves nothing behind.
+    source_sets: list[EvalSet] = []
+    for set_id in dict.fromkeys(payload.include_eval_set_ids):
+        role = await session.scalar(
+            select(EvalSetRole.role).where(
+                EvalSetRole.eval_set_id == set_id,
+                EvalSetRole.user_subject == subject,
+            )
+        )
+        es = await session.get(EvalSet, set_id) if role else None
+        if es is None:
+            # 404 rather than 403, matching the rest of the app: a set you have
+            # no role on is not one you get to learn the existence of.
+            raise HTTPException(status_code=404, detail=f"eval set {set_id} not found")
+        source_sets.append(es)
+
+    if not payload.questions and not source_sets:
+        raise HTTPException(
+            status_code=422, detail="a new eval set needs at least one question"
+        )
+
+    es = EvalSet(
+        name=payload.name, description=payload.description,
+        # The questions were composed here, not uploaded from a file.
+        source_format="jsonl", meta=payload.metadata,
+    )
+    session.add(es)
+    await session.flush()
+
+    for subj, role in _clean_shares(payload.shares, subject).items():
+        session.add(EvalSetRole(eval_set_id=es.id, user_subject=subj, role=role))
+
+    # Duplicate *text* is the collision that matters once ids are all new: two
+    # included sets often share history, and asking the agent the same question
+    # twice in one run is cost without information.
+    seen: set[str] = set()
+    duplicates = 0
+    count = 0
+
+    async def add_question(question: str, response: str, reasoning: str, skills: list[str]):
+        nonlocal duplicates, count
+        key = question.strip()
+        if key in seen:
+            duplicates += 1
+            return
+        seen.add(key)
+        q = Question(
+            eval_set_id=es.id, question_id=generate_question_id(), question=question,
+            ground_truth_response=response, ground_truth_reasoning=reasoning,
+        )
+        session.add(q)
+        await session.flush()
+        for ordinal, skill in enumerate(skills):
+            session.add(QuestionSkill(question_pk=q.id, skill_name=skill, ordinal=ordinal))
+        count += 1
+
+    # Shortlisted questions first: they are what the developer came to create,
+    # and on a duplicate they should be the copy that survives.
+    for sq in payload.questions:
+        await add_question(
+            sq.question, sq.ground_truth_response, sq.ground_truth_reasoning,
+            [s.strip() for s in sq.skills if s.strip()],
+        )
+
+    for source in source_sets:
+        rows = (
+            await session.execute(
+                select(Question)
+                .where(Question.eval_set_id == source.id)
+                .order_by(Question.created_at, Question.id)
+            )
+        ).scalars().all()
+        # One query for the whole set's tags rather than one per question: a
+        # 500-question set copied a tag at a time is 500 round trips to save
+        # grouping a list in Python.
+        tag_rows = (
+            await session.execute(
+                select(QuestionSkill.question_pk, QuestionSkill.skill_name)
+                .join(Question, Question.id == QuestionSkill.question_pk)
+                .where(Question.eval_set_id == source.id)
+                .order_by(QuestionSkill.ordinal)
+            )
+        ).all()
+        tags: dict = {}
+        for question_pk, skill_name in tag_rows:
+            tags.setdefault(question_pk, []).append(skill_name)
+
+        for row in rows:
+            await add_question(
+                row.question, row.ground_truth_response, row.ground_truth_reasoning,
+                tags.get(row.id, []),
+            )
+
+    await session.commit()
+    return EvalSetFromShortlistOut(
+        id=es.id, question_count=count, duplicates_skipped=duplicates
+    )
 
 
 @router.get("", response_model=EvalSetPage)

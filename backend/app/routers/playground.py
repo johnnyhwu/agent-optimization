@@ -34,6 +34,7 @@ from app.schemas import (
     PlaygroundCreate,
     RunConfig,
     SuspectOut,
+    SynthesisOut,
     TraceView,
     WorkspaceOut,
     WorkspaceOverrideIn,
@@ -336,6 +337,49 @@ async def re_diagnose_attempt(
     if analysis is None:  # pragma: no cover - re_diagnose sets it or raises
         raise HTTPException(status_code=502, detail="diagnosis produced nothing")
     return analysis
+
+
+@router.post("/attempts/{attempt_id}/synthesize-reasoning", response_model=SynthesisOut)
+async def synthesize_reasoning(
+    attempt_id: uuid.UUID,
+    subject: str = Depends(current_subject),
+):
+    """Draft an expected reasoning process from this attempt's trace (§10.8).
+
+    On a button, never automatic, and it does not touch the attempt: the draft
+    describes what the agent *did*, and only the developer can decide whether
+    that is what should be expected. Writing it onto the attempt would quietly
+    turn one observed run into the standard the next run is graded against.
+    """
+    attempt = _load(attempt_id, subject)
+    if attempt.trace is None:
+        # Premature rather than wrong — the same 409 the re-diagnose path uses,
+        # with the reason the UI can show verbatim.
+        raise HTTPException(
+            status_code=409,
+            detail="this attempt has no trace yet to draft a process from",
+        )
+
+    try:
+        seams = build_seams(attempt.config, attempt.secrets)
+    except Exception as exc:  # noqa: BLE001 - misconfiguration, not a bug
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+    if seams.synthesis is None:  # pragma: no cover - build_seams always sets it
+        raise HTTPException(status_code=502, detail="no synthesis client configured")
+
+    try:
+        reasoning = await seams.synthesis.synthesize(
+            attempt.trace, attempt.question, attempt.agent_response or ""
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The model's own message, not a 500 with the reason in a log file.
+        raise HTTPException(
+            status_code=502, detail=f"synthesis failed: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if not reasoning.strip():
+        raise HTTPException(status_code=502, detail="synthesis returned an empty process")
+    return SynthesisOut(reasoning_process=reasoning, model_used=seams.synthesis.model_name)
 
 
 @router.get("/attempts/{attempt_id}/progress")

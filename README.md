@@ -96,9 +96,10 @@ spec §4.1 and §4.4.
 
 Two ideas carry most of the design:
 
-**1. Five swappable seams.** Each external dependency is a Python `Protocol`
+**1. Six swappable seams.** Each external dependency is a Python `Protocol`
 with two implementations — a fake one with realistic latency, and a real one.
-`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` / `WORKSPACE_IMPL` pick
+`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` / `SYNTHESIS_IMPL` /
+`WORKSPACE_IMPL` pick
 between them **independently**, all defaulting to fake. So the whole product runs
 on nothing but Docker, and you can bring up one real service at a time.
 
@@ -175,6 +176,20 @@ button.
   attempt differs by exactly the one thing you are testing. There is no automatic
   "did it improve" — LLMs have temperature, so pressing the button twice is the
   honest comparison (spec §16, risk 8).
+- **Shortlist → eval set.** A playground question that turned out to be worth
+  keeping goes on the **shortlist**, and the shortlist becomes a new eval set.
+  The dialog is a review step, not a form: the expected answer is prefilled with
+  the agent's own and **labelled unverified** (kept as-is, that question asserts
+  the agent is already right — it will always pass and can never catch the answer
+  being wrong), and the expected process has a **Draft from trace** button that
+  asks an LLM to summarise what the agent did, step by step, as a starting point
+  to edit. An attempt that ran against an edited workspace is flagged, because the
+  deployed agent has none of those edits.
+  Because a set is locked once created (§4.6), the dialog also lets you tick
+  existing eval sets whose questions should be **copied** into the new one — that
+  is the only way to end up with "the old questions plus these new ones".
+  The shortlist itself lives in the browser and holds copies, so it survives both
+  a backend restart and the per-user attempt cap.
 - **Coming from a failed question:** the three-column view has a *"Try this in the
   playground"* link that carries the question, both ground-truth fields and that
   run's endpoints over.
@@ -274,6 +289,7 @@ so on.
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
+| `SYNTHESIS_IMPL` | `SynthesisClient` | draft an expected reasoning process from a trace, for a question being promoted out of the playground. Shares the LLM endpoint with the judge and the diagnosis; `SYNTHESIS_MODEL` picks the model |
 | `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's config + skill files for the playground: `GET {AGENT_BASE_URL}/get_workspace` and `/get_config_version` (spec §3.2). Read-only, so it is the cheapest one to switch on first |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
@@ -483,7 +499,7 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 | Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
 | Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
-| Playground | `GET /playground/workspace`, `/workspace/version`, `POST·GET /playground/attempts`, `GET·DELETE /playground/attempts/{id}`, `POST .../cancel`, `POST .../re-diagnose`, `GET .../progress` (SSE) |
+| Playground | `GET /playground/workspace`, `/workspace/version`, `POST /playground/attempts/{id}/synthesize-reasoning`, `POST /eval-sets/from-shortlist`, `POST·GET /playground/attempts`, `GET·DELETE /playground/attempts/{id}`, `POST .../cancel`, `POST .../re-diagnose`, `GET .../progress` (SSE) |
 
 Authorization is a FastAPI dependency, not scattered per-endpoint: writes and
 re-diagnose require **owner**; reads and triggering a run accept **owner or

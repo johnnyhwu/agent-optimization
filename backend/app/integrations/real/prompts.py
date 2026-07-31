@@ -1,8 +1,9 @@
-"""Prompt construction for the two LLM seams.
+"""Prompt construction for the three LLM seams.
 
 Kept in one file so the wording can be tuned without touching client logic — the
-judge's grading criteria and the diagnosis tone constraint are the two things
-most likely to be iterated on once real data starts flowing.
+judge's grading criteria, the diagnosis tone constraint and the synthesis level
+of detail are the things most likely to be iterated on once real data starts
+flowing.
 """
 from __future__ import annotations
 
@@ -126,5 +127,57 @@ def build_diagnosis_messages(
     )
     return [
         {"role": "system", "content": DIAGNOSIS_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+# --- Synthesis (a first draft of an expected process, from a real trace) -----
+
+SYNTHESIS_SYSTEM = """\
+You turn an AI agent's execution trace into a short, step-by-step description of \
+what the agent did.
+
+The result is a **first draft** a developer will read and correct. Write it as \
+the process itself, not as commentary on a recording — no "the agent appears \
+to", no hedging, no judgement about whether any of it was right.
+
+Level of detail — this is the part that matters:
+- One numbered step per meaningful action: reading a skill, calling a tool, \
+producing the answer.
+- For a tool call, name the tool, say what it was asked for, and say what came \
+back — in a phrase, not a transcript.
+- Do NOT reproduce full payloads, row dumps, long SQL, ids or timestamps. If a \
+figure is the point of the step, one figure is enough.
+- Merge repeated identical calls into one step ("queried invoices for each of \
+the three months").
+- Finish with a step describing what the final answer presented.
+- Aim for 3-8 steps.
+
+Example of the shape and grain:
+1. Read the billing skill to get the procedure for invoice questions.
+2. Queried the invoices table for ACME over Q2 and got three monthly balances.
+3. Summed the balances and presented the total with the period it covers.
+
+Reply with ONLY a JSON object, no prose and no code fences:
+{"reasoning_process": "1. ...\\n2. ...\\n3. ..."}"""
+
+
+def build_synthesis_messages(
+    question: str, agent_response: str, spans: list[Span]
+) -> list[dict]:
+    """Question, the answer produced, and the trace that produced it.
+
+    The answer is included because the last step has to describe what was
+    presented, and the final span's output is often a tool result rather than
+    the reply the developer actually saw.
+    """
+    user = (
+        f"# Question\n{question}\n\n"
+        "# Trace (span bodies may be truncated; every span is present)\n"
+        f"{format_spans(spans)}\n\n"
+        f"# The answer the agent gave\n{agent_response or '(no answer was recorded)'}"
+    )
+    return [
+        {"role": "system", "content": SYNTHESIS_SYSTEM},
         {"role": "user", "content": user},
     ]

@@ -1027,6 +1027,76 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
    they hit this floor. */
 .playground-three { min-height: 420px; }
 
+/* ---- shortlist: playground questions on their way into an eval set ---- */
+.page-head-actions { display: flex; gap: var(--space-2); }
+.page-head-actions button.active { border-color: var(--accent); color: var(--accent); }
+.page-head-actions .count {
+  margin-left: var(--space-1); font-size: var(--text-micro); padding: 1px 6px;
+  border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+}
+.attempt-actions button.active { border-color: var(--accent); color: var(--accent); }
+
+/* Same two-pane shape as the skill editor: a list to pick from, a form to work
+   in. The list carries the warnings, so what needs attention is visible without
+   opening every entry. */
+.shortlist-pane { display: grid; grid-template-columns: 280px 1fr; gap: var(--space-4); }
+@media (max-width: 900px) { .shortlist-pane { grid-template-columns: 1fr; } }
+.shortlist-items {
+  display: flex; flex-direction: column; gap: var(--space-1);
+  max-height: 420px; overflow-y: auto;
+}
+.shortlist-items > button.shortlist-item {
+  display: grid; grid-template-columns: 1fr auto; grid-template-areas: "q x" "chips x";
+  gap: var(--space-1) var(--space-2); align-items: center; text-align: left;
+  background: none; border: 1px solid transparent; box-shadow: none;
+  padding: var(--space-2); border-radius: var(--radius-sm); color: var(--text);
+}
+.shortlist-items > button.shortlist-item:hover { background: var(--panel-2); }
+.shortlist-items > button.shortlist-item.active {
+  background: var(--accent-soft); border-color: var(--accent);
+}
+.shortlist-item .q { grid-area: q; font-size: var(--text-body); overflow-wrap: anywhere; }
+.shortlist-item .chips { grid-area: chips; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.shortlist-item .icon-btn { grid-area: x; }
+.tag.warn { color: var(--amber); background: var(--amber-soft); border-color: transparent; }
+
+.shortlist-editor { display: flex; flex-direction: column; min-width: 0; }
+.shortlist-editor textarea { min-height: 88px; }
+/* Label, state and action on one line — the action is a sibling of the label,
+   not a child of it, so a click meant for the button cannot land on the field. */
+.field-head { display: flex; align-items: center; gap: var(--space-2); }
+.field-head label { margin: 0; }
+.field-head .grow { flex: 1; }
+.field-head .linkish { gap: var(--space-1); }
+.badge.warn {
+  background: var(--amber-soft); color: var(--amber);
+  font-size: var(--text-micro); font-weight: var(--fw-semibold);
+  padding: 1px 6px; border-radius: 999px;
+}
+.hint.warn-text {
+  color: var(--amber); background: var(--amber-soft);
+  border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.shortlist-newset { margin-top: var(--space-4); }
+.include-sets {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 160px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+.include-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  font-size: var(--text-body); font-weight: var(--fw-normal); margin: 0;
+  padding: 3px var(--space-1); border-radius: var(--radius-sm);
+}
+.include-row:hover { background: var(--panel-2); }
+.include-row input { width: auto; }
+.include-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.include-row .muted { font-size: var(--text-micro); }
+.shortlist-foot { flex: 1; font-size: var(--text-caption); }
+
 /* ---- responsive ----
    The rail costs horizontal space the three-column views were already spending,
    so both give it back in steps rather than all at once. */

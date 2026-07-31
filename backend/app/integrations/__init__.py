@@ -1,7 +1,8 @@
 """Integration seams (§6.15 external deps).
 
 Which implementation backs each seam is chosen per seam by the `*_IMPL` settings
-(`AGENT_IMPL`, `JUDGE_IMPL`, `TRACE_IMPL`, `DIAGNOSIS_IMPL`, `WORKSPACE_IMPL`, each
+(`AGENT_IMPL`, `JUDGE_IMPL`, `TRACE_IMPL`, `DIAGNOSIS_IMPL`, `SYNTHESIS_IMPL`,
+`WORKSPACE_IMPL`, each
 `fake` or `real`), so the real integrations can be brought up one at a time — a
 real agent while the judge is still fake, and so on. Everything downstream
 depends on the Protocols in `base.py` and never on a concrete class.
@@ -30,6 +31,7 @@ from app.integrations.base import (
     AgentClient,
     DiagnosisClient,
     JudgeClient,
+    SynthesisClient,
     TraceClient,
     WorkspaceClient,
 )
@@ -37,6 +39,7 @@ from app.integrations.fake import (
     FakeAgentClient,
     FakeDiagnosisClient,
     FakeJudgeClient,
+    FakeSynthesisClient,
     FakeTraceClient,
     FakeWorkspaceClient,
 )
@@ -46,8 +49,9 @@ from app.integrations.fake import (
 class Seams:
     """The clients one run — or one playground attempt — executes against.
 
-    `workspace` has a default because an eval run never reads the agent's
-    config or skill files: only the playground does (§10). Callers that predate
+    `synthesis` and `workspace` have defaults because an eval run needs neither:
+    only the playground drafts an expected process or reads the agent's config
+    and skill files (§10). Callers that predate
     it keep working, and a test can still build a Seams with just the seam it
     cares about.
     """
@@ -56,6 +60,7 @@ class Seams:
     judge: JudgeClient
     trace: TraceClient
     diagnosis: DiagnosisClient
+    synthesis: SynthesisClient | None = None
     workspace: WorkspaceClient | None = None
 
 
@@ -96,7 +101,11 @@ def build_seams(
     judge: JudgeClient
     diagnosis: DiagnosisClient
     llm = None
-    if settings.judge_impl == "real" or settings.diagnosis_impl == "real":
+    if (
+        settings.judge_impl == "real"
+        or settings.diagnosis_impl == "real"
+        or settings.synthesis_impl == "real"
+    ):
         from app.integrations.real.llm import get_client_for
 
         llm = get_client_for(
@@ -117,6 +126,14 @@ def build_seams(
         diagnosis = LlmDiagnosisClient(model=_get(config, "diagnosis_model"), llm=llm)
     else:
         diagnosis = FakeDiagnosisClient()
+
+    synthesis: SynthesisClient
+    if settings.synthesis_impl == "real":
+        from app.integrations.real.synthesis import LlmSynthesisClient
+
+        synthesis = LlmSynthesisClient(model=_get(config, "synthesis_model"), llm=llm)
+    else:
+        synthesis = FakeSynthesisClient()
 
     trace: TraceClient
     if settings.trace_impl == "real":
@@ -145,7 +162,7 @@ def build_seams(
 
     return Seams(
         agent=agent, judge=judge, trace=trace, diagnosis=diagnosis,
-        workspace=workspace,
+        synthesis=synthesis, workspace=workspace,
     )
 
 

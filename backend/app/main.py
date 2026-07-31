@@ -53,6 +53,8 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
             "judge": settings.judge_impl,
             "trace": settings.trace_impl,
             "diagnosis": settings.diagnosis_impl,
+            # Drafts an expected process from a trace, on the shortlist's button.
+            "synthesis": settings.synthesis_impl,
             # The playground's view of the agent's config + skills (§10.2).
             # Fake means what is shown is canned, which the editor says so
             # nobody edits a fake skill expecting the real agent to have it.
