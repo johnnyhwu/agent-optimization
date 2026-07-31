@@ -1,16 +1,27 @@
 import React from "react";
 import { IconCopy, IconStop, IconTrash } from "./icons.jsx";
+import { overrideCounts } from "../workspace_util.js";
 
 // Left column of the playground: this session's attempts, newest first.
 //
 // The iteration loop lives here. "Clone" is the important control — it puts an
-// attempt's question, skill text and settings back in the composer so the next
+// attempt's question, workspace edits and settings back in the composer so the next
 // attempt differs by exactly the one thing being tested, which is the only way a
 // before/after comparison means anything given §4.8's non-determinism.
 //
 // Attempts are held in the backend's memory (§10.3), so this list empties on a
 // backend restart. The footer says so rather than letting an empty list look like
 // a bug.
+
+// Counts, not names: what matters in a list row is that this attempt differed
+// from the agent's own workspace. The paths themselves are the tooltip.
+function overrideLabel(a) {
+  const { configs, files } = overrideCounts(a);
+  const parts = [];
+  if (configs) parts.push(`${configs} config`);
+  if (files) parts.push(`${files} file${files === 1 ? "" : "s"}`);
+  return parts.length ? `edited: ${parts.join(", ")}` : "workspace override";
+}
 
 function relative(iso) {
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -69,12 +80,16 @@ export default function AttemptList({
               {a.agent_latency_ms != null && ` · ${(a.agent_latency_ms / 1000).toFixed(1)}s`}
             </div>
             <div className="attempt-tags">
-              {a.skill_overridden ? (
-                <span className="tag" title="A candidate skill was sent with this call">
-                  skill: {a.skill_name}
+              {a.workspace_overridden ? (
+                <span
+                  className="tag"
+                  title={[...(a.config_overrides || []), ...(a.edited_skill_files || [])]
+                    .join("\n") || "A workspace override was sent with this call"}
+                >
+                  {overrideLabel(a)}
                 </span>
               ) : (
-                <span className="tag muted">agent's own skill</span>
+                <span className="tag muted">agent's own workspace</span>
               )}
               {!a.has_expected_answer && <span className="tag muted">not judged</span>}
             </div>
@@ -86,7 +101,7 @@ export default function AttemptList({
           </div>
           <div className="attempt-actions">
             <button
-              title="Copy this attempt's question, skill and settings into the composer"
+              title="Copy this attempt's question, workspace edits and settings into the composer"
               onClick={(e) => {
                 e.stopPropagation();
                 onClone(a);

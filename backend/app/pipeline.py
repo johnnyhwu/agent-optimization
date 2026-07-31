@@ -31,9 +31,9 @@ from app.integrations import Seams
 from app.integrations.base import (
     AgentResponse,
     NotReady,
-    SkillOverride,
     Trace,
     Verdict,
+    WorkspaceOverride,
 )
 
 log = logging.getLogger(__name__)
@@ -129,7 +129,7 @@ async def call_agent(
     tags: list[str] | None,
     timeout_s: float,
     cancel_event: asyncio.Event,
-    skill_override: SkillOverride | None = None,
+    workspace: WorkspaceOverride | None = None,
 ) -> AgentResponse:
     """Ask the agent, with the retry / timeout / cancel policies applied.
 
@@ -140,7 +140,7 @@ async def call_agent(
     # The keyword is only passed when there is one, so an eval run's call is
     # exactly the call it was before the playground existed — including for an
     # AgentClient implementation that never grew the parameter.
-    extra = {} if skill_override is None else {"skill_override": skill_override}
+    extra = {} if workspace is None else {"workspace": workspace}
     return await await_or_cancel(
         with_retries(
             lambda: asyncio.wait_for(

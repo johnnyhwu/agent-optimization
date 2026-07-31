@@ -26,28 +26,36 @@ from app.integrations.base import (
     NOT_READY,
     AgentResponse,
     NotReady,
-    Skill,
-    SkillOverride,
-    SkillSummary,
     Span,
     Trace,
     Verdict,
+    Workspace,
+    WorkspaceOverride,
 )
 
 # In-process poll counter so fetch_trace returns NotReady for the first
 # TRACE_NOT_READY_POLLS calls per correlation_id (simulates async ingestion).
 _poll_counts: dict[str, int] = {}
 
-# Skill overrides the fake agent was asked to use, keyed by correlation_id, so
-# the fake trace built later can show them in its system prompt (§10.7). The
+# Workspace overrides the fake agent was asked to use, keyed by correlation_id,
+# so the fake trace built later can show them in its system prompt (§10.7). The
 # real path has no equivalent bookkeeping: there the injected text shows up in
 # the trace because the agent genuinely used it, which is the only evidence the
 # platform can ever offer that an override took effect.
-_skill_overrides: dict[str, SkillOverride] = {}
+_workspace_overrides: dict[str, WorkspaceOverride] = {}
 
 # A correlation id containing this never becomes ready — the seed uses it to keep
 # the "trace is generating" UI state reachable.
 NOT_READY_MARKER = "notready"
+
+
+def _at_path(node: dict, path: str):
+    """The value a dotted config path points at, or None."""
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
 
 
 def _rng(seed: str) -> random.Random:
@@ -132,15 +140,20 @@ def build_fake_trace(correlation_id: str) -> Trace:
     question = f"(question behind correlation {correlation_id[:8]})"
 
     system = _FAKE_SYSTEM_PROMPT
-    override = _skill_overrides.get(correlation_id)
+    override = _workspace_overrides.get(correlation_id)
     if override is not None:
         # The override has to be *visible in the trace*, not just accepted: that
         # is the only way a developer can confirm the agent used the candidate
-        # skill rather than its own (§10.7). The fake agent puts it where a real
-        # one would — in the system prompt of every generation.
-        system += (
-            f"\n\n# Skill: {override.name} (overridden for this call)\n{override.content}"
-        )
+        # workspace rather than its own (§10.7). The fake agent puts it where a
+        # real one would — in the system prompt of every generation.
+        if override.config:
+            settings_line = ", ".join(
+                f"{path}={_at_path(override.config, path)!r}"
+                for path in override.edited_config_paths
+            )
+            system += f"\n\n# Config (overridden for this call)\n{settings_line}"
+        for path, content in (override.skills or {}).items():
+            system += f"\n\n# {path} (overridden for this call)\n{content}"
 
     # The conversation grows span by span, exactly as it does in a real agent
     # loop: every generation sees everything that came before it.
@@ -222,11 +235,11 @@ class FakeAgentClient:
     async def call(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None = None,
-        skill_override: SkillOverride | None = None,
+        workspace: WorkspaceOverride | None = None,
     ) -> AgentResponse:
-        if skill_override is not None:
-            # Remembered so build_fake_trace can show it (see _skill_overrides).
-            _skill_overrides[correlation_id] = skill_override
+        if workspace is not None:
+            # Remembered so build_fake_trace can show it (_workspace_overrides).
+            _workspace_overrides[correlation_id] = workspace
         started = time.monotonic()
         await _sleep_between(fc.AGENT_LATENCY_MIN_S, fc.AGENT_LATENCY_MAX_S)
         # Reported like the real client's: the fake genuinely slept for this long,
@@ -331,53 +344,92 @@ class FakeDiagnosisClient:
         }
 
 
-# The catalogue the fake agent "has". Two of the names match the skill tags the
-# seeded eval set uses (billing / reporting), so "open an incorrect question in
-# the playground" lands on a skill that actually exists in fake mode.
-_FAKE_SKILLS: dict[str, tuple[str, str]] = {
-    "billing": (
-        "Invoices, balances, refunds and payment status.",
+# The workspace the fake agent "has", shaped like a real one: a nested config
+# with its secrets already stripped, and skills as a flat map of file paths.
+# Two of the skill directories match the skill tags the seeded eval set uses
+# (billing / reporting), so "open an incorrect question in the playground" lands
+# on a skill that actually exists in fake mode. `billing` carries a reference
+# file because a skill being a *directory* is exactly what the flat-string model
+# could not express — the fake has to exercise that too.
+_FAKE_CONFIG: dict = {
+    "agents": {
+        "defaults": {
+            "model": "Qwen3.6-27B",
+            "temperature": 0.2,
+            "max_iterations": 8,
+        },
+        "enabled_skills": ["billing", "reporting", "escalation"],
+    },
+    "tools": {"sql_query": {"enabled": True}, "vector_search": {"enabled": True}},
+    "log_level": "info",
+}
+
+# What a real agent server removes before answering. Listed rather than dropped
+# so the UI can show the field as present-but-hidden (§10.2).
+_FAKE_REDACTED_PATHS: list[str] = ["agents.defaults.api_key", "langfuse.secret_key"]
+
+_FAKE_SKILL_FILES: dict[str, str] = {
+    "billing/SKILL.md": (
         "# Billing skill\n"
+        "Invoices, balances, refunds and payment status.\n\n"
         "1. Identify the customer or order the question is about.\n"
         "2. Query the `invoices` table with the SQL tool, filtered to that "
         "customer and the period asked for.\n"
         "3. Sum outstanding balances; never add figures that no tool returned.\n"
-        "4. State the amount and the period explicitly in the answer.\n",
+        "4. State the amount and the period explicitly in the answer.\n"
+        "5. For refunds, read `references/refunds.md` first.\n"
     ),
-    "reporting": (
-        "Aggregate reports, trends and churn analysis.",
+    "billing/references/refunds.md": (
+        "# Refund rules\n"
+        "- A refund is only in scope once the invoice is settled.\n"
+        "- Partial refunds are prorated by service days, not by amount paid.\n"
+    ),
+    "reporting/SKILL.md": (
         "# Reporting skill\n"
+        "Aggregate reports, trends and churn analysis.\n\n"
         "1. Establish the reporting period before querying anything.\n"
         "2. Retrieve the raw events with the SQL tool, then aggregate.\n"
         "3. Rank the drivers and keep the top three.\n"
-        "4. Report each figure with the period it covers.\n",
+        "4. Report each figure with the period it covers.\n"
     ),
-    "escalation": (
-        "Routing a question the other skills cannot answer.",
+    "escalation/SKILL.md": (
         "# Escalation skill\n"
+        "Routing a question the other skills cannot answer.\n\n"
         "1. Say plainly which part of the question you cannot answer.\n"
         "2. Name the team that owns it.\n"
-        "3. Never guess a figure to avoid escalating.\n",
+        "3. Never guess a figure to avoid escalating.\n"
     ),
 }
 
 
-class FakeSkillClient:
-    # REPLACE WITH REAL IMPL: GET {agent}/skills and GET {agent}/skills/{name}
-    # from the agent server (§10.2 / §10.7).
-    async def list_skills(self) -> list[SkillSummary]:
+class FakeWorkspaceClient:
+    # REPLACE WITH REAL IMPL: GET {agent}/get_workspace and
+    # GET {agent}/get_config_version from the agent server (§10.2 / §10.7).
+    async def get_workspace(self) -> Workspace:
         await asyncio.sleep(fc.SKILL_FETCH_LATENCY_S)
-        return [
-            SkillSummary(name=name, description=description)
-            for name, (description, _content) in _FAKE_SKILLS.items()
-        ]
+        return Workspace(
+            version=self._version(),
+            # Copied, so an edit made through the API can never mutate the
+            # fake's own workspace — the real seam gets a fresh parse per call
+            # and the fake must not be quietly more stateful than that.
+            config=json.loads(json.dumps(_FAKE_CONFIG)),
+            redacted_paths=list(_FAKE_REDACTED_PATHS),
+            skills=dict(_FAKE_SKILL_FILES),
+        )
 
-    async def get_skill(self, name: str) -> Skill:
+    async def get_version(self) -> str:
         await asyncio.sleep(fc.SKILL_FETCH_LATENCY_S)
-        entry = _FAKE_SKILLS.get(name)
-        if entry is None:
-            # Same shape of failure the real client reports for a 404, so the
-            # router's error handling is exercised in fake mode too.
-            raise KeyError(f"no such skill: {name}")
-        description, content = entry
-        return Skill(name=name, content=content, description=description)
+        return self._version()
+
+    @staticmethod
+    def _version() -> str:
+        """Constant while the fake workspace is constant, and derived from it.
+
+        Which means the staleness check is exercised rather than bypassed in
+        fake mode: it agrees with itself now, and would disagree the moment the
+        canned workspace above changed.
+        """
+        payload = json.dumps(
+            [_FAKE_CONFIG, _FAKE_SKILL_FILES], sort_keys=True
+        ).encode()
+        return f"fake.{hashlib.sha256(payload).hexdigest()[:7]}"

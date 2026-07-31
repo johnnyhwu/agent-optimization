@@ -53,10 +53,10 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
             "judge": settings.judge_impl,
             "trace": settings.trace_impl,
             "diagnosis": settings.diagnosis_impl,
-            # The playground's skill catalogue (§10.2). Fake means the skills
-            # shown are canned, which the picker says so nobody edits a fake
-            # skill expecting the real agent to have it.
-            "skill": settings.skill_impl,
+            # The playground's view of the agent's config + skills (§10.2).
+            # Fake means what is shown is canned, which the editor says so
+            # nobody edits a fake skill expecting the real agent to have it.
+            "workspace": settings.workspace_impl,
         },
     }
 

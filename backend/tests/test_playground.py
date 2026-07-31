@@ -20,7 +20,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from app import cancellation, playground
+from app import cancellation, fake_config as fc, playground
 from app.integrations import Seams
 from app.integrations.base import AgentResponse, Span, Trace, Verdict
 from app.integrations.real.prompts import build_diagnosis_messages
@@ -37,10 +37,10 @@ class RecordingAgent:
         self.calls: list[dict] = []
         self.response, self.failed, self.error, self.delay = response, failed, error, delay
 
-    async def call(self, question, correlation_id, user_id, tags=None, skill_override=None):
+    async def call(self, question, correlation_id, user_id, tags=None, workspace=None):
         self.calls.append({
             "question": question, "correlation_id": correlation_id,
-            "user_id": user_id, "tags": tags, "skill_override": skill_override,
+            "user_id": user_id, "tags": tags, "workspace": workspace,
         })
         if self.delay:
             await asyncio.sleep(self.delay)
@@ -115,7 +115,7 @@ def make_attempt(subject="alice", **kwargs) -> PlaygroundAttempt:
     defaults = dict(
         id=uuid.uuid4(), subject=subject, question="how much did ACME owe?",
         ground_truth_response=None, ground_truth_reasoning=None,
-        skill_override=None, config={}, secrets={},
+        workspace=None, workspace_baseline=None, config={}, secrets={},
         correlation_id=uuid.uuid4().hex,
     )
     defaults.update(kwargs)
@@ -230,17 +230,110 @@ async def test_verdict_is_passed_to_the_diagnosis_when_there_is_one(seams, monke
     assert verdict.comment == "missing a figure"
 
 
-# --- Skill override ---------------------------------------------------------
+# --- Workspace override -----------------------------------------------------
 
-async def test_skill_override_reaches_the_agent(seams, monkeypatch):
-    from app.integrations.base import SkillOverride
+async def test_workspace_override_reaches_the_agent(seams, monkeypatch):
+    from app.integrations.base import WorkspaceOverride
 
-    override = SkillOverride(name="billing", content="# Billing (edited)")
-    attempt = make_attempt(skill_override=override)
+    override = WorkspaceOverride(
+        config={"agents": {"defaults": {"model": "big"}}},
+        skills={"billing/SKILL.md": "# Billing (edited)"},
+    )
+    attempt = make_attempt(workspace=override)
     await execute(attempt, seams, monkeypatch)
 
-    assert seams.agent.calls[0]["skill_override"] is override
-    assert attempt.skill_name == "billing"
+    assert seams.agent.calls[0]["workspace"] is override
+    assert attempt.config_overrides == ["agents.defaults.model"]
+
+
+async def test_edited_files_are_counted_against_the_snapshot_not_the_whole_set(
+    seams, monkeypatch
+):
+    """`skills` is the complete file set, so only a baseline can say what changed.
+
+    Without one the summary would report every file the agent has as edited,
+    which is exactly the noise that makes a before/after comparison useless.
+    """
+    from app.integrations.base import WorkspaceOverride
+
+    baseline = {
+        "billing/SKILL.md": "# Billing",
+        "billing/references/refunds.md": "# Refunds",
+        "reporting/SKILL.md": "# Reporting",
+    }
+    attempt = make_attempt(
+        workspace=WorkspaceOverride(skills={
+            "billing/SKILL.md": "# Billing (edited)",     # changed
+            "reporting/SKILL.md": "# Reporting",          # untouched
+            "billing/references/new.md": "# New",         # added
+            # billing/references/refunds.md is absent — deleted for this call
+        }),
+        workspace_baseline=baseline,
+    )
+    await execute(attempt, seams, monkeypatch)
+
+    assert attempt.edited_skill_files == [
+        "billing/SKILL.md",
+        "billing/references/new.md",
+        "billing/references/refunds.md",
+    ]
+
+
+async def test_no_override_reports_nothing_edited(seams, monkeypatch):
+    attempt = make_attempt()
+    await execute(attempt, seams, monkeypatch)
+
+    assert seams.agent.calls[0]["workspace"] is None
+    assert attempt.config_overrides == []
+    assert attempt.edited_skill_files == []
+
+
+async def test_the_override_is_visible_in_the_fake_trace(monkeypatch):
+    """The one piece of evidence the platform can offer that an override landed.
+
+    Nothing can verify that a real agent honoured an override — the proof is the
+    text turning up in the trace's first system message, which the span view
+    renders. The fake seam has to produce that same evidence, or a Docker-only
+    demo would never show what "the override arrived" looks like.
+    """
+    from app.integrations.base import WorkspaceOverride
+    from app.integrations.fake import (
+        FakeAgentClient, FakeDiagnosisClient, FakeJudgeClient, FakeTraceClient,
+    )
+
+    monkeypatch.setattr(fc, "TRACE_NOT_READY_POLLS", 0)
+    seams = Seams(
+        agent=FakeAgentClient(), judge=FakeJudgeClient(),
+        trace=FakeTraceClient(), diagnosis=FakeDiagnosisClient(),
+    )
+    attempt = make_attempt(
+        workspace=WorkspaceOverride(
+            config={"agents": {"defaults": {"model": "OVERRIDE-MODEL"}}},
+            skills={"billing/SKILL.md": "# Billing OVERRIDE-MARKER-12345"},
+        ),
+    )
+    await execute(attempt, seams, monkeypatch)
+
+    system = attempt.trace.spans[0].input_json["messages"][0]["content"]
+    assert "OVERRIDE-MARKER-12345" in system
+    assert "agents.defaults.model='OVERRIDE-MODEL'" in system
+
+
+async def test_a_plain_attempt_leaves_no_override_in_the_trace(monkeypatch):
+    from app.integrations.fake import (
+        FakeAgentClient, FakeDiagnosisClient, FakeJudgeClient, FakeTraceClient,
+    )
+
+    monkeypatch.setattr(fc, "TRACE_NOT_READY_POLLS", 0)
+    seams = Seams(
+        agent=FakeAgentClient(), judge=FakeJudgeClient(),
+        trace=FakeTraceClient(), diagnosis=FakeDiagnosisClient(),
+    )
+    attempt = make_attempt()
+    await execute(attempt, seams, monkeypatch)
+
+    system = attempt.trace.spans[0].input_json["messages"][0]["content"]
+    assert "overridden for this call" not in system
 
 
 async def test_attempts_are_tagged_and_attributed_to_their_subject(seams, monkeypatch):
@@ -516,6 +609,73 @@ async def test_credentials_never_come_back_out(monkeypatch):
     assert "SENTINEL" not in payload
 
 
+async def test_an_override_that_changes_nothing_is_not_sent(monkeypatch):
+    """An empty override would make the request body differ from a plain call.
+
+    The agent server treats a present `workspace` as "use this instead of mine",
+    so sending an empty one for a question nobody edited would claim an
+    experiment that never happened.
+    """
+    started: list[PlaygroundAttempt] = []
+    monkeypatch.setattr(playground, "start", started.append)
+
+    detail = await playground_router.create_attempt(
+        PlaygroundCreate(question="q", workspace={"config": {}, "skills": None}),
+        subject="alice",
+    )
+
+    assert started[0].workspace is None
+    assert detail.workspace_overridden is False
+
+
+async def test_the_baseline_is_read_from_the_agent_not_the_browser(
+    monkeypatch, configure
+):
+    """What counts as "edited" is decided against the agent's own files.
+
+    Trusting a baseline sent by the browser would let a stale tab report a file
+    as untouched when the agent has since changed it.
+    """
+    started: list[PlaygroundAttempt] = []
+    monkeypatch.setattr(playground, "start", started.append)
+
+    with configure(workspace_impl="fake"):
+        detail = await playground_router.create_attempt(
+            PlaygroundCreate(
+                question="q",
+                workspace={"skills": {"billing/SKILL.md": "# Billing (edited)"}},
+            ),
+            subject="alice",
+        )
+
+    assert started[0].workspace_baseline["billing/SKILL.md"].startswith("# Billing")
+    # The other files the fake agent has are absent from the override, i.e.
+    # deleted for this call — and reported as such rather than ignored.
+    assert "billing/SKILL.md" in detail.edited_skill_files
+    assert "reporting/SKILL.md" in detail.edited_skill_files
+
+
+async def test_an_unreachable_agent_costs_the_summary_not_the_attempt(
+    monkeypatch, configure
+):
+    """The baseline is a nicety; the experiment still has to run without it."""
+    started: list[PlaygroundAttempt] = []
+    monkeypatch.setattr(playground, "start", started.append)
+
+    class Boom:
+        async def get_workspace(self):
+            raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(playground_router, "_workspace_client", lambda: Boom())
+    detail = await playground_router.create_attempt(
+        PlaygroundCreate(question="q", workspace={"skills": {"a/SKILL.md": "x"}}),
+        subject="alice",
+    )
+
+    assert started[0].workspace is not None
+    assert detail.workspace_overridden is True
+
+
 async def test_cancelling_a_finished_attempt_is_a_409():
     attempt = make_attempt()
     attempt.status = "done"
@@ -573,42 +733,62 @@ async def test_re_diagnose_reports_the_models_own_error(monkeypatch):
     assert "context length exceeded" in attempt.diagnosis_error
 
 
-async def test_skill_endpoints_report_misconfiguration_as_503(configure):
-    """SKILL_IMPL=real with no agent base URL used to be a 500 — the reason has
-    to reach the developer, and it is a configuration problem, not a bug."""
-    with configure(skill_impl="real", agent_base_url=""):
+async def test_workspace_endpoints_report_misconfiguration_as_503(configure):
+    """WORKSPACE_IMPL=real with no agent base URL used to be a 500 — the reason
+    has to reach the developer, and it is a configuration problem, not a bug."""
+    with configure(workspace_impl="real", agent_base_url=""):
         with pytest.raises(HTTPException) as exc:
-            await playground_router.list_skills(subject="alice")
+            await playground_router.get_workspace(subject="alice")
     assert exc.value.status_code == 503
     assert "AGENT_BASE_URL" in exc.value.detail
 
 
-async def test_a_broken_catalogue_is_a_503_not_an_empty_list(configure, monkeypatch):
+async def test_a_broken_workspace_is_a_503_not_an_empty_one(configure, monkeypatch):
+    """"No skills" and "the agent server refused us" must not look the same."""
     class Boom:
-        async def list_skills(self):
+        async def get_workspace(self):
             raise RuntimeError("agent server returned 500")
 
-    monkeypatch.setattr(playground_router, "_skill_client", lambda: Boom())
+    monkeypatch.setattr(playground_router, "_workspace_client", lambda: Boom())
     with pytest.raises(HTTPException) as exc:
-        await playground_router.list_skills(subject="alice")
+        await playground_router.get_workspace(subject="alice")
     assert exc.value.status_code == 503
     assert "agent server returned 500" in exc.value.detail
 
 
-async def test_fake_skill_catalogue_is_readable(configure):
-    with configure(skill_impl="fake"):
-        skills = await playground_router.list_skills(subject="alice")
-        billing = await playground_router.get_skill("billing", subject="alice")
+async def test_a_broken_version_check_is_a_503(configure, monkeypatch):
+    class Boom:
+        async def get_version(self):
+            raise RuntimeError("connection refused")
 
-    assert "billing" in [s.name for s in skills]
-    assert billing.content.startswith("# Billing")
+    monkeypatch.setattr(playground_router, "_workspace_client", lambda: Boom())
+    with pytest.raises(HTTPException) as exc:
+        await playground_router.get_workspace_version(subject="alice")
+    assert exc.value.status_code == 503
+    assert "connection refused" in exc.value.detail
 
 
-async def test_unknown_skill_is_a_404(configure):
-    with configure(skill_impl="fake"):
-        with pytest.raises(HTTPException) as exc:
-            await playground_router.get_skill("nope", subject="alice")
-    assert exc.value.status_code == 404
+async def test_fake_workspace_is_readable(configure):
+    with configure(workspace_impl="fake"):
+        ws = await playground_router.get_workspace(subject="alice")
+
+    assert ws.skills["billing/SKILL.md"].startswith("# Billing")
+    # A skill is a directory, and the fake has to prove the whole path survives.
+    assert "billing/references/refunds.md" in ws.skills
+    assert ws.config["agents"]["defaults"]["model"]
+    # Secrets are named but not carried, so the UI can show them as hidden
+    # rather than letting someone re-add the key by hand and shadow the real one.
+    assert "agents.defaults.api_key" in ws.redacted_paths
+    assert "api_key" not in ws.config["agents"]["defaults"]
+
+
+async def test_fake_version_agrees_with_the_snapshot(configure):
+    """The staleness check has to be exercised in fake mode, not bypassed."""
+    with configure(workspace_impl="fake"):
+        ws = await playground_router.get_workspace(subject="alice")
+        version = await playground_router.get_workspace_version(subject="alice")
+
+    assert version.version == ws.version != ""
 
 
 # --- Trace view states ------------------------------------------------------

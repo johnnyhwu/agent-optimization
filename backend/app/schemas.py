@@ -264,25 +264,47 @@ class TraceView(BaseModel):
 
 # --- Playground (§10) -------------------------------------------------------
 
-class SkillSummaryOut(BaseModel):
-    name: str
-    description: str | None = None
+class WorkspaceOut(BaseModel):
+    """The agent server's config + skill files, as the editor starts from."""
+
+    version: str = ""
+    config: dict = Field(default_factory=dict)
+    # Config paths the agent server withheld (its own API keys). Shown as
+    # present-but-hidden rather than dropped: a field that vanishes silently
+    # invites someone to re-add it by hand and shadow the real value.
+    redacted_paths: list[str] = Field(default_factory=list)
+    # Flat {relative path: file text} — a skill is a directory, so `SKILL.md`
+    # and everything under `references/` arrive as separate entries.
+    skills: dict[str, str] = Field(default_factory=dict)
 
 
-class SkillOut(BaseModel):
-    name: str
-    content: str
-    description: str | None = None
+class WorkspaceVersionOut(BaseModel):
+    """Just the version, for the staleness check made before each send."""
+
+    version: str = ""
 
 
-class SkillOverrideIn(BaseModel):
-    """A candidate skill to use for this one call instead of the stored one.
+class WorkspaceOverrideIn(BaseModel):
+    """The config/skills to use for this one call instead of the agent's own.
 
-    `name` is required alongside the text: the agent has to know which skill this
-    replaces, and a nameless blob tells it nothing about where to substitute it.
+    The two halves travel differently on purpose (see
+    docs/agent_server_stage4_endpoints.md §5.2/§5.3): `config` is sparse and is
+    deep-merged on the agent server — it must be, since the snapshot the editor
+    started from had the agent's secrets removed — while `skills` is the
+    complete file set for the call, because only replacement can express
+    deleting a file.
+
+    Both are optional: editing only the config, or only a skill, is the common
+    case, and sending the untouched half would claim an edit that never
+    happened.
     """
-    name: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+
+    config: dict | None = None
+    skills: dict[str, str] | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.config and self.skills is None
 
 
 class PlaygroundCreate(BaseModel):
@@ -297,7 +319,7 @@ class PlaygroundCreate(BaseModel):
     question: str = Field(min_length=1)
     ground_truth_response: str | None = None
     ground_truth_reasoning: str | None = None
-    skill_override: SkillOverrideIn | None = None
+    workspace: WorkspaceOverrideIn | None = None
     # Same per-run settings the eval path uses, so an attempt can target the same
     # endpoints a given run did.
     config: RunConfig = Field(default_factory=RunConfig)
@@ -314,10 +336,14 @@ class PlaygroundAttemptOut(BaseModel):
     # rather than leaving an empty verdict looking like a failure.
     has_expected_answer: bool
     has_expected_reasoning: bool
-    skill_name: str | None = None
-    # True when a candidate skill was sent with the call. The platform cannot
-    # verify the agent actually used it (§10.7) — this only reports what was sent.
-    skill_overridden: bool = False
+    # What the call carried, for the attempt list's summary. The platform cannot
+    # verify the agent actually applied any of it (§10.7) — these only report
+    # what was sent.
+    workspace_overridden: bool = False
+    # Dotted config paths this attempt overrode, e.g. ["agents.defaults.model"].
+    config_overrides: list[str] = Field(default_factory=list)
+    # Skill files whose text differed from the agent's own, plus any it deleted.
+    edited_skill_files: list[str] = Field(default_factory=list)
     status: str  # running | done | failed | cancelled
     phase: str  # pending | answered | judged | traced | diagnosed
     verdict: str | None = None
@@ -338,5 +364,9 @@ class PlaygroundAttemptDetail(PlaygroundAttemptOut):
 
     ground_truth_response: str | None = None
     ground_truth_reasoning: str | None = None
-    skill_content: str | None = None
+    # The override exactly as it was sent, so cloning an attempt back into the
+    # composer reproduces it. A clone that silently dropped it would change two
+    # variables at once, which is what makes a before/after comparison
+    # worthless.
+    workspace: WorkspaceOverrideIn | None = None
     trace: TraceView

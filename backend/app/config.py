@@ -48,9 +48,10 @@ class Settings(BaseSettings):
     judge_impl: Impl = "fake"
     trace_impl: Impl = "fake"
     diagnosis_impl: Impl = "fake"
-    # The playground's skill catalogue (§10.2). Read-only against the agent
-    # server, so it is the cheapest seam to switch on first.
-    skill_impl: Impl = "fake"
+    # The playground's view of the agent's config + skill files (§10.2).
+    # Read-only against the agent server, so it is the cheapest seam to switch
+    # on first.
+    workspace_impl: Impl = "fake"
 
     # --- Agent HTTP server (§6.2) -------------------------------------------
     # Base URL of the FastAPI agent server; the client POSTs to {base}/execute.

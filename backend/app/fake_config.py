@@ -22,7 +22,7 @@ JUDGE_LATENCY_MAX_S: float = 1.0
 DIAGNOSIS_LATENCY_MIN_S: float = 2.0
 DIAGNOSIS_LATENCY_MAX_S: float = 4.0
 
-# --- SkillClient : fake read of the agent's skill catalogue (§10.2) ---
+# --- WorkspaceClient : fake read of the agent's config + skill files (§10.2) ---
 # Short on purpose: the playground fetches this while the developer is typing,
 # so it should feel like reading a local file, not like calling an agent.
 SKILL_FETCH_LATENCY_S: float = 0.15

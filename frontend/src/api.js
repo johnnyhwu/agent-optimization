@@ -89,8 +89,11 @@ export const api = {
 
   // --- Playground (§10). Attempts live in the backend's memory, not the DB, so
   // there is nothing to paginate and a backend restart empties the list.
-  listSkills: () => req("GET", "/playground/skills"),
-  getSkill: (name) => req("GET", `/playground/skills/${encodeURIComponent(name)}`),
+  getWorkspace: () => req("GET", "/playground/workspace"),
+  // Cheap enough to call before every send, which is what turns "your snapshot
+  // is stale" into a question asked before the experiment rather than a mystery
+  // after it.
+  getWorkspaceVersion: () => req("GET", "/playground/workspace/version"),
   listAttempts: () => req("GET", "/playground/attempts"),
   createAttempt: (payload) => req("POST", "/playground/attempts", payload),
   getAttempt: (attemptId) => req("GET", `/playground/attempts/${attemptId}`),

@@ -6,6 +6,10 @@ with the agent's answer. No protocol SDK is involved — the payload and
 response are both trivial, so a hand-written httpx POST is simpler than
 depending on one.
 
+A playground attempt may also carry `metadata.workspace`, the config/skills the
+agent should use for this one call (see docs/agent_server_stage4_endpoints.md).
+An eval run never sends it, so the run path's request body is unchanged.
+
 The correlation mechanism (§6.2 / §6.7) is the whole point of this client: the
 platform mints a correlation_id per question and puts it in
 `metadata.trace_data.trace_id` (and reuses it as `session_id`, since each
@@ -20,7 +24,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.integrations.base import AgentResponse, SkillOverride
+from app.integrations.base import AgentResponse, WorkspaceOverride
 
 
 class AgentHttpError(RuntimeError):
@@ -65,7 +69,7 @@ class HttpAgentClient:
     def build_payload(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None,
-        skill_override: SkillOverride | None = None,
+        workspace: WorkspaceOverride | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "message": question,
@@ -80,24 +84,32 @@ class HttpAgentClient:
                 },
             },
         }
-        if skill_override is not None:
+        if workspace is not None:
             # Only present when the playground asked for one, so an eval run's
             # request body is byte-for-byte what it was before §10 existed. The
-            # agent server is expected to use this text for THIS call only and
-            # never persist it (§10.7).
-            payload["metadata"]["skill_override"] = {
-                "name": skill_override.name,
-                "content": skill_override.content,
-            }
+            # agent server is expected to apply this to THIS call only and never
+            # persist it (§10.7).
+            #
+            # Each half is omitted rather than sent as null when it wasn't
+            # edited, because the two mean different things on the far side:
+            # an absent `config` means "keep yours", while a present-but-empty
+            # `skills` means "run this call with no skills at all".
+            override: dict[str, Any] = {}
+            if workspace.config is not None:
+                override["config"] = workspace.config
+            if workspace.skills is not None:
+                override["skills"] = workspace.skills
+            if override:
+                payload["metadata"]["workspace"] = override
         return payload
 
     async def call(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None = None,
-        skill_override: SkillOverride | None = None,
+        workspace: WorkspaceOverride | None = None,
     ) -> AgentResponse:
         payload = self.build_payload(
-            question, correlation_id, user_id, tags, skill_override
+            question, correlation_id, user_id, tags, workspace
         )
         started = time.monotonic()
 

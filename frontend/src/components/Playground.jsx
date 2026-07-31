@@ -1,14 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import AttemptList from "./AttemptList.jsx";
+import Modal from "./Modal.jsx";
 import PhaseSteps from "./PhaseSteps.jsx";
 import PlaygroundComposer from "./PlaygroundComposer.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import SpanList from "./SpanList.jsx";
 import { useToast } from "./Toast.jsx";
 import { IconRefresh } from "./icons.jsx";
+import {
+  diffConfig,
+  editedFiles,
+  overrideCounts,
+  sameSkills,
+  stripRedacted,
+} from "../workspace_util.js";
 
-// The playground (§10): one question at a time, against one editable skill.
+// The playground (§10): one question at a time, against an editable copy of the
+// agent's own config and skill files.
 //
 // Structurally this is the three-column detail view with a composer on top, and
 // it reuses that view's two hard-won mechanisms (§9.18a):
@@ -23,12 +32,17 @@ import { IconRefresh } from "./icons.jsx";
 // Config and credentials live in this component's state, so they are typed once
 // per browser session. That matches the store being ephemeral: there is no run
 // row to borrow keys from the way the eval path does.
+//
+// The agent's workspace lives here too, as two values: `workspace` is the
+// snapshot the agent server served, and `wsEdit` is the working copy. Keeping
+// both is what makes "revert this field" and "what did I actually change?"
+// answerable — and the snapshot's `version` is what the staleness check before
+// each send compares against.
 
 const EMPTY_DRAFT = {
   question: "",
   ground_truth_response: "",
   ground_truth_reasoning: "",
-  skill_override: null,
 };
 
 export default function Playground({ subject, seed, onSeedApplied }) {
@@ -54,6 +68,16 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const [impls, setImpls] = useState({});
   const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
 
+  // The agent's workspace: what it served, and what the developer has done to it.
+  const [workspace, setWorkspace] = useState(null);
+  const [wsEdit, setWsEdit] = useState(null);
+  const [wsLoading, setWsLoading] = useState(false);
+  const [wsError, setWsError] = useState(null);
+  // Set when the agent's workspace moved on after the snapshot was taken. The
+  // send waits on the answer rather than guessing: reloading throws away the
+  // edit, and sending anyway may be exactly what was intended.
+  const [stale, setStale] = useState(null);
+
   const active = attempts.find((a) => a.id === activeId) || null;
 
   useEffect(() => {
@@ -71,16 +95,67 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // A different identity has a different set of attempts.
   }, [subject]);
 
-  // A question handed over from the three-column view (§10.5). The skill comes
-  // over as a name with no text, so the picker loads the agent's current version
-  // and the edit starts from what the agent actually has.
+  useEffect(() => {
+    loadWorkspace();
+  }, []);
+
+  async function loadWorkspace() {
+    setWsLoading(true);
+    setWsError(null);
+    try {
+      const ws = await api.getWorkspace();
+      setWorkspace(ws);
+      // Reloading starts the edit over from what the agent has now. Replaying
+      // the old edits onto new text would produce a third version that matches
+      // neither, which is precisely the confusion the version check exists to
+      // prevent.
+      setWsEdit({ config: ws.config, skills: ws.skills });
+    } catch (e) {
+      // Never a blank editor: "this agent has no skills" and "the agent server
+      // refused us" have to stay distinguishable, or the developer retypes a
+      // skill from memory and tests the wrong text.
+      setWsError(e.message);
+    } finally {
+      setWsLoading(false);
+    }
+  }
+
+  function reloadWorkspace() {
+    const dirty =
+      workspace && wsEdit
+        ? Object.keys(diffConfig(workspace.config, wsEdit.config) || {}).length +
+          editedFiles(workspace.skills, wsEdit.skills).length
+        : 0;
+    if (dirty && !window.confirm("Reloading discards your edits to the workspace. Continue?")) {
+      return;
+    }
+    loadWorkspace();
+  }
+
+  // What the next question should carry, or null when nothing was edited. An
+  // empty override is not sent: the agent server reads a present `workspace` as
+  // "use this instead of mine", so sending one would claim an experiment that
+  // never happened.
+  function buildOverride() {
+    if (!workspace || !wsEdit) return null;
+    const config = stripRedacted(
+      diffConfig(workspace.config, wsEdit.config), workspace.redacted_paths
+    );
+    const skills = sameSkills(workspace.skills, wsEdit.skills) ? null : wsEdit.skills;
+    if (!config && skills === null) return null;
+    return { config, skills };
+  }
+
+  // A question handed over from the three-column view (§10.5). Only the question
+  // and its ground truth travel: the workspace stays as the agent server has it,
+  // so the first run of a handed-over question reproduces what the eval run did
+  // rather than silently testing somebody's leftover edit.
   useEffect(() => {
     if (!seed) return;
     setDraft({
       question: seed.question || "",
       ground_truth_response: seed.ground_truth_response || "",
       ground_truth_reasoning: seed.ground_truth_reasoning || "",
-      skill_override: null,
     });
     if (seed.config) setForm((f) => (f ? { ...f, ...stripBlank(seed.config) } : f));
     onSeedApplied?.();
@@ -217,6 +292,27 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
   async function send() {
     if (!draft.question.trim()) return;
+    // Ask the agent whether its workspace moved since the snapshot was taken.
+    // Cheap (one string) and asked before the call rather than after, because a
+    // question answered against a stale skill is not a result you can trust —
+    // and you would have no way of telling afterwards.
+    if (workspace?.version) {
+      try {
+        const { version } = await api.getWorkspaceVersion();
+        if (version && version !== workspace.version) {
+          setStale({ version });
+          return;
+        }
+      } catch {
+        // The agent server not answering the version check is not a reason to
+        // refuse the experiment: it costs the check, not the question.
+      }
+    }
+    await sendNow();
+  }
+
+  async function sendNow() {
+    setStale(null);
     setBusy(true);
     setError(null);
     try {
@@ -224,9 +320,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         question: draft.question,
         ground_truth_response: draft.ground_truth_response || null,
         ground_truth_reasoning: draft.ground_truth_reasoning || null,
-        skill_override: draft.skill_override?.content
-          ? { name: draft.skill_override.name, content: draft.skill_override.content }
-          : null,
+        workspace: buildOverride(),
         config: form || {},
         secrets,
       });
@@ -245,19 +339,26 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
   async function clone(a) {
     // Fetched rather than read off the list row: the ground-truth fields and the
-    // skill text are only on the detail payload, and a clone that silently
-    // dropped them would change two variables at once — which is exactly what
-    // makes a before/after comparison worthless.
+    // workspace override are only on the detail payload, and a clone that
+    // silently dropped them would change two variables at once — which is
+    // exactly what makes a before/after comparison worthless.
     try {
       const full = await api.getAttempt(a.id);
       setDraft({
         question: full.question,
         ground_truth_response: full.ground_truth_response || "",
         ground_truth_reasoning: full.ground_truth_reasoning || "",
-        skill_override: full.skill_name
-          ? { name: full.skill_name, content: full.skill_content || "" }
-          : null,
       });
+      if (full.workspace && workspace) {
+        // Rebuilt against the current snapshot, each half the way the agent
+        // server reads it: the config overlay is sparse and merges onto what the
+        // agent has now, while the skills are the complete set that attempt ran
+        // with and replace the working copy outright.
+        setWsEdit({
+          config: applyOverlay(workspace.config, full.workspace.config),
+          skills: full.workspace.skills || workspace.skills,
+        });
+      }
       // Credentials are excluded: they are write-only and never come back. They
       // are already in this session's state anyway.
       if (full.config) setForm((f) => ({ ...f, ...stripBlank(full.config) }));
@@ -318,8 +419,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         <div>
           <h2>Playground</h2>
           <p className="muted">
-            One question, one editable skill, run as often as you like. Nothing here
-            is saved — attempts live in the backend's memory until it restarts.
+            One question against an editable copy of the agent's config and skill
+            files, run as often as you like. Nothing here is saved — attempts live
+            in the backend's memory until it restarts.
           </p>
         </div>
         <button onClick={reload} title="Reload the attempt list">
@@ -341,15 +443,23 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           impls={impls}
           onSend={send}
           busy={busy}
+          workspace={workspace}
+          workspaceEdit={wsEdit}
+          onWorkspaceEdit={setWsEdit}
+          workspaceLoading={wsLoading}
+          workspaceError={wsError}
+          onReloadWorkspace={reloadWorkspace}
         />
       )}
 
       {active && (
         <div className="attempt-head">
           <PhaseSteps attempt={active} />
-          {active.skill_overridden && (
+          {active.workspace_overridden && (
             <span className="hint">
-              sent with an override of <strong>{active.skill_name}</strong>
+              sent with{" "}
+              <strong>{describeOverride(active)}</strong>
+              {" "}— the agent's own workspace was not changed
             </span>
           )}
         </div>
@@ -381,8 +491,68 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           suspect={activeSpanObj ? suspectByIndex[activeSpanObj.index] : null}
         />
       </div>
+
+      {stale && (
+        <Modal
+          title="The agent's workspace has changed"
+          subtitle={`You started from ${workspace?.version}; the agent server is now at ${stale.version}.`}
+          onClose={() => setStale(null)}
+          width={520}
+          footer={
+            <>
+              <button onClick={() => setStale(null)}>Cancel</button>
+              <button
+                onClick={async () => {
+                  setStale(null);
+                  await loadWorkspace();
+                }}
+              >
+                Reload workspace
+              </button>
+              <button className="primary" onClick={sendNow}>
+                Send anyway
+              </button>
+            </>
+          }
+        >
+          <p style={{ margin: "0 0 8px" }}>
+            Someone changed the agent's config or skill files after this editor
+            read them.
+          </p>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+            <strong>Reload workspace</strong> starts over from what the agent has
+            now and discards your edits. <strong>Send anyway</strong> runs the
+            question with what is in the editor — which is a real answer when the
+            change was somebody else's and unrelated to what you are testing.
+          </p>
+        </Modal>
+      )}
     </div>
   );
+}
+
+// What an attempt carried, for the line above the three columns. Counts rather
+// than names: a config path and a file path are both long, and the point of the
+// line is that an override happened at all.
+function describeOverride(attempt) {
+  const { configs, files } = overrideCounts(attempt);
+  const parts = [];
+  if (configs) parts.push(`${configs} config value${configs === 1 ? "" : "s"}`);
+  if (files) parts.push(`${files} skill file${files === 1 ? "" : "s"}`);
+  return parts.length ? `an override of ${parts.join(" and ")}` : "a workspace override";
+}
+
+// A sparse config overlay merged onto a full config, the same deep merge the
+// agent server does with it (§5.2 of the agent-server contract): a key the
+// overlay does not mention keeps the value it already had.
+function applyOverlay(base, overlay) {
+  if (!overlay) return base;
+  const out = { ...(base || {}) };
+  Object.entries(overlay).forEach(([key, value]) => {
+    const isObject = (v) => v && typeof v === "object" && !Array.isArray(v);
+    out[key] = isObject(value) && isObject(out[key]) ? applyOverlay(out[key], value) : value;
+  });
+  return out;
 }
 
 // Only the values an attempt actually recorded, so cloning never overwrites a
