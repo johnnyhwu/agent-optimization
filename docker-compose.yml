@@ -62,6 +62,12 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_TIMEOUT_S: ${LANGFUSE_TIMEOUT_S:-60}
       RUN_CONCURRENCY: ${RUN_CONCURRENCY:-1}
+      # Langfuse ingests a trace incrementally, so the read that first returns
+      # observations can catch it still filling up — and the span that loses
+      # that race is the last one, the final answer generation. These size the
+      # window the read is repeated over; 0 reads trusts the first read (§6.12a).
+      TRACE_SETTLE_DELAY_S: ${TRACE_SETTLE_DELAY_S:-1.0}
+      TRACE_SETTLE_MAX_READS: ${TRACE_SETTLE_MAX_READS:-3}
       # Playground attempts are held in memory (§10.3), so this caps how many
       # each user keeps before the oldest finished ones are dropped.
       PLAYGROUND_MAX_ATTEMPTS_PER_USER: ${PLAYGROUND_MAX_ATTEMPTS_PER_USER:-20}

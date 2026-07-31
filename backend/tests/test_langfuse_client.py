@@ -93,6 +93,75 @@ async def test_spans_are_time_ordered_and_indexed_from_zero(client):
 
 
 @respx.mock
+async def test_ordering_survives_mixed_timestamp_precision(client):
+    """Compared as strings, `…:00.500Z` sorts *before* `…:00Z` — `.` < `Z`.
+
+    One observation serialized without its fractional seconds is enough to move
+    a span past its neighbour, and this list is read as the order the agent did
+    things in. Parsing the timestamps is what makes the two forms comparable.
+    """
+    respx.get(OBS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _obs(id="b", name="second", startTime="2026-07-27T00:00:00.500Z"),
+                    _obs(id="a", name="first", startTime="2026-07-27T00:00:00Z"),
+                    _obs(id="c", name="third", startTime="2026-07-27T00:00:01.250Z"),
+                ],
+                "meta": {"totalPages": 1},
+            },
+        )
+    )
+    trace = await client.fetch_trace("corr")
+    assert [s.tool_name for s in trace.spans] == ["first", "second", "third"]
+
+
+@respx.mock
+async def test_an_unparseable_timestamp_does_not_lose_the_span(client):
+    """A span with a timestamp we can't read still has to appear — dropping the
+    last span is the failure this ordering code exists next to."""
+    respx.get(OBS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _obs(id="a", name="dated", startTime="2026-07-27T00:00:01Z"),
+                    _obs(id="b", name="undated", startTime=None),
+                    _obs(id="c", name="nonsense", startTime="not a timestamp"),
+                ],
+                "meta": {"totalPages": 1},
+            },
+        )
+    )
+    trace = await client.fetch_trace("corr")
+    assert sorted(s.tool_name for s in trace.spans) == ["dated", "nonsense", "undated"]
+    assert [s.index for s in trace.spans] == [0, 1, 2]
+
+
+@respx.mock
+async def test_a_re_read_of_the_same_trace_orders_it_the_same_way(client):
+    """Settling re-reads a trace (§6.12a) and compares span counts. Ties broken
+    by id keep the two reads comparable instead of reshuffling equal timestamps.
+    """
+    same_time = [
+        _obs(id="b", name="second", startTime="2026-07-27T00:00:00Z"),
+        _obs(id="a", name="first", startTime="2026-07-27T00:00:00Z"),
+    ]
+    respx.get(OBS_URL).mock(
+        return_value=httpx.Response(200, json={"data": same_time, "meta": {"totalPages": 1}})
+    )
+    first = await client.fetch_trace("corr")
+    respx.get(OBS_URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": list(reversed(same_time)), "meta": {"totalPages": 1}}
+        )
+    )
+    second = await client.fetch_trace("corr")
+    assert [s.tool_name for s in first.spans] == [s.tool_name for s in second.spans]
+
+
+@respx.mock
 async def test_observation_types_are_filtered(client):
     respx.get(OBS_URL).mock(
         return_value=httpx.Response(

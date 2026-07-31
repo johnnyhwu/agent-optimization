@@ -53,6 +53,9 @@ function qs(params) {
 }
 
 export const api = {
+  // Kept for the API surface, but the UI does not gate anything on it: a role map
+  // fetched once per session goes stale the moment a set is created or shared,
+  // and each eval-set payload already carries `my_role` for the caller.
   me: () => req("GET", "/me"),
   users: () => req("GET", "/users"),
   // Returns a page: { items, total, has_more }.

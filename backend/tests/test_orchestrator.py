@@ -14,7 +14,7 @@ import pytest
 
 from app import cancellation, orchestrator, pipeline
 from app.integrations import Seams
-from app.integrations.base import AgentResponse, Trace, Verdict
+from app.integrations.base import AgentResponse, Span, Trace, Verdict
 from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.sse import hub
 
@@ -267,6 +267,46 @@ async def test_diagnosis_is_stored_for_incorrect_answers(seams):
 
     analysis = next(o for o in session.added if isinstance(o, SpanAnalysis))
     assert analysis.model_used == "stub-model"
+
+
+async def test_the_diagnosis_waits_for_the_trace_to_stop_growing(seams, configure):
+    """A run diagnoses the trace it polled for, so a half-ingested read is what
+    the LLM compares against the expected process (§6.9 / §6.12a).
+
+    The run's *view* re-reads Langfuse every time it is opened, so a short read
+    there heals itself and this was easy to miss — the diagnosis stored against
+    the question does not get a second chance.
+    """
+    reads = {"n": 0}
+
+    def spans(count):
+        return [
+            Span(index=i, tool_name=f"step{i}", status="success",
+                 input="in", output="out", token_usage={})
+            for i in range(count)
+        ]
+
+    async def growing(correlation_id):
+        # Two spans on the read that finds the trace, the final one a beat later.
+        reads["n"] += 1
+        return Trace(correlation_id=correlation_id, spans=spans(min(1 + reads["n"], 3)))
+
+    async def wrong(question, response, ground_truth):
+        return Verdict(verdict="incorrect", score=0.2, comment="nope")
+
+    diagnosed: list = []
+
+    async def record(trace, reasoning, verdict):
+        diagnosed.append(trace)
+        return {"overall_diagnosis": "d", "suspects": [], "caveat": None}
+
+    seams.judge, seams.trace, seams.diagnosis = wrong, growing, record
+    run, questions = make_run(), [make_question()]
+    session = StubSession(run, questions)
+    with configure(trace_settle_max_reads=3, trace_settle_delay_s=0.0):
+        await orchestrator._execute_run(session, run)
+
+    assert len(diagnosed[0].spans) == 3
 
 
 async def test_trace_store_error_does_not_fail_the_question(seams):

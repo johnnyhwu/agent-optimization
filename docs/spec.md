@@ -679,6 +679,31 @@ trace 物件 / 診斷 / 三個錯誤欄位。
   > 判分完到 `question_done` 之間隔著 trace poll 與診斷，接真實服務時那是**數十秒**——
   > 那段時間題目會一直停在「judging…」。
 
+### 6.1a 「抓到了」不等於「抓完了」（程式碼註解稱為 §6.12a）
+
+上面第 ③ 步的 poll 只回答得了「這條 trace 存在嗎」。**「這條 trace 完整嗎」是另一個問題，
+而 Langfuse 沒有那支端點**——ingestion 不只是慢，它是**逐筆進來的**，
+所以第一次讀到「有 observation 了」的那一刻，trace 可能還在長。
+
+而輸掉這場競速的，**系統性地就是最後一個 span**：agent 多次 tool calling 之後的最終回答生成，
+它結束的瞬間就是 HTTP response 回來、平台開始去找 trace 的瞬間。
+
+**因此第一筆非空的讀取不被直接採信，而是重讀到 span 數不再增加為止。**
+
+- **成長是唯一繼續讀的理由**：一次沒有新增 span 的讀取就結束等待，所以沒有東西在路上時的
+  代價固定是**一次額外請求**。
+- **settle 只能加、不能減**：重讀比較短、回 NotReady、或整個失敗，一律沿用手上那份。
+  一個在確認讀取上壞掉的 trace store 不該讓人賠掉已經讀成功的 spans。
+- **長度相同的重讀仍然採用後者**：Langfuse 是先建 observation 再補 output 的，
+  所以同樣的 span 在較晚的讀取裡 body 比較完整。
+- `TRACE_SETTLE_DELAY_S` / `TRACE_SETTLE_MAX_READS` 調整窗口；設 `0` 次即回到舊行為。
+
+> **為什麼這件事比「少看到一個 span」嚴重**：診斷（§8.2）就是拿 trace 對照期望流程找分歧。
+> 一條缺了最後一步的 trace，會讓模型**自信地診斷一個從未發生的失敗**。
+> 而 eval run 的 trace **檢視**路徑每次都重讀 Langfuse（§3.4），所以畫面上的缺漏會自己補上、
+> 很難被發現——**落庫的那份診斷卻沒有第二次機會**。
+> Playground 更嚴重：attempt 握著的是當初那一份，沒有任何東西會再讀一次（§7.3）。
+
 ### 6.2 失敗策略
 
 > 假層永遠不會 raise，所以這整段在假資料時代是無效程式碼。接真實服務後它是最重要的一段。
@@ -789,9 +814,14 @@ Stage 1 的診斷告訴你 trace 在哪裡出錯。下一個念頭通常是
 
 ① agent（tags=["playground"]，有 workspace override 就帶上）→ phase=answered
 ② 有期望答案才 judge                              → phase=judged
-③ poll trace                                     → phase=traced
+③ poll trace，並 settle 到 span 數不再增加（§6.1a）  → phase=traced
 ④ 有期望流程且 trace 有到才 diagnose               → phase=diagnosed
 ```
+
+> **attempt 握著的就是那一份 trace**：attempt detail 直接回傳它，不像 eval run 的 trace 檢視
+> 每次重讀 Langfuse（§3.4）。所以第 ③ 步的 settle 在這裡格外重要——
+> 這裡讀短了，就是**這個 attempt 一輩子都短**（`Draft from trace` 與重新診斷用的也是同一份）。
+> 沒填期望答案時第 ② 步整個跳過，第一次讀取緊貼在 agent 回應之後，競速最激烈。
 
 **與 eval run 的四個差異**
 
@@ -981,7 +1011,7 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 |---|---|---|
 | `GET /health` | — | |
 | `GET /users` | — | 假使用者名單 + 目前身分 |
-| `GET /me` | — | 目前 subject 與其在各 eval set 的角色 |
+| `GET /me` | — | 目前 subject 與其在各 eval set 的角色。**UI 不用它 gate 權限**（§11.4）——每個 eval set 的 payload 自己就帶 `my_role` |
 | `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **六個 `*_IMPL` 現況** |
 | `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares` |
 | `GET /eval-sets` | — | 我有權限的卡片。分頁 + 篩選：`?limit&offset&q&metadata_key&metadata_value&sort`，回 `{items,total,has_more}` |
@@ -1281,6 +1311,20 @@ Playground 則乾脆放棄視窗推導、固定 `62vh`，因為它的編輯區�
 - `PUT /eval-sets/{id}/roles` **整批覆寫**分享名單；**操作者本人永遠保留 owner**
   （不可自我鎖出、保證至少一個 owner）。
 
+### 11.4 前端從哪裡讀「我在這個 set 是什麼角色」
+
+**從那個 set 自己的 payload 讀**（卡片列表與 `GET /eval-sets/{id}` 都帶 `my_role`），
+不從一份 session 級的角色表讀。
+
+> 原本讀的是進站時抓一次的 `GET /me`（`{set_id: role}`）。**那份表沒有任何東西會讓它失效**，
+> 所以在這個 session 裡**新建**的 eval set 根本不在裡面：`my_role` 讀成 undefined，
+> 於是自己剛建立、自己就是 owner 的 set，「Edit questions」與「重新診斷」按鈕都不會出現。
+> shortlist **每次**都會踩到——建立完就直接導進那個新 set（§7.6），中間沒有重整。
+> 上傳建立的 set 同樣中招，只是上傳後通常會先回到卡片列表，比較容易在下次重整後才點進去。
+>
+> `GET /me` 仍然存在，只是 UI 不再拿它 gate 任何東西：**每個 eval set 的 payload 本來就帶著
+> 呼叫者在該 set 的角色**，而那份資料跟那個 set 一樣新。
+
 ---
 
 ## 12. 設定總表
@@ -1310,6 +1354,7 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | `LANGFUSE_TRACE_READ_STRATEGY` | `auto` | `auto` / `trace_api` / `observations_api`（§3.5）|
 | `RUN_CONCURRENCY` | `1` | 1 = 嚴格序列 |
 | `TRACE_POLL_BACKOFF_S` / `TRACE_POLL_MAX_ATTEMPTS` | `[0.5,1,2,4,8]` / `8` | trace ingestion 等待 |
+| `TRACE_SETTLE_DELAY_S` / `TRACE_SETTLE_MAX_READS` | `1.0` / `3` | §6.1a：trace 開始出現後，重讀到 span 數不再增加。設 `0` 次即回到「第一筆讀到的就算數」|
 | **`PLAYGROUND_MAX_ATTEMPTS_PER_USER`** | `20` | 記憶體 store 的 per-subject 上限（§5.3）|
 
 > **假層延遲參數集中在另一個檔案**（`app/fake_config.py`）：agent / judge / diagnosis 的 min/max、
@@ -1365,23 +1410,24 @@ SEED=1 ./scripts/dev.sh    # build image → 起 Postgres → migrate → seed �
 
 **這一節的目的是讓你知道能信到什麼程度。**
 
-### 14.1 單元測試：206 個
+### 14.1 單元測試：230 個
 
-`make test` 跑其中 **186 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
-LLM 路徑以 monkeypatch）。剩下 20 個（`test_pagination.py` 全部，加上 `test_shortlist.py`
+`make test` 跑其中 **207 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
+LLM 路徑以 monkeypatch）。剩下 23 個（`test_pagination.py` 全部，加上 `test_shortlist.py`
 建立 eval set 的那一半）需要一個真 Postgres，未設 `TEST_DATABASE_URL` 時自動 skip。
 
 | 檔案 | 數量 | 涵蓋 |
 |---|---|---|
 | `test_agent_client.py` | 17 | request body 的 `message` + `metadata.trace_data`；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.workspace` 出現、沒有時整個 key 不存在**；只改一半時另一半整個省略（`config` 缺席 ≠ `config: null`）；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」）|
-| `test_langfuse_client.py` | 24 | 空頁 → NotReady；時間排序與重新編號；observation 型別過濾；分頁；Basic auth；`usageDetails` 與舊版 `usage` 兩種 token 欄位；ERROR level 映射；401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼；**兩條讀取策略**（兩者映出的 span 完全相同、404 → NotReady、auto 命中第一條時不會多打第二條、第一條壞掉會 fallback、**全失敗時兩條的原因都在訊息裡**）|
+| `test_langfuse_client.py` | 27 | 空頁 → NotReady；時間排序與重新編號（**含混用有／無小數秒的 ISO 時間**——字串比較會把 `…:00.500Z` 排在 `…:00Z` 前面；時間讀不懂的 span 仍然保留；同時間以 id 打破平手，使重讀不會重排）；observation 型別過濾；分頁；Basic auth；`usageDetails` 與舊版 `usage` 兩種 token 欄位；ERROR level 映射；401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼；**兩條讀取策略**（兩者映出的 span 完全相同、404 → NotReady、auto 命中第一條時不會多打第二條、第一條壞掉會 fallback、**全失敗時兩條的原因都在訊息裡**）|
 | `test_judge_and_diagnosis.py` | 18 | verdict 正規化與非法值；門檻覆寫兩個方向；**§4.4 截斷保留所有 span**；越界 `span_index` 剔除；§8.2 四段 prompt 的順序；JSON 修復重試（成功與放棄各一）|
-| `test_orchestrator.py` | 18 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位 |
-| `test_playground.py` | 47 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；workspace override 傳到 agent；**編輯過的檔案是對著送出當下的快照算的**（沒有基準的話每個檔案都會被算成改過）；空 override 不送出；baseline 跟 agent server 要而不是信瀏覽器；agent 連不上時只損失摘要不損失 attempt；**override 的文字出現在假 trace 第一個 span 的 system message**、沒有 override 的 attempt 則乾淨；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷 |
+| `test_orchestrator.py` | 19 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位；**送去診斷的是 settle 過的 trace**（§6.1a——落庫的診斷沒有第二次機會）|
+| `test_playground.py` | 50 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；workspace override 傳到 agent；**編輯過的檔案是對著送出當下的快照算的**（沒有基準的話每個檔案都會被算成改過）；空 override 不送出；baseline 跟 agent server 要而不是信瀏覽器；agent 連不上時只損失摘要不損失 attempt；**override 的文字出現在假 trace 第一個 span 的 system message**、沒有 override 的 attempt 則乾淨；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷；**最後一個 span 還在 ingest 時會等它**（§6.1a），診斷拿到的也是那份完整的，而 trace 本來就完整時只多一次確認讀取 |
 | `test_run_config.py` | 19 | `build_seams` 空設定等同純環境變數行為；`*_IMPL` 仍是主開關；逐 run 值覆寫 env；空白欄位退回 env；judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白寫死；金鑰沿用的端點配對規則；**金鑰不外流的值層級斷言**（序列化一個帶哨兵金鑰的 model，斷言哨兵不出現在 payload 任何位置——比檢查欄位名可靠）|
 | `test_workspace_client.py` | 13 | 整份 workspace 讀取；**config 保持巢狀不被攤平**；空 workspace 合法 vs 形狀不對則失敗；沒有 version 仍可用（只是失去過期檢查）；skills 不是 `{路徑: 文字}` 時報錯並指名是哪一筆；4xx/5xx 帶狀態碼與 body；非 JSON body 不猜；transport 錯誤帶 host；版本端點沒有 version 時報錯（**回空字串會被讀成「沒變」而讓檢查失效**）|
-| `test_shortlist.py` | 15（**8 個需 DB**）| synthesis：草稿來自 trace、**不寫回 attempt**、無 trace → 409、模型錯誤原文回傳、空草稿算失敗、別人的 attempt → 404。建立：只用 shortlist 建立；複製既有 set 的題目；**複製件拿到新的 question_id**；skill tag 一併複製；重複題目文字被跳過並計數；同文字時 shortlist 的版本勝出；**讀不到的 set 回 404 且什麼都沒建**；空的建立請求 → 422；建立者是 owner 且分享名單生效 |
-| `test_run_lifecycle.py` | 9 | cancel 的權限矩陣（owner ✓ / 觸發者 ✓ / 其他 viewer ✗）；非 running → 409；跨 eval set → 404；delete 為 owner-only 且 running 時 409 |
+| `test_shortlist.py` | 18（**12 個需 DB**）| synthesis：草稿來自 trace、**不寫回 attempt**、無 trace → 409、模型錯誤原文回傳、空草稿算失敗、別人的 attempt → 404。建立：只用 shortlist 建立；複製既有 set 的題目；**複製件拿到新的 question_id**；skill tag 一併複製；重複題目文字被跳過並計數；同文字時 shortlist 的版本勝出；**讀不到的 set 回 404 且什麼都沒建**；空的建立請求 → 422；建立者是 owner 且分享名單生效；**新 set 第一次被讀取就回報正確的 `my_role`**（owner / 被分享者 viewer / 兩條建立路徑都是——這正是前端 gate 權限用的欄位，§11.4）；沒有角色的人連讀都讀不到 |
+| `test_trace_settle.py` | 14 | §6.1a 的 settle：最後才到的 span 會被等到；沒有成長就立刻結束（穩態只多一次請求）；成長時有上限；長度相同時採用較新的一份；**比較短的重讀、NotReady、確認讀取失敗一律不採用**；中止立刻停；`TRACE_SETTLE_MAX_READS=0` 回到舊行為；delay 真的有等；與 poll 的組合（NotReady → 出現 → settle）；**只有 settle 失敗時 `trace_error` 保持 None**（有 trace 就不該亮紅色 banner）|
+| `test_run_lifecycle.py` | 11 | cancel 的權限矩陣（owner ✓ / 觸發者 ✓ / 其他 viewer ✗）；非 running → 409；跨 eval set → 404；delete 為 owner-only 且 running 時 409 |
 | `test_results.py` | 8 | trace 檢視的狀態機。核心是**`pending` 的題目回 `not_started` 且對 trace store 發出零個請求**（用會記錄呼叫次數的 stub 斷言）|
 | `test_deletion.py` | 5 | `delete_run` / `delete_eval_set` 的 DELETE **順序**（子表先於父表，特別是 `question_results` 必須早於 `questions`），以及一個「schema 新增子表卻忘了加進刪除順序」的守門測試 |
 | `test_pagination.py` | 11（**需 DB**）| `limit`/`offset`/`total`/`has_more`；翻完所有頁**每張卡剛好出現一次**；只列出有權限的 set；搜尋與 metadata 篩選在 SQL 生效；趨勢受上限；regression 用最新兩個 run。**最重要的兩個是查詢數守門測試**：`GET /eval-sets` 與 `GET /runs` 在 `limit=1` 與 `limit=20` 時發出的查詢數必須**完全相同**——斷言時間會 flaky，斷言查詢數不會 |
@@ -1466,6 +1512,7 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 |---|---|---|
 | 1 | **question ↔ trace 的關聯**：eval 系統打 agent 後，如何得知該題對應哪條 trace | ✅ **已解**：correlation id 注入（§3.3）。但這依賴 agent server 端配合 |
 | 2 | **Langfuse ingestion 是非同步的**：agent 回應後 trace 不一定馬上可查 | ✅ **已處理**：poll + 指數退避；UI 明確區分「生成中」與「真的沒有」與「讀取失敗」（§6.4）|
+| 2a | **ingestion 還是逐筆的**：第一次讀到 observation 時 trace 可能還在長，最後一個 span（最終回答生成）最容易缺席 | ✅ **已處理**：讀到之後 settle 到 span 數不再增加才採信（§6.1a）。🟡 但 settle 窗口是有限的（預設約 3 秒）——ingestion 比它更慢時，playground 的 attempt 仍會凍結一份短的 trace，只能靠 `TRACE_SETTLE_*` 加大窗口 |
 | 3 | **粗粒度自然語言 reasoning ↔ 具體 span tree 的對齊是模糊問題**——這是整個定位功能的核心風險。多條同樣有效的路徑可能被誤判；粒度不匹配（ground truth 說「用 SQL tool 取資料」，trace 有多次 tool call / 重試）；**錯誤不一定能歸到單一 span**（compounding / emergent error）| 🟡 **部分承接**：Stage 1 用 `suspects[]` 陣列 + 三檔 confidence + `caveat` 逃生口在資料結構層容納不確定性（§4.1）。但**準確度本身完全未驗證**——這是 Stage 2 是否值得做的判斷依據 |
 | 4 | **correct/incorrect 的判準**：LLM judge 可能給連續分數或「部分正確」，二元化門檻要定義 | ✅ **已定案**：LLM 同時吐 verdict + score；另有可選的 `JUDGE_SCORE_THRESHOLD` 由分數推導。🟡「部分正確」的分級**未做** |
 | 5 | **skill-selection 錯誤沒被涵蓋**：題目標了「該用 skill X」，但 agent 可能**讀錯 skill**（常見 bug）。若錯在選錯 skill，錯誤歸因與優化對象都會指錯 | 🟡 **未專門處理**。Stage 1 只能靠 `caveat` 粗略承接。原設計建議：額外比對「agent 實際讀的 skill」vs「題目標註的 skill」，不一致時把讀 skill 的那個 span 標為高機率錯誤來源 |

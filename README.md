@@ -273,7 +273,7 @@ make migrate    # alembic upgrade head, in the backend container
 make seed       # python -m app.seed, in the backend container
 make backend    # backend container: uvicorn app.main:app --reload on :8000
 make frontend   # frontend container: vite dev server on :5173
-make test       # backend unit tests (no DB or external service needed; the 20
+make test       # backend unit tests (no DB or external service needed; the 23
                 #   database-backed tests skip — see "Paging the lists")
 make preflight  # ping whichever integrations are set to real
 make down       # docker compose down
@@ -357,6 +357,14 @@ Notes:
   the dialog's **Concurrency** field, which sets it per run.
 - `AGENT_TIMEOUT_S` and `LANGFUSE_TIMEOUT_S` are settable per run; `LLM_TIMEOUT_S`
   is not — it stays process-wide.
+- **A trace is re-read until it stops growing before it is used** (spec §6.1a).
+  Langfuse ingests a trace incrementally, so the first read that returns any
+  observation at all can be a trace that is still filling up — and the span that
+  loses that race is the last one, the agent's final answer generation. Polling
+  answers "does this trace exist"; nothing answers "is it complete", so the read
+  is repeated until the span count stops growing. `TRACE_SETTLE_DELAY_S` (1.0)
+  and `TRACE_SETTLE_MAX_READS` (3) size that window; `0` reads goes back to
+  trusting the first read. When nothing is pending this costs one extra request.
 - `JUDGE_SCORE_THRESHOLD` is empty by default, meaning the judge's own verdict is
   used. Set a 0–1 number to derive the verdict from its score instead, so the
   pass/fail boundary can be retuned without touching the prompt.
