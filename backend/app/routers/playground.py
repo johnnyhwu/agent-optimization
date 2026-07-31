@@ -25,7 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 from app import cancellation, playground
 from app.auth import current_subject
 from app.integrations import build_seams
-from app.integrations.base import SkillOverride
+from app.integrations.base import WorkspaceOverride
 from app.playground import PlaygroundAttempt
 from app.schemas import (
     AnalysisOut,
@@ -33,10 +33,11 @@ from app.schemas import (
     PlaygroundAttemptOut,
     PlaygroundCreate,
     RunConfig,
-    SkillOut,
-    SkillSummaryOut,
     SuspectOut,
     TraceView,
+    WorkspaceOut,
+    WorkspaceOverrideIn,
+    WorkspaceVersionOut,
 )
 from app.services import run_config
 from app.services.trace_view import span_to_out
@@ -44,60 +45,72 @@ from app.sse import hub
 
 router = APIRouter(prefix="/playground", tags=["playground"])
 
+# How long the "which files changed?" lookup may take before the attempt starts
+# without it. Deliberately not AGENT_TIMEOUT_S — that budget is for answering a
+# question, not for labelling one.
+BASELINE_TIMEOUT_S = 5.0
 
-# --- Skills -----------------------------------------------------------------
 
-def _skill_client():
-    """The skill seam, or a 503 explaining why there isn't one.
+# --- Workspace --------------------------------------------------------------
 
-    `include_skill=True` is what makes `build_seams` construct it at all — a
-    misconfigured skill seam must not be able to break the eval path, so nothing
-    else asks for it. `SKILL_IMPL=real` with no agent base URL raises here, and
-    the developer needs to read that sentence rather than get a 500.
+def _workspace_client():
+    """The workspace seam, or a 503 explaining why there isn't one.
+
+    `include_workspace=True` is what makes `build_seams` construct it at all — a
+    misconfigured workspace seam must not be able to break the eval path, so
+    nothing else asks for it. `WORKSPACE_IMPL=real` with no agent base URL raises
+    here, and the developer needs to read that sentence rather than get a 500.
     """
     try:
-        seams = build_seams(include_skill=True)
+        seams = build_seams(include_workspace=True)
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a server bug
         raise HTTPException(
             status_code=503, detail=f"{type(exc).__name__}: {exc}"
         ) from exc
-    if seams.skill is None:  # pragma: no cover - include_skill guarantees one
-        raise HTTPException(status_code=503, detail="no skill client configured")
-    return seams.skill
+    if seams.workspace is None:  # pragma: no cover - include_workspace ensures one
+        raise HTTPException(status_code=503, detail="no workspace client configured")
+    return seams.workspace
 
 
-@router.get("/skills", response_model=list[SkillSummaryOut])
-async def list_skills(subject: str = Depends(current_subject)):
-    """The agent's skill catalogue, so an edit starts from the real text.
+@router.get("/workspace", response_model=WorkspaceOut)
+async def get_workspace(subject: str = Depends(current_subject)):
+    """The agent's config + skill files, so an edit starts from the real thing.
 
-    A failure is a 503 with the reason, never an empty list: "this agent has no
-    skills" and "the agent server refused us" must not look the same, or the
-    developer silently loses the starting point and pastes from memory instead.
+    A failure is a 503 with the reason, never an empty workspace: "this agent
+    has no skills" and "the agent server refused us" must not look the same, or
+    the developer silently loses the starting point and retypes the skill from
+    memory — then tests the wrong text.
     """
-    client = _skill_client()
+    client = _workspace_client()
     try:
-        skills = await client.list_skills()
+        ws = await client.get_workspace()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=503, detail=f"could not read the skill catalogue: {exc}"
+            status_code=503, detail=f"could not read the agent's workspace: {exc}"
         ) from exc
-    return [
-        SkillSummaryOut(name=s.name, description=s.description) for s in skills
-    ]
+    return WorkspaceOut(
+        version=ws.version,
+        config=ws.config,
+        redacted_paths=ws.redacted_paths,
+        skills=ws.skills,
+    )
 
 
-@router.get("/skills/{name}", response_model=SkillOut)
-async def get_skill(name: str, subject: str = Depends(current_subject)):
-    client = _skill_client()
+@router.get("/workspace/version", response_model=WorkspaceVersionOut)
+async def get_workspace_version(subject: str = Depends(current_subject)):
+    """Just the version, checked before a send to catch a stale snapshot.
+
+    Separate from the snapshot itself because it is asked far more often — once
+    per question — and because the answer to "has it moved?" must not cost the
+    whole workspace.
+    """
+    client = _workspace_client()
     try:
-        skill = await client.get_skill(name)
-    except KeyError as exc:  # the fake client's "no such skill"
-        raise HTTPException(status_code=404, detail=f"no such skill: {name}") from exc
+        return WorkspaceVersionOut(version=await client.get_version())
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=503, detail=f"could not read skill {name!r}: {exc}"
+            status_code=503, detail=f"could not read the workspace version: {exc}"
         ) from exc
-    return SkillOut(name=skill.name, content=skill.content, description=skill.description)
 
 
 # --- Attempts ---------------------------------------------------------------
@@ -109,8 +122,9 @@ def _out(attempt: PlaygroundAttempt) -> PlaygroundAttemptOut:
         question=attempt.question,
         has_expected_answer=attempt.judged,
         has_expected_reasoning=attempt.diagnosable,
-        skill_name=attempt.skill_name,
-        skill_overridden=attempt.skill_override is not None,
+        workspace_overridden=attempt.workspace is not None,
+        config_overrides=attempt.config_overrides,
+        edited_skill_files=attempt.edited_skill_files,
         status=attempt.status,
         phase=attempt.phase,
         verdict=attempt.verdict,
@@ -179,7 +193,13 @@ def _detail(attempt: PlaygroundAttempt) -> PlaygroundAttemptDetail:
         **_out(attempt).model_dump(),
         ground_truth_response=attempt.ground_truth_response,
         ground_truth_reasoning=attempt.ground_truth_reasoning,
-        skill_content=attempt.skill_override.content if attempt.skill_override else None,
+        workspace=(
+            WorkspaceOverrideIn(
+                config=attempt.workspace.config, skills=attempt.workspace.skills
+            )
+            if attempt.workspace is not None
+            else None
+        ),
         trace=_trace_view(attempt),
     )
 
@@ -200,10 +220,32 @@ async def create_attempt(
     subject: str = Depends(current_subject),
 ):
     override = None
-    if body.skill_override is not None:
-        override = SkillOverride(
-            name=body.skill_override.name, content=body.skill_override.content
+    if body.workspace is not None and not body.workspace.is_empty:
+        # An override that changes nothing is dropped rather than sent: the
+        # agent server's request body then stays byte-for-byte what an
+        # un-overridden call sends, and the attempt does not claim an edit that
+        # never happened.
+        override = WorkspaceOverride(
+            config=body.workspace.config or None, skills=body.workspace.skills
         )
+
+    baseline = None
+    if override is not None and override.skills is not None:
+        # Which files count as edited is answered against the agent's files as
+        # they are *now*. Fetched here rather than trusted from the browser, and
+        # a failure is not fatal: it costs the summary line its precision, not
+        # the experiment.
+        #
+        # Hence the short timeout rather than the agent seam's own: this request
+        # is a label, and it must never be the reason a developer waits two
+        # minutes to find out their question started.
+        try:
+            ws = await asyncio.wait_for(
+                _workspace_client().get_workspace(), timeout=BASELINE_TIMEOUT_S
+            )
+            baseline = ws.skills
+        except Exception:  # noqa: BLE001
+            baseline = None
 
     attempt = PlaygroundAttempt(
         id=uuid.uuid4(),
@@ -211,7 +253,8 @@ async def create_attempt(
         question=body.question,
         ground_truth_response=(body.ground_truth_response or "").strip() or None,
         ground_truth_reasoning=(body.ground_truth_reasoning or "").strip() or None,
-        skill_override=override,
+        workspace=override,
+        workspace_baseline=baseline,
         # Materialized now, exactly as a run's is (§9.15): a blank field records
         # the environment's value, so the attempt says what it actually used.
         config=run_config.resolve(body.config),

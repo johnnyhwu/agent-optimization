@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from app.integrations.base import SkillOverride
+from app.integrations.base import WorkspaceOverride
 from app.integrations.real.agent import AgentHttpError, HttpAgentClient
 
 URL = "https://agent.test"
@@ -56,7 +56,7 @@ async def test_tags_default_to_empty_list(client):
 
 
 @respx.mock
-async def test_no_skill_override_key_without_one(client):
+async def test_no_workspace_key_without_one(client):
     """An eval run's request body must be what it always was (§10.7).
 
     The playground is the only caller that sends an override, so its existence
@@ -66,26 +66,61 @@ async def test_no_skill_override_key_without_one(client):
     await client.call("q", "corr-1", "bob", ["eval_billing"])
 
     metadata = json.loads(respx.calls[0].request.content)["metadata"]
-    assert "skill_override" not in metadata
+    assert "workspace" not in metadata
     assert set(metadata) == {"trace_data"}
 
 
 @respx.mock
-async def test_skill_override_travels_in_metadata(client):
+async def test_workspace_override_travels_in_metadata(client):
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
     await client.call(
         "q", "corr-1", "bob", ["playground"],
-        skill_override=SkillOverride(name="billing", content="# Billing (edited)"),
+        workspace=WorkspaceOverride(
+            config={"agents": {"defaults": {"model": "big"}}},
+            skills={"billing/SKILL.md": "# Billing (edited)"},
+        ),
     )
 
     metadata = json.loads(respx.calls[0].request.content)["metadata"]
-    assert metadata["skill_override"] == {
-        "name": "billing",
-        "content": "# Billing (edited)",
+    assert metadata["workspace"] == {
+        "config": {"agents": {"defaults": {"model": "big"}}},
+        "skills": {"billing/SKILL.md": "# Billing (edited)"},
     }
     # The correlation mechanism is untouched by the override riding along.
     assert metadata["trace_data"]["trace_id"] == "corr-1"
     assert metadata["trace_data"]["tags"] == ["playground"]
+
+
+@respx.mock
+async def test_untouched_half_of_the_override_is_omitted(client):
+    """`config` absent and `config` null are not the same request.
+
+    The agent server reads an absent half as "keep yours" and a present one as
+    "use this"; sending `skills: null` for an edit that only touched the config
+    would be a claim the developer never made.
+    """
+    respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
+    await client.call(
+        "q", "corr-1", "bob", ["playground"],
+        workspace=WorkspaceOverride(config={"log_level": "debug"}),
+    )
+
+    assert json.loads(respx.calls[0].request.content)["metadata"]["workspace"] == {
+        "config": {"log_level": "debug"}
+    }
+
+
+@respx.mock
+async def test_empty_skills_map_is_sent_because_it_means_something(client):
+    """`skills: {}` is "run with no skills", which is a legitimate experiment."""
+    respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
+    await client.call(
+        "q", "corr-1", "bob", ["playground"], workspace=WorkspaceOverride(skills={}),
+    )
+
+    assert json.loads(respx.calls[0].request.content)["metadata"]["workspace"] == {
+        "skills": {}
+    }
 
 
 @respx.mock

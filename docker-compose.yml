@@ -37,8 +37,9 @@ services:
       JUDGE_IMPL: ${JUDGE_IMPL:-fake}
       TRACE_IMPL: ${TRACE_IMPL:-fake}
       DIAGNOSIS_IMPL: ${DIAGNOSIS_IMPL:-fake}
-      # The playground's skill catalogue; reads {AGENT_BASE_URL}/skills.
-      SKILL_IMPL: ${SKILL_IMPL:-fake}
+      # The playground's view of the agent's config + skill files; reads
+      # {AGENT_BASE_URL}/get_workspace.
+      WORKSPACE_IMPL: ${WORKSPACE_IMPL:-fake}
 
       # --- Real integrations. Credentials come from the host environment or a
       # repo-root .env; they are never baked into the image. ---

@@ -86,7 +86,7 @@ spec §4.1 and §4.4.
                     │     │              ├─► JudgeClient  ────────┼─► LLM endpoint
                     │     │              ├─► TraceClient  ────────┼─► Langfuse
                     │     │              ├─► DiagnosisClient ─────┼─► LLM endpoint
-                    │     │              └─► SkillClient ─────────┼─► agent server
+                    │     │              └─► WorkspaceClient ─────┼─► agent server
                     │     ▼                                       │
                     │  Postgres: eval sets, questions, runs,      │
                     │            results, diagnoses, roles        │
@@ -98,7 +98,7 @@ Two ideas carry most of the design:
 
 **1. Five swappable seams.** Each external dependency is a Python `Protocol`
 with two implementations — a fake one with realistic latency, and a real one.
-`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` / `SKILL_IMPL` pick
+`AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` / `WORKSPACE_IMPL` pick
 between them **independently**, all defaulting to fake. So the whole product runs
 on nothing but Docker, and you can bring up one real service at a time.
 
@@ -157,14 +157,21 @@ button.
   paperwork: an **expected answer** turns judging on, an **expected reasoning
   process** turns diagnosis on. With neither, you get the answer and the trace —
   which is often all you wanted.
-- **Skill override.** Pick one of the agent's skills, edit its text, and it is sent
-  with *this one call* as `metadata.skill_override`. Nothing is written back to
-  the agent server.
+- **Workspace override.** The composer loads the agent's own `config.json` (minus
+  its secrets) and every file under its `skills/` directory. Change a config value,
+  edit a `SKILL.md`, add or delete a reference file — and it all travels with
+  *this one call* as `metadata.workspace`. Nothing is written back to the agent
+  server.
+- **Stale-snapshot check.** Before each send the platform asks the agent server
+  for its workspace version. If it moved since the editor read it, you are asked
+  whether to reload (discarding your edits) or send anyway — a question answered
+  against a skill that changed underneath you is not a result you can trust, and
+  you would have no way of telling afterwards.
 - **Attempts are not saved.** They live in the backend's memory (capped per user),
   so a backend restart clears the list. That is deliberate — an attempt is scratch
   work, a run is a record — and it means no migration and nothing to clean up.
 - **Iterating.** The left column lists this session's attempts; **Clone** copies an
-  attempt's question, skill text and settings back into the composer so the next
+  attempt's question, workspace edits and settings back into the composer so the next
   attempt differs by exactly the one thing you are testing. There is no automatic
   "did it improve" — LLMs have temperature, so pressing the button twice is the
   honest comparison (spec §16, risk 8).
@@ -173,22 +180,31 @@ button.
   run's endpoints over.
 
 > **The platform cannot verify that the agent honoured your override.** The one
-> piece of evidence is that the injected skill text shows up in the trace's first
+> piece of evidence is that the injected text shows up in the trace's first
 > span system message, which the span view renders — so you can see it. The UI
 > says as much rather than implying a check that does not exist.
 
-Three things are needed on the **agent server** for the real path (all additive):
+Three things are needed on the **agent server** for the real path (all additive) —
+the full contract is [docs/agent_server_stage4_endpoints.md](docs/agent_server_stage4_endpoints.md):
 
 ```
-POST /execute        also reads metadata.skill_override = {"name", "content"},
-                     using that text for this call only and never persisting it
-GET  /skills         -> {"skills": [{"name", "description"}]}
-GET  /skills/{name}  -> {"name", "content"}
+GET  /get_workspace       -> {"version", "config", "redacted_paths", "skills"}
+                             config.json minus its secrets, plus every skill file
+                             as {relative path: text}
+GET  /get_config_version  -> {"version"}   the same string, on its own
+POST /execute             also reads metadata.workspace = {"config", "skills"},
+                             applying it to this call only and never persisting it
 ```
 
-With `SKILL_IMPL=fake` (the default) the catalogue is three canned skills, and the
-picker says so — so the whole flow, including seeing an override appear in a span,
-is demonstrable on nothing but Docker.
+Two rules on the agent's side carry the design: the incoming `config` is
+**deep-merged** onto its own `config.json` (it must be — the snapshot arrived with
+the secrets stripped, so replacing the file wholesale would leave the agent with
+no API key), while `skills` **replaces** its directory for that call (only
+replacement can express deleting a file).
+
+With `WORKSPACE_IMPL=fake` (the default) the workspace is canned, and the editor
+says so — so the whole flow, including seeing an override appear in a span, is
+demonstrable on nothing but Docker.
 
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
@@ -258,7 +274,7 @@ so on.
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
-| `SKILL_IMPL` | `SkillClient` | read the agent's skills for the playground: `GET {AGENT_BASE_URL}/skills` and `/skills/{name}` (spec §3.2). Read-only, so it is the cheapest one to switch on first |
+| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's config + skill files for the playground: `GET {AGENT_BASE_URL}/get_workspace` and `/get_config_version` (spec §3.2). Read-only, so it is the cheapest one to switch on first |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
@@ -287,8 +303,8 @@ while the endpoint they authenticate against is unchanged.
 AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=...
 
-# the playground's skill catalogue — read-only, so this one is safe to try first
-SKILL_IMPL=real  AGENT_BASE_URL=https://your-agent-server
+# the playground's view of the agent's config + skills — read-only, so safe first
+WORKSPACE_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 ```
 Then check the wiring before spending a run on it:
 ```bash
@@ -305,7 +321,7 @@ trace it just caused. The full metadata shape sent on every call is:
 `trace_id` and `session_id` are the same value (each question is its own
 correlation unit); `user_id` is the subject who triggered the run. A playground
 attempt sends the same shape with `tags: ["playground"]`, plus
-`metadata.skill_override` when a candidate skill was supplied
+`metadata.workspace` when the agent's config or skill files were edited
 ([the playground](#the-playground)) — an eval run never sends that key at all.
 
 Notes:
@@ -467,7 +483,7 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 | Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
 | Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
-| Playground | `GET /playground/skills`, `/skills/{name}`, `POST·GET /playground/attempts`, `GET·DELETE /playground/attempts/{id}`, `POST .../cancel`, `POST .../re-diagnose`, `GET .../progress` (SSE) |
+| Playground | `GET /playground/workspace`, `/workspace/version`, `POST·GET /playground/attempts`, `GET·DELETE /playground/attempts/{id}`, `POST .../cancel`, `POST .../re-diagnose`, `GET .../progress` (SSE) |
 
 Authorization is a FastAPI dependency, not scattered per-endpoint: writes and
 re-diagnose require **owner**; reads and triggering a run accept **owner or

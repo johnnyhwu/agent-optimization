@@ -4,11 +4,11 @@ A real implementation swaps in behind the SAME interface — the orchestrator an
 routers depend only on these Protocols, never on a concrete module.
 
 Seams:
-    AgentClient.call(question, correlation_id, user_id, tags, skill_override) -> AgentResponse
+    AgentClient.call(question, correlation_id, user_id, tags, workspace) -> AgentResponse
     JudgeClient.judge(question, response, ground_truth)               -> Verdict
     TraceClient.fetch_trace(correlation_id)                           -> Trace | NotReady
     DiagnosisClient.diagnose(trace, ground_truth_reasoning, verdict)  -> dict (§6.9 JSON)
-    SkillClient.list_skills() / .get_skill(name)                      -> the agent's skills
+    WorkspaceClient.get_workspace() / .get_version()                  -> the agent's config + skills
 """
 from __future__ import annotations
 
@@ -64,31 +64,71 @@ class Trace:
 
 
 @dataclass
-class SkillSummary:
-    """One entry of the agent's skill catalogue (§10.2)."""
-    name: str
-    description: str | None = None
+class Workspace:
+    """What the agent server is currently configured with (§10.2).
 
-
-@dataclass
-class Skill:
-    """A skill's full text, as the agent server currently holds it."""
-    name: str
-    content: str
-    description: str | None = None
-
-
-@dataclass
-class SkillOverride:
-    """A candidate skill to use for ONE agent call instead of the stored one.
-
-    The playground's whole point (§4.7 / §6.5): try an edited skill without
-    writing it back to the agent server. `name` travels with the content because
-    the agent has to know *which* skill this replaces — a nameless blob of text
-    tells it nothing about where to substitute it.
+    A skill is not a blob of text: on the agent server it is a directory
+    (`SKILL.md` plus whatever `references/` it carries), and half of what
+    decides the agent's behaviour lives in `config.json` next to it. So the
+    playground reads the whole thing at once — one request, one consistent
+    snapshot, no chance of pairing this minute's config with last minute's
+    skills.
     """
-    name: str
-    content: str
+
+    # Changes whenever config.json or any skill file changes, so an edit that
+    # started from a stale snapshot can be spotted before it is sent.
+    version: str
+    # config.json, nested exactly as the agent server holds it, minus the
+    # secrets — the platform must never receive the agent's own API keys.
+    config: dict
+    # Dotted paths the agent server removed, e.g. "agents.defaults.api_key".
+    # Kept so the UI can show the field as present-but-hidden: a field that
+    # vanishes silently invites someone to re-add it and shadow the real key.
+    redacted_paths: list[str] = field(default_factory=list)
+    # Flat {relative path: file text}, e.g. "billing/references/refunds.md".
+    skills: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class WorkspaceOverride:
+    """The config/skills one agent call should use instead of the server's own.
+
+    The playground's whole point (§4.7 / §6.5): try an edited skill or a
+    different setting without writing anything back to the agent server.
+
+    The two halves are sent — and applied — differently, and the asymmetry is
+    deliberate (see docs/agent_server_stage4_endpoints.md §5.2/§5.3):
+
+      * `config` is a **sparse** overlay, deep-merged onto the agent's own
+        config.json. It has to be: the snapshot arrived with its secrets
+        stripped, so replacing the file wholesale would leave the agent with no
+        API key at all.
+      * `skills` is the **complete** file set for the call, replacing the
+        server's directory. Only replacement can express deleting a file, which
+        is a legitimate experiment ("does it still work without this
+        reference?").
+
+    Either half may be None, meaning "use the agent server's own".
+    """
+
+    config: dict | None = None
+    skills: dict[str, str] | None = None
+
+    @property
+    def edited_config_paths(self) -> list[str]:
+        """Dotted paths this override changes, for the UI's summary line."""
+        return sorted(_leaf_paths(self.config or {}))
+
+
+def _leaf_paths(node: dict, prefix: str = "") -> list[str]:
+    out: list[str] = []
+    for key, value in node.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict) and value:
+            out.extend(_leaf_paths(value, f"{path}."))
+        else:
+            out.append(path)
+    return out
 
 
 class NotReady:
@@ -114,12 +154,12 @@ class TraceFetchError(RuntimeError):
 class AgentClient(Protocol):
     # `user_id` is the subject who triggered the run; `tags` lets the caller
     # attach labels (e.g. the eval set name) to the agent's Langfuse metadata.
-    # `skill_override` is keyword-with-a-default on purpose: an eval run never
-    # sends one, so the run path is untouched by the playground existing.
+    # `workspace` is keyword-with-a-default on purpose: an eval run never sends
+    # one, so the run path is untouched by the playground existing.
     async def call(
         self, question: str, correlation_id: str, user_id: str,
         tags: list[str] | None = None,
-        skill_override: "SkillOverride | None" = None,
+        workspace: "WorkspaceOverride | None" = None,
     ) -> AgentResponse: ...
 
 
@@ -152,14 +192,17 @@ class DiagnosisClient(Protocol):
 
 
 @runtime_checkable
-class SkillClient(Protocol):
-    """Read the agent's skill catalogue, so the playground can edit from the
-    real starting point rather than from a blank textarea (§10.2).
+class WorkspaceClient(Protocol):
+    """Read the agent's config and skill files, so the playground can edit from
+    the real starting point rather than from a blank textarea (§10.2).
 
     Read-only by design: writing an optimized skill back to the agent server
     needs versioning and rollback (§4.9) and belongs to Stage 3.
     """
 
-    async def list_skills(self) -> list[SkillSummary]: ...
+    async def get_workspace(self) -> Workspace: ...
 
-    async def get_skill(self, name: str) -> Skill: ...
+    # Just the version string. Cheap enough to call before every send, which is
+    # what makes "your snapshot is stale" a question the developer gets asked
+    # before the experiment rather than a mystery afterwards.
+    async def get_version(self) -> str: ...

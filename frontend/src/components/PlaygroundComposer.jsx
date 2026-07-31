@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import RunConfigFields from "./RunConfigFields.jsx";
-import SkillEditor from "./SkillEditor.jsx";
+import WorkspaceEditor from "./WorkspaceEditor.jsx";
 import { IconGear, IconSend } from "./icons.jsx";
 
-// What gets sent: a question, optionally a skill to substitute, optionally the two
-// ground-truth fields, and the connection settings.
+// What gets sent: a question, optionally an edited copy of the agent's config and
+// skill files, optionally the two ground-truth fields, and the connection
+// settings.
 //
 // Only the question is required, and that is the point of the whole tab (§10.4).
 // The two ground-truth boxes are switches — an expected answer turns judging on,
@@ -13,6 +14,8 @@ import { IconGear, IconSend } from "./icons.jsx";
 // before anything happens.
 export default function PlaygroundComposer({
   draft, setDraft, form, set, setNum, secrets, setSecrets, impls, onSend, busy,
+  workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
+  onReloadWorkspace,
 }) {
   const [showTruth, setShowTruth] = useState(
     Boolean(draft.ground_truth_response || draft.ground_truth_reasoning)
@@ -40,10 +43,14 @@ export default function PlaygroundComposer({
         />
       </div>
 
-      <SkillEditor
-        value={draft.skill_override}
-        onChange={(skill_override) => setDraft({ ...draft, skill_override })}
-        fakeSeam={impls.skill === "fake"}
+      <WorkspaceEditor
+        snapshot={workspace}
+        edit={workspaceEdit}
+        onChange={onWorkspaceEdit}
+        loading={workspaceLoading}
+        error={workspaceError}
+        onReload={onReloadWorkspace}
+        fakeSeam={impls.workspace === "fake"}
       />
 
       <div className="composer-toggles">

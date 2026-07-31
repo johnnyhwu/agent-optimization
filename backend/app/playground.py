@@ -2,9 +2,10 @@
 
 Why this exists: after the three-column view shows that a question went wrong, the
 developer usually has a hypothesis — "if the skill said X instead, this would have
-worked". Before Stage 4 the only way to test that hypothesis was to edit an eval
-set and run the whole thing. This is the cheap path: one question, one set of
-settings, one editable skill, and a button.
+worked", or "if the model were bigger". Before Stage 4 the only way to test that
+hypothesis was to edit an eval set and run the whole thing. This is the cheap
+path: one question, one editable copy of the agent's config and skill files, and
+a button.
 
 **Nothing here is persisted, and that is a decision, not an omission.** An attempt
 is a scratch experiment; a run is a historical record. Keeping attempts out of the
@@ -40,7 +41,7 @@ from datetime import datetime, timezone
 from app import cancellation
 from app.config import settings
 from app.integrations import Seams, build_seams
-from app.integrations.base import SkillOverride, Trace, Verdict
+from app.integrations.base import Trace, Verdict, WorkspaceOverride
 from app.pipeline import (
     RunCancelled,
     call_agent,
@@ -70,7 +71,13 @@ class PlaygroundAttempt:
     # question and read its trace.
     ground_truth_response: str | None
     ground_truth_reasoning: str | None
-    skill_override: SkillOverride | None
+    workspace: WorkspaceOverride | None
+    # What the agent server's skill files looked like when the override was
+    # composed. Kept only to work out which files the developer actually
+    # changed: `workspace.skills` is the complete set either way (§5.3 of the
+    # agent-server contract), so without a baseline every file would look
+    # edited.
+    workspace_baseline: dict[str, str] | None
     # The effective settings, materialized at send time exactly as a run's are
     # (§9.15): a blank field is stored as the environment's value, so an attempt
     # is a complete record of what it used.
@@ -112,8 +119,27 @@ class PlaygroundAttempt:
         return bool((self.ground_truth_reasoning or "").strip())
 
     @property
-    def skill_name(self) -> str | None:
-        return self.skill_override.name if self.skill_override else None
+    def config_overrides(self) -> list[str]:
+        """Dotted config paths this attempt overrode, for the list's summary."""
+        if self.workspace is None:
+            return []
+        return self.workspace.edited_config_paths
+
+    @property
+    def edited_skill_files(self) -> list[str]:
+        """Skill files this attempt changed, deleted, or added.
+
+        Computed against the snapshot the editor started from rather than
+        against the agent server as it is now: the attempt records what the
+        developer changed *at send time*, and the agent's own files may well
+        have moved on since.
+        """
+        if self.workspace is None or self.workspace.skills is None:
+            return []
+        before, after = self.workspace_baseline or {}, self.workspace.skills
+        changed = [p for p, text in after.items() if before.get(p) != text]
+        deleted = [p for p in before if p not in after]
+        return sorted(changed + deleted)
 
 
 # Insertion-ordered so eviction is "drop the oldest" without sorting.
@@ -261,7 +287,7 @@ async def _execute(attempt: PlaygroundAttempt) -> None:
         agent_resp = await call_agent(
             seams, attempt.question, attempt.correlation_id, attempt.subject,
             ["playground"], timeout_s, cancel_event,
-            skill_override=attempt.skill_override,
+            workspace=attempt.workspace,
         )
     except RunCancelled:
         await cancelled("Stopped while waiting for the agent.")

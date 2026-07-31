@@ -830,8 +830,53 @@ select { cursor: pointer; }
 @media (max-width: 900px) { .composer-truth { grid-template-columns: 1fr; } }
 .composer-truth textarea { min-height: 80px; }
 
-.skill-editor textarea.skill-text { min-height: 130px; }
-.skill-editor .badge { background: var(--amber-soft); color: var(--amber); margin-left: 6px; }
+/* The workspace editor: the agent's config and skill files, edited for one call.
+   Two panes rather than one long form — a skill file needs room to read, and a
+   config field needs to sit next to its siblings to be comparable. */
+.workspace-editor { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 12px; }
+.workspace-head { display: flex; align-items: center; gap: 8px; }
+.workspace-tabs { display: flex; gap: 6px; }
+.workspace-tabs > button.active { border-color: var(--accent); color: var(--accent); }
+.workspace-tabs .count {
+  margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: var(--amber-soft); color: var(--amber);
+}
+.workspace-source { margin: 8px 0 4px; }
+
+.config-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px; margin-top: 10px;
+}
+.config-field.wide { grid-column: 1 / -1; }
+/* The path is part of the label: several branches of the config reuse a name,
+   so a bare "model" would not say which model it is. */
+.config-field label > .muted { font-weight: 400; font-size: 11px; margin-left: 6px; }
+.config-field .checkline { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.config-field .checkline input { width: auto; }
+.config-field textarea.config-json { min-height: 70px; font-family: var(--font-mono); font-size: 12px; }
+
+.skills-pane { display: grid; grid-template-columns: 240px 1fr; gap: 14px; margin-top: 10px; }
+@media (max-width: 900px) { .skills-pane { grid-template-columns: 1fr; } }
+.skill-files { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; }
+.skill-group {
+  font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.04em; margin: 8px 0 2px;
+}
+.skill-files > button.skill-file {
+  display: flex; align-items: center; gap: 6px; justify-content: flex-start;
+  background: none; border: none; box-shadow: none; padding: 4px 8px; border-radius: 6px;
+  font-size: 12px; color: var(--text); text-align: left;
+}
+.skill-files > button.skill-file:hover { background: var(--surface-2); }
+.skill-files > button.skill-file.active { background: var(--accent-soft); color: var(--accent); }
+.skill-files > button.skill-file.deleted .path { text-decoration: line-through; color: var(--muted); }
+.skill-files .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-add { display: flex; gap: 6px; margin-top: 10px; }
+.skill-add input { font-size: 12px; }
+.skill-body textarea.skill-text { min-height: 260px; font-family: var(--font-mono); font-size: 12px; }
+.workspace-editor .badge {
+  background: var(--amber-soft); color: var(--amber); margin-left: 6px;
+}
 .hint.error-text { color: var(--red); }
 
 /* A button that reads as a link: used for small inline actions inside prose. */

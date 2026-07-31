@@ -8,7 +8,7 @@ import React from "react";
 // Props are the caller's form state, so each host keeps its own submit shape:
 //   form/set/setNum        the nine non-secret settings
 //   secrets/setSecrets     write-only; the backend never sends these back
-//   impls                  {agent,judge,trace,diagnosis,skill} -> 'fake' | 'real'
+//   impls                  {agent,judge,trace,diagnosis,workspace} -> 'fake' | 'real'
 //   kept(secretKey)        placeholder text when a key is being carried over
 //   showConcurrency        false for a single question, where it means nothing
 export default function RunConfigFields({
