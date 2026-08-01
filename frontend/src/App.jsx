@@ -28,7 +28,6 @@ export default function App() {
   const route = useHashRoute();
   const [subject, setSubj] = useState(getSubject());
   const [users, setUsers] = useState([subject]);
-  const [me, setMe] = useState(null);
   const [collapsed, setCollapsed] = useRailCollapsed();
   // The set named by the route. Held as an object because the run history and
   // the breadcrumb show its name, while the URL can only carry its id.
@@ -41,9 +40,6 @@ export default function App() {
   useEffect(() => {
     api.users().then((r) => setUsers(r.users)).catch(() => {});
   }, []);
-  useEffect(() => {
-    api.me().then(setMe).catch(() => setMe(null));
-  }, [subject]);
 
   // Resolve the route's eval-set id. Opening a set from the list hands the
   // object over directly (see onOpen below), so this only actually fetches when
@@ -80,12 +76,23 @@ export default function App() {
     setEvalSet(null);
     navigate(href.evaluation()); // roles change; go home
   }
-  const roleFor = (id) => (me && me.roles ? me.roles[id] : undefined);
 
   // The set is resolved when it matches the route. Rendering the run history
   // against the *previous* set for a frame would fire its requests at the wrong
   // id, so the tiers below wait for this.
   const resolved = evalSet && String(evalSet.id) === String(esId) ? evalSet : null;
+
+  // The role comes from the set that is open, not from a session-wide map.
+  //
+  // It used to come from `GET /me`, fetched once on mount: a set created *during*
+  // the session was therefore absent from that map, `myRole` came back undefined,
+  // and the owner-only controls (Edit questions, re-diagnose) stayed hidden on a
+  // set the developer had just created and owned. The shortlist hit this every
+  // time, because promoting a shortlist navigates straight into the new set.
+  // Every payload that can put a set in `evalSet` — the card list and
+  // `GET /eval-sets/{id}` — already carries the caller's role for that set, and
+  // reading it there means the answer is as fresh as the set itself.
+  const myRole = resolved ? resolved.my_role : undefined;
 
   return (
     <ToastProvider>
@@ -139,7 +146,7 @@ export default function App() {
                   (resolved ? (
                     <RunHistory
                       evalSet={resolved}
-                      myRole={roleFor(resolved.id)}
+                      myRole={myRole}
                       onOpenRuns={(runIds, mode, lastN) =>
                         navigate(href.runs(resolved.id, runIds, mode, lastN))
                       }
@@ -155,7 +162,7 @@ export default function App() {
                       runIds={route.runIds}
                       mode={route.mode}
                       lastN={route.lastN}
-                      myRole={roleFor(resolved.id)}
+                      myRole={myRole}
                       // Carrying a question over is the whole reason the
                       // playground exists: the hypothesis being tested was
                       // formed while looking at this trace.

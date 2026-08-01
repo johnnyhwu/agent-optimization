@@ -106,6 +106,19 @@ class Settings(BaseSettings):
     trace_poll_backoff_s: list[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
     # Safety cap so a never-ready trace can't stall a run forever.
     trace_poll_max_attempts: int = 8
+    # Settling a trace that has *started* arriving (§6.12a).
+    #
+    # Langfuse ingestion is not only late, it is incremental: the first read that
+    # returns any observation at all can be a trace that is still filling up. The
+    # span most often missing is the last one — the agent's final answer
+    # generation, which ends microseconds before the HTTP response that makes
+    # this platform go looking for the trace. So the first non-empty read is
+    # re-read until the span count stops growing, rather than trusted outright.
+    #
+    # `0` reads restores the old take-the-first-read behaviour. The cost when
+    # nothing is pending is one extra request and one delay per question.
+    trace_settle_delay_s: float = 1.0
+    trace_settle_max_reads: int = 3
     # How much of an exception message is kept in question_results.error_message.
     error_message_max_chars: int = 2000
 

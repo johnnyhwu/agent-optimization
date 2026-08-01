@@ -42,6 +42,7 @@ hide the reason the primary path failed.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import httpx
 
@@ -115,6 +116,32 @@ def _structured(value: object) -> object | None:
             if isinstance(parsed, (dict, list)):
                 return parsed
     return None
+
+
+_EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def started_at(obs: dict) -> datetime:
+    """`startTime` as a comparable instant, for ordering the span list.
+
+    Compared as raw strings, two ISO timestamps that differ only in whether the
+    fractional seconds were serialized order wrongly: `…:00.500Z` sorts *before*
+    `…:00Z`, because `.` < `Z`. One observation in a response missing its
+    fraction is enough to move a span past its neighbour, and this list is read
+    as the order the agent did things in. A missing or unparseable timestamp
+    sorts first, which is what the string comparison did with `""`.
+    """
+    raw = obs.get("startTime")
+    if not isinstance(raw, str) or not raw.strip():
+        return _EARLIEST
+    text = raw.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return _EARLIEST
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def observation_to_span(obs: dict, index: int) -> Span:
@@ -297,7 +324,8 @@ class LangfuseTraceClient:
             # the caller's side; the poll cap decides when to give up (§6.12).
             return NOT_READY
 
-        # Time order is the execution order the developer expects to read.
-        observations.sort(key=lambda o: (o.get("startTime") or "", o.get("id") or ""))
+        # Time order is the execution order the developer expects to read. The
+        # id breaks ties so a re-read of the same trace never reshuffles it.
+        observations.sort(key=lambda o: (started_at(o), o.get("id") or ""))
         spans = [observation_to_span(obs, i) for i, obs in enumerate(observations)]
         return Trace(correlation_id=correlation_id, spans=spans)

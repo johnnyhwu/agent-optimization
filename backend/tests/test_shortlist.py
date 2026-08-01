@@ -31,7 +31,7 @@ from app.models import EvalSet, EvalSetRole, Question, QuestionSkill
 from app.playground import PlaygroundAttempt
 from app.routers import eval_sets as eval_sets_router
 from app.routers import playground as playground_router
-from app.schemas import EvalSetFromShortlist
+from app.schemas import EvalSetCreate, EvalSetFromShortlist
 
 pytestmark_db = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL"),
@@ -367,3 +367,58 @@ async def test_creator_is_owner_and_shares_apply(session):
         )
     ).all()
     assert {r.user_subject: r.role for r in roles} == {"alice": "owner", "bob": "viewer"}
+
+
+@pytestmark_db
+async def test_the_new_set_reports_the_creators_role_straight_away(session):
+    """The promoted set must answer "what am I here?" on its very first read.
+
+    This is the payload the UI gates its owner-only controls on. It used to read
+    a role map fetched once when the page loaded, so a set created *during* the
+    session was missing from it entirely and its owner got no Edit questions
+    button — every time, since promoting a shortlist navigates straight into the
+    set it just created.
+    """
+    out = await eval_sets_router.create_eval_set_from_shortlist(
+        body(questions=[shortlisted("q")], shares=[{"subject": "bob", "role": "viewer"}]),
+        subject="alice", session=session,
+    )
+
+    card = await eval_sets_router.get_eval_set(out.id, subject="alice", session=session)
+    assert card.my_role == "owner"
+
+    shared = await eval_sets_router.get_eval_set(out.id, subject="bob", session=session)
+    assert shared.my_role == "viewer"
+
+
+@pytestmark_db
+async def test_an_uploaded_set_reports_its_creators_role_too(session):
+    """The same guarantee on the other creation path, so the two cannot drift."""
+    created = await eval_sets_router.create_eval_set(
+        EvalSetCreate(
+            name="uploaded",
+            jsonl='{"question": "q", "ground_truth_response": "a",'
+                  ' "ground_truth_reasoning_process_description": "1. did it",'
+                  ' "skill": ["billing"]}',
+            source_format="jsonl",
+        ),
+        subject="alice", session=session,
+    )
+
+    card = await eval_sets_router.get_eval_set(
+        uuid.UUID(created["id"]), subject="alice", session=session
+    )
+    assert card.my_role == "owner"
+
+
+@pytestmark_db
+async def test_a_stranger_cannot_read_the_promoted_set(session):
+    """`my_role` is only ever the caller's own role — the guard is what stops a
+    set being readable at all, and it has to keep doing that."""
+    out = await eval_sets_router.create_eval_set_from_shortlist(
+        body(questions=[shortlisted("q")]), subject="alice", session=session
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await eval_sets_router.require_reader(out.id, subject="carol", session=session)
+    assert exc.value.status_code == 403

@@ -230,6 +230,73 @@ async def test_verdict_is_passed_to_the_diagnosis_when_there_is_one(seams, monke
     assert verdict.comment == "missing a figure"
 
 
+# --- The trace is settled before the attempt keeps it (§6.12a) --------------
+#
+# An attempt keeps the trace it was handed and nothing re-reads it afterwards
+# (§10), so a half-ingested read here is not a frame the developer sees once —
+# it is the trace, for as long as the attempt exists. The span that loses that
+# race is the last one: the agent's final answer generation, which ends
+# immediately before the response that sends us looking for the trace.
+
+class GrowingTrace:
+    """A trace store that reveals one more span on each read, up to `final`."""
+
+    def __init__(self, first: int, final: int):
+        self.calls = 0
+        self.first, self.final = first, final
+
+    async def fetch_trace(self, correlation_id):
+        self.calls += 1
+        count = min(self.first + self.calls - 1, self.final)
+        return Trace(
+            correlation_id=correlation_id,
+            spans=[
+                Span(index=i, tool_name=f"step{i}", status="success",
+                     input="in", output="out", token_usage={})
+                for i in range(count)
+            ],
+        )
+
+
+async def test_the_final_span_still_landing_is_waited_for(monkeypatch, configure):
+    seams = Seams(agent=RecordingAgent(), judge=RecordingJudge(),
+                  trace=GrowingTrace(first=3, final=4), diagnosis=RecordingDiagnosis())
+    attempt = make_attempt()
+    with configure(trace_settle_max_reads=3, trace_settle_delay_s=0.0):
+        await execute(attempt, seams, monkeypatch)
+
+    assert [s.tool_name for s in attempt.trace.spans] == [
+        "step0", "step1", "step2", "step3",
+    ]
+
+
+async def test_the_diagnosis_sees_the_settled_trace(monkeypatch, configure):
+    """The worse half of the bug: the diagnosis compares the trace against the
+    expected process (§6.9), so a trace missing its last step invites a
+    confident diagnosis of a failure that never happened."""
+    seams = Seams(agent=RecordingAgent(), judge=RecordingJudge(),
+                  trace=GrowingTrace(first=3, final=4), diagnosis=RecordingDiagnosis())
+    attempt = make_attempt(ground_truth_reasoning="Read the skill, then answer.")
+    with configure(trace_settle_max_reads=3, trace_settle_delay_s=0.0):
+        await execute(attempt, seams, monkeypatch)
+
+    diagnosed_trace = seams.diagnosis.calls[0][0]
+    assert len(diagnosed_trace.spans) == 4
+
+
+async def test_settling_does_not_stall_a_trace_that_is_already_whole(
+    monkeypatch, configure
+):
+    """The cost when nothing is pending is one confirmation read, not the cap."""
+    trace = GrowingTrace(first=2, final=2)
+    seams = Seams(agent=RecordingAgent(), judge=RecordingJudge(),
+                  trace=trace, diagnosis=RecordingDiagnosis())
+    with configure(trace_settle_max_reads=3, trace_settle_delay_s=0.0):
+        await execute(make_attempt(), seams, monkeypatch)
+
+    assert trace.calls == 2  # the read that found it, plus one that confirmed it
+
+
 # --- Workspace override -----------------------------------------------------
 
 async def test_workspace_override_reaches_the_agent(seams, monkeypatch):
