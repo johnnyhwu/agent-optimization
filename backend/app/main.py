@@ -18,7 +18,7 @@ from app.routers import diagnosis, eval_sets, playground, questions, results, ru
 from app.services import run_config
 
 
-async def _reap_interrupted_runs() -> int:
+async def reap_interrupted_runs(session_factory=None) -> int:
     """Close out runs this process can no longer be executing.
 
     A run is an `asyncio.create_task` background task in *this* process (§6.1).
@@ -32,8 +32,11 @@ async def _reap_interrupted_runs() -> int:
     (§5.3, §15.2): no other process could be legitimately running these. If that
     constraint is ever lifted, this has to move with it, or one worker booting
     will kill another worker's live run.
+
+    Returns how many runs were closed out. `session_factory` is an injection
+    point for the tests; production always uses the app's own.
     """
-    async with SessionLocal() as session:
+    async with (session_factory or SessionLocal)() as session:
         result = await session.execute(
             update(Run)
             .where(Run.status == "running")
@@ -49,7 +52,7 @@ async def _reap_interrupted_runs() -> int:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _reap_interrupted_runs()
+    await reap_interrupted_runs()
     yield
 
 
