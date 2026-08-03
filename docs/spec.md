@@ -1295,18 +1295,43 @@ Playground 則乾脆放棄視窗推導、固定 `62vh`，因為它的編輯區�
 - 授權檢查做成**統一的 FastAPI 依賴**（`require_owner` / `require_reader`），不散在各 endpoint。
 - **Playground 不在這個體系內**（§7.5）——它沒有 eval set。
 
-### 11.2 登入是假的
+### 11.2 登入的兩種模式（`AUTH_MODE`）
 
-**目前沒有真的 key-lock service。** 使用者身分來自 `X-User-Subject` header
-（SSE 用 `?subject=` query，或設定檔預設值），可在 UI 右上角下拉切換，方便測試 owner/viewer 權限。
-使用者名單來自 `GET /users`（設定檔 `KNOWN_USERS`，預設 alice / bob / carol / dave）。
+身分是**第七個 seam**，形狀與 §3.2 的六個一致：`AUTH_MODE=fake | keycloak`，預設 `fake`。
 
-> 原設計是「公司內部 key lock service 回傳的 token，授權以 token 的 identity(subject) 查核」。
-> 換成真登入時，**只需要把 `current_subject` 這個依賴換掉**——其餘授權邏輯都建立在 subject 之上。
+| 模式 | 身分從哪來 | 用在哪 |
+|---|---|---|
+| **`fake`**（預設）| `X-User-Subject` header（或設定檔 `FAKE_USER_SUBJECT`），UI 右上角可下拉切換 | 本機開發、`make test`、seed 出來的 demo、測 owner/viewer 權限矩陣 |
+| **`keycloak`** | Keycloak 簽發的 bearer token，subject 取自 `preferred_username` claim | 部署 |
+
+**只有 `current_subject` 認得這個差別。** `role_for` / `require_reader` / `require_owner`
+吃的都是一個 subject 字串，兩種模式下一模一樣——這正是原設計「換掉一個依賴即可」的兌現。
+
+**為什麼存 `preferred_username` 而不是 token 的 `sub`**：`sub` 是 UUID。
+`eval_set_roles.user_subject` 與 `runs.triggered_by` 本來就是存使用者名稱的 text 欄位、
+分享是一個人打同事的帳號、員工目錄也用同一個字串當 key。改存 `sub` 換來的是不可變性，
+代價是一次 migration、每個顯示分享名單的畫面都要再查一次姓名、以及一個沒有人讀得懂的資料庫。
+**因此這次改動不含任何 migration。** 代價是 username 理論上可被改配；真的發生時後果可回復
+（owner 重新分享一次），這才是它是正確取捨而不只是方便取捨的理由。
+
+**大小寫正規化**：`normalize_subject()` 是身分字串進入系統的唯一入口，token 與分享輸入
+都走它。`eval_set_roles` 是精確字串比對，一個 `TW12345` 對上一個 `tw12345`
+**不會報錯，只會安靜地把 eval set 分享給一個永遠不會登入的帳號**。
+
+**Token 驗證**：JWKS 簽章 + `iss` + `exp` + `aud`。`KEYCLOAK_AUDIENCE` 可設定也可留空關閉——
+Keycloak 只有在設了 audience mapper 時才把 client id 寫進 `aud`，否則寫別的（`account` 最常見），
+而猜錯會讓**每一張 token 都失敗**。因此驗證失敗的訊息會帶出 token 裡的**實際值**（§4.11）。
+
+**SSE 不用 `EventSource`**：它不能帶 header，身分只能放 query string；而且它重連時會
+**重放原始 URL**——access token 只有 60 秒，一次網路抖動就會變成拿著過期 token 無限重試
+（症狀是「進度條偶爾卡住，重整就好」）。改為以 `fetch` 讀串流，每次連線都重新取 token。
+對外介面與 `EventSource` 相同，所以三個呼叫端各只改一行。
 
 ### 11.3 分享
 
 - 上傳時可直接**輸入人名**指定分享對象（subject + role）。
+  輸入會先經 `GET /users/lookup` 對員工目錄查核：**查無此人擋下**；
+  **目錄本身連不上則警告但放行**——那邊的故障不該讓這邊所有人都不能分享。
 - 每張卡片有 **config 齒輪**（僅 owner 見）：一個對話框可改 name / description / metadata **與分享名單**。
 - `PUT /eval-sets/{id}/roles` **整批覆寫**分享名單；**操作者本人永遠保留 owner**
   （不可自我鎖出、保證至少一個 owner）。
@@ -1335,9 +1360,17 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `DATABASE_URL` / `SYNC_DATABASE_URL` | 指向 compose 的 `db` | app 用 asyncpg、Alembic 用 psycopg |
-| `FAKE_USER_SUBJECT` | `alice` | 假登入的預設身分 |
-| `KNOWN_USERS` | `["alice","bob","carol","dave"]` | `GET /users` 回傳的名單 |
-| `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源 |
+| **`AUTH_MODE`** | `fake` | `fake` \| `keycloak`（§11.2）。前端有對應的開關，兩邊必須一致 |
+| `FAKE_USER_SUBJECT` | `alice` | 假登入的預設身分（僅 `fake` 模式）|
+| `KNOWN_USERS` | `["alice","bob","carol","dave"]` | `GET /users` 回傳的名單（僅 `fake` 模式）|
+| `KEYCLOAK_URL` | 空 | **含**部署的相對路徑（例如結尾的 `/auth`），照抄不要自己組 |
+| `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` | `tsmc` / `ai4bi-public` | |
+| `KEYCLOAK_AUDIENCE` | `ai4bi-public` | 預期的 `aud`；**留空即不檢查**。猜錯會讓每張 token 都失敗，所以 401 訊息會帶出 token 裡的實際值 |
+| `KEYCLOAK_JWKS_CACHE_S` | `3600` | 簽章金鑰快取；遇到未知 `kid` 一律強制重抓，所以這只約束「被撤銷的金鑰還會被信任多久」|
+| `HR_API_BASE_URL` | （內部端點）| 分享時查核 username 的員工目錄，key 與 `preferred_username` 相同 |
+| `HR_API_VERIFY_SSL` / `HR_API_TIMEOUT_S` | `false` / `5` | 該服務是自簽憑證；裝好公司 CA 之後改 `true` |
+| `ROOT_PATH` | 空 | 反向代理剝掉的前綴（nginx 用 `/api`）。不影響路由，只讓產生的 `/docs`、`/openapi.json` 網址帶上前綴 |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源。nginx 單一入口下前後端同源，這段自然失效 |
 | `ERROR_MESSAGE_MAX_CHARS` | `2000` | 落庫錯誤訊息的長度上限 |
 | `SPAN_BODY_MAX_CHARS` | `800` | §4.4 單一 span body 截斷門檻（**只用於診斷 prompt**）|
 | **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SYNTHESIS_IMPL`** / **`WORKSPACE_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
@@ -1403,6 +1436,49 @@ SEED=1 ./scripts/dev.sh    # build image → 起 Postgres → migrate → seed �
 
 **前置檢查**：`make preflight` 會逐一 ping 設為 `real` 的 seam，回報每個 OK / FAIL 與原因。
 > 設定打錯時，這比跑一次 eval 才發現快得多。
+
+### 13.3 部署形態
+
+開發與部署是**兩套 compose 疊出來的**，共用一份服務定義：
+
+| 檔案 | 內容 |
+|---|---|
+| `docker-compose.yml` | 三個服務的共同定義。**刻意不含**任何「開發才有」的東西 |
+| `docker-compose.override.yml` | 開發：對外 port、原始碼 bind mount、兩個 reload 迴圈。**compose 會自動載入** |
+| `docker-compose.prod.yml` | 部署：`make prod-up`（明確指定 `-f`，因此不會載入 override）|
+
+> **為什麼要拆成三份而不是在 prod 覆寫**：compose 疊檔案時，`ports` / `volumes` 這類
+> list 欄位是**附加**而不是取代——`ports: []` 拿不掉已經發佈的 port。
+> 把開發專屬的東西一開始就不放進 base，才是讓它們在部署時「不存在」而不是「被蓋掉」。
+
+**部署形態的四個差別**
+
+1. **frontend 是 `vite build` 的產物 + nginx**（Dockerfile 的 `runner` stage），不是 Vite dev server。
+   nginx 監聽 **5173**（與開發同一個網址，所以 Keycloak 只需登錄一組 redirect URI），
+   自己送靜態檔、把 `/api/` 轉給 backend。前端因此打的是**相對路徑** `/api`——
+   `VITE_API_BASE` 是 build 時燒進 bundle 的，絕對網址會讓每換一個 hostname 就要重 build。
+2. **Keycloak 設定走執行時注入**：容器啟動時 `envsubst` 產生 `/config.js`，
+   前端從 `window.__APP_CONFIG__` 讀（`src/app_config.js`）。**一個 image 可以部署到任何環境。**
+   `/config.js` 與 `/index.html` 必須 `no-store`——被快取住的話，改了環境變數重啟也不會生效，
+   而且重整不會好。
+3. **backend 沒有 `--reload`、沒有 bind mount、不對外開 port**，migration 在 entrypoint 跑
+   （`RUN_MIGRATIONS=1`；`make test` 用 `--no-deps` 所以不能無條件跑）。
+4. **db 不對外開 port**，密碼沒有預設值（沒設就拒絕啟動）。
+
+> ⚠️ **單一 worker 是限制，不是還沒優化。** playground 的 attempt store 與 SSE hub
+> 都在 process 記憶體裡（§5.3、§15.2）。多 worker 會讓 attempt 隨機 404、進度條隨機不動，
+> 兩者都是間歇性失敗。要橫向擴展必須先有共享 bus 與 attempt 落庫——entrypoint 的
+> migration 步驟也建立在單一容器這個前提上。
+
+**SSE 在 nginx 後面的必要設定**：`proxy_buffering off`（否則進度條會靜止到 run 結束才一次噴完，
+而且不會報錯）、`gzip off`、`proxy_http_version 1.1`、`proxy_read_timeout 3600s`
+（§6.5 的 15 秒 ping 讓連線只在確實活著時才撐這麼久）。
+`sse-starlette` 本身已送 `X-Accel-Buffering: no`，nginx 認得——上面那幾行是雙保險，
+因為這個失敗是安靜的。驗收方式是 `curl -N`：事件必須一條一條冒出來。
+
+**啟動時收尾未完成的 run**：run 是 in-process 的背景 task，backend 重啟後
+`status='running'` 的 run 沒有任何東西會收掉它（UI 會一直轉圈，cancel 又因為「已終結」被拒）。
+lifespan 啟動時把它們收成 `failed` 並寫明原因。**production 第一次部署就會撞到這個。**
 
 ---
 
@@ -1495,7 +1571,7 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 | **span tree 不重建** | Langfuse 回傳的 `parentObservationId` **完全未使用**，目前以**依 startTime 排序的平舖列表**呈現。樹狀結構留給 Stage 2 的熱點檢視 |
 | **`LLM_TIMEOUT_S` 沒有逐 run 版本** | 補法很小：`RunConfig` 加欄位、defaults 加一行、往 client factory 傳進去、對話框加一格 |
 | **run config 無法比對** | 唯讀檢視一次只能看一個 run；要並排 diff 兩個 run 的設定還得自己切換 |
-| **真登入** | 目前是假登入（§11.2）。換掉一個依賴即可 |
+| ~~**真登入**~~ | ✅ **已做**：Keycloak OIDC，`AUTH_MODE=keycloak`（§11.2）|
 | **shortlist 只在單一瀏覽器** | 它存在 localStorage（§7.6）。換一台機器或換一個瀏覽器就看不到自己的 shortlist。要跨裝置就得落庫，而那要一張表與一次 migration |
 | **升上來的題目沒有血緣紀錄** | 新 set 不會記載「這幾題來自哪個 set / 哪個 attempt」。`questions` 沒有 metadata 欄位，寫進 eval set 的 metadata 又會污染使用者自己的篩選鍵 |
 | **Playground 不落庫的連帶限制** | backend 重啟清空 attempt；多 worker 部署會壞（與 SSE hub 同一個限制）|

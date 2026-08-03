@@ -1,0 +1,15 @@
+// Generated at container start from environment variables — see
+// docker-entrypoint.d/10-app-config.sh. Loaded by index.html before the bundle,
+// and read by src/app_config.js.
+//
+// This file exists so one built image can be deployed anywhere. Vite bakes its
+// VITE_* variables into the bundle at build time, so without a runtime hook the
+// Keycloak URL would be fixed at `pnpm build` and every environment would need
+// its own image.
+window.__APP_CONFIG__ = {
+  AUTH_MODE: "${AUTH_MODE}",
+  API_BASE: "${API_BASE}",
+  KEYCLOAK_URL: "${KEYCLOAK_URL}",
+  KEYCLOAK_REALM: "${KEYCLOAK_REALM}",
+  KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID}"
+};

@@ -279,6 +279,75 @@ make preflight  # ping whichever integrations are set to real
 make down       # docker compose down
 ```
 
+## Deploying it
+
+Development and deployment are two compose files layered over one shared
+service definition:
+
+| file | what's in it |
+|---|---|
+| `docker-compose.yml` | the three services, minus anything development-only |
+| `docker-compose.override.yml` | published ports, source bind-mounts, both reload loops. **Compose loads this automatically**, so everything above this section is unchanged |
+| `docker-compose.prod.yml` | the deployed form — `make prod-up` names its files explicitly, which is what leaves the override out |
+
+The split is not stylistic: Compose *appends* list-valued keys like `ports` and
+`volumes` when layering files, so an overlay cannot take a published port back
+out. Keeping the development-only entries out of the base is what makes them
+absent in deployment rather than merely overridden.
+
+```bash
+# in a repo-root .env
+POSTGRES_PASSWORD=…
+DATABASE_URL=postgresql+asyncpg://agentopt:…@db:5432/agentopt
+SYNC_DATABASE_URL=postgresql+psycopg://agentopt:…@db:5432/agentopt
+KEYCLOAK_URL=https://keycloak.example.com/auth
+
+make prod-up      # build + start; app on http://localhost:5173
+make prod-logs
+make prod-down
+```
+
+Compose refuses to start if any of those are missing, rather than falling back
+to the development password or a fake login.
+
+**What changes.** The frontend becomes a `vite build` bundle served by nginx,
+which also proxies `/api/` to the backend — one origin, so the bundle calls a
+relative `/api` and CORS stops applying. nginx keeps port **5173** so the app's
+URL is identical in both modes and a single Keycloak redirect URI covers them.
+The backend drops `--reload` and its bind-mount, publishes nothing, and applies
+migrations from its entrypoint. Postgres is no longer published to the host.
+
+**Keycloak setup.** Register all three of these for the client, or sign-in
+breaks in ways that name nothing useful:
+
+| field | value | symptom if missing |
+|---|---|---|
+| Valid Redirect URIs | `http://<host>:5173/*` | `Invalid parameter: redirect_uri` at login |
+| Valid Post Logout Redirect URIs | `http://<host>:5173/*` | login works, **sign-out** fails |
+| Web Origins | `http://<host>:5173` | login redirects fine, then hangs on a blank page (the token exchange is blocked by CORS) |
+
+`KEYCLOAK_AUDIENCE` is the one value worth expecting to get wrong: Keycloak only
+writes the client id into `aud` when an audience mapper says so, and otherwise
+writes something else (`account`, usually). A wrong value rejects every token.
+The 401 names the value the token actually carried, so the first failed sign-in
+tells you what to set — or leave it blank to skip the check.
+
+**One worker, deliberately.** The playground's attempt store and the SSE hub
+both live in the backend process's memory (spec §5.3, §15.2), so a second worker
+makes attempts 404 and progress bars stall at random. Scaling out needs a shared
+bus and persisted attempts first.
+
+**Verifying SSE isn't buffered** — the one thing worth checking by hand after a
+deployment, because it fails silently:
+
+```bash
+curl -N -H "Authorization: Bearer <token>" \
+  http://localhost:5173/api/eval-sets/<id>/runs/<run-id>/progress
+```
+
+Events must trickle out one at a time. All at once at the end means
+`proxy_buffering` isn't off and every progress bar in the app will look frozen.
+
 ## Going from fake to real
 Out of the box every external dependency is faked, so the demo runs with nothing
 but Docker. The six seams (spec §3.2) each have their own switch, so you can

@@ -212,7 +212,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // immediately, so a historical attempt costs nothing.
   useEffect(() => {
     if (!activeId) return undefined;
-    const es = new EventSource(api.attemptProgressUrl(activeId));
+    const es = api.openAttemptProgress(activeId);
 
     const patch = (e) => {
       let d;

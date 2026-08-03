@@ -11,6 +11,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Written by the nginx container at start-up from environment variables,
+         so one built image runs in any environment. Absent under `vite dev`,
+         where src/app_config.js falls back to the VITE_* variables. -->
+    <script src="/config.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

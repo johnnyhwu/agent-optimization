@@ -1,19 +1,75 @@
 """FastAPI application entrypoint."""
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_subject
 from app.config import settings
-from app.db import get_session
-from app.models import EvalSetRole
-from app.routers import diagnosis, eval_sets, playground, questions, results, runs
+from app.db import SessionLocal, get_session
+from app.models import EvalSetRole, Run
+from app.routers import diagnosis, eval_sets, playground, questions, results, runs, users
 from app.services import run_config
 
-app = FastAPI(title="Agent Eval — Stage 1 POC")
+
+async def reap_interrupted_runs(session_factory=None) -> int:
+    """Close out runs this process can no longer be executing.
+
+    A run is an `asyncio.create_task` background task in *this* process (§6.1).
+    When the backend restarts — a deploy, a crash, an OOM kill — the task is
+    gone but `runs.status` is still 'running', and nothing else will ever change
+    it: the UI keeps waiting on a run that cannot finish, and `POST /cancel`
+    rejects it as already terminal. Production hits this on its very first
+    deploy.
+
+    Reaping at startup is safe precisely because of the single-worker constraint
+    (§5.3, §15.2): no other process could be legitimately running these. If that
+    constraint is ever lifted, this has to move with it, or one worker booting
+    will kill another worker's live run.
+
+    Returns how many runs were closed out. `session_factory` is an injection
+    point for the tests; production always uses the app's own.
+    """
+    async with (session_factory or SessionLocal)() as session:
+        result = await session.execute(
+            update(Run)
+            .where(Run.status == "running")
+            .values(
+                status="failed",
+                error_message="backend restarted; this run was interrupted",
+                completed_at=dt.datetime.now(dt.timezone.utc),
+            )
+        )
+        await session.commit()
+        return result.rowcount or 0
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    await reap_interrupted_runs()
+    yield
+
+
+# `root_path` is for a proxy that strips a prefix before forwarding (nginx
+# `proxy_pass …:8000/` under `location /api/`). Routes are unaffected; what it
+# fixes is the generated OpenAPI/docs URLs, which would otherwise point above the
+# prefix and 404. Empty by default, so running the backend directly is unchanged.
+app = FastAPI(
+    title="Agent Eval — Stage 1 POC",
+    root_path=settings.root_path,
+    lifespan=lifespan,
+    # The built-in doc routes are unauthenticated; these are re-added below with
+    # the same identity dependency as everything else.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,6 +79,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(users.router)
 app.include_router(eval_sets.router)
 app.include_router(questions.router)
 app.include_router(runs.router)
@@ -33,7 +90,33 @@ app.include_router(playground.router)
 
 @app.get("/health")
 async def health():
+    """The one unauthenticated endpoint: container and proxy health probes."""
     return {"status": "ok"}
+
+
+# --- API docs, behind the same identity check as the API itself -------------
+# In fake mode this is transparent (the header defaults), so browsing /docs
+# during development is unchanged. In keycloak mode it is effectively closed to
+# browsers, since a plain navigation cannot set an Authorization header — that is
+# the intent, and `curl -H "Authorization: Bearer …" …/openapi.json` is the way
+# to read the schema from a deployment.
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(subject: str = Depends(current_subject)):
+    return app.openapi()
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui(subject: str = Depends(current_subject)):
+    return get_swagger_ui_html(
+        openapi_url=f"{app.root_path}/openapi.json", title=f"{app.title} — docs"
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc(subject: str = Depends(current_subject)):
+    return get_redoc_html(
+        openapi_url=f"{app.root_path}/openapi.json", title=f"{app.title} — docs"
+    )
 
 
 @app.get("/run-config/defaults")
@@ -61,12 +144,6 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
             "workspace": settings.workspace_impl,
         },
     }
-
-
-@app.get("/users")
-async def users(subject: str = Depends(current_subject)):
-    """Fake user directory for the login switch + share pickers (§6.16)."""
-    return {"users": settings.known_users, "current": subject}
 
 
 @app.get("/me")

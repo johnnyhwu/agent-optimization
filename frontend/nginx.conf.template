@@ -1,0 +1,92 @@
+# Single entry point for the deployed app: static bundle and API under one
+# origin. `${API_URL}` is substituted when the container starts, by the nginx
+# image's own /docker-entrypoint.d/20-envsubst-on-templates.sh.
+#
+# Serving both halves from one origin is what lets the frontend call "/api/…"
+# instead of an absolute URL. That matters because Vite freezes its variables
+# into the bundle at build time — an absolute backend URL would mean rebuilding
+# the image for every hostname it is ever deployed under. It also makes the
+# backend's CORS middleware inert, since same-origin requests never trigger a
+# CORS check at all.
+server {
+    listen 5173;
+    server_name _;
+    charset utf-8;
+    root /var/www;
+
+    # nginx defaults to 1m, which is well under a large eval set: the upload is
+    # a whole JSONL document in the request body (§10.3).
+    client_max_body_size 64m;
+
+    # --- Live run/attempt progress (SSE) -----------------------------------
+    # Regex locations win over prefix ones regardless of order, but keeping this
+    # first is a reminder that it must not fall through to /api/ below.
+    #
+    # `proxy_buffering off` is the line that matters. With buffering on, nginx
+    # accumulates the event stream and releases it in blocks — the progress bar
+    # sits frozen for the whole run and then jumps to the end. Nothing errors,
+    # which is what makes it expensive to diagnose.
+    #
+    # sse-starlette already sends `X-Accel-Buffering: no`, which nginx honours on
+    # its own; this is the belt to that pair of braces, because the failure mode
+    # is silent and the cost of being explicit is four lines.
+    location ~ ^/api/.*/progress$ {
+        proxy_pass ${API_URL}/;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+
+        # A run can last an hour. The backend sends a keepalive ping every 15s
+        # (§6.15), so a connection only stays open this long while it is
+        # provably alive.
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # --- Everything else on the API ----------------------------------------
+    # The trailing slash on proxy_pass strips the /api prefix, so the backend's
+    # routes are untouched. FastAPI is told about the prefix via `root_path`,
+    # which is what keeps the generated /docs and /openapi.json URLs correct.
+    location /api/ {
+        proxy_pass ${API_URL}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+
+    # --- Static assets ------------------------------------------------------
+    # Vite fingerprints these filenames, so a given URL's content never changes.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # These two must never be cached. /config.js carries the Keycloak URL and API
+    # base, written fresh at container start: a cached copy means changing an
+    # environment variable and restarting has no effect on an already-open
+    # browser, and no amount of reloading fixes it.
+    location = /config.js {
+        add_header Cache-Control "no-store" always;
+    }
+    location = /index.html {
+        add_header Cache-Control "no-store" always;
+    }
+
+    # The app keeps its navigation state in the URL hash (§6.13), so deep links
+    # never reach the server and this rarely fires. It costs nothing and stops
+    # being a trap if path routing is ever adopted.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

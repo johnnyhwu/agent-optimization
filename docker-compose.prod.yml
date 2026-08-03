@@ -1,0 +1,96 @@
+# The deployed form:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# (or `make prod-up`). Note the explicit `-f` list: naming files suppresses the
+# automatic docker-compose.override.yml, which is what leaves the development
+# ports, bind-mounts and reload loops out rather than trying to undo them.
+#
+# Only what differs from the shared base lives here. The backend's forty-odd
+# environment variables stay defined once in docker-compose.yml, because a second
+# copy drifts and the drift only ever surfaces in production.
+services:
+  frontend:
+    build:
+      # nginx serving the built bundle, instead of the Vite dev server.
+      target: runner
+    # The only published port in the whole deployment. nginx serves the bundle
+    # and proxies /api to the backend over the compose network, so the browser
+    # sees a single origin — which is what lets the bundle call a relative
+    # "/api" and makes the backend's CORS middleware inert.
+    #
+    # 5173 is kept from development deliberately: the app's URL is then
+    # identical in both modes, so one redirect URI registered in Keycloak covers
+    # both.
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      # Where nginx forwards /api/ — compose service name, not localhost.
+      API_URL: http://backend:8000
+      # Written into /var/www/config.js when the container starts, not baked into
+      # the bundle. That is what lets one built image run in any environment.
+      AUTH_MODE: ${AUTH_MODE:-keycloak}
+      API_BASE: /api
+      KEYCLOAK_URL: ${KEYCLOAK_URL:?set KEYCLOAK_URL, e.g. https://keycloak.example.com/auth}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options:
+        # Docker's default has no ceiling, so months of logs eventually fill the
+        # disk — and that failure looks like the host breaking rather than
+        # anything to do with this app.
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    environment:
+      # Required, not defaulted: the base file's defaults embed the development
+      # password, and a deployment that sets POSTGRES_PASSWORD without updating
+      # these would fail at connect time with an authentication error that says
+      # nothing about the cause. Refusing to start is the better failure.
+      # Percent-encode any URL-reserved characters in the password.
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to match POSTGRES_PASSWORD}
+      SYNC_DATABASE_URL: ${SYNC_DATABASE_URL:?set SYNC_DATABASE_URL to match POSTGRES_PASSWORD}
+
+      AUTH_MODE: ${AUTH_MODE:-keycloak}
+      KEYCLOAK_URL: ${KEYCLOAK_URL:?set KEYCLOAK_URL}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
+      # Blank disables the audience check. Keycloak only writes the client id
+      # into `aud` when an audience mapper says so — `account` is a common
+      # default — and a wrong value rejects every token at once. The 401 names
+      # the value the token actually carried, which is how to find the right one.
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE-ai4bi-public}
+      # nginx strips /api before forwarding; this keeps the generated /docs and
+      # /openapi.json URLs pointing back through the prefix.
+      ROOT_PATH: /api
+      HR_API_BASE_URL: ${HR_API_BASE_URL:-https://cpochatproxyservice.cpoap-dev.dev.tsmc.com/proxy/employees}
+      HR_API_VERIFY_SSL: ${HR_API_VERIFY_SSL:-false}
+      HR_API_TIMEOUT_S: ${HR_API_TIMEOUT_S:-5}
+      # Runs `alembic upgrade head` in the entrypoint before uvicorn starts.
+      # Safe only while there is exactly one backend container — see below.
+      RUN_MIGRATIONS: "1"
+    # Inherits the image's CMD: uvicorn with no --reload and, deliberately, no
+    # --workers.
+    #
+    # ONE WORKER IS A CONSTRAINT, NOT AN OVERSIGHT. The playground's attempt
+    # store and the SSE pub/sub hub both live in this process's memory (§5.3,
+    # §15.2). With more than one worker, an attempt created on worker A is a 404
+    # on worker B, and a progress subscription landing on a worker that is not
+    # running that job never receives an event. Both fail intermittently, which
+    # is the expensive kind of failure. Scaling out needs a shared bus and
+    # persisted attempts first — and the entrypoint's migration step assumes a
+    # single container too.
+    restart: unless-stopped
+    logging: *logging
+
+  db:
+    environment:
+      # No default: compose refuses to start rather than deploy the development
+      # password. DATABASE_URL in the base file interpolates the same variable,
+      # so this is the only place it is set.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    restart: unless-stopped
+    logging: *logging

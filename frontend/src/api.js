@@ -1,27 +1,28 @@
-// Thin API client. The fake-login subject (§6.16) is sent as X-User-Subject on
-// every request; the SSE stream gets it as ?subject= since EventSource can't set
-// headers.
-const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// Thin API client. Identity comes from auth.js and rides on every request —
+// `X-User-Subject` in fake mode, `Authorization: Bearer` against Keycloak.
+//
+// Progress streams do NOT use EventSource. See `openStream` at the bottom for
+// why: EventSource cannot set headers, and it reconnects by replaying the URL it
+// was created with, which with a 60-second access token means retrying forever
+// with a dead one.
+import { cfg } from "./app_config.js";
+import { getAuthHeaders, getUsername } from "./auth.js";
 
-let subject = localStorage.getItem("subject") || "alice";
+const BASE = cfg.apiBase;
 
-export function getSubject() {
-  return subject;
-}
-export function setSubject(s) {
-  subject = s;
-  localStorage.setItem("subject", s);
-}
 export function apiBase() {
   return BASE;
 }
+// Kept under the original name: several components read "who am I" to decide
+// what to render, and they do not care where it came from.
+export { getUsername as getSubject } from "./auth.js";
 
 async function req(method, path, body) {
   const res = await fetch(BASE + path, {
     method,
     headers: {
       "Content-Type": "application/json",
-      "X-User-Subject": subject,
+      ...(await getAuthHeaders()),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -58,6 +59,11 @@ export const api = {
   // and each eval-set payload already carries `my_role` for the caller.
   me: () => req("GET", "/me"),
   users: () => req("GET", "/users"),
+  // Resolve a typed username against the employee directory before it is shared
+  // with. 404 means the directory denied it; a 200 with verified=false means the
+  // directory could not be reached, which is a different answer (see
+  // ShareEditor).
+  lookupUser: (username) => req("GET", `/users/lookup${qs({ username })}`),
   // Returns a page: { items, total, has_more }.
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
@@ -92,8 +98,10 @@ export const api = {
   trace: (id, resultId) => req("GET", `/eval-sets/${id}/results/${resultId}/trace`),
   reDiagnose: (id, resultId) =>
     req("POST", `/eval-sets/${id}/results/${resultId}/re-diagnose`),
-  progressUrl: (id, runId) =>
-    `${BASE}/eval-sets/${id}/runs/${runId}/progress?subject=${encodeURIComponent(subject)}`,
+  // Live run progress (§6.15). Returns an EventSource-shaped object; see
+  // `openStream`.
+  openRunProgress: (id, runId) =>
+    openStream(`/eval-sets/${id}/runs/${runId}/progress`),
 
   // --- Playground (§10). Attempts live in the backend's memory, not the DB, so
   // there is nothing to paginate and a backend restart empties the list.
@@ -114,6 +122,126 @@ export const api = {
   // whether that is what should be expected.
   synthesizeReasoning: (attemptId) =>
     req("POST", `/playground/attempts/${attemptId}/synthesize-reasoning`),
-  attemptProgressUrl: (attemptId) =>
-    `${BASE}/playground/attempts/${attemptId}/progress?subject=${encodeURIComponent(subject)}`,
+  openAttemptProgress: (attemptId) =>
+    openStream(`/playground/attempts/${attemptId}/progress`),
 };
+
+// --- Server-sent events over fetch ------------------------------------------
+//
+// A drop-in for the `EventSource` this used to use: same `addEventListener` /
+// `close()` / `onerror`, so the three call sites changed by one line each.
+//
+// It exists because `EventSource` cannot set request headers, which left the
+// identity travelling as `?subject=`. That was fine for a fake login and is not
+// fine for a bearer token: it would land the token in the proxy's access log,
+// and — worse — `EventSource` reconnects by replaying the exact URL it was
+// constructed with. With a 60-second access token, the first network blip on a
+// twenty-minute run turns into an endless retry loop against an expired token.
+// The symptom is "the progress bar sometimes freezes; reloading fixes it", which
+// is about as hard to diagnose as bugs get.
+//
+// So: fetch, with fresh headers on every attempt.
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+
+function openStream(path) {
+  const listeners = new Map();
+  const controller = new AbortController();
+  let closed = false;
+  let timer = null;
+  let attempt = 0;
+
+  const stream = {
+    addEventListener(name, fn) {
+      listeners.set(name, fn);
+    },
+    close() {
+      closed = true;
+      clearTimeout(timer);
+      controller.abort();
+    },
+    onerror: null,
+  };
+
+  const emit = (name, data) => {
+    const fn = listeners.get(name);
+    if (fn) fn({ data });
+  };
+  const fail = (err) => {
+    if (!closed && stream.onerror) stream.onerror(err);
+  };
+
+  async function connect() {
+    const res = await fetch(BASE + path, {
+      headers: { Accept: "text/event-stream", ...(await getAuthHeaders()) },
+      signal: controller.signal,
+    });
+    // A rejected identity will be rejected again next time, so retrying only
+    // hides it. Anything else (5xx, a proxy hiccup) is worth another attempt.
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      const err = new Error(`stream refused: ${res.status}`);
+      err.status = res.status;
+      err.permanent = true;
+      throw err;
+    }
+    if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);
+
+    attempt = 0; // a connection that opened resets the backoff
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return; // server closed: terminal event already delivered, or a drop
+      buffer += decoder.decode(value, { stream: true });
+
+      // Frames are separated by a blank line. The buffer is essential rather
+      // than tidy: a chunk boundary can fall anywhere, including the middle of
+      // a JSON payload, so frames must be reassembled before being parsed.
+      let split;
+      while ((split = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+
+        let name = "message";
+        const data = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) name = line.slice(6).trim();
+          else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+          // ":" comment lines and "id:"/"retry:" are not used by this protocol.
+        }
+        if (data.length) emit(name, data.join("\n"));
+      }
+    }
+  }
+
+  async function run() {
+    while (!closed) {
+      try {
+        await connect();
+      } catch (err) {
+        if (closed || err.name === "AbortError") return;
+        if (err.permanent) return fail(err);
+        if (attempt >= RETRY_DELAYS_MS.length) return fail(err);
+        const delay = RETRY_DELAYS_MS[attempt++];
+        await new Promise((resolve) => {
+          timer = setTimeout(resolve, delay);
+        });
+        continue;
+      }
+      if (closed) return;
+      // The stream ended without an error. A finished run is the normal case and
+      // its terminal event already fired; the components close on that, so
+      // reaching here means the connection dropped mid-run. Reconnect — the
+      // backend replays a snapshot to late subscribers, so nothing is lost.
+      if (attempt >= RETRY_DELAYS_MS.length) return;
+      const delay = RETRY_DELAYS_MS[attempt++];
+      await new Promise((resolve) => {
+        timer = setTimeout(resolve, delay);
+      });
+    }
+  }
+
+  run();
+  return stream;
+}

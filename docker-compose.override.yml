@@ -1,0 +1,53 @@
+# Development. Compose loads this automatically alongside docker-compose.yml, so
+# `docker compose up`, `./scripts/dev.sh`, `make up`, `make test` and `make seed`
+# all behave exactly as they did before the deployment form existed.
+#
+# Everything here is development-only: published ports, source bind-mounts, and
+# the two reload loops. The deployed form omits this file entirely
+# (`docker compose -f docker-compose.yml -f docker-compose.prod.yml`), which is
+# why none of it needs to be undone there — Compose appends list-valued keys when
+# layering files, so an overlay could not have removed them.
+services:
+  db:
+    # Published so psql and the DB-backed tests can reach it from the host.
+    ports:
+      - "5432:5432"
+
+  backend:
+    ports:
+      - "8000:8000"
+    volumes:
+      # Live source for --reload; deps live in system site-packages, so this
+      # mount cannot shadow them.
+      - ./backend:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    build:
+      # The Vite dev server stage. The deployed form builds `runner` instead.
+      target: dev
+    environment:
+      # The browser (not the container) calls the backend, so this stays a
+      # localhost URL pointing at the published port. Deployed, the browser talks
+      # to nginx on one origin and this becomes the relative "/api".
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+      # Matches the backend's AUTH_MODE; fake means no Keycloak round trip and
+      # the identity switcher stays in the top bar.
+      VITE_AUTH_MODE: ${AUTH_MODE:-fake}
+      VITE_KEYCLOAK_URL: ${KEYCLOAK_URL:-}
+      VITE_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
+      VITE_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
+      # Bind-mounted sources don't always emit inotify events (macOS/Windows);
+      # polling keeps HMR working everywhere.
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      # Keep the image's node_modules — the bind mount above would hide it.
+      - agentopt_node_modules:/app/node_modules
+    # The volume outlives image rebuilds, so re-check deps on start (a no-op
+    # when they already match the lockfile) before handing over to Vite.
+    # `exec` hands PID 1 to pnpm so Ctrl-C stops the dev server promptly instead
+    # of waiting out the stop grace period.
+    command: ["sh", "-c", "pnpm install --frozen-lockfile && exec pnpm run dev --host 0.0.0.0"]

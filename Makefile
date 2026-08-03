@@ -1,7 +1,15 @@
 # Convenience targets for the Stage 1 POC. See README.md for the one-command path.
 # db, backend and frontend all run as containers, so the only host requirement
 # is docker (with compose) — no host venv, no host node_modules.
-.PHONY: up up-seed db build setup migrate seed backend frontend down test preflight
+#
+# Everything above the "Deployment" section runs the development stack:
+# docker-compose.yml plus the auto-loaded docker-compose.override.yml.
+.PHONY: up up-seed db build setup migrate seed backend frontend down test preflight \
+        prod-build prod-up prod-down prod-logs
+
+# Naming the files explicitly is what suppresses docker-compose.override.yml,
+# and with it the published ports, source bind-mounts and reload loops.
+PROD := docker compose -f docker-compose.yml -f docker-compose.prod.yml
 
 # One command: Postgres + backend + frontend (Ctrl-C stops backend+frontend).
 up:
@@ -43,3 +51,22 @@ test:
 # Ping whichever integrations are set to real; reports OK/FAIL per seam.
 preflight:
 	docker compose run --rm --no-deps backend python -m app.check_integrations
+
+# --- Deployment -------------------------------------------------------------
+# Built bundle behind nginx, no reload, only the nginx port published. Needs
+# KEYCLOAK_URL, POSTGRES_PASSWORD, DATABASE_URL and SYNC_DATABASE_URL set (see
+# backend/.env.example); compose refuses to start without them rather than
+# falling back to development values.
+
+prod-build:
+	$(PROD) build
+
+prod-up:
+	$(PROD) up -d --build
+	@echo "App: http://localhost:$${FRONTEND_PORT:-5173}"
+
+prod-down:
+	$(PROD) down
+
+prod-logs:
+	$(PROD) logs -f --tail=100

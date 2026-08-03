@@ -85,7 +85,7 @@ export default function RunDetail({
   resultsRef.current = results;
   useEffect(() => {
     if (!liveRunId) return undefined;
-    const es = new EventSource(api.progressUrl(evalSet.id, liveRunId));
+    const es = api.openRunProgress(evalSet.id, liveRunId);
 
     const patch = (e) => {
       const d = JSON.parse(e.data);

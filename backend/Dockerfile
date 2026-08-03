@@ -26,6 +26,11 @@ COPY requirements.txt ./
 RUN uv pip install --system --no-cache -r requirements.txt
 
 COPY . .
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
+# The entrypoint applies migrations when RUN_MIGRATIONS=1 and then execs the
+# command below; with the variable unset it is a no-op passthrough, so
+# `docker compose run backend pytest` behaves exactly as it did.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
