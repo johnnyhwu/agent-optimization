@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { api, getSubject, setSubject } from "./api.js";
+import { api } from "./api.js";
+import { isKeycloak } from "./app_config.js";
+import { getUsername, logout, setUsername } from "./auth.js";
 import { href, navigate, useHashRoute } from "./useHashRoute.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
@@ -26,7 +28,7 @@ function avatarColor(name) {
 // no eval set (§10.5) — and Optimize will join it as a third.
 export default function App() {
   const route = useHashRoute();
-  const [subject, setSubj] = useState(getSubject());
+  const [subject, setSubj] = useState(getUsername());
   const [users, setUsers] = useState([subject]);
   const [collapsed, setCollapsed] = useRailCollapsed();
   // The set named by the route. Held as an object because the run history and
@@ -37,7 +39,10 @@ export default function App() {
   // Deliberately not in the URL: it is a one-shot handoff, not a location.
   const [playgroundSeed, setPlaygroundSeed] = useState(null);
 
+  // Only fake mode has a directory to switch between; against Keycloak the
+  // endpoint returns an empty list and the switcher is not rendered at all.
   useEffect(() => {
+    if (isKeycloak) return;
     api.users().then((r) => setUsers(r.users)).catch(() => {});
   }, []);
 
@@ -71,7 +76,7 @@ export default function App() {
   }, [esId, subject]);
 
   function switchUser(s) {
-    setSubject(s);
+    setUsername(s);
     setSubj(s);
     setEvalSet(null);
     navigate(href.evaluation()); // roles change; go home
@@ -109,16 +114,25 @@ export default function App() {
                 <div className="avatar" style={{ background: avatarColor(subject) }}>
                   {subject.slice(0, 1)}
                 </div>
-                <select
-                  value={subject}
-                  onChange={(e) => switchUser(e.target.value)}
-                  aria-label="Switch user"
-                  style={{ width: "auto" }}
-                >
-                  {users.map((u) => (
-                    <option key={u} value={u}>{u}</option>
-                  ))}
-                </select>
+                {isKeycloak ? (
+                  <>
+                    <strong>{subject}</strong>
+                    <button className="ghost" onClick={logout}>
+                      Sign out
+                    </button>
+                  </>
+                ) : (
+                  <select
+                    value={subject}
+                    onChange={(e) => switchUser(e.target.value)}
+                    aria-label="Switch user"
+                    style={{ width: "auto" }}
+                  >
+                    {users.map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
           </header>

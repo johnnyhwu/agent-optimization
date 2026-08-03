@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import current_subject, require_owner, require_reader
+from app.auth import current_subject, normalize_subject, require_owner, require_reader
 from app.db import get_session
 from app.models import (
     EvalSet,
@@ -171,14 +171,21 @@ async def _build_card(session: AsyncSession, es: EvalSet, subject: str) -> EvalS
 
 def _clean_shares(shares: list[ShareEntry], creator: str) -> dict[str, str]:
     """Normalize a share list into {subject: role}, always keeping the creator as
-    owner and dropping empty/invalid rows."""
+    owner and dropping empty/invalid rows.
+
+    Subjects go through the same `normalize_subject` the login path uses. All
+    three write paths for a share list (create, create-from-shortlist, PUT
+    /roles) funnel through here, so that one call is what guarantees a typed
+    `TW12345` and a token's `tw12345` name the same person — the alternative
+    fails silently, as an eval set shared with an account that never logs in.
+    """
     desired: dict[str, str] = {}
     for s in shares:
-        subj = (s.subject or "").strip()
+        subj = normalize_subject(s.subject)
         if not subj or s.role not in ("owner", "viewer"):
             continue
         desired[subj] = s.role
-    desired[creator] = "owner"  # creator/actor can never lock themselves out
+    desired[normalize_subject(creator)] = "owner"  # actor can never lock themselves out
     return desired
 
 

@@ -14,6 +14,11 @@ sse-starlette==2.1.3
 httpx==0.28.1
 # openai: any OpenAI-compatible endpoint (self-hosted included) via base_url.
 openai==1.59.6
+# PyJWT: verifies Keycloak access tokens (AUTH_MODE=keycloak). The [crypto] extra
+# pulls in `cryptography` for RS256. Its bundled PyJWKClient is deliberately NOT
+# used — that one fetches the key set over blocking urllib, which would stall the
+# event loop on every cache miss; app/keycloak.py fetches with httpx instead.
+PyJWT[crypto]==2.10.1
 
 # --- Dev / test ---
 pytest==8.3.4

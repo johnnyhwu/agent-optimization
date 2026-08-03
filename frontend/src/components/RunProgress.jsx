@@ -9,7 +9,7 @@ export default function RunProgress({ evalSetId, runId, label, onDone }) {
   const [status, setStatus] = useState("running");
 
   useEffect(() => {
-    const es = new EventSource(api.progressUrl(evalSetId, runId));
+    const es = api.openRunProgress(evalSetId, runId);
     const onQ = (e) => {
       const d = JSON.parse(e.data);
       setDone(d.done);

@@ -17,6 +17,9 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Impl = Literal["fake", "real"]
+# Same fake/real shape as the six seams above, for the one dependency that is not
+# an outbound integration: who the caller is.
+AuthMode = Literal["fake", "keycloak"]
 
 
 class Settings(BaseSettings):
@@ -26,13 +29,65 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://agentopt:agentopt@localhost:5432/agentopt"
     sync_database_url: str = "postgresql+psycopg://agentopt:agentopt@localhost:5432/agentopt"
 
+    # --- Identity -----------------------------------------------------------
+    # fake     -> trust the X-User-Subject header (local dev, the seeded demo,
+    #             and the owner/viewer switch in the top bar).
+    # keycloak -> verify a Keycloak-issued bearer token and take the subject from
+    #             its `preferred_username` claim.
+    #
+    # Only `current_subject` in app/auth.py branches on this. Every role check
+    # below it (role_for / require_reader / require_owner) takes a subject string
+    # and is identical in both modes — which is what makes the swap this small.
+    auth_mode: AuthMode = "fake"
+
     # Fake logged-in user (§6.16). Role is NOT stored here — it is resolved per
     # eval_set from the `eval_set_roles` table using this subject.
     fake_user_subject: str = "alice"
 
     # Fake user directory: the selectable identities for the login switch and the
-    # share pickers. A real deployment would replace this with the org's directory.
+    # share pickers. In keycloak mode the directory is the org's, reached through
+    # the employee lookup below.
     known_users: list[str] = ["alice", "bob", "carol", "dave"]
+
+    # --- Keycloak (auth_mode="keycloak") ------------------------------------
+    # Base URL *including* any relative path the deployment is served under —
+    # Keycloak dropped the historical /auth prefix in 17, but a deployment can
+    # (and ours does) put it back, so this is copied verbatim rather than
+    # assembled. Example: https://keycloak.example.com/auth
+    keycloak_url: str = ""
+    keycloak_realm: str = "tsmc"
+    keycloak_client_id: str = "ai4bi-public"
+    # Expected `aud` claim. Blank disables the audience check entirely.
+    #
+    # It is a separate setting from client_id on purpose: Keycloak only puts the
+    # client id in `aud` when an audience mapper says so, and otherwise emits
+    # something else ("account" is the common default). Guessing wrong makes
+    # *every* token fail, so `verify_token` reports the value it actually saw and
+    # this knob is how you act on that without a code change.
+    keycloak_audience: str = "ai4bi-public"
+    # How long the signing keys are cached. An unknown `kid` forces a refetch
+    # regardless, so this only bounds how long a *revoked* key stays trusted.
+    keycloak_jwks_cache_s: int = 3600
+
+    # --- Employee directory lookup (share picker) ---------------------------
+    # Resolves a typed username to a real person before it is written into
+    # eval_set_roles. Without it a typo shares an eval set with nobody, silently.
+    # The username in the path is the same string as the token's
+    # preferred_username.
+    hr_api_base_url: str = "https://cpochatproxyservice.cpoap-dev.dev.tsmc.com/proxy/employees"
+    # The internal service presents a self-signed certificate. Flip this on once
+    # the corporate CA bundle is installed in the backend image.
+    hr_api_verify_ssl: bool = False
+    # Deliberately short: this call sits in front of a keystroke, and a directory
+    # that is merely slow must not make the share dialog feel broken.
+    hr_api_timeout_s: float = 5.0
+
+    # Prefix this app is mounted under by a reverse proxy that strips it before
+    # forwarding (nginx `proxy_pass …:8000/` under `location /api/`). It does not
+    # change the routes; it makes the generated /docs and /openapi.json URLs
+    # carry the prefix, which is otherwise the one thing that breaks behind a
+    # stripping proxy.
+    root_path: str = ""
 
     frontend_origin: str = "http://localhost:5173"
 
