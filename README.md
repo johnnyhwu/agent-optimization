@@ -21,6 +21,12 @@ switched to real independently — see
 [Going from fake to real](#going-from-fake-to-real). The app DB schema is the
 real thing, created by Alembic migrations.
 
+**Sign-in follows the same pattern.** `AUTH_MODE=fake` (the default) trusts a
+header and gives you the owner/viewer switch in the top bar; `AUTH_MODE=keycloak`
+runs real OIDC against a Keycloak realm — see [Signing in](#signing-in). And the
+stack has two shapes: `./scripts/dev.sh` for development, `./scripts/prod.sh` for
+a deployed build behind nginx — see [Deploying it](#deploying-it).
+
 > **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
 > re-labeling, SkillOpt, skill write-back, annotation score sync,
 > multi-tenant isolation. Writing back to Langfuse (verdicts as Scores) is
@@ -28,7 +34,8 @@ real thing, created by Alembic migrations.
 
 **Contents** — [The problem](#the-problem) · [How it works](#how-it-works) ·
 [Life of a run](#life-of-a-run) · [The playground](#the-playground) · [Stack](#stack) ·
-[Run it](#run-it-one-command) · [Fake → real](#going-from-fake-to-real) ·
+[Run it](#run-it-one-command) · [Signing in](#signing-in) · [Deploying it](#deploying-it) ·
+[Fake → real](#going-from-fake-to-real) ·
 [Trying the flows](#trying-the-flows) · [Where things live](#where-the-important-pieces-live) ·
 [API](#api-surface) · [Langfuse read strategies](#langfuse-read-strategies-and-the-events-table-error) ·
 [Paging](#paging-the-lists) · [Upload schema](#upload-schema)
@@ -79,21 +86,28 @@ spec §4.1 and §4.4.
 
 ```
                     ┌─────────────────────────────────────────────┐
-  browser ────────► │  Eval platform  (this repo)                 │
-  (React, :5173)    │                                             │
-                    │  FastAPI ──► Orchestrator (asyncio task)    │
-                    │     │        └── Playground (in memory)     │
-                    │     │              │                        │
-                    │     │              ├─► AgentClient  ────────┼─► agent server
-                    │     │              ├─► JudgeClient  ────────┼─► LLM endpoint
-                    │     │              ├─► TraceClient  ────────┼─► Langfuse
-                    │     │              ├─► DiagnosisClient ─────┼─► LLM endpoint
-                    │     │              └─► WorkspaceClient ─────┼─► agent server
-                    │     ▼                                       │
-                    │  Postgres: eval sets, questions, runs,      │
-                    │            results, diagnoses, roles        │
-                    └─────────────────────────────────────────────┘
-                          ▲ SSE: live per-question progress
+  browser ────────► │  nginx (deployed form only) ────────────────┼─┐
+    │  (:5173)      │    /       static bundle                    │ │ /api
+    │               │    /api/*  ──────────────────────────────►  │ │
+    │               │                                             │ │
+    │               │  FastAPI ──► Orchestrator (asyncio task)    │◄┘
+    │               │     │        └── Playground (in memory)     │
+    │               │     │              │                        │
+    │               │     │              ├─► AgentClient  ────────┼─► agent server
+    │               │     │              ├─► JudgeClient  ────────┼─► LLM endpoint
+    │               │     │              ├─► TraceClient  ────────┼─► Langfuse
+    │               │     │              ├─► DiagnosisClient ─────┼─► LLM endpoint
+    │               │     │              ├─► SynthesisClient ─────┼─► LLM endpoint
+    │               │     │              └─► WorkspaceClient ─────┼─► agent server
+    │               │     │                                       │
+    │               │     └─► current_subject ───────────────────►┼─► Keycloak (JWKS)
+    │               │     │   (AUTH_MODE)                         │
+    │               │     └─► /users/lookup ─────────────────────►┼─► employee directory
+    │               │     ▼                                       │
+    │               │  Postgres: eval sets, questions, runs,      │
+    │               │            results, diagnoses, roles        │
+    │               └─────────────────────────────────────────────┘
+    └── OIDC login ──► Keycloak            ▲ SSE: live per-question progress
 ```
 
 Two ideas carry most of the design:
@@ -202,7 +216,8 @@ button.
 > says as much rather than implying a check that does not exist.
 
 Three things are needed on the **agent server** for the real path (all additive) —
-the full contract is [docs/agent_server_stage4_endpoints.md](docs/agent_server_stage4_endpoints.md):
+the full contract, written so the agent server team can implement from it alone,
+is **spec §17**:
 
 ```
 GET  /get_workspace       -> {"version", "config", "redacted_paths", "skills"}
@@ -273,11 +288,64 @@ make migrate    # alembic upgrade head, in the backend container
 make seed       # python -m app.seed, in the backend container
 make backend    # backend container: uvicorn app.main:app --reload on :8000
 make frontend   # frontend container: vite dev server on :5173
-make test       # backend unit tests (no DB or external service needed; the 23
-                #   database-backed tests skip — see "Paging the lists")
+make test       # backend unit tests: 242 of 270, no DB or network needed. The 28
+                #   database-backed ones skip — see "Paging the lists"
 make preflight  # ping whichever integrations are set to real
 make down       # docker compose down
 ```
+
+## Signing in
+
+Identity is a seam like the other six. `AUTH_MODE` picks the implementation, and
+**only `current_subject` in `app/auth.py` branches on it** — every role check
+below that takes a subject string and is identical either way.
+
+| | `AUTH_MODE=fake` (default) | `AUTH_MODE=keycloak` |
+|---|---|---|
+| Who you are | an `X-User-Subject` header | the token's `preferred_username` |
+| Top bar | a dropdown to switch identity | your username + sign out |
+| Used by | local dev, `make test`, the seeded demo, testing owner/viewer | deployment |
+
+```bash
+# repo-root .env  (gitignored)
+AUTH_MODE=keycloak
+KEYCLOAK_URL=https://keycloak.example.com/auth   # include /auth if your realm serves it there
+KEYCLOAK_REALM=…
+KEYCLOAK_CLIENT_ID=…                             # a public client; the flow is Auth Code + PKCE
+
+./scripts/dev.sh    # same command; AUTH_MODE decides
+```
+
+Pointing the **development** stack at a real Keycloak is the recommended way to
+get a realm configuration right: reload and HMR still work, and there are two
+fewer moving parts than the deployed form.
+
+**The subject stored in the database is `preferred_username`, not `sub`.** The
+columns that hold subjects already held usernames, the share picker is a person
+typing a colleague's name, and the employee directory is keyed by the same
+string — so this needed **no migration**. Everything that writes a subject
+casefolds it through one function, because `eval_set_roles` is looked up by exact
+match and a `TW12345` typed against a `tw12345` token is not an error, it is an
+eval set shared with nobody.
+
+**Three things to expect the first time:**
+
+- **`KEYCLOAK_AUDIENCE` is probably wrong.** Keycloak only writes the client id
+  into `aud` when an audience mapper says so; `account` is the common default,
+  and a wrong value rejects every token. The 401 names the value the token
+  actually carried, so the first failed sign-in tells you what to set. Blank
+  skips the check.
+- **Your eval set list will be empty.** The seeded data is owned by
+  `alice`/`bob`/`carol`, and under real sign-in nobody is those users. That is
+  correct, not broken — upload a set as yourself.
+- **The backend may fail on TLS** if your Keycloak uses a corporate CA. See
+  [the CA note](#deploying-it) below; the tell is that `curl` works from the host
+  and fails from inside the container.
+
+Sharing an eval set resolves the typed username against the employee directory
+first (`GET /users/lookup`). A name the directory denies is blocked; a directory
+that cannot be reached warns but allows — an outage there must not stop everyone
+here from sharing anything.
 
 ## Deploying it
 
@@ -606,7 +674,7 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 
 | Group | Endpoints |
 |---|---|
-| Session | `GET /health`, `/users`, `/me`, `/run-config/defaults` |
+| Session | `GET /health`, `/users`, `/users/lookup?username=`, `/me`, `/run-config/defaults` |
 | Eval sets | `POST /eval-sets`, `GET /eval-sets` (paged + filtered), `GET·PATCH·DELETE /eval-sets/{id}`, `PUT /eval-sets/{id}/roles`, `GET /eval-sets/metadata/keys` |
 | Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
@@ -616,8 +684,21 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 Authorization is a FastAPI dependency, not scattered per-endpoint: writes and
 re-diagnose require **owner**; reads and triggering a run accept **owner or
 viewer**; cancelling accepts an owner *or* whoever started that run. Identity
-comes from the `X-User-Subject` header (`?subject=` for SSE, which cannot set
-headers).
+comes from an `X-User-Subject` header or an `Authorization: Bearer` token
+depending on `AUTH_MODE` — see [Signing in](#signing-in).
+
+**`GET /health` is the only endpoint that needs no identity**, for container and
+proxy probes. That includes `/docs`, `/redoc` and `/openapi.json`: transparent in
+fake mode, and effectively closed to browsers under Keycloak, since a plain
+navigation cannot set an Authorization header. Read the schema with
+`curl -H "Authorization: Bearer …" …/openapi.json`.
+
+The two SSE progress streams are read with `fetch`, not `EventSource` —
+`EventSource` cannot set headers, which would leave the token in the query
+string, and it reconnects by replaying its original URL, which with a
+60-second access token turns the first network blip into an endless retry
+against an expired one. The client keeps the same
+`addEventListener`/`close`/`onerror` surface, so the consumers did not change.
 
 The playground endpoints are outside that scheme, because an attempt belongs to no
 eval set: an attempt is visible only to the subject who created it, and someone
@@ -700,9 +781,9 @@ already loaded.
 
 Both endpoints issue a **fixed number of queries regardless of page size**;
 `backend/tests/test_pagination.py` asserts it. Those tests need a database and
-skip without one, so `make test` stays DB-free. The same is true of the half of
-`test_shortlist.py` that creates eval sets — copying questions, checking
-permissions and de-duplicating are all SQL:
+skip without one, so `make test` stays DB-free. The same is true of
+`test_startup_reaper.py` and the half of `test_shortlist.py` that creates eval
+sets — copying questions, checking permissions and de-duplicating are all SQL:
 
 ```bash
 createdb agenteval_test

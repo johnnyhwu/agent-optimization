@@ -7,7 +7,7 @@ response are both trivial, so a hand-written httpx POST is simpler than
 depending on one.
 
 A playground attempt may also carry `metadata.workspace`, the config/skills the
-agent should use for this one call (see docs/agent_server_stage4_endpoints.md).
+agent should use for this one call (see docs/spec.md §17).
 An eval run never sends it, so the run path's request body is unchanged.
 
 The correlation mechanism (§6.2 / §6.7) is the whole point of this client: the

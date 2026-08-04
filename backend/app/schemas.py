@@ -288,7 +288,7 @@ class WorkspaceOverrideIn(BaseModel):
     """The config/skills to use for this one call instead of the agent's own.
 
     The two halves travel differently on purpose (see
-    docs/agent_server_stage4_endpoints.md §5.2/§5.3): `config` is sparse and is
+    docs/spec.md §17.4): `config` is sparse and is
     deep-merged on the agent server — it must be, since the snapshot the editor
     started from had the agent's secrets removed — while `skills` is the
     complete file set for the call, because only replacement can express
