@@ -195,13 +195,24 @@ function openStream(path) {
       if (done) return; // server closed: terminal event already delivered, or a drop
       buffer += decoder.decode(value, { stream: true });
 
-      // Frames are separated by a blank line. The buffer is essential rather
-      // than tidy: a chunk boundary can fall anywhere, including the middle of
-      // a JSON payload, so frames must be reassembled before being parsed.
+      // The SSE grammar allows CRLF, CR or LF as the line terminator, and
+      // sse-starlette emits CRLF. Splitting on "\n\n" alone therefore never
+      // matches anything: "\r\n\r\n" holds no two consecutive newlines, so the
+      // buffer grows forever and not one event is ever dispatched. Normalising
+      // first is what makes a single split rule correct for all three forms.
+      //
+      // A trailing CR is held back rather than normalised, because a CRLF split
+      // across two chunks would otherwise turn into "\n\n" here and be read as
+      // an end-of-frame that the server never sent.
+      const danglingCR = buffer.endsWith("\r");
+      let pending = (danglingCR ? buffer.slice(0, -1) : buffer).replace(/\r\n|\r/g, "\n");
+
+      // A chunk boundary can fall anywhere, including the middle of a JSON
+      // payload, so frames are reassembled before being parsed.
       let split;
-      while ((split = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, split);
-        buffer = buffer.slice(split + 2);
+      while ((split = pending.indexOf("\n\n")) !== -1) {
+        const frame = pending.slice(0, split);
+        pending = pending.slice(split + 2);
 
         let name = "message";
         const data = [];
@@ -212,6 +223,11 @@ function openStream(path) {
         }
         if (data.length) emit(name, data.join("\n"));
       }
+
+      // Carry the partial frame over. Re-normalising it next round is a no-op
+      // (it holds no CR by construction); the held-back CR is put back so the
+      // CRLF it belongs to can be completed by the next chunk.
+      buffer = pending + (danglingCR ? "\r" : "");
     }
   }
 
