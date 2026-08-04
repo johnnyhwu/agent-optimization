@@ -65,6 +65,13 @@ services:
       # Runs `alembic upgrade head` in the entrypoint before uvicorn starts.
       # Safe only while there is exactly one backend container — see below.
       RUN_MIGRATIONS: "1"
+    # The one bind-mount the deployed form keeps, and the exception proves the
+    # rule: it is read-only configuration, not source. Development gets this for
+    # free because it mounts ./backend wholesale; here the CA bundle still has to
+    # reach /app/certs somehow, and mounting it beats rebuilding the image every
+    # time the corporate chain rolls over.
+    volumes:
+      - ./backend/certs:/app/certs:ro
     # Inherits the image's CMD: uvicorn with no --reload and, deliberately, no
     # --workers.
     #

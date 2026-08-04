@@ -76,6 +76,26 @@ services:
       # deployed form, where nginx puts both halves on one origin.
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
 
+      # --- Trusting an internal certificate authority -------------------------
+      # Internal services (Keycloak, Langfuse, the agent server, the employee
+      # directory) present certificates signed by a private CA that the
+      # python:3.12-slim base image has never heard of, so every outbound HTTPS
+      # call fails with CERTIFICATE_VERIFY_FAILED / "unable to get local issuer
+      # certificate" until it is told where to look.
+      #
+      # httpx reads this variable when `verify=True` (its default, and what all
+      # six seams use), so one value covers Keycloak, Langfuse, the agent server
+      # and the OpenAI-compatible LLM endpoint at once — no per-client setting.
+      #
+      # ⚠️ The file *replaces* the default trust store rather than adding to it,
+      # so it must also contain the public roots. Copying the host's own bundle
+      # (/etc/ssl/certs/ca-certificates.crt on a corporate Linux machine) gets
+      # both; a bare corporate root on its own would break public HTTPS.
+      #
+      # Put the PEM at backend/certs/ca-bundle.crt — gitignored, and already
+      # inside the container at /app/certs in both forms.
+      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
+
       # --- Integration selection (§9.2, §10.2). Default fake = the seeded demo. ---
       AGENT_IMPL: ${AGENT_IMPL:-fake}
       JUDGE_IMPL: ${JUDGE_IMPL:-fake}

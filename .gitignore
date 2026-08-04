@@ -20,3 +20,8 @@ frontend/.pnpm-store/
 # OS / editor
 .DS_Store
 *.log
+
+# CA bundles for internal endpoints — environment-specific, see
+# backend/certs/README.md
+backend/certs/*
+!backend/certs/README.md

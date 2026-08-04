@@ -327,6 +327,29 @@ URL is identical in both modes and a single Keycloak redirect URI covers them.
 The backend drops `--reload` and its bind-mount, publishes nothing, and applies
 migrations from its entrypoint. Postgres is no longer published to the host.
 
+**Internal certificate authority.** If any internal endpoint is HTTPS with a
+certificate signed by a corporate CA, the backend will fail every call to it:
+
+```
+[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+```
+
+The tell is that `curl` to the same URL works from the host and fails from
+inside the container — the host trusts the corporate CA, the base image trusts
+only the public roots shipped with `certifi`. Give the container the host's own
+bundle:
+
+```bash
+cp /etc/ssl/certs/ca-certificates.crt backend/certs/ca-bundle.crt
+echo 'SSL_CERT_FILE=/app/certs/ca-bundle.crt' >> .env
+```
+
+`httpx` reads that variable whenever `verify=True`, which is what every seam
+uses, so one value covers Keycloak, Langfuse, the agent server and the LLM
+endpoint at once. It **replaces** the trust store rather than adding to it, so
+the file has to carry the public roots too — which is why this copies the whole
+host bundle rather than just the corporate root. See `backend/certs/README.md`.
+
 **Keycloak setup.** Register all three of these for the client, or sign-in
 breaks in ways that name nothing useful:
 
