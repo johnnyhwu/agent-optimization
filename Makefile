@@ -61,9 +61,11 @@ preflight:
 prod-build:
 	$(PROD) build
 
+# Delegates to the script, the same way `up` delegates to dev.sh — the two
+# scripts are written to mirror each other, so `diff scripts/dev.sh
+# scripts/prod.sh` is a readable summary of what deployment changes.
 prod-up:
-	$(PROD) up -d --build
-	@echo "App: http://localhost:$${FRONTEND_PORT:-5173}"
+	./scripts/prod.sh
 
 prod-down:
 	$(PROD) down

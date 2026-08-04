@@ -296,19 +296,29 @@ out. Keeping the development-only entries out of the base is what makes them
 absent in deployment rather than merely overridden.
 
 ```bash
-# in a repo-root .env
+# in a repo-root .env  (gitignored)
 POSTGRES_PASSWORD=…
 DATABASE_URL=postgresql+asyncpg://agentopt:…@db:5432/agentopt
 SYNC_DATABASE_URL=postgresql+psycopg://agentopt:…@db:5432/agentopt
 KEYCLOAK_URL=https://keycloak.example.com/auth
 
-make prod-up      # build + start; app on http://localhost:5173
+./scripts/prod.sh   # or: make prod-up
 make prod-logs
 make prod-down
 ```
 
-Compose refuses to start if any of those are missing, rather than falling back
-to the development password or a fake login.
+The script refuses to start if any of those are missing, rather than falling
+back to the development password or a fake login — and prints the whole set,
+since compose itself reports only the first one.
+
+`scripts/prod.sh` is written to mirror `scripts/dev.sh` step for step, so
+
+```bash
+diff scripts/dev.sh scripts/prod.sh
+```
+
+reads as a list of exactly what deployment changes — six things, each marked in
+the source.
 
 **What changes.** The frontend becomes a `vite build` bundle served by nginx,
 which also proxies `/api/` to the backend — one origin, so the bundle calls a
