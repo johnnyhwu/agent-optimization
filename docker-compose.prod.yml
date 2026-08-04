@@ -54,21 +54,14 @@ services:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to match POSTGRES_PASSWORD}
       SYNC_DATABASE_URL: ${SYNC_DATABASE_URL:?set SYNC_DATABASE_URL to match POSTGRES_PASSWORD}
 
+      # The KEYCLOAK_* and HR_API_* passthroughs live in the base file, so only
+      # what genuinely differs in deployment is repeated here: the mode defaults
+      # the other way, and KEYCLOAK_URL becomes required instead of optional.
       AUTH_MODE: ${AUTH_MODE:-keycloak}
       KEYCLOAK_URL: ${KEYCLOAK_URL:?set KEYCLOAK_URL}
-      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
-      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
-      # Blank disables the audience check. Keycloak only writes the client id
-      # into `aud` when an audience mapper says so — `account` is a common
-      # default — and a wrong value rejects every token at once. The 401 names
-      # the value the token actually carried, which is how to find the right one.
-      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE-ai4bi-public}
       # nginx strips /api before forwarding; this keeps the generated /docs and
       # /openapi.json URLs pointing back through the prefix.
       ROOT_PATH: /api
-      HR_API_BASE_URL: ${HR_API_BASE_URL:-https://cpochatproxyservice.cpoap-dev.dev.tsmc.com/proxy/employees}
-      HR_API_VERIFY_SSL: ${HR_API_VERIFY_SSL:-false}
-      HR_API_TIMEOUT_S: ${HR_API_TIMEOUT_S:-5}
       # Runs `alembic upgrade head` in the entrypoint before uvicorn starts.
       # Safe only while there is exactly one backend container — see below.
       RUN_MIGRATIONS: "1"

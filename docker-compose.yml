@@ -53,9 +53,25 @@ services:
       # --- Identity (§6.16) ---
       # fake trusts an X-User-Subject header, which is what the seeded demo and
       # the owner/viewer switch in the top bar run on. keycloak verifies a real
-      # bearer token; docker-compose.prod.yml turns it on.
+      # bearer token.
+      #
+      # This lives in the base rather than only in docker-compose.prod.yml so
+      # that `AUTH_MODE=keycloak ./scripts/dev.sh` works: pointing the
+      # development stack at the real identity provider — with reload and HMR
+      # still running — is how you shake out a Keycloak configuration before
+      # putting nginx and a production build underneath it.
       AUTH_MODE: ${AUTH_MODE:-fake}
       FAKE_USER_SUBJECT: ${FAKE_USER_SUBJECT:-alice}
+      KEYCLOAK_URL: ${KEYCLOAK_URL:-}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
+      # `-` not `:-`: an explicitly empty value must survive, because blank is
+      # how the audience check is switched off.
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE-ai4bi-public}
+      # Employee directory behind the share picker.
+      HR_API_BASE_URL: ${HR_API_BASE_URL:-https://cpochatproxyservice.cpoap-dev.dev.tsmc.com/proxy/employees}
+      HR_API_VERIFY_SSL: ${HR_API_VERIFY_SSL:-false}
+      HR_API_TIMEOUT_S: ${HR_API_TIMEOUT_S:-5}
       # CORS origin of the Vite dev server, as seen by the browser. Inert in the
       # deployed form, where nginx puts both halves on one origin.
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}

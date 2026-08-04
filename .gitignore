@@ -2,6 +2,13 @@
 backend/.venv/
 __pycache__/
 *.pyc
+
+# Credentials. docker-compose interpolates from a repo-root .env, and README
+# and docs/spec.md both tell you to put real endpoint credentials there — so it
+# must never be committable. `.env.example` stays tracked as the reference.
+.env
+.env.*
+!.env.example
 backend/.env
 
 # Node / frontend
