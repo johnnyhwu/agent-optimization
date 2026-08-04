@@ -21,8 +21,12 @@
 > > 要根治的話得把那 179 處註解改寫成本文件的編號——那是一次獨立的機械式改動，
 > > 刻意沒有和這次的文件更名混在一起。
 >
-> **對照的操作手冊**：repo 根目錄的 `README.md` 是「怎麼跑起來、怎麼接真實服務」的操作手冊。
+> **對照的操作手冊**：repo 根目錄的 `README.md` 是「怎麼跑起來、怎麼接真實服務、怎麼部署」的操作手冊。
 > 本文件是設計與實作紀錄，兩者互補不重複。
+>
+> **`docs/` 底下只有這一份。** 原本另有一份寫給 agent server 團隊的端點契約
+> （`agent_server_stage4_endpoints.md`），已收進 [§17](#17-對-agent-server-端的相依需求) 並刪除——
+> 兩份文件描述同一組端點時，遲早會有一份先過期，而讀者無從得知是哪一份。
 
 **目錄**
 
@@ -38,13 +42,13 @@
 | [8](#8-llm-契約judgediagnosis-與-synthesis) | LLM 契約（judge、diagnosis 與 synthesis） |
 | [9](#9-api-全表) | API 全表與權限 |
 | [10](#10-前端資訊架構) | 前端資訊架構、三個關鍵機制、排版陷阱與設計系統 |
-| [11](#11-權限身分與並發) | 權限、身分與並發 |
+| [11](#11-權限身分與並發) | 權限、身分（Keycloak SSO）與並發 |
 | [12](#12-設定總表) | 設定總表（環境變數） |
-| [13](#13-如何執行從-fake-到-real) | 如何執行、從 fake 到 real |
+| [13](#13-如何執行從-fake-到-real) | 如何執行、從 fake 到 real、**部署形態** |
 | [14](#14-測試與驗證現況可信度地圖) | **測試與驗證現況（可信度地圖）** |
 | [15](#15-明確尚未做的) | **明確尚未做的** |
 | [16](#16-已知風險與未解問題) | 已知風險與未解問題 |
-| [17](#17-對-agent-server-端的相依需求) | 對 agent server 端的相依需求 |
+| [17](#17-對-agent-server-端的相依需求) | 對 agent server 端的相依需求（**完整端點契約**）|
 | [18](#18-給接手者的下一步建議) | 給接手者的下一步建議 |
 
 **名詞表**（全文一致使用）
@@ -174,8 +178,18 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 ### 3.1 拓樸
 
 ```
+                          ┌──────────┐
+                          │ Keycloak │  OIDC（AUTH_MODE=keycloak，見 §11.2）
+                          └────┬─────┘
+        瀏覽器 ──登入─────────────┘
+          │
+          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Eval Platform（本 repo，獨立 app）                            │
+│                                                              │
+│  nginx（僅部署形態，見 §13.3）                                  │
+│    /        → 打包好的靜態 bundle                              │
+│    /api/*   → 轉給 backend（開發形態沒有這一層）                 │
 │                                                              │
 │  Frontend (React + Vite)                                     │
 │    側邊欄三個 section（Evaluation / Playground / Optimize）      │
@@ -187,16 +201,20 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 │    ├── Orchestrator：讀 eval set → 逐題打 agent → judge →      │
 │    │                 等 trace → 診斷 → 落庫 → SSE 推進度        │
 │    ├── Playground：單題版本，狀態只在記憶體                      │
-│    └── 六個 seam（fake / real 各一套）                          │
+│    └── 六個 seam（fake / real 各一套）+ 身分 seam（§11.2）        │
 │                                                              │
 │  App DB (PostgreSQL)：Langfuse 沒有的概念 + 指回 Langfuse 的索引  │
-└───────┬─────────────────────────────┬────────────────────────┘
-        │ 讀 trace（HTTP public API）    │ POST /execute（HTTP）
-        ▼                             ▼
-   ┌──────────┐                ┌──────────────────┐
-   │ Langfuse │◀───trace 寫入────│  Agent Server    │
-   └──────────┘                │  (stateless agent)│
+└───┬───────────────┬─────────────────┬────────────────────────┘
+    │ 驗 token      │ 讀 trace         │ POST /execute（HTTP）
+    │ （JWKS）      │（HTTP public API）│
+    ▼               ▼                 ▼
+┌──────────┐   ┌──────────┐    ┌──────────────────┐
+│ Keycloak │   │ Langfuse │◀──trace 寫入──│ Agent Server │
+└──────────┘   └──────────┘    │  (stateless agent)│
                                └──────────────────┘
+   ┌──────────────────┐
+   │ 員工目錄 HR API   │ ← 分享時查核 username（§11.3）
+   └──────────────────┘
 ```
 
 **技術棧**
@@ -208,8 +226,11 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
   （見 §10.1）——不是 router 套件，但也不再是 `App.jsx` 裡的 `useState`。
   字型（Inter / Space Grotesk / IBM Plex Mono）以 `@fontsource` **打包進 bundle**，
   不打 CDN，因為這東西是 docker-compose 部署、必須離線可用。
+- **身分**：`keycloak-js`（前端，Authorization Code + PKCE）+ `PyJWT[crypto]`（後端驗簽章）。
+  兩者都只在 `AUTH_MODE=keycloak` 時才動作（§11.2）。
 - **DB**：PostgreSQL 16，schema 由 Alembic migration 建立。
-- **部署形態**：`db` / `backend` / `frontend` **各自一個 container**，由 `docker-compose.yml` 編排。
+- **部署形態**：`db` / `backend` / `frontend` **各自一個 container**，
+  由 `docker-compose.yml` 加一份疊加檔編排（開發 / 部署兩套，見 §13.3）。
   host 端唯一需求是 docker（含 compose）——不需要 host 的 Python venv 或 node_modules。
 
 ### 3.2 六個 seam（最重要的一節）
@@ -286,8 +307,7 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 - **`metadata.workspace` 只在 Playground 改過 agent 的 config 或 skill 檔時才出現**；
   eval run 的 request body 與 Stage 4 出現之前**完全相同**（連 key 都不會多）。
   兩半各自可省略：只改 config 就不送 `skills`，反之亦然。
-- **兩半在 agent server 上的套用方式刻意不同**（完整契約見
-  `docs/agent_server_stage4_endpoints.md`）：
+- **兩半在 agent server 上的套用方式刻意不同**（完整契約見 [§17](#17-對-agent-server-端的相依需求)）：
   - `config` 是**稀疏 overlay**，deep merge 到 agent 自己的 `config.json` 上。
     非如此不可——平台拿到的快照已經把機密拿掉了，整份取代會讓 agent 沒有 API key。
   - `skills` 是**這次呼叫的完整檔案集**，整份取代 agent 的目錄。
@@ -715,6 +735,7 @@ trace 物件 / 診斷 / 三個錯誤欄位。
 | 診斷失敗 | **不影響該題判定**。verdict 才是結果，診斷是加值；原因寫進 `diagnosis_error`，owner 可事後手動 re-diagnose |
 | trace store 暫時抓不到 | 不算該題失敗，只是 `trace_ready=false`，並把原因寫進 `trace_error` |
 | 任何非預期例外 | 把 run 收成 `status='failed'`、寫 `runs.error_message`、**並送出 SSE 終止事件**。run 不會卡在 `running` 讓前端無限等待 |
+| **backend 整個重啟**（部署 / crash / OOM）| run 是 in-process 的背景 task，重啟後 `status='running'` **再也沒有東西會改它**——UI 一直轉圈，按中止又因為「已終結」被拒。因此 **backend 啟動時會把所有 `running` 的 run 收成 `failed`** 並寫明原因（見 §13.3）|
 | 使用者按下中止 | 見 §6.3 |
 
 **其他執行控制**
@@ -1003,14 +1024,20 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 ## 9. API 全表
 
 互動式文件由執行中的 backend 提供：`/docs`、`/redoc`、`/openapi.json`。
+**這三個和其他 API 一樣需要身分**——`AUTH_MODE=fake` 時是透明的（header 有預設值），
+`keycloak` 模式下瀏覽器直接開會 401（一次導覽帶不了 `Authorization` header），
+要讀 schema 用 `curl -H "Authorization: Bearer …" …/openapi.json`。
+
+**`GET /health` 是唯一不需要身分的端點**——容器與反向代理的探活要用它。
 
 **權限標記**：`R` = owner 或 viewer；`O` = 僅 owner；`—` = 只需登入身分；
 `C` = 僅該 attempt 的建立者。
 
 | 端點 | 權限 | 說明 |
 |---|---|---|
-| `GET /health` | — | |
-| `GET /users` | — | 假使用者名單 + 目前身分 |
+| `GET /health` | **公開** | 唯一不需身分的端點 |
+| `GET /users` | — | `fake` 模式回可切換的假身分名單；`keycloak` 模式回空陣列（前端據此隱藏切換器）+ 目前身分 |
+| `GET /users/lookup?username=` | — | 分享前對員工目錄查核（§11.3）。查無此人 → **404**；目錄連不上 → **200 但 `verified:false`**，前端警告卻放行 |
 | `GET /me` | — | 目前 subject 與其在各 eval set 的角色。**UI 不用它 gate 權限**（§11.4）——每個 eval set 的 payload 自己就帶 `my_role` |
 | `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **六個 `*_IMPL` 現況** |
 | `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares` |
@@ -1370,6 +1397,7 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | `HR_API_BASE_URL` | （內部端點）| 分享時查核 username 的員工目錄，key 與 `preferred_username` 相同 |
 | `HR_API_VERIFY_SSL` / `HR_API_TIMEOUT_S` | `false` / `5` | 該服務是自簽憑證；裝好公司 CA 之後改 `true` |
 | `ROOT_PATH` | 空 | 反向代理剝掉的前綴（nginx 用 `/api`）。不影響路由，只讓產生的 `/docs`、`/openapi.json` 網址帶上前綴 |
+| **`SSL_CERT_FILE`** | 空 | 內部 CA 的 PEM 路徑。內部服務（Keycloak / Langfuse / agent server / 員工目錄 / LLM）的憑證由私有 CA 簽發，而 image 只信任 `certifi` 的公開根憑證——不設就是每個對外 HTTPS 呼叫都 `CERTIFICATE_VERIFY_FAILED`。`httpx` 在 `verify=True`（本 repo 每個 client 都是）時會讀它，所以**一個值同時解決五個整合**。⚠️ **它是取代 trust store 不是疊加**，所以檔案必須也含公開根憑證——直接複製 host 的 `/etc/ssl/certs/ca-certificates.crt` 兩者都有 |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 來源。nginx 單一入口下前後端同源，這段自然失效 |
 | `ERROR_MESSAGE_MAX_CHARS` | `2000` | 落庫錯誤訊息的長度上限 |
 | `SPAN_BODY_MAX_CHARS` | `800` | §4.4 單一 span body 截斷門檻（**只用於診斷 prompt**）|
@@ -1445,11 +1473,18 @@ SEED=1 ./scripts/dev.sh    # build image → 起 Postgres → migrate → seed �
 |---|---|
 | `docker-compose.yml` | 三個服務的共同定義。**刻意不含**任何「開發才有」的東西 |
 | `docker-compose.override.yml` | 開發：對外 port、原始碼 bind mount、兩個 reload 迴圈。**compose 會自動載入** |
-| `docker-compose.prod.yml` | 部署：`make prod-up`（明確指定 `-f`，因此不會載入 override）|
+| `docker-compose.prod.yml` | 部署：`./scripts/prod.sh`（明確指定 `-f`，因此不會載入 override）|
 
 > **為什麼要拆成三份而不是在 prod 覆寫**：compose 疊檔案時，`ports` / `volumes` 這類
 > list 欄位是**附加**而不是取代——`ports: []` 拿不掉已經發佈的 port。
 > 把開發專屬的東西一開始就不放進 base，才是讓它們在部署時「不存在」而不是「被蓋掉」。
+
+**兩支腳本刻意逐段對齊**，所以 `diff scripts/dev.sh scripts/prod.sh` 本身就是差異清單
+（六處，每處在原始碼裡標了 `DIFFERS FROM dev.sh (n/6)`）。
+`prod.sh` 唯一不是「同一個指令換個寫法」的步驟是**前置檢查**：部署需要的變數在 compose 裡是
+`${VAR:?}`，腳本在 build 任何東西之前先用 `docker compose config --quiet` 驗一次。
+檢查交給 compose 而不是自己測，是因為它在「shell 環境 vs repo 根目錄 `.env`」之間的優先順序
+很細，自己重寫容易錯得很微妙；但 compose **只會報第一個**缺少的變數，所以腳本另外把完整清單印出來。
 
 **部署形態的四個差別**
 
@@ -1486,11 +1521,17 @@ lifespan 啟動時把它們收成 `failed` 並寫明原因。**production 第一
 
 **這一節的目的是讓你知道能信到什麼程度。**
 
-### 14.1 單元測試：230 個
+### 14.1 單元測試：270 個
 
-`make test` 跑其中 **207 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
-LLM 路徑以 monkeypatch）。剩下 23 個（`test_pagination.py` 全部，加上 `test_shortlist.py`
-建立 eval set 的那一半）需要一個真 Postgres，未設 `TEST_DATABASE_URL` 時自動 skip。
+`make test` 跑其中 **242 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
+LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_startup_reaper.py` 全部，
+加上 `test_shortlist.py` 建立 eval set 的那一半）需要一個真 Postgres，
+未設 `TEST_DATABASE_URL` 時自動 skip。
+
+> **測試不經過 HTTP。** 每個測試都是直接呼叫 router 函式並把 `subject="alice"` 當參數傳進去
+> （沒有任何測試用 `TestClient` / `AsyncClient`）。所以 §11.2 換掉 `current_subject` 時，
+> 既有測試**一個都沒有受影響**——這也是為什麼 `test_auth.py` 必須存在：
+> 那條路徑在別的地方完全沒有被執行到。
 
 | 檔案 | 數量 | 涵蓋 |
 |---|---|---|
@@ -1507,6 +1548,9 @@ LLM 路徑以 monkeypatch）。剩下 23 個（`test_pagination.py` 全部，加
 | `test_results.py` | 8 | trace 檢視的狀態機。核心是**`pending` 的題目回 `not_started` 且對 trace store 發出零個請求**（用會記錄呼叫次數的 stub 斷言）|
 | `test_deletion.py` | 5 | `delete_run` / `delete_eval_set` 的 DELETE **順序**（子表先於父表，特別是 `question_results` 必須早於 `questions`），以及一個「schema 新增子表卻忘了加進刪除順序」的守門測試 |
 | `test_pagination.py` | 11（**需 DB**）| `limit`/`offset`/`total`/`has_more`；翻完所有頁**每張卡剛好出現一次**；只列出有權限的 set；搜尋與 metadata 篩選在 SQL 生效；趨勢受上限；regression 用最新兩個 run。**最重要的兩個是查詢數守門測試**：`GET /eval-sets` 與 `GET /runs` 在 `limit=1` 與 `limit=20` 時發出的查詢數必須**完全相同**——斷言時間會 flaky，斷言查詢數不會 |
+| `test_auth.py` | 24 | §11.2 的身分。**fake 模式行為完全沒變**（其餘測試全靠這一點）；keycloak 模式對缺 token／非 bearer／壞簽章／過期／跨 realm 一律 401；用**本地產生的 RSA key 簽 token**、以 `respx` mock JWKS 驗證合法 token 通過；金鑰快取，**未知 `kid` 只重抓一次**（不能變成每個 request 都打 Keycloak）；取 `preferred_username` 而**不是** `sub`（參考實作把這個 claim 拼錯、安靜地 fallback 到 `sub`，那會把 UUID 塞進放使用者名稱的欄位）；**audience 不符時訊息帶出 token 裡的實際值**；`KEYCLOAK_AUDIENCE` 留空即跳過檢查；`normalize_subject` 的大小寫與空白 |
+| `test_user_lookup.py` | 11 | 分享前的目錄查核（§11.3）。**「目錄說沒有」與「目錄沒回答」是兩個不同答案**，只有前者擋下——兩者合併在任一方向都是錯的：都擋，那邊一出事這邊全公司不能分享；都放行，打錯字的問題又回來了。含 404 擋下、逾時／連線失敗／非 JSON body 一律 `verified:false` 但放行、**200 但 body 只有 `detail` 也算查無此人**（有些部署這樣回，只看狀態碼會放行）、查核前先正規化 username、fake 模式走 `known_users` 以便離線開發 |
+| `test_startup_reaper.py` | 5（**需 DB**）| §6.2 最後一列。`running` 的 run 被收成 `failed` 且**帶得出原因**與 `completed_at`；**已結束的 run 一個字都不能改**（改了就是竄改 §4.6 賴以成立的歷史）；只動 `running` 的；**重跑兩次不會重複改寫**（連續重啟兩次）；空資料庫不算錯誤 |
 
 ### 14.2 端到端驗證
 
@@ -1536,14 +1580,37 @@ shortlist：加入 → `Draft from trace` → 勾一個既有 set → 建立 →
 **Langfuse 錯誤路徑**：用一個回傳真實 `Unknown table expression 'events'` 500 body 的 mock，
 確認兩條策略都被嘗試、錯誤訊息含兩者、瀏覽器顯示白話說明且原始 SQL 收在可展開區塊。
 
+**Keycloak（`AUTH_MODE=keycloak`）**：**已在公司內部環境對接真實 realm 驗證通過**——
+開發形態（Vite dev server + `uvicorn --reload`）配上真 Keycloak，登入導轉、換 token、
+帶著 bearer token 打 API、SSE 即時更新都正常。
+過程中撞到的兩件事都被設計預期到了，各花約一分鐘解決：
+
+| 撞到什麼 | 為什麼一分鐘就解決 |
+|---|---|
+| `aud` 實際是 `account`，不是 client id | 401 訊息直接把 token 裡的實際值印出來，照著設 `KEYCLOAK_AUDIENCE` 即可（§11.2）|
+| 後端讀 JWKS 時 `CERTIFICATE_VERIFY_FAILED` | 錯誤訊息帶了完整 URL 與原因，而 host 上 `curl` 同一個網址是通的——對比直接指向「容器少了內部 CA」，設 `SSL_CERT_FILE` 解決（§12）|
+
+> 這兩件事是 §4.11「錯誤必須看得見，而且要能分辨種類」最直接的回報。
+
+**SSE 串流 client**：`EventSource` 換成 `fetch` 之後（§11.2），parser 以
+**`sse-starlette` 自己的 encoder 產生的真實 bytes** 驗證，並切到**每次只讀一個 byte**，
+讓每個 CRLF、每個 frame 邊界、每段 JSON payload 都被拆散在多次 read 之間。
+> 這一項是補課。第一版的測試是**手寫 `"\n\n"` frame** 餵進去的，於是驗的是作者的假設而不是
+> 伺服器的行為——`sse-starlette` 的行尾是 **CRLF**，`"\r\n\r\n"` 裡沒有兩個連續的 `\n`，
+> 所以那個 parser **一個事件都派發不出來**，測試卻是綠的。真實 bytes 之外，
+> 現在也會先確認測試在舊 parser 上會失敗，才拿它驗新的。
+
 ### 14.3 ⚠️ 哪些**沒有**被證明（最重要的一段）
 
 | 項目 | 狀態 |
 |---|---|
-| **Langfuse 讀取** | **已對接真環境**，真實 trace 讀得回來也渲染得出來。token 欄位兩種命名都處理過 |
+| **Langfuse 讀取** | ✅ **已對接真環境**，真實 trace 讀得回來也渲染得出來。token 欄位兩種命名都處理過 |
+| **Keycloak 登入（`AUTH_MODE=keycloak`）** | ✅ **已對接公司內部真實 realm**（開發形態）：登入導轉、換 token、bearer token 打 API、SSE 都正常。見 §14.2 |
+| **員工目錄查核（`GET /users/lookup`）** | ⚠️ 平台這一側有 `respx` 單元測試涵蓋三條路徑（找到／查無此人／連不上）。真實目錄**尚未在本文件更新時完成對接驗證** |
+| **nginx 部署形態** | ❌ **尚未在真環境跑過**。單元層面驗過 compose 疊加後的變數解析、`prod.sh` 的前置檢查兩條路徑、`/config.js` 注入鏈；但 **build、啟動、以及 SSE 有沒有被 nginx 緩衝**都還沒實測。§13.3 的 `curl -N` 是第一件該做的事 |
 | **agent server（`/execute`）** | ❌ **只用自建 mock 驗過**。證明不了貴方的 `/execute` 是否真的回 `{"content": str}`。client 刻意寫得寬容，但真接上去仍可能需要微調 |
 | **LLM 端點（judge / diagnosis）** | ❌ **只用 mock 驗過**。證明不了貴方端點是否支援 `response_format: json_object`（被拒會自動退回，但仍未實測）|
-| **agent workspace（`/get_workspace`、`/get_config_version`）** | ⚠️ **平台這一側只有 respx 單元測試**。agent server 那一側已依 `docs/agent_server_stage4_endpoints.md` 實作，但兩邊**尚未在本文件更新時完成對接驗證** |
+| **agent workspace（`/get_workspace`、`/get_config_version`）** | ⚠️ **平台這一側只有 respx 單元測試**。agent server 那一側已依 §17 的契約實作，但兩邊**尚未在本文件更新時完成對接驗證** |
 | **`metadata.workspace`** | ⚠️ 同上。特別要在真環境確認的是 **config 是 deep merge 而不是整份取代**——取代會讓 agent 沒有 API key，而那是一個很晚才會發現的失敗 |
 | **synthesis（`SYNTHESIS_IMPL=real`）** | ❌ **只用假層驗過**。真模型產出的顆粒度（會不會貼整段 SQL、會不會寫成十五步）需要真資料才知道，prompt 大概率要調 |
 | **診斷品質本身** | ❌ **完全未知**。診斷準確度只能在真實資料上跑起來後觀察——而那正是決定要不要投入 Stage 2 的依據 |
@@ -1572,6 +1639,12 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 | **`LLM_TIMEOUT_S` 沒有逐 run 版本** | 補法很小：`RunConfig` 加欄位、defaults 加一行、往 client factory 傳進去、對話框加一格 |
 | **run config 無法比對** | 唯讀檢視一次只能看一個 run；要並排 diff 兩個 run 的設定還得自己切換 |
 | ~~**真登入**~~ | ✅ **已做**：Keycloak OIDC，`AUTH_MODE=keycloak`（§11.2）|
+| **run 的金鑰是明文落庫** | `runs.secrets` 存的是使用者在對話框輸入的 LLM / Langfuse 金鑰。§4.7 的「不外流到 response」是結構性保證，但**資料庫裡是明文**。部署形態該把金鑰改成由部署層提供、對話框只留端點與模型 |
+| **DB 沒有備份策略** | 只有一個 docker volume。而這個系統的價值主張建立在 §4.6「run 是不可重寫的歷史紀錄」上——**歷史沒有備份，那個主張就不成立** |
+| **沒有 structured logging / audit log** | 一個會打五個外部服務、每次呼叫數十秒的 orchestrator，出事時只有 uvicorn 的 access log。有真實身分之後，「誰刪了哪個 eval set」也變得可記錄而且該記錄 |
+| **`/health` 不檢查 DB** | 只回 `{"status":"ok"}`。當 liveness 夠，當 readiness 不夠 |
+| **`HR_API_VERIFY_SSL` 預設是關的** | 當初關掉是因為容器沒有內部 CA。`SSL_CERT_FILE`（§12）就位之後這個可以也應該改回 `true`——那是唯一還在跳過憑證驗證的地方 |
+| **committed 的開發用 DB 密碼** | `docker-compose.yml` 仍帶著 `POSTGRES_PASSWORD` 的開發預設值。部署形態已經要求必填、拒絕沿用，但 repo 裡那個字串還在 |
 | **shortlist 只在單一瀏覽器** | 它存在 localStorage（§7.6）。換一台機器或換一個瀏覽器就看不到自己的 shortlist。要跨裝置就得落庫，而那要一張表與一次 migration |
 | **升上來的題目沒有血緣紀錄** | 新 set 不會記載「這幾題來自哪個 set / 哪個 attempt」。`questions` 沒有 metadata 欄位，寫進 eval set 的 metadata 又會污染使用者自己的篩選鍵 |
 | **Playground 不落庫的連帶限制** | backend 重啟清空 attempt；多 worker 部署會壞（與 SSE hub 同一個限制）|
@@ -1613,29 +1686,148 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 ## 17. 對 agent server 端的相依需求
 
 **這些都在本 repo 之外，需要 agent server 團隊配合。**
+本節是**自包含的契約**——agent server 的實作者只要讀這一節就能動手，不需要知道這個平台的存在。
 
-**完整契約寫在 [`docs/agent_server_stage4_endpoints.md`](agent_server_stage4_endpoints.md)**——
-那份是寫給 agent server 實作者看的：每個端點的 input / output / 處理步驟 / curl 驗收清單，
-不預設讀者知道這個平台的存在。以下只列需求與狀態。
+> 這份契約原本是獨立的 `docs/agent_server_stage4_endpoints.md`。那份文件已刪除、內容收進這裡，
+> 因為兩份文件描述同一組端點時，遲早會有一份先過期，而讀者無從得知是哪一份。
+> 程式碼註解裡引用 `agent_server_stage4_endpoints.md §5.2 / §5.3` 的地方，指的是下面的 **§17.4**。
+
+### 17.0 需求總表
 
 | # | 需求 | 為什麼必要 | 狀態 |
 |---|---|---|---|
 | 1 | `POST /execute` 讀 `metadata.trace_data.trace_id`，**用它當 Langfuse trace id** | 沒有這一步，平台無從找回自己剛觸發的 trace，**整個錯誤定位功能失效** | ✅ 已實作 |
-| 2 | `GET /get_workspace` → `{"version", "config", "redacted_paths", "skills"}`：`config.json` 移除機密後的內容 + 每個 skill 檔（`{相對路徑: 文字}`）+ 版本字串 | 讓 Playground 從**真實的** config 與 skill 檔開始編輯，而不是從空白 textarea | ✅ 已實作 |
-| 3 | `GET /get_config_version` → `{"version"}`，與上面同一個字串 | 送出前的過期檢查（§4.10a）。單獨一個端點是因為它被問得頻繁得多 | ✅ 已實作 |
+| 2 | `GET /get_workspace` → `{version, config, redacted_paths, skills}` | 讓 Playground 從**真實的** config 與 skill 檔開始編輯，而不是從空白 textarea | ✅ 已實作 |
+| 3 | `GET /get_config_version` → `{version}`，與上面同一個字串 | 送出前的過期檢查（§4.10a）。單獨一個端點是因為它被問得頻繁得多 | ✅ 已實作 |
 | 4 | `POST /execute` 讀 `metadata.workspace = {config?, skills?}`，**只影響這一次呼叫、不落磁碟、不影響其他 request** | Playground 的迭代沙盒（Stage 4）與 Stage 3 的重跑實驗都靠它 | ✅ 已實作 |
 | 5 | skill 更新 API + 版本控制 / rollback | Stage 3 的「存回 agent server」 | 🔴 Stage 3，未規劃 |
 
-**第 2–4 項都是加法**，不改動既有 `/execute` 契約：沒有 override 時 request body 與現在**完全相同**
-（連 `workspace` 這個 key 都不會出現）。
+**第 2–4 項都是加法**，不改動既有 `/execute` 契約：**沒有 override 時 request body 與加這個功能之前
+完全相同**（連 `workspace` 這個 key 都不會出現）。這是相容性要求，不是巧合。
 
-**兩條規則撐著整個設計，也是最容易被「順手優化」掉的**（詳見那份契約的 §5.2 / §5.3）：
+### 17.1 前提：workspace 的形狀與兩個名詞
 
-1. **傳入的 `config` 是 deep merge 到 agent 自己的 `config.json` 上，不是整份取代。**
-   平台拿到的快照已經把機密刪掉了，整份取代會讓 agent 沒有 API key——而那是一個很晚才會發現的失敗。
-2. **傳入的 `skills` 是整份取代。** 沒有取代就表達不出「把某個 reference 檔刪掉試試看」。
+```
+<AGENT_ROOT>/
+  config.json                  ← 巢狀 JSON，含機密（LLM API key 等）
+  workspace/skills/
+    skill_A/SKILL.md
+    skill_A/references/ref_1.md
+    skill_B/SKILL.md
+```
 
-> 這兩者刻意不對稱。實作者若把它們「統一」，其中一個就會壞掉。
+| 名詞 | 意思 |
+|---|---|
+| **skill 相對路徑** | 相對於 `workspace/skills/`，例如 `skill_A/references/ref_1.md`。**一律用 `/` 分隔** |
+| **config 路徑** | 用 `.` 串起來的 key 路徑，例如 `agents.defaults.api_key` |
+
+### 17.2 三條共用規則
+
+**各寫成一個共用函式**，不要在每個端點各寫一份——兩份實作遲早不一致。
+
+**① 機密遮罩 `redact(config) -> (safe_config, redacted_paths)`**
+遞迴走訪每一層，key 名稱轉小寫後**包含**下列任一字串的葉節點就**刪掉**並記下它的 config 路徑：
+`api_key` · `apikey` · `secret` · `token` · `password` · `passwd` · `credential` · `private_key`
+
+> **為什麼回 `redacted_paths` 而不是安靜地刪掉**：呼叫端會把 config 畫成編輯表單。
+> 一個憑空消失的欄位會誘使人自己補一個同名 key，把真的金鑰蓋掉。
+
+**② 版本字串 `workspace_version() -> str`**
+1. `git rev-parse --short HEAD` → 例如 `a1b2c3d`
+2. `git status --porcelain` 是空的 → 就用 `a1b2c3d`，結束
+3. 非空 → 算 sha256：先餵 `config.json` 原始位元組，再把所有 skill 檔**依相對路徑排序**逐一餵入
+   「相對路徑 utf-8 位元組 + `\0` + 檔案原始位元組」，取十六進位前 7 碼
+4. 版本 = `a1b2c3d-dirty.9f3e11c`。**不是 git repo** 時跳過 1–2，用 `nogit.<前7碼>`，**不要讓端點失敗**
+
+> **為什麼不能只用 commit hash**：直接手改 `SKILL.md` 存檔測試是最常見的操作，
+> 那時 commit hash 不會變，呼叫端的過期檢查就永遠失效。
+
+**③ 錯誤回應**：失敗一律回非 2xx，**body 一定要寫得出原因**——呼叫端會把這段文字原樣顯示給使用者。
+
+```json
+{ "detail": "could not read workspace: [Errno 13] Permission denied: '/app/workspace/skills'" }
+```
+
+> ⚠️ 讀不到 skill 時**絕對不可以**回 `200` 加一個空的 `skills: {}`。那會讓「這台 agent 沒有 skill」
+> 和「你的路徑設錯了」長得一模一樣，而前者是合法狀態（§7.4）。
+
+### 17.3 端點契約
+
+**`GET /get_workspace`** — 無 input，回：
+
+```json
+{
+  "version": "a1b2c3d",
+  "config": { "agents": { "defaults": { "model": "gpt-4o", "temperature": 0.2 } }, "retries": 3 },
+  "redacted_paths": ["agents.defaults.api_key"],
+  "skills": { "skill_A/SKILL.md": "# Skill A\n…", "skill_A/references/ref_1.md": "…" }
+}
+```
+
+- `config` **保留原本的巢狀結構**（不要攤平），機密已移除
+- `skills` 是**扁平**的 `{相對路徑: 完整內容}`：走訪**所有層級**（不要只讀 `SKILL.md`）、
+  **不要截斷**（使用者要在全文上編輯）、decode 失敗的二進位檔跳過但不讓整個請求失敗
+- 沒有 skill 就回 `{}`（合法）；`config.json` 或 `skills/` 讀不到 → `500` + 原因
+
+**`GET /get_config_version`** — 無 input，回 `{"version": "a1b2c3d"}`，與上面**同一個字串**。
+
+**`POST /execute`** — 既有端點，多讀一個選填的 `metadata.workspace`：
+
+```json
+{ "message": "<題目>", "metadata": { "trace_data": {...}, "workspace": { "config": {...}, "skills": {...} } } }
+```
+
+回應不變：`{"content": "<agent 的回答>"}`。
+
+**路徑安全檢查**：`skills` 的 key 會被當成檔案路徑寫到磁碟，含 `..` / 以 `/` 開頭 / 含 `\` /
+含 NUL / 空字串 → 一律 `400`。通過後再確認「暫存目錄 + 相對路徑」解析出的絕對路徑
+**仍在暫存目錄底下**，不是的話一樣 `400`。
+
+### 17.4 ⚠️ 兩條刻意不對稱的規則
+
+**這是整份契約最容易做錯的地方，也是最容易被「順手優化」掉的。**
+
+**① 傳入的 `config` 是 deep merge，不是取代**
+
+```python
+config = payload["metadata"]["workspace"]["config"]   # ❌ 錯！agent 會沒有 API key
+config = deep_merge(load_config_json(), incoming)     # ✅ 對
+```
+
+> `GET /get_workspace` 已經把金鑰刪掉了，所以呼叫端手上那份 config **本來就沒有金鑰**。
+> 整份取代會讓 agent 初始化時沒有金鑰可用——**而那是一個很晚才會發現的失敗**。
+
+合併規則：傳入 dict 且原本也是 dict → 遞迴往下；傳入純量 → 取代原值；傳入 list → **整份取代**，不逐項合併。
+
+**② 傳入的 `skills` 是整份取代**
+
+map 裡有的檔案用傳入的內容；map 裡**沒有**的檔案這次呼叫**看不到**（即使磁碟上有）；
+`skills: {}` 代表這次一個 skill 都沒有（合法的測試情境）；**`skills` 這個 key 不存在**才是照常用磁碟上的。
+
+> **為什麼 config 是 merge、skills 是 replace？** config 因為機密被拿掉了，非 merge 不可；
+> skills 沒有機密，而且**只有整份取代才表達得出「把某個 reference 檔刪掉試試看」**。
+> 實作者若把它們「統一」，其中一個就會壞掉。
+
+### 17.5 驗收清單
+
+```bash
+# ① 不帶 workspace —— 回歸測試，行為必須與加這個功能之前完全相同
+curl -s $AGENT/execute -H 'Content-Type: application/json' \
+  -d '{"message":"hi","metadata":{"trace_data":{"trace_id":"t1"}}}'
+
+# ② 兩個端點回的版本要一樣
+test "$(curl -s $AGENT/get_workspace | jq -r .version)" \
+   = "$(curl -s $AGENT/get_config_version | jq -r .version)"
+
+# ③ 手改一個 skill 檔（不 commit），版本必須改變
+# ④ 帶 config override —— 關鍵是 agent 仍然叫得動 LLM（這一項在驗 merge 而不是取代）
+# ⑤ 路徑攻擊必須被擋下
+curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: application/json' \
+  -d '{"message":"x","metadata":{"workspace":{"skills":{"../../etc/passwd":"x"}}}}'   # 期望 400
+```
+
+⚠️ 第 ④ 項是這份清單裡最重要的一項：它是唯一能證明 §17.4 的 config 規則沒被做成「取代」的檢查，
+而做錯的症狀（agent 沒有金鑰）在生產環境要很久才會被歸因到這裡。
 
 ---
 
@@ -1660,6 +1852,19 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
    真模型會不會貼整段 SQL、會不會寫成十五步，只有真資料知道。
 6. **補 §15.2 的小缺口**時，優先考慮 **verdict 寫回 Langfuse Score**——
    那讓兩個系統的真相一致，成本也不高。
+
+**部署那一側另外有一條線，可以與上面並行**（身分那一層已經在真環境驗過，見 §14.2）：
+
+7. **跑一次 `./scripts/prod.sh`**，這是唯一還完全沒在真環境跑過的一塊（§14.3）。
+   最該先確認的是 **SSE 沒有被 nginx 緩衝**——`curl -N`，事件必須一條一條冒出來。
+   這個失敗是安靜的：不會報錯，只會讓全 app 的進度條看起來像凍住。
+8. **把 §15.2 那幾個維運缺口收掉**，建議順序是
+   **DB 備份** → **金鑰改由部署層提供**（`runs.secrets` 目前明文）→ structured logging → audit log。
+   第一項最急：這個系統的價值主張建立在「run 是不可重寫的歷史」上。
+
+> ⚠️ **兩件事要分清楚。** 上面 7–8 做完，你會得到一個**部署得起來的** production 系統；
+> 1–5 做完，才會知道它**是不是有用的**。§14.3 那張表裡 agent server、LLM 端點、
+> workspace 三項仍然只用 mock 驗過，而**診斷品質完全未知**——後者才是這個專案的核心賭注。
 
 **如果你要修改程式碼，先讀這四段**：§4（設計決策的理由）、§6.2（失敗策略）、
 §10.2（三個前端機制）、§14.3（哪些沒被證明）。

@@ -98,7 +98,7 @@ class WorkspaceOverride:
     different setting without writing anything back to the agent server.
 
     The two halves are sent — and applied — differently, and the asymmetry is
-    deliberate (see docs/agent_server_stage4_endpoints.md §5.2/§5.3):
+    deliberate (see docs/spec.md §17.4):
 
       * `config` is a **sparse** overlay, deep-merged onto the agent's own
         config.json. It has to be: the snapshot arrived with its secrets
