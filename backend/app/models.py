@@ -40,6 +40,24 @@ class EvalSet(Base):
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # How this set's answers are graded (owner-only; see services/judge_prompt).
+    # NULL means "the code's default", deliberately rather than a copy of it: a
+    # set that never overrode the prompt should inherit later improvements to it.
+    judge_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_user_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set by the verify button, cleared the moment either prompt changes — a
+    # stale "verified" badge is worse than none.
+    judge_prompt_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    judge_prompt_verified_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When an owner last opened the judging settings. Drives the "look at this"
+    # badge on a newly created set: the badge means "nobody has confirmed the
+    # grading criteria", not "your prompt is the default one" — the latter is
+    # true of almost every set and would be ignored within a week.
+    judge_prompt_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
 
@@ -154,6 +172,13 @@ class QuestionResult(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)  # pending|done|failed|cancelled
     # Why status='failed' (agent error, judge error, timeout, ...).
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Which step failed, as a machine-readable kind: 'agent' | 'judge' |
+    # 'judge_invalid'. The message alone already said this, but only in prose —
+    # and one of these is not like the others: 'judge_invalid' means the judge
+    # replied and we could not parse it, which usually indicts the eval set's
+    # judge prompt rather than the agent. Lumping it in with a timeout hides the
+    # one failure the owner can actually fix.
+    failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trace_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     # Why the trace could not be fetched (Langfuse unreachable / 401 / timeout).

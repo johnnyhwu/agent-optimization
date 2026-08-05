@@ -537,6 +537,10 @@ trace 檢視有**五種狀態**（見 §6.4）；錯誤訊息帶 host + HTTP 狀
 | `source_format` | text | `'csv' \| 'jsonl'`——**開發者實際上傳的檔案格式**。因為 CSV 在前端就被轉成 JSONL，後端 payload 恆為 JSONL，此欄是唯一保留原始格式的地方 |
 | `metadata` | jsonb | 開發者自訂的 metadata key-value。**單一 JSONB 欄位**，未建 keys 表——key 量不大，「既有 key 自動帶出」以掃描 JSONB 支援。ORM 屬性叫 `meta`（`metadata` 在 declarative Base 上是保留字）|
 | `version` | int | 樂觀鎖 |
+| `judge_system_prompt` | text null | 本 set 的 judge system prompt。**NULL = 用程式碼的預設**（§8.1a），不是預設值的副本 |
+| `judge_user_prompt` | text null | 同上，user 那半（template，含三個佔位符）|
+| `judge_prompt_verified_at` / `_verified_model` | timestamptz null / text null | Verify 通過的時間與所用模型。**任一半 prompt 一改就清空** |
+| `judge_prompt_reviewed_at` | timestamptz null | owner 最後一次看過判準的時間。NULL 時卡片與第二層的齒輪上亮提示點。刻意**不是**「跟預設不同才亮」——幾乎每個 set 都用預設，那樣的提示一週內就會被當成裝飾 |
 | `created_at` / `updated_at` | timestamptz | |
 
 **2. `questions`**（stable question_id 的家）
@@ -589,6 +593,7 @@ trace 檢視有**五種狀態**（見 §6.4）；錯誤訊息帶 host + HTTP 狀
 | `judge_score` / `judge_comment` | numeric / text null | |
 | `status` | text | `pending \| done \| failed \| cancelled`（容許 run 部分完成）|
 | `error_message` | text null | 該題失敗/中止的**原因** |
+| `failure_kind` | text null | 哪一步失敗：`agent \| judge \| judge_invalid`。分出 `judge_invalid`（judge 回覆 parse 不出來）是因為它指的地方不一樣——其他失敗是 agent 或網路，這一個幾乎都是本 set 的 judge prompt（§8.1a）。舊資料為 NULL，照樣畫成 `failed`：那些 run 是真的不知道，硬猜會讓新的「未判分」統計對歷史說謊 |
 | `agent_latency_ms` | int null | agent round-trip 實測耗時 |
 | `trace_ready` | bool | trace 是否已確認可查 |
 | `trace_error` | text null | trace 抓不到的原因（§4.11）|
@@ -623,7 +628,7 @@ trace 檢視有**五種狀態**（見 §6.4）；錯誤訊息帶 host + HTTP 狀
 **未建的表**：`skills`、`skill_versions`、`skillopt_runs`（Stage 3）；
 `eval_set_metadata_keys`（改用單一 JSONB）；`playground_*`（刻意不落庫，§7）。
 
-### 5.2 五個 Alembic migration
+### 5.2 六個 Alembic migration
 
 | Revision | 內容 |
 |---|---|
@@ -631,7 +636,8 @@ trace 檢視有**五種狀態**（見 §6.4）；錯誤訊息帶 host + HTTP 狀
 | `0002_real_integration` | `question_results.agent_response` / `error_message` / `agent_latency_ms`、`runs.error_message`。假資料時代不需要，接真實服務後「看得到 eval 結果」少不了它們 |
 | `0003_run_config` | `runs.name` / `runs.config` / `runs.secrets`——逐 run 設定（§4.7）|
 | `0004_run_lifecycle` | `runs.cancel_requested`、`question_results.trace_error` / `diagnosis_error` |
-| `0005_list_indexes` | 三個索引（見下）。**head 是這一個** |
+| `0005_list_indexes` | 三個索引（見下）|
+| `0006_judge_prompt` | `eval_sets` 的五個 judge-prompt 欄位、`question_results.failure_kind`（§8.1a）。兩者都**可為 NULL 且不回填**：prompt 回填等於凍結今天的措辭，`failure_kind` 回填等於替不知道的歷史編一個答案。**head 是這一個** |
 
 **慣例**：檔名 `NNNN_snake_name.py`，`revision` 字串**等於檔名 stem**（不是 hash）；
 `down_revision` 指向前一個 stem；**autogenerate 不使用**（`target_metadata = None`），
@@ -789,7 +795,7 @@ trace 物件 / 診斷 / 三個錯誤欄位。
 | `run_completed` | run 結束 | 含 `status`，可能是 `cancelled` / `failed` |
 | `ping` | 15 秒無事件 | 保持連線 |
 
-五個 `question_*` 事件的 payload 相同：`question_pk / phase / verdict / status / error_message /
+五個 `question_*` 事件的 payload 相同：`question_pk / phase / verdict / status / error_message / failure_kind /
 trace_ready / has_analysis / trace_error / diagnosis_error / done / total / correct`。
 
 - 前三個欄位是左欄「灰 → 白 → 綠/紅」的來源。`phase` 由後端**同一個函式**推導
@@ -942,6 +948,67 @@ eval set 建立後就鎖定（§4.6），所以「舊題目加上這幾題新的
   漏掉、寫錯、矛盾的事實才算錯。
 - **`JUDGE_SCORE_THRESHOLD`**（選填）：設 0–1 數字則改由分數推導 verdict。
   > 這樣調 pass/fail 門檻不用改 prompt。
+  > 它是**部署層**的設定，卻會覆寫模型自己給的 verdict——所以判準編輯畫面上會把
+  > 目前生效的門檻顯示出來：改寫了 `score` 的語意、門檻卻還停在部署層，是會安靜出錯的組合。
+
+### 8.1a Judge prompt 可由 eval set 的 owner 改寫
+
+上面那份 prompt 是**預設值，不是固定值**。每個 eval set 可以有自己的 judge prompt，
+system 與 user 兩半都可改；改的權限是 **owner only**（§11.1 有完整的理由）。
+
+**兩個方向，都是刻意的：**
+
+| 存在哪 | 空值的意思 | 為什麼 |
+|---|---|---|
+| `eval_sets.judge_system_prompt` / `judge_user_prompt` | **NULL = 用程式碼裡的預設** | eval set 是**活的設定**。之後改良了預設 prompt，沒有客製過的 set 應該自動受益；建立時把當下的字複製進去，等於把這週的措辭凍進每一個 set |
+| `runs.config.judge_system_prompt` / `judge_user_prompt` | 觸發時**寫入全文** | run 是**歷史紀錄**。一份已完成的 run，它的 verdict 只有對著當時的判準才有意義，所以存文字而不是指標 |
+
+> 這兩條看起來矛盾，而且兩條都對。`run_config.resolve` 裡留了註解說明，
+> 免得下一個人「順手統一」掉其中一個。
+
+**User prompt 是 template。** 必須含 `{question}`、`{ground_truth}`、`{agent_response}`
+三個佔位符。**代換用字串取代，不用 `str.format`**——judge prompt 裡到處都是 JSON 大括號
+（`{"verdict": ...}` 正是每份這種 prompt 都會要求的形狀），`format` 會直接炸掉或把它吃掉。
+
+> 缺 `{ground_truth}` 是這個功能最貴的失敗模式：**它不會報錯**，只會拿沒有標準答案的
+> 提示去判每一題，然後回一個看起來完全正常的 pass rate。所以檢查是**逐鍵即時**做的，
+> 不藏在按鈕後面。
+
+**Verify prompt**：拿使用者挑的那一題判**兩次**——用該題自己的期望答案（應判 `correct`）、
+再用一個刻意矛盾的答案（應判 `incorrect`）。
+
+> 只判一次只能證明「回覆 parse 得動」，證明不了 prompt 還分得出對錯；
+> 而一個「什麼都判 correct」的 prompt parse 得完美無缺，
+> 要等一整個 run 回來 100% 才會有人發現。
+>
+> 負向那筆刻意是**具體且與期望答案相反**的敘述，不是「我不知道」之類的空話：
+> 一個只擋得掉明顯空答案的 judge，仍然可能對所有「看起來像答案」的東西照單全收。
+
+Verify **不強制**（`JUDGE_IMPL=fake` 時根本無從驗起，會回 409），
+驗證結果記在 `judge_prompt_verified_at` / `_model`，**任一半 prompt 一被編輯就作廢**——
+描述著已經不存在的文字的徽章，比沒有徽章更糟。
+驗的是「送來的」prompt（這樣才能在存檔前先驗），但只有在**送來的文字等於已存的文字**時
+才會蓋上徽章：徽章描述的必須是 run 真的會用的東西。
+
+**指紋**：`judge_prompt_fingerprint` 是 system + user 的短雜湊，隨 run 一起存。
+同指紋的 run 是同一套判準判出來的，pass rate 可比；不同就不可比，run 列表上會標色。
+
+> 這是「版本功能」真正想給的那一半，而**不需要版本表**。過去用過的每一份 prompt
+> 本來就躺在各個 `runs.config` 裡，點開 run config 就看得到；
+> 沒有的是「版本列表 + 一鍵還原」。
+
+**新的失敗種類 `judge_invalid`**：judge 回了東西但 parse 不出來。
+它在 DB 裡仍然是 `status='failed'`、沒有 verdict、不算 pass、**仍留在 pass rate 的分母**
+（未判分的題目是未知，偷偷縮小分母會讓「judge 壞掉的 run」看起來比「judge 正常的 run」健康）；
+但它在 UI 與 `RunOut.judge_invalid_count` 上被分出來，因為它指向的地方不一樣——
+其他失敗是 agent 或網路的問題，這一個幾乎都是這個 eval set 自己的 judge prompt，
+而那是 owner 唯一能去修的東西。`llm_max_retries` 不會放大它：
+`LlmOutputError` 不在 `RETRYABLE` 裡，同一份壞 prompt 每題只燒一次（外加 `complete_json`
+自己那一次修復重試）。
+
+**Playground 是例外**：一個 attempt 不屬於任何 eval set，沒有共用的 pass rate 要維持，
+所以那裡的 judge prompt 完全自由編輯。從 run 帶過來的題目會連同那個 run 凍結的 prompt
+一起帶過來（composer 上會寫明它從哪來），從首頁直接進 playground 則是系統預設。
 
 ### 8.2 Diagnosis（程式碼註解稱為「§6.9 契約」）
 
@@ -1044,13 +1111,15 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /eval-sets` | — | 我有權限的卡片。分頁 + 篩選：`?limit&offset&q&metadata_key&metadata_value&sort`，回 `{items,total,has_more}` |
 | `GET /eval-sets/metadata/keys` | — | 掃 JSONB 得既有 metadata key |
 | `GET /eval-sets/{id}` | R | 單一卡片 |
-| `PATCH /eval-sets/{id}` | O | 改 name / description / metadata（樂觀鎖 → 409）|
+| `PATCH /eval-sets/{id}` | O | 改 name / description / metadata / **judge prompt**（樂觀鎖 → 409）|
+| `POST /eval-sets/{id}/judge-prompt/verify` | O | 拿本 set 的某一題，用**送來的**（未必已存檔的）prompt 判兩次：期望答案本身應判 `correct`、刻意矛盾的答案應判 `incorrect`。`JUDGE_IMPL=fake` → 409 |
+| `POST /eval-sets/{id}/judge-prompt/reviewed` | O | 記錄「owner 已看過本 set 的判準」，消掉新 set 上的提示點。不帶版本——它記的是一個動作而非一次編輯 |
 | `DELETE /eval-sets/{id}` | O | 刪整個 set（含所有 run / 結果 / 診斷）；底下有 running run → 409（先中止）|
 | `PUT /eval-sets/{id}/roles` | O | **整批覆寫**分享名單（操作者本人永遠保留 owner）|
 | `GET /eval-sets/{id}/questions` | R | 題目清單 |
 | `PATCH /eval-sets/{id}/questions/{qpk}` | O | 改題（樂觀鎖 → 409；`question_id` 不變）|
 | `POST /eval-sets/{id}/runs` | R | 觸發 run；body 帶 `name` / `config` / `secrets` / `reuse_secrets_from_run_id`，全部可省略 |
-| `GET /eval-sets/{id}/runs` | R | run 列表（含 `incorrect_count` / `config` / `credentials_set` / `cancel_requested`）；分頁 `?limit&offset&q` |
+| `GET /eval-sets/{id}/runs` | R | run 列表（含 `incorrect_count` / `judge_invalid_count` / `config` / `credentials_set` / `cancel_requested`）；分頁 `?limit&offset&q` |
 | `GET /eval-sets/{id}/runs/{run_id}` | R | 單一 run |
 | `POST /eval-sets/{id}/runs/{run_id}/cancel` | R\* | \*owner **或該 run 的觸發者**；非 running → 409 |
 | `DELETE /eval-sets/{id}/runs/{run_id}` | O | running → 409（先中止）|
@@ -1333,8 +1402,20 @@ Playground 則乾脆放棄視窗推導、固定 `62vh`，因為它的編輯區�
 
 | 角色 | 可以 | 不可以 |
 |---|---|---|
-| **owner** | 全部 write（改題、改 metadata、改分享名單、刪 run / set、觸發 re-diagnose）+ 全部 read + 執行 eval | |
-| **viewer** | 全部 read（含三欄錯誤診斷詳情）+ **執行 eval** + 中止自己觸發的 run | 改任何內容、刪 run / set、**觸發 re-diagnose**（避免 LLM 成本）|
+| **owner** | 全部 write（改題、改 metadata、改分享名單、**改 judge prompt**、刪 run / set、觸發 re-diagnose）+ 全部 read + 執行 eval | |
+| **viewer** | 全部 read（含三欄錯誤診斷詳情、**讀得到本 set 的 judge prompt**）+ **執行 eval** + 中止自己觸發的 run | 改任何內容、**改 judge prompt**、刪 run / set、**觸發 re-diagnose**（避免 LLM 成本）|
+
+> **「run config 上哪些是 viewer 可以改的？」答案是「全部」**，而這正是 judge prompt
+> 被放在 eval set 而不是 run config 的理由。run config 上的每一欄回答的是「連到哪裡、
+> 跑多快」——那是呼叫者自己的事；judge prompt 回答的是「什麼算對」，那是這個題庫的事。
+> 若人人可帶自己的判準，同一個 set 兩次 run 的 pass rate 就不可比，而整個第二層
+> （趨勢、regression、多 run 比較）都建立在可比之上。放在 eval set 也讓它直接沿用
+> 既有的 `require_owner`，**不必發明欄位級權限**——那會打破「授權檢查集中在兩個依賴裡」
+> 這條規則，而且欄位級的比對（空字串？只差空白？前端沒送？）正是容易寫出漏洞的地方。
+>
+> 執行面上，`POST /runs` **維持 R**（§6.16 允許 viewer 觸發 run），
+> 但 `run_config.resolve` 對這三個欄位是**無條件覆寫**而不是回 403：呼叫者沒有東西
+> 要更正，也沒有什麼需要解釋。
 
 - 一個 eval set 可指派多個 owner。
 - 授權檢查做成**統一的 FastAPI 依賴**（`require_owner` / `require_reader`），不散在各 endpoint。
@@ -1377,7 +1458,16 @@ Keycloak 只有在設了 audience mapper 時才把 client id 寫進 `aud`，否�
 - 上傳時可直接**輸入人名**指定分享對象（subject + role）。
   輸入會先經 `GET /users/lookup` 對員工目錄查核：**查無此人擋下**；
   **目錄本身連不上則警告但放行**——那邊的故障不該讓這邊所有人都不能分享。
-- 每張卡片有 **config 齒輪**（僅 owner 見）：一個對話框可改 name / description / metadata **與分享名單**。
+- 每張卡片有 **config 齒輪**（僅 owner 見）：一個**分頁**對話框——General（name / description / metadata）、
+  Sharing（分享名單）、Judging（judge prompt、門檻顯示、Verify）。
+  > 分頁而不是一路往下捲：judge prompt 是兩個大 textarea，疊在 metadata 列下面會把分享名單
+  > 推出筆電螢幕，而「捲到找到為止」正是設定從此不再被找到的方式。
+  > 齒輪上會在 `judge_prompt_reviewed_at` 為 NULL 時亮一個提示點——意思是
+  > 「還沒有人確認過這個 set 怎麼判分」，不是「你的 prompt 是預設值」。
+- **第二層（run 列表）也有一顆 Set config**（僅 owner 見），開的是同一個對話框、預設停在 Judging。
+  > 想調判準的人正站在結果前面；把他趕回首頁去找卡片是純粹的路徑問題。
+  > 但這只解決「方便」——「哪個 run 用的是哪套判準」是另一回事，由每一列上的
+  > **judge 指紋 chip** 回答（§8.1a）。
 - 每張卡片有 **下載鈕（所有角色都見得到**，run 歷史頁也有一顆）：viewer 本來就讀得到匯出檔裡的每一列，
   擋下載保護不到任何東西，卻正好擋掉最需要它的那群人。對話框的設計見 §9 匯出那段。
 - `PUT /eval-sets/{id}/roles` **整批覆寫**分享名單；**操作者本人永遠保留 owner**
@@ -1557,10 +1647,11 @@ LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_st
 |---|---|---|
 | `test_agent_client.py` | 17 | request body 的 `message` + `metadata.trace_data`；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.workspace` 出現、沒有時整個 key 不存在**；只改一半時另一半整個省略（`config` 缺席 ≠ `config: null`）；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」）|
 | `test_langfuse_client.py` | 27 | 空頁 → NotReady；時間排序與重新編號（**含混用有／無小數秒的 ISO 時間**——字串比較會把 `…:00.500Z` 排在 `…:00Z` 前面；時間讀不懂的 span 仍然保留；同時間以 id 打破平手，使重讀不會重排）；observation 型別過濾；分頁；Basic auth；`usageDetails` 與舊版 `usage` 兩種 token 欄位；ERROR level 映射；401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼；**兩條讀取策略**（兩者映出的 span 完全相同、404 → NotReady、auto 命中第一條時不會多打第二條、第一條壞掉會 fallback、**全失敗時兩條的原因都在訊息裡**）|
-| `test_judge_and_diagnosis.py` | 18 | verdict 正規化與非法值；門檻覆寫兩個方向；**§4.4 截斷保留所有 span**；越界 `span_index` 剔除；§8.2 四段 prompt 的順序；JSON 修復重試（成功與放棄各一）|
-| `test_orchestrator.py` | 19 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位；**送去診斷的是 settle 過的 trace**（§6.1a——落庫的診斷沒有第二次機會）|
+| `test_judge_and_diagnosis.py` | 24 | verdict 正規化與非法值；門檻覆寫兩個方向；**§4.4 截斷保留所有 span**；越界 `span_index` 剔除；§8.2 四段 prompt 的順序；JSON 修復重試（成功與放棄各一）；**§8.1a 的純函式**——空值回落到內建預設、指紋只跟文字走、佔位符缺漏逐一點名、`{"verdict"...}` 這種 JSON 大括號不會被 `str.format` 吃掉、eval set 的 prompt 真的傳進 judge client |
+| `test_orchestrator.py` | 21 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**、且 `failure_kind` 分得出是哪一步；**judge 回覆 parse 不出來時記成 `judge_invalid`**——不算 pass、仍留在分母、舊資料（NULL）照樣畫成 `failed`；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位；**送去診斷的是 settle 過的 trace**（§6.1a——落庫的診斷沒有第二次機會）|
 | `test_playground.py` | 50 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；workspace override 傳到 agent；**編輯過的檔案是對著送出當下的快照算的**（沒有基準的話每個檔案都會被算成改過）；空 override 不送出；baseline 跟 agent server 要而不是信瀏覽器；agent 連不上時只損失摘要不損失 attempt；**override 的文字出現在假 trace 第一個 span 的 system message**、沒有 override 的 attempt 則乾淨；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷；**最後一個 span 還在 ingest 時會等它**（§6.1a），診斷拿到的也是那份完整的，而 trace 本來就完整時只多一次確認讀取 |
-| `test_run_config.py` | 19 | `build_seams` 空設定等同純環境變數行為；`*_IMPL` 仍是主開關；逐 run 值覆寫 env；空白欄位退回 env；judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白寫死；金鑰沿用的端點配對規則；**金鑰不外流的值層級斷言**（序列化一個帶哨兵金鑰的 model，斷言哨兵不出現在 payload 任何位置——比檢查欄位名可靠）|
+| `test_judge_prompt.py` | 14（**全部需 DB**）| **viewer 送的 judge prompt 被丟掉而 run 記下 owner 的**（這個功能的整個權限故事）；`require_owner` 擋改、`require_reader` 仍放行讀與觸發；set 改了之後 run 仍記著當時的全文與指紋；存回預設文字不會把預設釘死；編輯清掉 verified 徽章；Verify 兩個方向都對才算過、**「什麼都判 correct」的 prompt 驗不過**、驗未存檔的編輯不蓋徽章、**缺 `{ground_truth}` 時兩筆都如預期也仍算失敗**；`JUDGE_IMPL=fake` → 409；別的 set 的題目 → 404；manifest 帶著判準 |
+| `test_run_config.py` | 22 | `build_seams` 空設定等同純環境變數行為；**三個 judge-prompt 欄位是 eval set 的，`resolve` 一律丟掉 body 送來的值**（有沒有帶 eval set 的 prompt 都一樣）；`defaults()` 刻意不含它們（它們沒有 env 來源），但 `resolve()` 仍然吐出每一個欄位；`*_IMPL` 仍是主開關；逐 run 值覆寫 env；空白欄位退回 env；judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白寫死；金鑰沿用的端點配對規則；**金鑰不外流的值層級斷言**（序列化一個帶哨兵金鑰的 model，斷言哨兵不出現在 payload 任何位置——比檢查欄位名可靠）|
 | `test_workspace_client.py` | 13 | 整份 workspace 讀取；**config 保持巢狀不被攤平**；空 workspace 合法 vs 形狀不對則失敗；沒有 version 仍可用（只是失去過期檢查）；skills 不是 `{路徑: 文字}` 時報錯並指名是哪一筆；4xx/5xx 帶狀態碼與 body；非 JSON body 不猜；transport 錯誤帶 host；版本端點沒有 version 時報錯（**回空字串會被讀成「沒變」而讓檢查失效**）|
 | `test_shortlist.py` | 18（**12 個需 DB**）| synthesis：草稿來自 trace、**不寫回 attempt**、無 trace → 409、模型錯誤原文回傳、空草稿算失敗、別人的 attempt → 404。建立：只用 shortlist 建立；複製既有 set 的題目；**複製件拿到新的 question_id**；skill tag 一併複製；重複題目文字被跳過並計數；同文字時 shortlist 的版本勝出；**讀不到的 set 回 404 且什麼都沒建**；空的建立請求 → 422；建立者是 owner 且分享名單生效；**新 set 第一次被讀取就回報正確的 `my_role`**（owner / 被分享者 viewer / 兩條建立路徑都是——這正是前端 gate 權限用的欄位，§11.4）；沒有角色的人連讀都讀不到 |
 | `test_trace_settle.py` | 14 | §6.1a 的 settle：最後才到的 span 會被等到；沒有成長就立刻結束（穩態只多一次請求）；成長時有上限；長度相同時採用較新的一份；**比較短的重讀、NotReady、確認讀取失敗一律不採用**；中止立刻停；`TRACE_SETTLE_MAX_READS=0` 回到舊行為；delay 真的有等；與 poll 的組合（NotReady → 出現 → settle）；**只有 settle 失敗時 `trace_error` 保持 None**（有 trace 就不該亮紅色 banner）|

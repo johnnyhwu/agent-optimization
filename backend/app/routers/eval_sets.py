@@ -3,12 +3,14 @@ questions, delete."""
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_subject, normalize_subject, require_owner, require_reader
+from app.config import settings
 from app.db import get_session
 from app.models import (
     EvalSet,
@@ -25,10 +27,15 @@ from app.schemas import (
     EvalSetFromShortlistOut,
     EvalSetPage,
     EvalSetUpdate,
+    JudgePromptOut,
+    JudgePromptVerifyCase,
+    JudgePromptVerifyRequest,
+    JudgePromptVerifyResult,
     QuestionOut,
     RolesUpdate,
     ShareEntry,
 )
+from app.services import judge_prompt as judge_prompt_service
 from app.services.aggregation import RunVerdicts, regression_summary
 from app.services.deletion import delete_eval_set as delete_eval_set_rows
 from app.services.upload import generate_question_id, parse_jsonl
@@ -159,9 +166,37 @@ async def _build_cards(
                 regressed=reg["regressed"], improved=reg["improved"],
                 my_role=next((r.role for r in roles if r.subject == subject), None),
                 roles=roles,
+                judge_prompt=_judge_prompt_out(es),
             )
         )
     return cards
+
+
+def _judge_prompt_out(es: EvalSet) -> JudgePromptOut:
+    """This set's grading criteria, already resolved against the default.
+
+    The resolved text goes out even when the set never overrode it, because the
+    Judging tab has to render *something* into a textarea and an empty box
+    labelled "the default applies" would make people guess at wording they are
+    about to edit. `is_default` carries the distinction instead.
+    """
+    system, user = judge_prompt_service.effective(
+        es.judge_system_prompt, es.judge_user_prompt
+    )
+    return JudgePromptOut(
+        system_prompt=system,
+        user_prompt=user,
+        is_default=judge_prompt_service.is_default(
+            es.judge_system_prompt, es.judge_user_prompt
+        ),
+        fingerprint=judge_prompt_service.fingerprint(
+            es.judge_system_prompt, es.judge_user_prompt
+        ),
+        missing_placeholders=judge_prompt_service.missing_placeholders(user),
+        verified_at=es.judge_prompt_verified_at,
+        verified_model=es.judge_prompt_verified_model,
+        reviewed_at=es.judge_prompt_reviewed_at,
+    )
 
 
 async def _build_card(session: AsyncSession, es: EvalSet, subject: str) -> EvalSetCard:
@@ -441,7 +476,7 @@ async def update_eval_set(
     subject: str = Depends(require_owner),
     session: AsyncSession = Depends(get_session),
 ):
-    """Optimistic-locked edit of name/description/metadata (§6.16)."""
+    """Optimistic-locked edit of name/description/metadata/judge prompt (§6.16)."""
     # Use mapped-attribute keys (not string column names): the DB column is
     # "metadata", which collides with SQLAlchemy's reserved MetaData attr — the
     # ORM attribute for it is `EvalSet.meta`.
@@ -452,6 +487,40 @@ async def update_eval_set(
         values[EvalSet.description] = payload.description
     if payload.metadata is not None:
         values[EvalSet.meta] = payload.metadata
+
+    if payload.judge_system_prompt is not None or payload.judge_user_prompt is not None:
+        es = await session.get(EvalSet, eval_set_id)
+        if es is None:
+            raise HTTPException(status_code=404, detail="eval set not found")
+        before = judge_prompt_service.effective(
+            es.judge_system_prompt, es.judge_user_prompt
+        )
+        # Text identical to the default is stored as NULL, so a set the owner
+        # merely looked at keeps inheriting later improvements to the default
+        # instead of pinning today's wording forever.
+        after = judge_prompt_service.effective(
+            payload.judge_system_prompt
+            if payload.judge_system_prompt is not None
+            else es.judge_system_prompt,
+            payload.judge_user_prompt
+            if payload.judge_user_prompt is not None
+            else es.judge_user_prompt,
+        )
+        system, user = after
+        values[EvalSet.judge_system_prompt] = (
+            None if judge_prompt_service.is_default(system, user) else system
+        )
+        values[EvalSet.judge_user_prompt] = (
+            None if judge_prompt_service.is_default(system, user) else user
+        )
+        # Opening the Judging tab is the review; saving from it is the proof.
+        values[EvalSet.judge_prompt_reviewed_at] = func.now()
+        if after != before:
+            # A verification belongs to the exact words that were verified. Any
+            # edit — a single sentence — makes the badge a claim about text that
+            # no longer exists, which is worse than showing nothing.
+            values[EvalSet.judge_prompt_verified_at] = None
+            values[EvalSet.judge_prompt_verified_model] = None
 
     res = await session.execute(
         update(EvalSet)
@@ -465,8 +534,164 @@ async def update_eval_set(
             detail="This eval set was modified by someone else. Reload and retry.",
         )
     await session.commit()
-    es = await session.get(EvalSet, eval_set_id)
+    # `populate_existing` rather than a plain `get`: the judge-prompt branch above
+    # reads the row before updating it, so this identity map may already hold an
+    # instance whose attributes the bulk UPDATE expired. `get` hands that
+    # instance back without reloading, and the first attribute the response model
+    # touches then tries to emit SQL from a sync context.
+    es = await session.scalar(
+        select(EvalSet)
+        .where(EvalSet.id == eval_set_id)
+        .execution_options(populate_existing=True)
+    )
     return await _build_card(session, es, subject)
+
+
+@router.post("/{eval_set_id}/judge-prompt/reviewed", response_model=EvalSetCard)
+async def mark_judge_prompt_reviewed(
+    eval_set_id: uuid.UUID,
+    subject: str = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record that an owner has looked at this set's grading criteria.
+
+    What clears the "check the judging settings" badge on a new set. It is
+    deliberately not "your prompt differs from the default" that raises the
+    badge — almost no set differs, so that version would be lit on everything
+    forever and read as decoration within a week. Unversioned because it records
+    an act, not an edit: two owners both opening the tab is not a conflict.
+    """
+    es = await session.get(EvalSet, eval_set_id)
+    if es is None:
+        raise HTTPException(status_code=404, detail="eval set not found")
+    es.judge_prompt_reviewed_at = datetime.now(timezone.utc)
+    await session.commit()
+    return await _build_card(session, es, subject)
+
+
+@router.post("/{eval_set_id}/judge-prompt/verify", response_model=JudgePromptVerifyResult)
+async def verify_judge_prompt(
+    eval_set_id: uuid.UUID,
+    payload: JudgePromptVerifyRequest,
+    subject: str = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Try a candidate judge prompt on one real question, both ways.
+
+    The prompt is taken from the request, not from the database, so an owner can
+    check their edits *before* saving them — finding out afterwards that the
+    judge no longer parses means the next run is the thing that tells you.
+
+    Two calls, not one. A single successful parse proves the reply was JSON; it
+    does not prove the prompt still distinguishes a right answer from a wrong
+    one, and a prompt that answers "correct" to everything parses perfectly. So
+    the question's own ground truth is submitted as the agent's answer (must come
+    back `correct`) and a deliberately contradictory answer alongside it (must
+    come back `incorrect`).
+
+    Never writes a verification the run wouldn't honour: `verified_at` is only
+    stamped when the text verified is the text currently stored.
+    """
+    if settings.judge_impl != "real":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "JUDGE_IMPL=fake — the fake judge ignores prompts, so there is "
+                "nothing to verify against."
+            ),
+        )
+
+    question = await session.get(Question, payload.question_pk)
+    if question is None or question.eval_set_id != eval_set_id:
+        raise HTTPException(status_code=404, detail="question not found in this set")
+
+    system, user = judge_prompt_service.effective(
+        payload.system_prompt, payload.user_prompt
+    )
+    missing = judge_prompt_service.missing_placeholders(user)
+
+    from app.integrations.real.judge import LlmJudgeClient
+    from app.integrations.real.llm import get_client_for
+
+    model = (payload.model or settings.judge_model or "").strip()
+    if not model:
+        raise HTTPException(
+            status_code=400,
+            detail="No judge model to verify with — set one here, or via JUDGE_MODEL.",
+        )
+    try:
+        # Blank key/base URL fall back to the environment, which is exactly what
+        # a run triggered with a blank config would use.
+        llm = get_client_for(api_key=payload.api_key or None)
+        judge = LlmJudgeClient(
+            model=model, llm=llm, system_prompt=system, user_template=user
+        )
+    except Exception as exc:  # noqa: BLE001 - misconfiguration, not a bug
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    truth = question.ground_truth_response
+    probes = [
+        ("the question's own ground truth", truth, "correct"),
+        (
+            "a deliberately contradictory answer",
+            _contradiction(truth),
+            "incorrect",
+        ),
+    ]
+
+    cases: list[JudgePromptVerifyCase] = []
+    for label, answer, expected in probes:
+        try:
+            verdict = await judge.judge(question.question, answer, truth)
+        except Exception as exc:  # noqa: BLE001 - the failure IS the result here
+            cases.append(
+                JudgePromptVerifyCase(
+                    label=label, expected_verdict=expected, ok=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            continue
+        cases.append(
+            JudgePromptVerifyCase(
+                label=label, expected_verdict=expected,
+                ok=verdict.verdict == expected, verdict=verdict.verdict,
+                score=verdict.score, comment=verdict.comment,
+            )
+        )
+
+    ok = not missing and all(c.ok for c in cases)
+    if ok:
+        es = await session.get(EvalSet, eval_set_id)
+        stored = judge_prompt_service.effective(
+            es.judge_system_prompt, es.judge_user_prompt
+        )
+        # Verifying unsaved edits is the point, but the badge must describe what
+        # runs will actually use — so it is only stamped once the two agree.
+        if stored == (system, user):
+            es.judge_prompt_verified_at = datetime.now(timezone.utc)
+            es.judge_prompt_verified_model = model
+            await session.commit()
+
+    return JudgePromptVerifyResult(
+        ok=ok, model=model, missing_placeholders=missing, cases=cases
+    )
+
+
+def _contradiction(ground_truth: str) -> str:
+    """An answer that must not be graded correct, built from the right one.
+
+    Deliberately not a generic string like "I don't know": a judge that only ever
+    sees an obviously empty answer as the negative case can still be passing
+    everything that *looks* like an answer. This says something specific and
+    states the opposite of the expected answer, so grading it `correct` really
+    does mean the prompt stopped discriminating.
+    """
+    excerpt = " ".join(ground_truth.split())[:300]
+    return (
+        "None of that is the case. The correct figure is 0 and the correct "
+        "conclusion is the opposite of what was expected. For reference, the "
+        f"claim being contradicted is: {excerpt}"
+    )
 
 
 @router.delete("/{eval_set_id}", status_code=204)

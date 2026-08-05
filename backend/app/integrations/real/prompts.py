@@ -12,8 +12,13 @@ import json
 from app.integrations.base import Span, Verdict
 
 # --- Judge (§6.7: judge is a black-box sub-component) ------------------------
+#
+# Both halves are editable per eval set (owner-only; see services/judge_prompt).
+# What is written here is the default a set falls back to, not a fixed prompt —
+# which is why the user half is a template with named placeholders rather than
+# code that concatenates strings.
 
-JUDGE_SYSTEM = """\
+DEFAULT_JUDGE_SYSTEM = """\
 You grade a domain agent's answer against a known-correct answer.
 
 Judge on substance, not wording: an answer is correct when it conveys the same \
@@ -29,16 +34,68 @@ Reply with ONLY a JSON object, no prose and no code fences:
 decisive reason — for an incorrect answer, name the specific fact that is wrong \
 or missing."""
 
+# The three things a judge cannot grade without. An editable template must carry
+# all of them, and `missing_placeholders` is what the UI and the API both check
+# with — a template missing `{ground_truth}` does not error at run time, it
+# quietly grades every answer against nothing, which is the most expensive
+# failure this feature can produce.
+JUDGE_PLACEHOLDERS = ("question", "ground_truth", "agent_response")
 
-def build_judge_messages(question: str, response: str, ground_truth: str) -> list[dict]:
-    user = (
-        f"# Question\n{question}\n\n"
-        f"# Expected answer (ground truth)\n{ground_truth}\n\n"
-        f"# Agent's answer\n{response}"
-    )
+DEFAULT_JUDGE_USER = """\
+# Question
+{question}
+
+# Expected answer (ground truth)
+{ground_truth}
+
+# Agent's answer
+{agent_response}"""
+
+
+def missing_placeholders(template: str) -> list[str]:
+    """Which of the required placeholders this template does not contain."""
+    return [p for p in JUDGE_PLACEHOLDERS if "{" + p + "}" not in (template or "")]
+
+
+def _fill(template: str, values: dict[str, str]) -> str:
+    """Substitute the placeholders — by replacement, never `str.format`.
+
+    A judge prompt is full of JSON braces (`{"verdict": ...}`), and `format`
+    would either raise on them or eat them. Replacement also leaves any other
+    brace the author wrote exactly as they wrote it.
+    """
+    out = template
+    for key, value in values.items():
+        out = out.replace("{" + key + "}", value)
+    return out
+
+
+def build_judge_messages(
+    question: str,
+    response: str,
+    ground_truth: str,
+    system_prompt: str | None = None,
+    user_template: str | None = None,
+) -> list[dict]:
+    """The judge call's messages, from this eval set's prompt or the default.
+
+    Callers pass the *already resolved* pair (see `services.judge_prompt`); the
+    fallbacks here only keep the no-config call sites — tests, and any seam built
+    without a run config — working as they did.
+    """
     return [
-        {"role": "system", "content": JUDGE_SYSTEM},
-        {"role": "user", "content": user},
+        {"role": "system", "content": system_prompt or DEFAULT_JUDGE_SYSTEM},
+        {
+            "role": "user",
+            "content": _fill(
+                user_template or DEFAULT_JUDGE_USER,
+                {
+                    "question": question,
+                    "ground_truth": ground_truth,
+                    "agent_response": response,
+                },
+            ),
+        },
     ]
 
 

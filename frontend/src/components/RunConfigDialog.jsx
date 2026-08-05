@@ -19,7 +19,7 @@ const SECRET_PAIRS = [
   ["langfuse_secret_key", "langfuse_host"],
 ];
 
-export default function RunConfigDialog({ evalSetId, onClose, onRun }) {
+export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) {
   const [defaults, setDefaults] = useState(null);
   const [impls, setImpls] = useState({});
   const [form, setForm] = useState(null);
@@ -151,6 +151,45 @@ export default function RunConfigDialog({ evalSetId, onClose, onRun }) {
             impls={impls}
             kept={kept}
           />
+
+          {/* One line, not two textareas. The grading criteria belong to the
+              eval set (only its owner may change them), so this dialog states
+              which prompt the run will use and where to go to change it —
+              putting the full text here would double the dialog's height for
+              something nobody edits from this screen. */}
+          {evalSet?.judge_prompt && (
+            <>
+              <h4 className="cfg-section">Judging</h4>
+              <div className="cfg-view">
+                <div className="cfg-row">
+                  <span className="cfg-label">Judge prompt</span>
+                  <span className="cfg-value">
+                    {evalSet.judge_prompt.is_default ? "built-in default" : "custom"} ·{" "}
+                    {evalSet.judge_prompt.fingerprint}
+                    {evalSet.judge_prompt.verified_at ? " · verified" : ""}
+                  </span>
+                </div>
+              </div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {evalSet.judge_prompt.missing_placeholders?.length > 0 ? (
+                  <span className="danger-text">
+                    This set’s judge prompt is missing{" "}
+                    {evalSet.judge_prompt.missing_placeholders
+                      .map((p) => `{${p}}`)
+                      .join(", ")}
+                    . Results from this run will not mean what they appear to.
+                  </span>
+                ) : (
+                  <>
+                    Set by the eval set’s owner, so every run of this set is
+                    graded the same way and their pass rates can be compared.
+                    {!evalSet.judge_prompt.verified_at &&
+                      " It has not been verified against a real judge model."}
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
     </Modal>

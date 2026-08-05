@@ -33,7 +33,13 @@ class JudgeOutput(BaseModel):
 
 
 class LlmJudgeClient:
-    def __init__(self, model: str | None = None, llm: AsyncOpenAI | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        llm: AsyncOpenAI | None = None,
+        system_prompt: str | None = None,
+        user_template: str | None = None,
+    ) -> None:
         self.model_name = model or settings.judge_model
         if not self.model_name:
             raise RuntimeError(
@@ -42,9 +48,16 @@ class LlmJudgeClient:
             )
         # None = the environment-configured endpoint.
         self.llm = llm
+        # None on either = this eval set never overrode it; the default in
+        # `prompts.py` applies (services/judge_prompt explains the two directions).
+        self.system_prompt = system_prompt
+        self.user_template = user_template
 
     async def judge(self, question: str, response: str, ground_truth: str) -> Verdict:
-        messages = build_judge_messages(question, response, ground_truth)
+        messages = build_judge_messages(
+            question, response, ground_truth,
+            system_prompt=self.system_prompt, user_template=self.user_template,
+        )
         out = await complete_json(self.model_name, messages, JudgeOutput, client=self.llm)
 
         verdict = out.verdict

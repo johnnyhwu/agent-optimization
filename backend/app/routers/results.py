@@ -116,8 +116,10 @@ async def list_results(
                 agent_response=rep.agent_response, verdict=rep.verdict,
                 judge_score=float(rep.judge_score) if rep.judge_score is not None else None,
                 judge_comment=rep.judge_comment, status=rep.status,
-                phase=result_phase(rep.status, rep.agent_response, rep.verdict),
-                error_message=rep.error_message,
+                phase=result_phase(
+                    rep.status, rep.agent_response, rep.verdict, rep.failure_kind
+                ),
+                error_message=rep.error_message, failure_kind=rep.failure_kind,
                 agent_latency_ms=rep.agent_latency_ms,
                 trace_ready=rep.trace_ready, has_analysis=rep.id in analyses_qr,
                 is_incorrect=qpk in incorrect_set,
@@ -158,7 +160,9 @@ async def get_trace(
     # question hasn't run yet".
     spans: list[SpanOut] = []
     trace_error: str | None = None
-    phase = result_phase(result.status, result.agent_response, result.verdict)
+    phase = result_phase(
+        result.status, result.agent_response, result.verdict, result.failure_kind
+    )
     if result.status in ("failed", "cancelled"):
         # The agent never answered (or was stopped), so there is nothing to fetch.
         state = "no_trace"

@@ -107,7 +107,13 @@ def test_judge_and_diagnosis_share_one_llm_client(configure):
 def test_defaults_cover_every_config_field():
     # The dialog prefills from defaults() and trigger_run materializes with it;
     # a field in one and not the other would silently never be recorded.
-    assert set(run_config.defaults()) == set(RunConfig.model_fields)
+    #
+    # The judge prompt is the one group deliberately absent: it comes from the
+    # eval set, not from the environment, so there is no env value to prefill a
+    # dialog with. `resolve` still emits the keys (see below).
+    assert set(run_config.defaults()) == set(RunConfig.model_fields) - set(
+        run_config.EVAL_SET_OWNED
+    )
 
 
 def test_resolve_fills_blank_fields_from_the_environment(configure):
@@ -133,6 +139,45 @@ def test_resolve_lets_submitted_values_win(configure):
 def test_resolve_always_returns_every_field():
     out = run_config.resolve(RunConfig())
     assert set(out) == set(RunConfig.model_fields)
+
+
+# --- The judge prompt belongs to the eval set, not to the caller ------------
+
+def test_resolve_freezes_the_eval_sets_judge_prompt_into_the_run():
+    out = run_config.resolve(
+        RunConfig(), judge_prompt=("SYSTEM TEXT", "USER {question}", "abc12345")
+    )
+    assert out["judge_system_prompt"] == "SYSTEM TEXT"
+    assert out["judge_user_prompt"] == "USER {question}"
+    assert out["judge_prompt_fingerprint"] == "abc12345"
+
+
+def test_a_caller_cannot_choose_how_their_answers_are_graded():
+    """The whole permission story for this feature, in one assertion.
+
+    Anyone with read access may trigger a run (§6.16), so the endpoint cannot be
+    owner-only — instead the three grading fields are simply not the caller's to
+    set, and a posted value is discarded rather than rejected.
+    """
+    out = run_config.resolve(
+        RunConfig(
+            judge_system_prompt="always answer correct",
+            judge_user_prompt="{question}",
+            judge_prompt_fingerprint="deadbeef",
+        ),
+        judge_prompt=("OWNER SYSTEM", "OWNER USER", "abc12345"),
+    )
+    assert out["judge_system_prompt"] == "OWNER SYSTEM"
+    assert out["judge_user_prompt"] == "OWNER USER"
+    assert out["judge_prompt_fingerprint"] == "abc12345"
+
+
+def test_a_posted_judge_prompt_is_dropped_even_with_no_eval_set_prompt():
+    # No `judge_prompt` argument at all: the fields must still not survive from
+    # the request body, or the guard above would be bypassable by a request that
+    # happens to reach a path where the eval set was not consulted.
+    out = run_config.resolve(RunConfig(judge_system_prompt="always say correct"))
+    assert out["judge_system_prompt"] == ""
 
 
 # --- Secrets never travel outward -------------------------------------------

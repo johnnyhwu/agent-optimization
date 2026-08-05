@@ -134,6 +134,15 @@ export const api = {
   updateEvalSet: (id, payload) => req("PATCH", `/eval-sets/${id}`, payload),
   deleteEvalSet: (id) => req("DELETE", `/eval-sets/${id}`),
   updateRoles: (id, shares) => req("PUT", `/eval-sets/${id}/roles`, { shares }),
+  // Grade one of this set's own questions with a candidate prompt, both ways
+  // round. Takes the prompt from the form rather than the database, so edits can
+  // be checked before they are saved. Optional model/api_key override the
+  // environment's; the key is inbound-only, like every other credential here.
+  verifyJudgePrompt: (id, payload) =>
+    req("POST", `/eval-sets/${id}/judge-prompt/verify`, payload),
+  // Clears the "nobody has checked the grading criteria" badge on a new set.
+  markJudgePromptReviewed: (id) =>
+    req("POST", `/eval-sets/${id}/judge-prompt/reviewed`),
   metadataKeys: () => req("GET", "/eval-sets/metadata/keys"),
   // Row counts and column names for the download dialog's file preview. Counts
   // depend only on which runs are in scope, so this is refetched when the run

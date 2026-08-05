@@ -7,6 +7,7 @@ import QuestionEditor from "./QuestionEditor.jsx";
 import RunConfigDialog from "./RunConfigDialog.jsx";
 import RunConfigView from "./RunConfigView.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import ConfigDialog from "./ConfigDialog.jsx";
 import DownloadDialog from "./DownloadDialog.jsx";
 import { useToast } from "./Toast.jsx";
 import {
@@ -27,7 +28,7 @@ const PAGE_SIZE = 20;
 // Runs page in newest-first as you scroll. Selection is held as a list of run
 // ids rather than indices, so multi-select survives an append — the whole point
 // of the multi-run modes is comparing runs that may be pages apart.
-export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
+export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChanged }) {
   const toast = useToast();
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState([]);
@@ -38,7 +39,14 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const [viewConfigRun, setViewConfigRun] = useState(null);
   const [deleteRun, setDeleteRun] = useState(null);
   const [showDownload, setShowDownload] = useState(false);
+  const [configTab, setConfigTab] = useState(null);
   const subject = getSubject();
+
+  // The set's current grading criteria. Every run below records the prompt it
+  // actually used, so a row whose fingerprint differs from this was graded by
+  // different words — and its pass rate is not comparable with the others.
+  const currentFingerprint = evalSet.judge_prompt?.fingerprint;
+  const unreviewedJudging = !evalSet.judge_prompt?.reviewed_at;
 
   const {
     items: runs, total, hasMore, loadingMore, error: loadError, loadMore,
@@ -103,6 +111,18 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           </button>
           {myRole === "owner" && (
             <button onClick={() => setShowEditor(true)}><IconGear size={15} /> Edit questions</button>
+          )}
+          {/* The second entry point to the set's own settings. Without it the
+              only way to adjust the judge prompt — the setting most likely to
+              be revisited while looking at results — is to go back to the home
+              page and find the card. */}
+          {myRole === "owner" && (
+            <button
+              onClick={() => setConfigTab("judging")}
+              title="Name, sharing, and how this set's answers are graded"
+            >
+              <IconGear size={15} /> Set config{unreviewedJudging ? " !" : ""}
+            </button>
           )}
           <button className="primary" onClick={() => setShowRunConfig(true)}>
             <IconPlay size={14} /> Run eval
@@ -192,6 +212,29 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
               {r.pass_rate === null ? "—" : `${Math.round(r.pass_rate * 100)}% pass`}
             </div>
             <div style={{ width: 80, textAlign: "right" }} className="muted">{r.incorrect_count ?? 0} wrong</div>
+            {/* Questions whose judge replied unparseably. Not folded into the
+                pass rate (they stay in the denominator — an ungraded question is
+                not a pass), but a rate that fell because the judge broke is a
+                different problem from one that fell because the agent did. */}
+            {r.judge_invalid_count > 0 && (
+              <span className="pill warn" title="The judge's reply could not be parsed for these questions">
+                {r.judge_invalid_count} unjudged
+              </span>
+            )}
+            {r.config?.judge_prompt_fingerprint && (
+              <span
+                className={`chip ${
+                  r.config.judge_prompt_fingerprint === currentFingerprint ? "" : "changed"
+                }`}
+                title={
+                  r.config.judge_prompt_fingerprint === currentFingerprint
+                    ? "Graded with this set's current judge prompt"
+                    : "Graded with a different judge prompt than the set uses now — pass rates are not directly comparable"
+                }
+              >
+                judge {r.config.judge_prompt_fingerprint}
+              </span>
+            )}
             <button
               className="icon-btn"
               aria-label="View run config"
@@ -249,9 +292,38 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
         />
       )}
       {showEditor && <QuestionEditor evalSet={evalSet} onClose={() => setShowEditor(false)} />}
+      {configTab && (
+        <ConfigDialog
+          evalSet={evalSet}
+          subject={subject}
+          initialTab={configTab}
+          onClose={async () => {
+            // Opening the tab is the review. Recorded on close rather than on
+            // save so the badge also clears for an owner who looked, decided
+            // the default was right, and changed nothing.
+            if (unreviewedJudging) {
+              try {
+                onEvalSetChanged?.(await api.markJudgePromptReviewed(evalSet.id));
+              } catch {
+                /* the badge staying lit is not worth an error toast */
+              }
+            }
+            setConfigTab(null);
+          }}
+          onSaved={async () => {
+            setConfigTab(null);
+            try {
+              onEvalSetChanged?.(await api.getEvalSet(evalSet.id));
+            } catch {
+              /* the dialog already reported anything that mattered */
+            }
+          }}
+        />
+      )}
       {showRunConfig && (
         <RunConfigDialog
           evalSetId={evalSet.id}
+          evalSet={evalSet}
           onClose={() => setShowRunConfig(false)}
           onRun={trigger}
         />

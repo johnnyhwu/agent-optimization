@@ -48,10 +48,43 @@ def _supplied(value: Any) -> bool:
     return True
 
 
-def resolve(config: RunConfig) -> dict[str, Any]:
-    """The effective settings for a run: defaults, overlaid with what was given."""
-    effective = defaults()
+# Settings a caller may never choose: they come from the eval set, so whatever
+# arrives in the request body for them is discarded. Keeping the list here means
+# `resolve` cannot forget one — the overwrite below is unconditional.
+EVAL_SET_OWNED = ("judge_system_prompt", "judge_user_prompt", "judge_prompt_fingerprint")
+
+
+def resolve(
+    config: RunConfig, judge_prompt: tuple[str, str, str] | None = None
+) -> dict[str, Any]:
+    """The effective settings for a run: defaults, overlaid with what was given.
+
+    `judge_prompt` is `(system, user, fingerprint)` from the eval set, and it
+    **wins over anything the caller sent**. That is the entire enforcement of
+    "only an owner decides how answers are graded": the endpoint is still open to
+    viewers (§6.16 — anyone may run an eval), the three fields are simply not
+    theirs to set. Expressed as an overwrite rather than a 403 on purpose, since
+    there is nothing for a caller to correct and nothing to explain.
+
+    It is stored as full text, not as a reference to the eval set, for the same
+    reason every other field is materialized: the set can be edited tomorrow, and
+    a finished run has to keep saying what it actually graded with.
+    """
+    # Seeded blank so the stored config still lists every field of `RunConfig`,
+    # complete-record rule and all — `defaults()` cannot supply these, since they
+    # come from an eval set rather than from the environment. Blank reads the
+    # same way it does everywhere else here: fall back to the shipped default.
+    effective = {key: "" for key in EVAL_SET_OWNED}
+    effective.update(defaults())
     for key, value in config.model_dump().items():
+        if key in EVAL_SET_OWNED:
+            continue
         if _supplied(value):
             effective[key] = value
+
+    if judge_prompt is not None:
+        system, user, fingerprint = judge_prompt
+        effective["judge_system_prompt"] = system
+        effective["judge_user_prompt"] = user
+        effective["judge_prompt_fingerprint"] = fingerprint
     return effective

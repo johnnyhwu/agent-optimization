@@ -88,6 +88,29 @@ export default function RunConfigView({ run, onClose }) {
             </React.Fragment>
           ))}
 
+          {/* The words this run was graded by, frozen at trigger time. The eval
+              set may have moved on since; a finished run's verdicts only make
+              sense against the criteria that produced them, so this is the copy
+              that matters and not the set's current one. */}
+          <h4 className="cfg-section">Judging</h4>
+          <div className="cfg-view">
+            <Row label="Judge prompt" value={config.judge_prompt_fingerprint} />
+          </div>
+          {config.judge_system_prompt ? (
+            <details style={{ marginTop: 6 }}>
+              <summary className="linkish">View the judge prompt this run used</summary>
+              <div className="hint" style={{ marginTop: 8 }}>System</div>
+              <pre className="prompt-text">{config.judge_system_prompt}</pre>
+              <div className="hint" style={{ marginTop: 8 }}>User</div>
+              <pre className="prompt-text">{config.judge_user_prompt}</pre>
+            </details>
+          ) : (
+            <div className="hint" style={{ marginTop: 6 }}>
+              This run predates per-set judge prompts. It graded with whatever
+              the built-in prompt was at the time.
+            </div>
+          )}
+
           <h4 className="cfg-section">Credentials</h4>
           <div className="cfg-view">
             {CREDENTIALS.map(([slot, label]) => (

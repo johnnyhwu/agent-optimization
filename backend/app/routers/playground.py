@@ -40,6 +40,7 @@ from app.schemas import (
     WorkspaceOverrideIn,
     WorkspaceVersionOut,
 )
+from app.services import judge_prompt as judge_prompt_service
 from app.services import run_config
 from app.services.trace_view import span_to_out
 from app.sse import hub
@@ -258,7 +259,24 @@ async def create_attempt(
         workspace_baseline=baseline,
         # Materialized now, exactly as a run's is (§9.15): a blank field records
         # the environment's value, so the attempt says what it actually used.
-        config=run_config.resolve(body.config),
+        #
+        # The judge prompt is the one field a *run* refuses to take from its
+        # caller (it belongs to the eval set's owner), and the one an attempt
+        # takes freely: an attempt belongs to no eval set, so there is no shared
+        # pass rate to keep comparable and nobody else's results to affect. It is
+        # scratch work — which is the whole point of trying a prompt here before
+        # committing it to a set. Passed through explicitly, so `resolve`'s
+        # discard-by-default stays the rule and this is visibly the exception.
+        config=run_config.resolve(
+            body.config,
+            judge_prompt=(
+                body.config.judge_system_prompt,
+                body.config.judge_user_prompt,
+                judge_prompt_service.fingerprint(
+                    body.config.judge_system_prompt, body.config.judge_user_prompt
+                ),
+            ),
+        ),
         secrets={k: v for k, v in body.secrets.model_dump().items() if v},
         correlation_id=uuid.uuid4().hex,
     )

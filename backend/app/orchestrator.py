@@ -61,6 +61,7 @@ from app import cancellation
 from app.config import settings
 from app.db import SessionLocal
 from app.integrations import Seams, build_seams
+from app.integrations.base import LlmOutputError
 from app.models import EvalSet, Question, QuestionResult, Run, SpanAnalysis
 from app.pipeline import (
     RunCancelled,
@@ -216,10 +217,11 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
             has_analysis=has_analysis,
         )
 
-    async def fail(message: str) -> None:
+    async def fail(message: str, kind: str | None = None) -> None:
         async with lock:
             result.status = "failed"
             result.error_message = clip(message)
+            result.failure_kind = kind
             await session.commit()
             state["done"] += 1
             snap = (state["done"], state["correct"])
@@ -248,14 +250,14 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         return
     except Exception as exc:  # noqa: BLE001
         log.warning("agent call failed for %s: %s", correlation_id, exc)
-        await fail(f"Agent call failed: {exc!s}")
+        await fail(f"Agent call failed: {exc!s}", kind="agent")
         return
 
     if agent_resp.failed:
         async with lock:
             result.agent_response = agent_resp.response or None
             result.agent_latency_ms = agent_resp.latency_ms
-        await fail(agent_resp.error or "Agent reported a failure.")
+        await fail(agent_resp.error or "Agent reported a failure.", kind="agent")
         return
 
     async with lock:
@@ -276,11 +278,19 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     except RunCancelled:
         await cancel("Run cancelled while judging; the agent's answer was kept.")
         return
+    except LlmOutputError as exc:
+        # The judge answered, but not in the shape the contract asks for. Almost
+        # always the eval set's judge prompt, not the LLM or the agent — so it
+        # gets its own kind, and the run reports "N could not be judged" instead
+        # of burying them among timeouts.
+        log.warning("judge output unusable for %s: %s", correlation_id, exc)
+        await fail(f"Judge output could not be parsed: {exc!s}", kind="judge_invalid")
+        return
     except Exception as exc:  # noqa: BLE001
         log.warning("judge call failed for %s: %s", correlation_id, exc)
         # Deliberately NOT defaulted to 'correct' — an unjudged question is an
         # unknown, and silently passing it would inflate the pass rate.
-        await fail(f"Judge call failed: {exc!s}")
+        await fail(f"Judge call failed: {exc!s}", kind="judge")
         return
 
     async with lock:
@@ -379,10 +389,13 @@ async def _publish_progress(run_id, question_pk, result: QuestionResult,
             # The colour the left column should paint this question, derived in
             # one place (see services/aggregation.result_phase) so the API and
             # the live stream can never disagree.
-            "phase": result_phase(result.status, result.agent_response, result.verdict),
+            "phase": result_phase(
+                result.status, result.agent_response, result.verdict, result.failure_kind
+            ),
             "verdict": result.verdict,
             "status": result.status,
             "error_message": result.error_message,
+            "failure_kind": result.failure_kind,
             "trace_ready": result.trace_ready,
             # The detail view refetches the trace when any of these change, so
             # the middle column follows a live question instead of freezing at

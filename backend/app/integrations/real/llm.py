@@ -19,12 +19,11 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
 from app.config import settings
+from app.integrations.base import LlmOutputError
 
 T = TypeVar("T", bound=BaseModel)
 
-
-class LlmOutputError(RuntimeError):
-    """The model replied, but not with the JSON contract we asked for."""
+__all__ = ["LlmOutputError", "as_text", "complete_json", "get_client", "get_client_for", "reset_client"]
 
 
 # Keyed by (base_url, api_key, timeout): a run may point at a different endpoint

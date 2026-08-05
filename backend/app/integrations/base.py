@@ -17,6 +17,18 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 
+# --- Shared errors ----------------------------------------------------------
+
+class LlmOutputError(RuntimeError):
+    """The model replied, but not with the JSON contract we asked for.
+
+    Defined here rather than beside the OpenAI client that raises it, because
+    the orchestrator has to name it in an `except` clause — and `real/llm.py` is
+    imported lazily so that a fake-only deployment never touches a real seam.
+    `real.llm` re-exports it, so the raising side reads unchanged.
+    """
+
+
 # --- Shared value objects ---------------------------------------------------
 
 @dataclass

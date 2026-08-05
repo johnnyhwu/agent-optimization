@@ -149,6 +149,11 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
     """
     return {
         "defaults": run_config.defaults(),
+        # Deployment-level, and it overrides the verdict a judge prompt returns
+        # (integrations/real/judge.py). Surfaced so the prompt editor can say so
+        # — rewriting what "score" means while a threshold silently reinterprets
+        # it is a trap worth one line of text.
+        "judge_score_threshold": settings.judge_score_threshold,
         "impls": {
             "agent": settings.agent_impl,
             "judge": settings.judge_impl,

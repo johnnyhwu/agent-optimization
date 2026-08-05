@@ -116,7 +116,15 @@ def build_seams(
     if settings.judge_impl == "real":
         from app.integrations.real.judge import LlmJudgeClient
 
-        judge = LlmJudgeClient(model=_get(config, "judge_model"), llm=llm)
+        # The prompt travels in the run config like everything else here, but it
+        # is put there by `trigger_run` from the eval set — never by the caller
+        # (services/judge_prompt).
+        judge = LlmJudgeClient(
+            model=_get(config, "judge_model"),
+            llm=llm,
+            system_prompt=_get(config, "judge_system_prompt"),
+            user_template=_get(config, "judge_user_prompt"),
+        )
     else:
         judge = FakeJudgeClient()
 
