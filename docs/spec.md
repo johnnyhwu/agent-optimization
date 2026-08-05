@@ -1120,7 +1120,8 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 Evaluation（三層下鑽）                        Playground
 ├─ 首頁：eval set 卡片                        ├─ 編輯區（問題 + 四個面板，見下）
 │   run 數、最近通過率、趨勢小折線、            ├─ phase stepper（Agent→Judge→Trace→Diagnosis）
-│   regression 摘要數、成員數、齒輪            ├─ 三欄：attempt 清單 │ trace+診斷 │ span 細節
+│   regression 摘要數、成員數、               ├─ 三欄：attempt 清單 │ trace+診斷 │ span 細節
+│   下載、齒輪
 │                                          └─ Shortlist 對話框（§7.6）
 ├─ 中層：某 set 的 run 歷史
 │   多選 run + union / intersection / last-N
@@ -1377,6 +1378,8 @@ Keycloak 只有在設了 audience mapper 時才把 client id 寫進 `aud`，否�
   輸入會先經 `GET /users/lookup` 對員工目錄查核：**查無此人擋下**；
   **目錄本身連不上則警告但放行**——那邊的故障不該讓這邊所有人都不能分享。
 - 每張卡片有 **config 齒輪**（僅 owner 見）：一個對話框可改 name / description / metadata **與分享名單**。
+- 每張卡片有 **下載鈕（所有角色都見得到**，run 歷史頁也有一顆）：viewer 本來就讀得到匯出檔裡的每一列，
+  擋下載保護不到任何東西，卻正好擋掉最需要它的那群人。對話框的設計見 §9 匯出那段。
 - `PUT /eval-sets/{id}/roles` **整批覆寫**分享名單；**操作者本人永遠保留 owner**
   （不可自我鎖出、保證至少一個 owner）。
 
@@ -1538,9 +1541,9 @@ lifespan 啟動時把它們收成 `failed` 並寫明原因。**production 第一
 
 **這一節的目的是讓你知道能信到什麼程度。**
 
-### 14.1 單元測試：270 個
+### 14.1 單元測試：295 個
 
-`make test` 跑其中 **242 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
+`make test` 跑其中 **267 個**——**不需要 DB 也不需要網路**（外部呼叫一律以 `respx` mock，
 LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_startup_reaper.py` 全部，
 加上 `test_shortlist.py` 建立 eval set 的那一半）需要一個真 Postgres，
 未設 `TEST_DATABASE_URL` 時自動 skip。
@@ -1562,6 +1565,7 @@ LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_st
 | `test_shortlist.py` | 18（**12 個需 DB**）| synthesis：草稿來自 trace、**不寫回 attempt**、無 trace → 409、模型錯誤原文回傳、空草稿算失敗、別人的 attempt → 404。建立：只用 shortlist 建立；複製既有 set 的題目；**複製件拿到新的 question_id**；skill tag 一併複製；重複題目文字被跳過並計數；同文字時 shortlist 的版本勝出；**讀不到的 set 回 404 且什麼都沒建**；空的建立請求 → 422；建立者是 owner 且分享名單生效；**新 set 第一次被讀取就回報正確的 `my_role`**（owner / 被分享者 viewer / 兩條建立路徑都是——這正是前端 gate 權限用的欄位，§11.4）；沒有角色的人連讀都讀不到 |
 | `test_trace_settle.py` | 14 | §6.1a 的 settle：最後才到的 span 會被等到；沒有成長就立刻結束（穩態只多一次請求）；成長時有上限；長度相同時採用較新的一份；**比較短的重讀、NotReady、確認讀取失敗一律不採用**；中止立刻停；`TRACE_SETTLE_MAX_READS=0` 回到舊行為；delay 真的有等；與 poll 的組合（NotReady → 出現 → settle）；**只有 settle 失敗時 `trace_error` 保持 None**（有 trace 就不該亮紅色 banner）|
 | `test_run_lifecycle.py` | 11 | cancel 的權限矩陣（owner ✓ / 觸發者 ✓ / 其他 viewer ✗）；非 running → 409；跨 eval set → 404；delete 為 owner-only 且 running 時 409 |
+| `test_export.py` | 25 | 匯出（§6.13 卡片動作）。核心是**把匯出結果直接餵回 `parse_jsonl`**——`questions.*` 對外承諾「可重新上傳」，而它用的欄位名是上傳的那組而非 API 的那組，正是日後重構最容易「順手對齊」掉的東西；另有 **provenance 欄位隨行但不破壞重新上傳**、CSV 的 skill 寫成 JSON 陣列字面值（技能名含逗號時才不會被拆開）、Excel 需要的 BOM/CRLF、**results 是每 (run × question) 一列而不是每題一列**（後者會安靜地丟掉除最新以外的所有 run）、跑到一半的題目照樣匯出成 pending、空表仍寫表頭、zip 位元組可重現、**金鑰值層級斷言**（run 同時在 `config` 與 `secrets` 放進哨兵金鑰，搜整包 zip）、manifest 不帶分享名單、preview 的欄位名與寫檔器同源 |
 | `test_results.py` | 8 | trace 檢視的狀態機。核心是**`pending` 的題目回 `not_started` 且對 trace store 發出零個請求**（用會記錄呼叫次數的 stub 斷言）|
 | `test_deletion.py` | 5 | `delete_run` / `delete_eval_set` 的 DELETE **順序**（子表先於父表，特別是 `question_results` 必須早於 `questions`），以及一個「schema 新增子表卻忘了加進刪除順序」的守門測試 |
 | `test_pagination.py` | 11（**需 DB**）| `limit`/`offset`/`total`/`has_more`；翻完所有頁**每張卡剛好出現一次**；只列出有權限的 set；搜尋與 metadata 篩選在 SQL 生效；趨勢受上限；regression 用最新兩個 run。**最重要的兩個是查詢數守門測試**：`GET /eval-sets` 與 `GET /runs` 在 `limit=1` 與 `limit=20` 時發出的查詢數必須**完全相同**——斷言時間會 flaky，斷言查詢數不會 |
@@ -1593,6 +1597,21 @@ LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_st
 shortlist：加入 → `Draft from trace` → 勾一個既有 set → 建立 → 跳到新 set 且顯示
 「Created with 3 questions」，用 API 確認升上來的那題帶著生成的流程、複製進來的兩題保留 skill tag
 且拿到新 id；**重新整理頁面後 shortlist 還在**（localStorage），建立後清空。
+
+**匯出下載**：真 Postgres + 真 backend + 真瀏覽器。
+**完整 round trip 走真 HTTP**——匯出 `questions.jsonl` → `POST /eval-sets` → 新 set 的 5 題
+與原本逐欄相同，**skill 與 question_id 都保留**（也就順帶造出「兩個 set 共用同一批 question_id」
+這個 provenance 欄位存在的理由）；匯出的 CSV 餵給**真正的 `upload_parse.js`**（Node 直跑）
+0 parse error、0 validation error，BOM 與 skill 陣列都正確；權限與既有端點一致
+（無角色 → 403、viewer → 200）；只選一個檔回檔案本身、多檔回 zip + manifest、全不選 → 422；
+`traces.json` 如實回報 4 ready / 1 generating；整包 zip 搜不到任何憑證值。
+
+> 瀏覽器這一輪抓到兩個**測試抓不到**的錯：
+> ① 記憶下來的偏好在沒有 run 的 set 上，讓標題宣稱「你會拿到 .zip」但實際只有一個 CSV——
+> checkbox 用的是有效選擇、檔名算的是原始選擇，兩者不同步。這個 bug 正好打在這個功能唯一的賣點
+> （面板可信）上。② 檔案存下來叫 `export`（沒有副檔名）：跨來源 fetch 讀不到
+> `Content-Disposition`，除非後端明講 `expose_headers`。**同源部署（nginx 代理 `/api`）永遠不會遇到**，
+> 所以它會一直潛伏到有人把前端指向另一台機器的後端。
 
 **Langfuse 錯誤路徑**：用一個回傳真實 `Unknown table expression 'events'` 500 body 的 mock，
 確認兩條策略都被嘗試、錯誤訊息含兩者、瀏覽器顯示白話說明且原始 SQL 收在可展開區塊。

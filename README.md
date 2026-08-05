@@ -38,7 +38,7 @@ a deployed build behind nginx — see [Deploying it](#deploying-it).
 [Fake → real](#going-from-fake-to-real) ·
 [Trying the flows](#trying-the-flows) · [Where things live](#where-the-important-pieces-live) ·
 [API](#api-surface) · [Langfuse read strategies](#langfuse-read-strategies-and-the-events-table-error) ·
-[Paging](#paging-the-lists) · [Upload schema](#upload-schema)
+[Paging](#paging-the-lists) · [Upload schema](#upload-schema) · [Download](#download-export)
 
 > **New to this codebase?** Read [The problem](#the-problem) and
 > [Life of a run](#life-of-a-run) below, then
@@ -679,6 +679,7 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 | Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
 | Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
+| Export | `GET /eval-sets/{id}/export/preview`, `GET /eval-sets/{id}/export` — see [Download](#download-export) |
 | Playground | `GET /playground/workspace`, `/workspace/version`, `POST /playground/attempts/{id}/synthesize-reasoning`, `POST /eval-sets/from-shortlist`, `POST·GET /playground/attempts`, `GET·DELETE /playground/attempts/{id}`, `POST .../cancel`, `POST .../re-diagnose`, `GET .../progress` (SSE) |
 
 Authorization is a FastAPI dependency, not scattered per-endpoint: writes and
@@ -812,3 +813,60 @@ eval set as `source_format`.
 | `ground_truth_reasoning_process_description` | ✅ | |
 | `skill` | ✅ | list of strings |
 | `question_id` | optional | system generates an immutable `q_<hex>` if omitted (not a content hash) |
+
+## Download (export)
+
+Every eval-set card has a **Download** button (so does the run history, where
+your ticked runs carry over). It opens a dialog that is a *preview of the
+output* rather than a scope picker: each file is named, its real columns are
+printed, and its row count is a number the server counted. What you tick is the
+file you get.
+
+| file | contents |
+|---|---|
+| `questions.{csv,jsonl}` | one row per question — **re-uploadable**, see below |
+| `runs.{csv,jsonl}` | one row per run: status, pass rate, timings, resolved non-secret config |
+| `results.{csv,jsonl}` | one row per **(run × question)**: agent answer, verdict, judge score/comment, latency |
+| `traces.json` | agent spans + stored diagnosis per question; always JSON, off by default |
+| `manifest.json` | source set, export time, what's included, question-id policy |
+
+Selecting a single file downloads that file. A real bundle is zipped with a
+manifest. Selecting nothing is a 422 rather than an empty archive.
+
+**`questions.*` round-trips.** It uses the [upload schema](#upload-schema)
+field names — `ground_truth_reasoning_process_description`, singular `skill` —
+not the API's `ground_truth_reasoning` / `skills`, so an exported file goes
+straight back through **Upload eval set**. Because a set is locked after
+creation (no add/delete question endpoints exist), download → edit →
+re-upload is the sanctioned way to *grow* a question set. Re-uploading creates
+a **new** eval set; it does not update the source.
+
+**Every table carries `eval_set_id` and `eval_set_name`.** `question_id` is
+unique per eval set, not globally (`UNIQUE (eval_set_id, question_id)`), and a
+download-edit-re-upload cycle routinely leaves two sets sharing ids. Nothing
+internal cares — every join runs on the `question_pk` UUID — but an exported
+file gets joined in pandas or Excel, where `question_id` alone silently merges
+unrelated questions. **Join on `(eval_set_id, question_id)`**: the export's key
+is the database's uniqueness key. Both parsers resolve columns by name and
+ignore what they don't recognise, so these columns cost re-upload nothing.
+Export preserves `question_id` (`POST /eval-sets/from-shortlist` deliberately
+mints new ones — one is a copy, the other a derivation); `manifest.json` records
+which rule produced the file.
+
+**Credentials cannot reach a file.** Run rows are built through `RunConfig`,
+which has no credential fields and drops unknown keys, so a secret mis-stored in
+`config` still cannot be exported. Only slot names appear, via
+`credentials_set`. Share lists are user subjects and are never exported.
+
+Notes:
+- **Viewers can download.** A viewer can already read every row an export
+  contains, so withholding the file would protect nothing.
+- Counts include the awkward ones — questions still running, traces not yet
+  ingested — because a preview that rounds those away stops being believed.
+- CSV is written with a BOM and CRLF so Excel opens UTF-8 (Chinese question
+  text) intact. `pandas.read_csv` shows the BOM on the first column name unless
+  read with `encoding="utf-8-sig"`.
+- `EXPORT_MAX_TRACES` (1000) and `EXPORT_TRACE_CONCURRENCY` (8) size the only
+  part of an export that leaves the database: one live read per result against
+  the trace store. Past the cap the file records `truncated: true` and the
+  dialog says so.
