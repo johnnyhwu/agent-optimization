@@ -40,6 +40,7 @@ from typing import Any, Iterable
 
 from app.models import EvalSet, Question, QuestionResult, Run
 from app.schemas import RunConfig
+from app.services import judge_prompt
 from app.services.aggregation import result_phase
 
 # Bumped when the shape of an exported file changes. Recorded in the manifest so
@@ -200,7 +201,9 @@ def result_rows(
                     "status": r.status,
                     # Same derivation the UI colours its list with, so "answered
                     # but not judged" reads identically in both places.
-                    "phase": result_phase(r.status, r.agent_response, r.verdict),
+                    "phase": result_phase(
+                        r.status, r.agent_response, r.verdict, r.failure_kind
+                    ),
                     "error_message": r.error_message,
                     "agent_latency_ms": r.agent_latency_ms,
                     "correlation_id": r.correlation_id,
@@ -305,6 +308,15 @@ def build_manifest(
     different set. Without this line, a reader finding the same id in two sets
     cannot tell which rule produced it.
     """
+    judge_system, judge_user = judge_prompt.effective(
+        eval_set.judge_system_prompt, eval_set.judge_user_prompt
+    )
+    judge_is_default = judge_prompt.is_default(
+        eval_set.judge_system_prompt, eval_set.judge_user_prompt
+    )
+    judge_fingerprint = judge_prompt.fingerprint(
+        eval_set.judge_system_prompt, eval_set.judge_user_prompt
+    )
     return {
         "export_format_version": EXPORT_FORMAT_VERSION,
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -316,6 +328,18 @@ def build_manifest(
             "metadata": eval_set.meta or {},
             "version": eval_set.version,
             "created_at": _iso(eval_set.created_at),
+            # How this set's answers are graded, as it stands today. In the
+            # manifest and not in questions.* on purpose: a judge prompt is
+            # thousands of characters and identical on every row, so a column of
+            # it would make the CSV unopenable in the tools people export for.
+            # Each run's own frozen copy already travels in runs.config, which is
+            # what makes the per-run pass rates in this archive interpretable.
+            "judge_prompt": {
+                "system_prompt": judge_system,
+                "user_prompt": judge_user,
+                "is_default": judge_is_default,
+                "fingerprint": judge_fingerprint,
+            },
         },
         "files": files,
         "counts": counts,

@@ -31,11 +31,81 @@ class EvalSetCreate(BaseModel):
 
 
 class EvalSetUpdate(BaseModel):
-    """Edit name/description/metadata under optimistic lock (§6.16)."""
+    """Edit name/description/metadata/judge prompt under optimistic lock (§6.16).
+
+    The judge prompt rides the existing owner-only, versioned PATCH rather than
+    getting an endpoint of its own — it is a property of the set like the others,
+    and reusing this route means it inherits the 409 conflict flow for free.
+    An empty string is meaningful here: it clears the override and returns the
+    set to the default prompt. `None` (the field absent) leaves it untouched.
+    """
     name: str | None = None
     description: str | None = None
     metadata: dict[str, str] | None = None
+    judge_system_prompt: str | None = None
+    judge_user_prompt: str | None = None
     version: int  # client-held version; mismatch -> 409
+
+
+class JudgePromptOut(BaseModel):
+    """This eval set's grading criteria, as the Judging tab renders them.
+
+    `system_prompt` / `user_prompt` are the *effective* text — the override or
+    the default, already resolved — because a textarea has to show something and
+    "empty means the default you can't see" is not something to make a person
+    reason about. `is_default` is what says which of the two it is.
+    """
+    system_prompt: str
+    user_prompt: str
+    is_default: bool
+    fingerprint: str
+    # Placeholders the user template is missing. Empty is the healthy state; the
+    # UI blocks nothing on it but says loudly what will happen.
+    missing_placeholders: list[str] = Field(default_factory=list)
+    verified_at: datetime | None = None
+    verified_model: str | None = None
+    reviewed_at: datetime | None = None
+
+
+class JudgePromptVerifyRequest(BaseModel):
+    """Grade one known question twice, to see whether this prompt still works.
+
+    `question_pk` is the question to try it on — the developer picks, because
+    only they know which of their questions is representative.
+
+    `model` and `api_key` are optional overrides. Left blank, the server uses the
+    environment's LLM settings, which is also what a run with a blank config
+    would use. The key is inbound-only, exactly like `RunSecrets`.
+    """
+    question_pk: uuid.UUID
+    system_prompt: str
+    user_prompt: str
+    model: str = ""
+    api_key: str = ""
+
+
+class JudgePromptVerifyCase(BaseModel):
+    """One of the two graded probes."""
+    label: str  # 'ground truth as the answer' | 'a deliberately wrong answer'
+    expected_verdict: str
+    ok: bool
+    verdict: str | None = None
+    score: float | None = None
+    comment: str | None = None
+    error: str | None = None
+
+
+class JudgePromptVerifyResult(BaseModel):
+    """Both probes plus the one-line answer.
+
+    Two calls rather than one, because a single successful parse only proves the
+    reply was JSON. A prompt that answers "correct" to everything also parses
+    perfectly — and it would take a whole run, and a pass rate of 100%, to notice.
+    """
+    ok: bool
+    model: str
+    missing_placeholders: list[str] = Field(default_factory=list)
+    cases: list[JudgePromptVerifyCase] = Field(default_factory=list)
 
 
 class RolesUpdate(BaseModel):
@@ -79,6 +149,10 @@ class EvalSetCard(BaseModel):
     improved: int
     my_role: str | None
     roles: list[ShareEntry]  # current share list (for the config dialog)
+    # Grading criteria for every run of this set. Readable by any role on
+    # purpose: a viewer whose run comes back 40% is entitled to know what "wrong"
+    # meant. Only an owner can change it.
+    judge_prompt: JudgePromptOut
 
 
 # --- Questions --------------------------------------------------------------
@@ -122,6 +196,16 @@ class RunConfig(BaseModel):
     diagnosis_model: str = ""
     # How many questions are sent to the agent at once.
     concurrency: int | None = Field(default=None, ge=1)
+    # The grading criteria this run used, frozen at trigger time. Present on the
+    # way out (and in exports) but **ignored on the way in**: `trigger_run`
+    # overwrites all three from the eval set, which is what makes "only an owner
+    # can change how answers are graded" true no matter what a client posts.
+    judge_system_prompt: str = ""
+    judge_user_prompt: str = ""
+    # Short hash of the pair above. Two runs sharing it were graded by the same
+    # words, so their pass rates are comparable — the run list shows it for
+    # exactly that reason.
+    judge_prompt_fingerprint: str = ""
 
 
 class RunSecrets(BaseModel):
@@ -164,6 +248,12 @@ class RunOut(BaseModel):
     total_count: int | None
     correct_count: int | None
     incorrect_count: int | None = None
+    # Questions whose judge replied with something we could not parse. Reported
+    # separately from the pass rate rather than folded into it: they stay in the
+    # denominator (an ungraded question is not a pass), but a rate that dropped
+    # because the judge broke is a different problem from one that dropped
+    # because the agent got worse, and the number is the only thing that says so.
+    judge_invalid_count: int | None = None
 
 
 class RunPage(Page):
@@ -188,10 +278,12 @@ class QuestionResultOut(BaseModel):
     judge_comment: str | None
     status: str  # pending | done | failed | cancelled
     # How far this question got — 'pending' | 'answered' | 'judged' | 'failed' |
-    # 'cancelled'. Derived server-side (services.aggregation.result_phase) so the
-    # left column's colours and the live SSE events come from one rule.
+    # 'judge_invalid' | 'cancelled'. Derived server-side
+    # (services.aggregation.result_phase) so the left column's colours and the
+    # live SSE events come from one rule.
     phase: str
     error_message: str | None = None  # why status == 'failed' / 'cancelled'
+    failure_kind: str | None = None  # 'agent' | 'judge' | 'judge_invalid'
     agent_latency_ms: int | None = None
     trace_ready: bool
     has_analysis: bool

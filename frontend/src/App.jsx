@@ -161,6 +161,11 @@ export default function App() {
                     <RunHistory
                       evalSet={resolved}
                       myRole={myRole}
+                      // The run history can now edit the set (its judging
+                      // settings), so the copy held up here has to follow —
+                      // otherwise the fingerprint chips keep comparing against
+                      // the prompt as it was when the page loaded.
+                      onEvalSetChanged={setEvalSet}
                       onOpenRuns={(runIds, mode, lastN) =>
                         navigate(href.runs(resolved.id, runIds, mode, lastN))
                       }

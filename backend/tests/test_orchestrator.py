@@ -14,8 +14,9 @@ import pytest
 
 from app import cancellation, orchestrator, pipeline
 from app.integrations import Seams
-from app.integrations.base import AgentResponse, Span, Trace, Verdict
+from app.integrations.base import AgentResponse, LlmOutputError, Span, Trace, Verdict
 from app.models import Question, QuestionResult, Run, SpanAnalysis
+from app.services.aggregation import result_phase
 from app.sse import hub
 
 
@@ -226,7 +227,43 @@ async def test_judge_failure_does_not_silently_pass_the_question(seams):
     assert result.status == "failed"
     assert result.verdict is None  # not defaulted to correct
     assert "judge returned garbage" in result.error_message
+    assert result.failure_kind == "judge"
     assert run.correct_count == 0
+
+
+async def test_an_unparseable_judge_reply_is_its_own_kind_of_failure(seams):
+    """Distinguished from every other failure because it indicts something else.
+
+    An agent error or a timeout is the agent's or the network's fault; a judge
+    that answers in the wrong shape is almost always the eval set's own judge
+    prompt, which is the one thing the owner can go and fix. Lumping the two
+    together is how a broken prompt reads as "the agent got worse".
+    """
+    async def unparseable(question, response, ground_truth):
+        raise LlmOutputError("model did not return valid JSON after a repair attempt")
+
+    seams.judge = unparseable
+    run, questions = make_run(), [make_question()]
+    session = StubSession(run, questions)
+    await orchestrator._execute_run(session, run)
+
+    result = next(o for o in session.added if isinstance(o, QuestionResult))
+    assert result.status == "failed"
+    assert result.failure_kind == "judge_invalid"
+    assert result.verdict is None
+    # Still not a pass, and still in the denominator: an ungraded question is an
+    # unknown, and quietly shrinking `total` would make the pass rate of a run
+    # with a broken judge look healthier than one where the judge worked.
+    assert run.correct_count == 0
+    assert run.total_count == 1
+    assert result_phase(result.status, result.agent_response, result.verdict,
+                        result.failure_kind) == "judge_invalid"
+
+
+def test_a_pre_existing_failed_row_still_paints_as_failed():
+    # Rows written before `failure_kind` existed carry NULL, and guessing a kind
+    # for them would make the new "could not be judged" count lie about history.
+    assert result_phase("failed", "answer", None, None) == "failed"
 
 
 async def test_diagnosis_failure_leaves_the_verdict_intact(seams):

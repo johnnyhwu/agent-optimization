@@ -675,7 +675,7 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 | Group | Endpoints |
 |---|---|
 | Session | `GET /health`, `/users`, `/users/lookup?username=`, `/me`, `/run-config/defaults` |
-| Eval sets | `POST /eval-sets`, `GET /eval-sets` (paged + filtered), `GET·PATCH·DELETE /eval-sets/{id}`, `PUT /eval-sets/{id}/roles`, `GET /eval-sets/metadata/keys` |
+| Eval sets | `POST /eval-sets`, `GET /eval-sets` (paged + filtered), `GET·PATCH·DELETE /eval-sets/{id}`, `PUT /eval-sets/{id}/roles`, `GET /eval-sets/metadata/keys`, `POST .../judge-prompt/verify`, `POST .../judge-prompt/reviewed` |
 | Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
 | Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
@@ -813,6 +813,70 @@ eval set as `source_format`.
 | `ground_truth_reasoning_process_description` | ✅ | |
 | `skill` | ✅ | list of strings |
 | `question_id` | optional | system generates an immutable `q_<hex>` if omitted (not a content hash) |
+
+## How answers are graded (the judge prompt)
+
+The judge is an LLM told what "correct" means for this eval set. That prompt is
+editable — **on the eval set, by its owner**, under the config gear's *Judging*
+tab (reachable from the card on the home page and from the run history, since
+that is where someone is standing when they want to change it).
+
+**Why it lives on the set and not in the run config.** Everything in the "Run
+eval" dialog answers *where do I connect and how fast do I go* — the caller's
+business, which is why a viewer may set it. This answers *what counts as
+correct*, and that belongs to the question set: if every caller brought their
+own, two runs of the same set would produce pass rates nobody could compare, and
+comparing them is what the entire middle tier is for. It also means the existing
+owner-only guard covers it, with no per-field permission rule to explain.
+
+So the answer to "which run settings can a viewer change?" stays simple:
+**all of them**. The judge prompt is not one of them — the run dialog shows which
+prompt will be used and links to where it is changed. A posted prompt is
+discarded server-side rather than refused, because there is nothing for the
+caller to correct.
+
+**Two halves, both yours.** The system prompt is unrestricted, including the JSON
+contract. The user prompt is a template and must contain `{question}`,
+`{ground_truth}` and `{agent_response}`; the editor checks that on every
+keystroke, because a template missing `{ground_truth}` does not error — it grades
+every answer against nothing and returns a pass rate that looks entirely normal.
+
+**Verify prompt** grades one question you pick, twice: once with its own expected
+answer (must come back *correct*), once with a deliberately contradictory one
+(must come back *incorrect*). One call would only prove the reply parses — a
+prompt that says "correct" to everything parses perfectly. It uses the
+environment's LLM settings unless you override the model or key in the dialog,
+and nothing typed there is stored. Verification is never required, and it is
+cleared the moment either prompt is edited: a badge describing text that no
+longer exists is worse than no badge.
+
+**Blank means the built-in prompt**, and a set that never overrode it keeps
+inheriting later improvements to it — the stored value is NULL, not a copy. The
+frozen copy lives on each *run* instead (`runs.config`), so a finished run always
+says exactly what it graded with even after the set has moved on. The run list
+shows a short fingerprint of that text per row, highlighted when it differs from
+the set's current prompt: same fingerprint means the pass rates are comparable,
+and it is what answers "did the rate drop because the agent got worse, or because
+I made the judge stricter?".
+
+> There are no prompt *versions*. There is no need for a version table to see old
+> prompts — every run carries the full text it used, visible under the run's
+> config. What you don't get is a list to restore from.
+
+**A new failure kind: "not judged".** If the judge replies with something that
+cannot be parsed, the question is not marked incorrect and never counted as a
+pass — it is recorded as `judge_invalid`, shown amber, and totalled per run as
+"N unjudged". It stays in the pass rate's denominator (an ungraded question is an
+unknown), but it points somewhere different from every other failure: at the eval
+set's own judge prompt, the one thing an owner can go and fix.
+
+With `JUDGE_IMPL=fake` (the default) the fake judge ignores prompts entirely. The
+editor says so and disables Verify, rather than letting someone carefully tune
+text that does nothing.
+
+The playground is the exception to all of the above: an attempt belongs to no eval
+set, so its judge prompt is freely editable there, and a question carried over
+from a run arrives with that run's frozen prompt (the composer says which).
 
 ## Download (export)
 

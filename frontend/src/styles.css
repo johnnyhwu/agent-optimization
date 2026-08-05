@@ -1182,3 +1182,66 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* ---- judging: the eval set's grading criteria ----
+   A judge that replied in the wrong shape is amber, not red. Red is "the agent
+   or the network let you down"; this one says the eval set's own judge prompt
+   did, which is a different thing to go and look at — and unlike a wrong answer
+   it is nobody's result. */
+.dot.judge_invalid { background: var(--amber); }
+.qphase.judge_invalid { color: var(--amber); }
+.qitem.judge_invalid { opacity: 0.85; }
+.pill.warn { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
+
+/* The fingerprint of the judge prompt a run was graded with. Neutral while it
+   matches the set's current one; amber when it doesn't, because that is the row
+   whose pass rate cannot be compared with its neighbours. */
+.chip {
+  font-size: var(--text-micro);
+  font-family: var(--font-mono);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.chip.changed { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
+
+/* A note inside a dialog that is guidance rather than an error. */
+.hint.callout {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  color: var(--text);
+}
+.danger-text { color: var(--red); }
+
+/* Judge prompts are long and whitespace-significant; they scroll rather than
+   reflow, for the same reason span bodies do. */
+pre.prompt-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+/* An icon button with something behind it worth opening. One dot, no number:
+   the count would be 1 forever. */
+.icon-btn.nudge { position: relative; }
+.icon-btn.nudge::after {
+  content: "";
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}

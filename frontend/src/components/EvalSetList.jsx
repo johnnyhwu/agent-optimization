@@ -170,10 +170,18 @@ export default function EvalSetList({ onOpen, subject }) {
                   </button>
                   {s.my_role === "owner" && (
                     <>
+                      {/* The dot means "nobody has looked at how this set is
+                          graded yet", not "your judge prompt is the default
+                          one" — the latter is true of nearly every set and
+                          would be background noise inside a week. */}
                       <button
-                        className="icon-btn"
+                        className={`icon-btn ${s.judge_prompt?.reviewed_at ? "" : "nudge"}`}
                         aria-label="Configure"
-                        title="Configure"
+                        title={
+                          s.judge_prompt?.reviewed_at
+                            ? "Configure"
+                            : "Configure — nobody has checked this set's grading criteria yet"
+                        }
                         onClick={(e) => { e.stopPropagation(); setConfigSet(s); }}
                       >
                         <IconGear size={16} />
@@ -254,7 +262,20 @@ export default function EvalSetList({ onOpen, subject }) {
         <ConfigDialog
           evalSet={configSet}
           subject={subject}
-          onClose={() => setConfigSet(null)}
+          initialTab={configSet.judge_prompt?.reviewed_at ? "general" : "judging"}
+          onClose={async () => {
+            // Opening the tab counts as the review, so an owner who looked and
+            // decided the default was right isn't nagged forever.
+            if (!configSet.judge_prompt?.reviewed_at) {
+              try {
+                await api.markJudgePromptReviewed(configSet.id);
+              } catch {
+                /* a lingering dot is not worth an error toast */
+              }
+            }
+            setConfigSet(null);
+            refresh();
+          }}
           onSaved={() => { setConfigSet(null); refresh(); }}
         />
       )}

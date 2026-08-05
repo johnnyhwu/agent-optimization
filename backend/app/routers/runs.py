@@ -17,7 +17,7 @@ from app.db import get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
 from app.schemas import RunConfig, RunCreate, RunOut, RunPage
-from app.services import run_config
+from app.services import judge_prompt, run_config
 from app.services.deletion import delete_run as delete_run_rows
 from app.sse import hub
 
@@ -52,6 +52,43 @@ async def _incorrect_count(session: AsyncSession, run_id: uuid.UUID) -> int:
             .where(QuestionResult.run_id == run_id, QuestionResult.verdict == "incorrect")
         )
     ) or 0
+
+
+async def _judge_invalid_count(session: AsyncSession, run_id: uuid.UUID) -> int:
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(QuestionResult)
+            .where(
+                QuestionResult.run_id == run_id,
+                QuestionResult.failure_kind == "judge_invalid",
+            )
+        )
+    ) or 0
+
+
+async def _judge_invalid_counts(
+    session: AsyncSession, run_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """How many questions this run could not judge, per run.
+
+    A second grouped query rather than a join onto the incorrect counts: the two
+    are counting different things (a verdict vs. the absence of one) and keeping
+    them apart means neither can accidentally start filtering the other.
+    """
+    if not run_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(QuestionResult.run_id, func.count())
+            .where(
+                QuestionResult.run_id.in_(run_ids),
+                QuestionResult.failure_kind == "judge_invalid",
+            )
+            .group_by(QuestionResult.run_id)
+        )
+    ).all()
+    return {run_id: n for run_id, n in rows}
 
 
 async def _incorrect_counts(
@@ -133,7 +170,14 @@ async def trigger_run(
     # rather than a set of deltas against an environment that may since have
     # changed. Must precede _resolve_secrets, which compares endpoints against
     # the source run's — both sides are then fully populated.
-    config = run_config.resolve(body.config)
+    # The grading criteria come from the eval set, never from the request body —
+    # anyone may start a run (§6.16), but only an owner decides what counts as
+    # correct. `resolve` discards whatever was posted for these three fields.
+    system, user = judge_prompt.effective(es.judge_system_prompt, es.judge_user_prompt)
+    config = run_config.resolve(
+        body.config,
+        judge_prompt=(system, user, judge_prompt.fingerprint(system, user)),
+    )
     secrets = await _resolve_secrets(session, eval_set_id, body, config)
 
     run = Run(
@@ -148,10 +192,10 @@ async def trigger_run(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
-    return _run_out(run, incorrect_count=0)
+    return _run_out(run, incorrect_count=0, judge_invalid_count=0)
 
 
-def _run_out(run: Run, incorrect_count: int) -> RunOut:
+def _run_out(run: Run, incorrect_count: int, judge_invalid_count: int = 0) -> RunOut:
     return RunOut(
         id=run.id, eval_set_id=run.eval_set_id, triggered_by=run.triggered_by,
         name=run.name, config=RunConfig(**(run.config or {})),
@@ -161,6 +205,7 @@ def _run_out(run: Run, incorrect_count: int) -> RunOut:
         pass_rate=float(run.pass_rate) if run.pass_rate is not None else None,
         total_count=run.total_count, correct_count=run.correct_count,
         incorrect_count=incorrect_count,
+        judge_invalid_count=judge_invalid_count,
     )
 
 
@@ -191,8 +236,10 @@ async def list_runs(
         )
     ).all()
 
-    counts = await _incorrect_counts(session, [r.id for r in runs])
-    items = [_run_out(r, counts.get(r.id, 0)) for r in runs]
+    run_ids = [r.id for r in runs]
+    counts = await _incorrect_counts(session, run_ids)
+    unjudged = await _judge_invalid_counts(session, run_ids)
+    items = [_run_out(r, counts.get(r.id, 0), unjudged.get(r.id, 0)) for r in runs]
     return RunPage(items=items, total=total, has_more=offset + len(items) < total)
 
 
@@ -209,7 +256,11 @@ async def get_run(
     run = await session.get(Run, run_id)
     if run is None or run.eval_set_id != eval_set_id:
         raise HTTPException(status_code=404, detail="run not found")
-    return _run_out(run, await _incorrect_count(session, run_id))
+    return _run_out(
+        run,
+        await _incorrect_count(session, run_id),
+        await _judge_invalid_count(session, run_id),
+    )
 
 
 @router.post("/{run_id}/cancel", response_model=RunOut)
@@ -245,7 +296,11 @@ async def cancel_run(
     # The DB flag is the durable record; the event is what actually interrupts
     # the in-flight agent call (see app/cancellation.py).
     cancellation.signal(run_id)
-    return _run_out(run, await _incorrect_count(session, run_id))
+    return _run_out(
+        run,
+        await _incorrect_count(session, run_id),
+        await _judge_invalid_count(session, run_id),
+    )
 
 
 @router.delete("/{run_id}", status_code=204)

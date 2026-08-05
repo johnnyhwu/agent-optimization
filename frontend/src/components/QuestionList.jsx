@@ -16,6 +16,11 @@ const PHASE_LABEL = {
   pending: "waiting",
   answered: "judging…",
   failed: "failed",
+  // Separated from "failed" on purpose: this one is not the agent's fault and
+  // not the network's. The judge answered in a shape we could not parse, which
+  // points at the eval set's judge prompt — the one thing an owner can go and
+  // fix. It is still not a pass, and still in the pass rate's denominator.
+  judge_invalid: "not judged",
   cancelled: "stopped",
 };
 
@@ -46,7 +51,7 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
       {shown.map((r) => {
         // Colour follows the phase; only a judged question is green or red.
         const dot =
-          r.phase === "failed" || r.phase === "cancelled"
+          r.phase === "failed" || r.phase === "cancelled" || r.phase === "judge_invalid"
             ? r.phase
             : r.phase === "judged"
             ? r.is_incorrect
@@ -67,7 +72,8 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
                 {r.question_id} · <span className={`qphase ${r.phase}`}>{note}</span>
               </div>
               {/* A bare "failed" says nothing once the agent is a real service. */}
-              {(r.phase === "failed" || r.phase === "cancelled") && r.error_message && (
+              {(r.phase === "failed" || r.phase === "cancelled" || r.phase === "judge_invalid") &&
+                r.error_message && (
                 <div className="qerror" title={r.error_message}>
                   {r.error_message.slice(0, 80)}
                 </div>

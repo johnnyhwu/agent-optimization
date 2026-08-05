@@ -16,7 +16,14 @@ from app.integrations.real.diagnosis import (
 )
 from app.integrations.real.judge import JudgeOutput, LlmJudgeClient
 from app.integrations.real.llm import LlmOutputError, _strip_code_fence
-from app.integrations.real.prompts import build_diagnosis_messages, build_judge_messages
+from app.integrations.real.prompts import (
+    DEFAULT_JUDGE_SYSTEM,
+    DEFAULT_JUDGE_USER,
+    build_diagnosis_messages,
+    build_judge_messages,
+    missing_placeholders,
+)
+from app.services import judge_prompt
 
 
 def _spans(n=3, body="short") -> list[Span]:
@@ -82,6 +89,75 @@ def test_judge_prompt_includes_all_three_inputs():
     messages = build_judge_messages("QUESTION", "AGENT", "EXPECTED")
     user = messages[-1]["content"]
     assert "QUESTION" in user and "AGENT" in user and "EXPECTED" in user
+
+
+# --- A per-eval-set judge prompt -------------------------------------------
+
+def test_an_eval_sets_prompt_replaces_both_halves():
+    messages = build_judge_messages(
+        "QUESTION", "AGENT", "EXPECTED",
+        system_prompt="GRADE IT MY WAY",
+        user_template="Q={question} T={ground_truth} A={agent_response}",
+    )
+    assert messages[0]["content"] == "GRADE IT MY WAY"
+    assert messages[-1]["content"] == "Q=QUESTION T=EXPECTED A=AGENT"
+
+
+def test_placeholders_are_substituted_not_formatted():
+    """A judge prompt is full of JSON braces, and `str.format` would choke on
+    them — `{"verdict": ...}` is the shape every one of these prompts asks for."""
+    messages = build_judge_messages(
+        "Q", "A", "T",
+        user_template='Reply {"verdict": "correct"} for {question}',
+    )
+    assert messages[-1]["content"] == 'Reply {"verdict": "correct"} for Q'
+
+
+def test_missing_placeholders_are_reported_by_name():
+    # The dangerous one: a template with no ground truth grades every answer
+    # against nothing, and never raises while doing it.
+    assert missing_placeholders(DEFAULT_JUDGE_USER) == []
+    assert missing_placeholders("{question} -> {agent_response}") == ["ground_truth"]
+    assert set(missing_placeholders("nothing at all")) == {
+        "question", "ground_truth", "agent_response"
+    }
+
+
+def test_a_blank_override_falls_back_to_the_shipped_default():
+    # Emptying the textarea means "back to the default", not "grade with no
+    # instructions" — the same rule blank fields follow everywhere else.
+    assert judge_prompt.effective("  ", "") == (DEFAULT_JUDGE_SYSTEM, DEFAULT_JUDGE_USER)
+    assert judge_prompt.is_default(None, None)
+    assert not judge_prompt.is_default("something else", None)
+
+
+def test_the_fingerprint_tracks_the_words_and_nothing_else():
+    default = judge_prompt.fingerprint(None, None)
+    # Same effective text, however it was arrived at -> comparable runs.
+    assert judge_prompt.fingerprint(DEFAULT_JUDGE_SYSTEM, "") == default
+    # One edited sentence -> a different chip on the run list.
+    assert judge_prompt.fingerprint(DEFAULT_JUDGE_SYSTEM + " Be strict.", "") != default
+    assert len(default) == 8
+
+
+async def test_the_judge_client_carries_the_eval_sets_prompt(configure, monkeypatch):
+    seen = {}
+
+    async def fake_complete_json(model, messages, schema, client=None):
+        seen["messages"] = messages
+        return schema.model_validate({"verdict": "correct", "score": 1.0})
+
+    monkeypatch.setattr(judge_mod, "complete_json", fake_complete_json)
+    with configure(judge_model="judge-model", judge_score_threshold=None):
+        client = LlmJudgeClient(
+            model="judge-model",
+            system_prompt="MY SYSTEM",
+            user_template="only {question}/{ground_truth}/{agent_response}",
+        )
+        await client.judge("Q", "A", "T")
+
+    assert seen["messages"][0]["content"] == "MY SYSTEM"
+    assert seen["messages"][-1]["content"] == "only Q/T/A"
 
 
 # --- Diagnosis --------------------------------------------------------------

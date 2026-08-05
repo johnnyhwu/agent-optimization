@@ -149,6 +149,44 @@ export default function PlaygroundComposer({
               not a verdict (§6.9).
             </div>
           </div>
+
+          {/* Freely editable here, unlike on an eval set where only the owner
+              may touch it. An attempt belongs to no set, so there is no shared
+              pass rate to keep comparable — trying a prompt out is exactly what
+              this screen is for. What it must not do is grade with a criterion
+              the developer doesn't know they inherited, hence the provenance
+              line: a question carried over from a run brings that run's frozen
+              judge prompt with it. */}
+          <details className="field">
+            <summary className="linkish">
+              Judge prompt —{" "}
+              {form?.judge_prompt_fingerprint
+                ? `carried over from the run you came from (${form.judge_prompt_fingerprint})`
+                : "the built-in default"}
+            </summary>
+            <div className="hint" style={{ margin: "8px 0" }}>
+              Applies to this attempt only, and is never written back to any eval
+              set. Leave a box empty to use the built-in prompt. The user prompt
+              needs <code>{"{question}"}</code>, <code>{"{ground_truth}"}</code>{" "}
+              and <code>{"{agent_response}"}</code>.
+            </div>
+            <label>System</label>
+            <textarea
+              rows={8}
+              spellCheck={false}
+              value={form?.judge_system_prompt || ""}
+              placeholder="Blank — using the built-in judge system prompt."
+              onChange={(e) => set("judge_system_prompt", e.target.value)}
+            />
+            <label style={{ marginTop: 8 }}>User</label>
+            <textarea
+              rows={6}
+              spellCheck={false}
+              value={form?.judge_user_prompt || ""}
+              placeholder="Blank — using the built-in judge user prompt."
+              onChange={(e) => set("judge_user_prompt", e.target.value)}
+            />
+          </details>
         </div>
       )}
 

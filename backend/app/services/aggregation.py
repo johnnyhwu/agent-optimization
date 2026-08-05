@@ -9,20 +9,35 @@ import uuid
 from dataclasses import dataclass
 
 
-def result_phase(status: str, agent_response: str | None, verdict: str | None) -> str:
+def result_phase(
+    status: str,
+    agent_response: str | None,
+    verdict: str | None,
+    failure_kind: str | None = None,
+) -> str:
     """How far one question got, as the left column paints it.
 
-        pending    no agent answer yet                      (grey)
-        answered   answered, judge hasn't ruled yet         (plain)
-        judged     has a verdict                            (green / red)
-        failed     agent or judge errored                   (error styling)
-        cancelled  the run was stopped mid-question
+        pending        no agent answer yet                  (grey)
+        answered       answered, judge hasn't ruled yet     (plain)
+        judged         has a verdict                        (green / red)
+        failed         agent or judge errored               (error styling)
+        judge_invalid  the judge replied unparseably        (warning styling)
+        cancelled      the run was stopped mid-question
+
+    `judge_invalid` is a failure like any other as far as the database is
+    concerned (`status='failed'`, no verdict, not counted as a pass) — it is
+    split out here because it points somewhere else entirely. Every other failure
+    says the agent or the network let you down; this one says the eval set's own
+    judge prompt did, and that is the one an owner can go and fix. Rows written
+    before `failure_kind` existed carry NULL and keep painting as `failed`.
 
     Derived rather than stored: `status`, `agent_response` and `verdict` already
     say all of this, and a stored copy is one more thing that can drift. Kept
     here so the REST payload and the live SSE events can't disagree about a
     question's colour.
     """
+    if status == "failed" and failure_kind == "judge_invalid":
+        return "judge_invalid"
     if status in ("failed", "cancelled"):
         return status
     if verdict is not None:
