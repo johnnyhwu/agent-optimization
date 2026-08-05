@@ -1058,6 +1058,8 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /eval-sets/{id}/results` | R | 左欄題目清單；`?run_ids=..&mode=union\|intersection\|last_n&last_n=` |
 | `GET /eval-sets/{id}/results/{rid}/trace` | R | 中+右欄：即時抓 trace（完整 body）+ 讀 DB 的診斷 |
 | `POST /eval-sets/{id}/results/{rid}/re-diagnose` | O | 手動重診斷（避免 viewer 產生 LLM 成本）|
+| `GET /eval-sets/{id}/export/preview` | R | 下載對話框的檔案預覽：各檔真實列數 + **實際欄位名**（由寫檔用的同一組欄位定義供給）|
+| `GET /eval-sets/{id}/export` | R | 下載本體；`?questions&runs&traces&fmt=csv\|jsonl&run_scope=all\|latest\|latest_n\|selected&run_ids=`。只選一個檔 → 直接回該檔；多檔 → zip + `manifest.json`；全不選 → 422 |
 | `POST /eval-sets/from-shortlist` | — | 用 shortlist 的題目 + 複製既有 set 的題目建立新 set（§7.6）；讀不到的來源 set → 404（**寫入前**檢查）；沒有任何題目 → 422 |
 | `GET /playground/workspace` | — | agent 的 config（已移除機密）+ 全部 skill 檔 + 版本；失敗 → **503 + 原因** |
 | `GET /playground/workspace/version` | — | 只有版本字串，送出前的過期檢查用 |
@@ -1087,6 +1089,21 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 - `GET /playground/attempts` 每筆回 `workspace_overridden` / `config_overrides`（點路徑陣列）/
   `edited_skill_files`（相對路徑陣列），讓清單一眼看出這次不是跑在 agent 自己的 workspace 上。
 - `POST /eval-sets/from-shortlist` 回 `{id, question_count, duplicates_skipped}`。
+- **匯出（§6.13 卡片動作）**：`questions.*` 的欄位名是**上傳的那一組**
+  （`ground_truth_reasoning_process_description`、單數的 `skill`），不是 API 的
+  （`ground_truth_reasoning`、複數的 `skills`）——用 API 的名字匯出，檔案再上傳會 422，
+  而使用者會以為是自己的檔案壞了。`test_export.py` 把匯出結果直接餵回 `parse_jsonl` 釘住這件事。
+  > 每個檔都多帶 `eval_set_id` / `eval_set_name`：`question_id` 只在單一 set 內唯一
+  > （`UniqueConstraint(eval_set_id, question_id)`），下載→編輯→重新上傳之後兩個 set 常常撞號。
+  > 系統內部不受影響（所有 join 都走 `question_pk`），但檔案是拿去 pandas / Excel join 的，
+  > 只用 `question_id` 會安靜地把不相干的題目併在一起。**匯出檔的關聯鍵＝資料庫的唯一鍵。**
+  > 這兩欄對重新上傳是免費的：CSV 與 JSONL 的 parser 都只按名字取欄位，不認得的直接略過。
+  >
+  > `question_id` **保留**（`from-shortlist` 則刻意產生新的——一個是複製、一個是衍生），
+  > 兩者都記在 `manifest.json` 的 `question_id_policy`。
+  > **憑證不可能進到檔案裡**：run 列經過 `RunConfig`，它沒有任何憑證欄位也會丟掉未知的 key，
+  > 所以就算金鑰被誤存進 `config` 也匯不出去；只有 slot 名稱透過 `credentials_set` 出現。
+  > 分享名單（`eval_set_roles`）是 PII，永不匯出。
 
 ---
 

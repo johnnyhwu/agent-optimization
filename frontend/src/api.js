@@ -53,6 +53,64 @@ function qs(params) {
   return s ? `?${s}` : "";
 }
 
+// Export params, with `run_ids` repeated rather than joined — the endpoint reads
+// it as a list, and a comma-joined value would arrive as one malformed uuid.
+function exportQuery({ questions, runs, traces, fmt, runScope, runIds = [], lastN }) {
+  const search = new URLSearchParams();
+  if (questions !== undefined) search.set("questions", String(Boolean(questions)));
+  if (runs !== undefined) search.set("runs", String(Boolean(runs)));
+  if (traces !== undefined) search.set("traces", String(Boolean(traces)));
+  if (fmt) search.set("fmt", fmt);
+  if (runScope) search.set("run_scope", runScope);
+  if (lastN) search.set("last_n", String(lastN));
+  runIds.forEach((id) => search.append("run_ids", id));
+  return `?${search.toString()}`;
+}
+
+function filenameFrom(disposition) {
+  const match = /filename="([^"]+)"/.exec(disposition || "");
+  return match ? match[1] : null;
+}
+
+// A download cannot be a plain `<a href>`: an anchor navigation carries no
+// headers, so in Keycloak mode it would arrive without the bearer token and
+// 401. Fetching it here keeps the identity on the request exactly like every
+// other call; the blob is then handed to a synthetic anchor to reach the disk.
+//
+// Returns the filename the server chose, so the caller can name it in a toast
+// rather than saying "done" and leaving the developer to find it. `fallbackName`
+// covers the case where Content-Disposition cannot be read — a cross-origin
+// deployment whose CORS policy does not expose the header — since saving the
+// file as a bare "export" with no extension is worse than guessing well.
+async function download(path, fallbackName) {
+  const res = await fetch(BASE + path, { headers: { ...(await getAuthHeaders()) } });
+  if (!res.ok) {
+    let detail;
+    try {
+      detail = (await res.json()).detail;
+    } catch {
+      detail = res.statusText;
+    }
+    const err = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    err.status = res.status;
+    throw err;
+  }
+  const blob = await res.blob();
+  const filename =
+    filenameFrom(res.headers.get("Content-Disposition")) || fallbackName || "export";
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoking synchronously cancels the save in some browsers, so the URL is
+  // released on a later tick instead.
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return filename;
+}
+
 export const api = {
   // Kept for the API surface, but the UI does not gate anything on it: a role map
   // fetched once per session goes stale the moment a set is created or shared,
@@ -77,6 +135,13 @@ export const api = {
   deleteEvalSet: (id) => req("DELETE", `/eval-sets/${id}`),
   updateRoles: (id, shares) => req("PUT", `/eval-sets/${id}/roles`, { shares }),
   metadataKeys: () => req("GET", "/eval-sets/metadata/keys"),
+  // Row counts and column names for the download dialog's file preview. Counts
+  // depend only on which runs are in scope, so this is refetched when the run
+  // selector changes and not when a file is ticked.
+  exportPreview: (id, params) =>
+    req("GET", `/eval-sets/${id}/export/preview${exportQuery(params)}`),
+  downloadExport: (id, params, fallbackName) =>
+    download(`/eval-sets/${id}/export${exportQuery(params)}`, fallbackName),
   listQuestions: (id) => req("GET", `/eval-sets/${id}/questions`),
   updateQuestion: (id, qpk, payload) =>
     req("PATCH", `/eval-sets/${id}/questions/${qpk}`, payload),

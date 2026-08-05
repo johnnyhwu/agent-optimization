@@ -6,8 +6,9 @@ import Sparkline from "./Sparkline.jsx";
 import UploadDialog from "./UploadDialog.jsx";
 import ConfigDialog from "./ConfigDialog.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import DownloadDialog from "./DownloadDialog.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconGear, IconTrash, IconUpload, IconUsers } from "./icons.jsx";
+import { IconDownload, IconGear, IconTrash, IconUpload, IconUsers } from "./icons.jsx";
 
 const PAGE_SIZE = 24;
 
@@ -24,6 +25,7 @@ export default function EvalSetList({ onOpen, subject }) {
   const [showUpload, setShowUpload] = useState(false);
   const [configSet, setConfigSet] = useState(null);
   const [deleteSet, setDeleteSet] = useState(null);
+  const [downloadSet, setDownloadSet] = useState(null);
 
   // Search / filter / sort. `query` is what's typed; `search` is the debounced
   // value that actually hits the API — a request per keystroke would both
@@ -153,26 +155,40 @@ export default function EvalSetList({ onOpen, subject }) {
                 style={{ animationDelay: `${(i % PAGE_SIZE) * 40}ms` }}
                 onClick={() => onOpen(s)}
               >
-                {s.my_role === "owner" && (
-                  <div className="card-actions">
-                    <button
-                      className="icon-btn"
-                      aria-label="Configure"
-                      title="Configure"
-                      onClick={(e) => { e.stopPropagation(); setConfigSet(s); }}
-                    >
-                      <IconGear size={16} />
-                    </button>
-                    <button
-                      className="icon-btn danger-btn"
-                      aria-label="Delete eval set"
-                      title="Delete eval set"
-                      onClick={(e) => { e.stopPropagation(); setDeleteSet(s); }}
-                    >
-                      <IconTrash size={16} />
-                    </button>
-                  </div>
-                )}
+                {/* Download is offered to every role, config and delete only to
+                    owners. A viewer can already read every row an export
+                    contains, so withholding the file would protect nothing
+                    while denying it to most of the people who want it. */}
+                <div className="card-actions">
+                  <button
+                    className="icon-btn"
+                    aria-label="Download eval set"
+                    title="Download this eval set"
+                    onClick={(e) => { e.stopPropagation(); setDownloadSet(s); }}
+                  >
+                    <IconDownload size={16} />
+                  </button>
+                  {s.my_role === "owner" && (
+                    <>
+                      <button
+                        className="icon-btn"
+                        aria-label="Configure"
+                        title="Configure"
+                        onClick={(e) => { e.stopPropagation(); setConfigSet(s); }}
+                      >
+                        <IconGear size={16} />
+                      </button>
+                      <button
+                        className="icon-btn danger-btn"
+                        aria-label="Delete eval set"
+                        title="Delete eval set"
+                        onClick={(e) => { e.stopPropagation(); setDeleteSet(s); }}
+                      >
+                        <IconTrash size={16} />
+                      </button>
+                    </>
+                  )}
+                </div>
                 <h3>{s.name}</h3>
                 <div className="meta">
                   {new Date(s.created_at).toLocaleDateString()}
@@ -225,6 +241,13 @@ export default function EvalSetList({ onOpen, subject }) {
           subject={subject}
           onClose={() => setShowUpload(false)}
           onCreated={() => { setShowUpload(false); refresh(); }}
+        />
+      )}
+      {downloadSet && (
+        <DownloadDialog
+          evalSet={downloadSet}
+          subject={subject}
+          onClose={() => setDownloadSet(null)}
         />
       )}
       {configSet && (

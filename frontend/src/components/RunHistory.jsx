@@ -7,8 +7,11 @@ import QuestionEditor from "./QuestionEditor.jsx";
 import RunConfigDialog from "./RunConfigDialog.jsx";
 import RunConfigView from "./RunConfigView.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import DownloadDialog from "./DownloadDialog.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconPlay, IconGear, IconFileText, IconStop, IconTrash } from "./icons.jsx";
+import {
+  IconPlay, IconGear, IconDownload, IconFileText, IconStop, IconTrash,
+} from "./icons.jsx";
 
 const MODES = [
   ["union", "Union"],
@@ -34,6 +37,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
   const [showRunConfig, setShowRunConfig] = useState(false);
   const [viewConfigRun, setViewConfigRun] = useState(null);
   const [deleteRun, setDeleteRun] = useState(null);
+  const [showDownload, setShowDownload] = useState(false);
   const subject = getSubject();
 
   const {
@@ -90,6 +94,13 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {/* The second entry point, and the one that matters most for results:
+              the developer who wants the CSV is usually already here looking at
+              a run, and sending them back to the home page to find the card's
+              download button would be the long way round. */}
+          <button onClick={() => setShowDownload(true)}>
+            <IconDownload size={15} /> Download
+          </button>
           {myRole === "owner" && (
             <button onClick={() => setShowEditor(true)}><IconGear size={15} /> Edit questions</button>
           )}
@@ -227,6 +238,16 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns }) {
         />
       )}
 
+      {showDownload && (
+        // Runs already ticked here are what the developer is looking at, so the
+        // dialog opens on that selection rather than making them re-pick it.
+        <DownloadDialog
+          evalSet={evalSet}
+          subject={subject}
+          seedRunIds={selected}
+          onClose={() => setShowDownload(false)}
+        />
+      )}
       {showEditor && <QuestionEditor evalSet={evalSet} onClose={() => setShowEditor(false)} />}
       {showRunConfig && (
         <RunConfigDialog

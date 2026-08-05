@@ -1119,6 +1119,50 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
   :root { --gutter: var(--space-4); }
 }
 
+/* ---- download dialog (§6.13 export) ----
+   The panel is a preview of the output rather than a form, so the file rows
+   carry the visual weight: a monospace filename, its real columns, its real
+   count. Rows are <label>s wrapping their checkbox, so the whole block is the
+   hit target — with the reading matter this dense, a 13px tickbox would be the
+   only clickable part of a very large row. */
+.dl-artefact { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-3); margin-bottom: var(--space-3); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.dl-artefact code { font-family: var(--font-mono); font-size: var(--text-body); font-weight: var(--fw-semibold); color: var(--text); word-break: break-all; }
+
+.dl-files { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.dl-file { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3); border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.12s ease; }
+.dl-file:last-child { border-bottom: none; }
+.dl-file:hover { background: var(--panel-2); }
+.dl-file.on { background: var(--accent-soft); }
+.dl-file.off, .dl-file.always { cursor: default; opacity: 0.6; }
+.dl-file.off:hover, .dl-file.always:hover { background: none; }
+.dl-file > input[type="checkbox"] { width: auto; margin-top: 3px; flex: none; }
+/* Keeps the manifest row's text aligned with the rows that do have a box. */
+.dl-file.always > .grow { margin-left: 25px; }
+.dl-file .grow { flex: 1; min-width: 0; }
+.dl-file-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.dl-file-head code { font-family: var(--font-mono); font-size: var(--text-body); font-weight: var(--fw-semibold); }
+.dl-count { margin-left: auto; font-size: var(--text-caption); color: var(--muted); white-space: nowrap; }
+.dl-cols { margin-top: var(--space-1); font-family: var(--font-mono); font-size: var(--text-micro); line-height: 1.6; color: var(--muted); word-break: break-word; }
+.dl-subfile { margin-top: var(--space-2); padding-left: var(--space-3); border-left: 2px solid var(--border); }
+.dl-subfile code { font-family: var(--font-mono); font-size: var(--text-micro); color: var(--text); }
+
+.dl-group { border-bottom: 1px solid var(--border); }
+.dl-group:last-child { border-bottom: none; }
+.dl-group-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-2) var(--space-3); background: var(--panel-3); border-bottom: 1px solid var(--border); font-size: var(--text-caption); }
+/* The selector governs every file in this group, so it sits on the group and
+   not inside one of them — it decides the row counts of all three. */
+.dl-group-title { font-weight: var(--fw-semibold); letter-spacing: 0.06em; text-transform: uppercase; font-size: var(--text-micro); color: var(--muted); }
+.dl-scope-note { margin-left: auto; }
+.dl-group .dl-file { padding-left: var(--space-5); }
+
+.dl-runpick { max-height: 180px; overflow-y: auto; padding: var(--space-2) var(--space-5); border-bottom: 1px solid var(--border); background: var(--panel-2); }
+.dl-runpick-row { display: flex; align-items: center; gap: var(--space-2); padding: 3px 0; font-size: var(--text-body); cursor: pointer; }
+.dl-runpick-row input[type="checkbox"] { width: auto; flex: none; }
+
+.dl-foot-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3); font-size: var(--text-caption); }
+.dl-notes { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); line-height: 1.6; }
+.dl-notes code { font-family: var(--font-mono); font-size: var(--text-micro); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+
 /* ---- empty / loading ---- */
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
 .empty h2 { margin: 0 0 var(--space-2); font-size: var(--text-section); color: var(--text); }

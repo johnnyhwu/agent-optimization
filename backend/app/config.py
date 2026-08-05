@@ -185,6 +185,14 @@ class Settings(BaseSettings):
     # Oldest attempts are evicted first, per subject.
     playground_max_attempts_per_user: int = 20
 
+    # --- Export -------------------------------------------------------------
+    # Traces are the only part of an export that leaves the database: each one
+    # is a live read against the trace store, so a 600-question export is 600
+    # round trips. Fetched concurrently, and capped so a whole run history
+    # cannot turn one download into a multi-minute request.
+    export_trace_concurrency: int = 8
+    export_max_traces: int = 1000
+
     @field_validator("judge_score_threshold", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
