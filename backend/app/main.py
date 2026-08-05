@@ -14,7 +14,16 @@ from app.auth import current_subject
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
-from app.routers import diagnosis, eval_sets, playground, questions, results, runs, users
+from app.routers import (
+    diagnosis,
+    eval_sets,
+    export,
+    playground,
+    questions,
+    results,
+    runs,
+    users,
+)
 from app.services import run_config
 
 
@@ -77,6 +86,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # A cross-origin fetch can only read the safelisted response headers unless
+    # the server says otherwise, and Content-Disposition is not one of them. The
+    # export download reads it for the filename the server chose; without this
+    # the browser still saves the file, but under a made-up name. Same-origin
+    # deployments (nginx serving the UI and proxying /api) never hit this, which
+    # is exactly why it would have gone unnoticed until someone ran the UI
+    # against a backend on another host.
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(users.router)
@@ -84,6 +101,7 @@ app.include_router(eval_sets.router)
 app.include_router(questions.router)
 app.include_router(runs.router)
 app.include_router(results.router)
+app.include_router(export.router)
 app.include_router(diagnosis.router)
 app.include_router(playground.router)
 

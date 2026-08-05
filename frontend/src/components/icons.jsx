@@ -94,6 +94,15 @@ export const IconFileText = (p) => (
     <line x1="16" y1="17" x2="8" y2="17" />
   </S>
 );
+// Deliberately IconUpload's mirror image: upload and download are the two ends
+// of the same round trip, and the cards show both.
+export const IconDownload = (p) => (
+  <S {...p}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </S>
+);
 export const IconTrash = (p) => (
   <S {...p}>
     <polyline points="3 6 5 6 21 6" />
