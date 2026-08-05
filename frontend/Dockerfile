@@ -52,8 +52,22 @@ COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 # Rendered into the web root by the script below — not an nginx template, so it
 # is staged outside /etc/nginx/templates.
 COPY config.js.template /etc/nginx/config.js.template
-COPY docker-entrypoint.d/10-app-config.sh /docker-entrypoint.d/10-app-config.sh
-RUN chmod +x /docker-entrypoint.d/10-app-config.sh
+# --chmod rather than a following `RUN chmod +x`, for two reasons.
+#
+# The mode is set by the builder as it writes the layer, so no chmod(2) runs
+# inside a container. That matters because this stage is Alpine: its musl tries
+# fchmodat2(2) first and falls back to fchmodat(2) on ENOSYS, but a seccomp
+# profile that predates the syscall answers EPERM instead, the fallback never
+# fires, and the build dies with "chmod: Operation not permitted". Docker only
+# learned fchmodat2 in 26.0.0 (and 25.0.3/24.0.10/23.0.10), so any older daemon
+# on a 6.6+ kernel hits it. The Debian-based backend image is unaffected — its
+# glibc is old enough not to reach for the new syscall — which is why this was
+# the only step that failed.
+#
+# It also pins the bit down rather than inheriting it from the build context: a
+# checkout on a filesystem without a POSIX executable bit would otherwise ship a
+# script the nginx entrypoint silently skips.
+COPY --chmod=0755 docker-entrypoint.d/10-app-config.sh /docker-entrypoint.d/
 
 COPY --from=builder /app/dist /var/www
 
