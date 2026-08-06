@@ -1245,3 +1245,89 @@ pre.prompt-text {
   border-radius: 50%;
   background: var(--amber);
 }
+
+/* ============================================================================
+   Upload dialog — metadata explanation, and the expanded preview editor.
+   ============================================================================ */
+
+/* "Custom metadata" sits right under Description and says what it buys you.
+   The known keys are the ones this workspace already filters by, so they're
+   clickable rather than a list of words. */
+.meta-help { margin: 0 0 var(--space-2); max-width: 62ch; line-height: 1.5; }
+.meta-help code {
+  font-family: var(--font-mono); font-size: var(--text-micro);
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+}
+.meta-keys { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+button.chip-btn {
+  cursor: pointer; font-weight: var(--fw-medium);
+  padding: 2px 8px; transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+button.chip-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+.meta-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; }
+
+/* A dialog given an explicit height hands the leftover space to its body, and
+   the body to whichever field asked to fill it. Only bodies that contain such a
+   field become flex containers — every other dialog keeps its block layout. */
+.dialog-body { flex: 1 1 auto; min-height: 0; }
+.dialog-body:has(> .field-fill) { display: flex; flex-direction: column; }
+.field-fill { display: flex; flex-direction: column; min-height: 0; flex: 1; margin-bottom: 0; }
+.field-fill > .field-head { flex: none; }
+
+/* Expanded preview: rows on the left, one row's fields on the right — the same
+   shape as QuestionEditor, since it's the same job. */
+.preview-editor {
+  display: grid; grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--space-4); flex: 1; min-height: 0; margin-top: var(--space-2);
+}
+.preview-list {
+  display: flex; flex-direction: column; gap: var(--space-2); min-height: 0;
+  border-right: 1px solid var(--border); padding-right: var(--space-3);
+}
+.preview-list-rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.preview-add { flex: none; justify-content: center; }
+
+.preview-item {
+  display: flex; align-items: baseline; gap: var(--space-2); width: 100%;
+  text-align: left; font-weight: var(--fw-normal);
+  background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  padding: 7px 10px; color: var(--text);
+}
+.preview-item:hover { background: var(--panel-2); border-color: transparent; box-shadow: none; }
+.preview-item.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.preview-item .n {
+  flex: none; width: 2ch; text-align: right;
+  color: var(--muted); font-size: var(--text-micro); font-variant-numeric: tabular-nums;
+}
+.preview-item .grow { min-width: 0; flex: 1; }
+.preview-item .qtext {
+  display: block; font-size: var(--text-body);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* A row you still have to fix is why you expanded the preview — mark it in
+   shape, not only in the error list you'd otherwise meet at submit time. */
+.preview-item.incomplete { box-shadow: inset 3px 0 0 var(--red); }
+.preview-item.incomplete.active { box-shadow: inset 3px 0 0 var(--red), 0 0 0 1px var(--border); }
+.preview-item .gaps { display: block; margin-top: 1px; font-size: var(--text-micro); color: var(--red); }
+
+.preview-pane { display: flex; flex-direction: column; min-height: 0; gap: var(--space-3); overflow-y: auto; }
+.preview-pane-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.preview-pane .field { margin-bottom: 0; }
+/* Questions and answers are prose, not payloads: read them in the body face. */
+.preview-pane .grow-field { display: flex; flex-direction: column; flex: 1 1 0; min-height: 120px; }
+.preview-pane .grow-field textarea {
+  flex: 1; min-height: 96px; resize: none;
+  font-family: var(--font); font-size: var(--text-body); line-height: 1.55;
+}
+.preview-meta { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); flex: none; }
+.preview-meta input.mono { font-family: var(--font-mono); font-size: var(--text-caption); }
+.preview-keys { flex: none; margin: 0; }
+
+/* Under ~900px the two panes stop being two panes. */
+@media (max-width: 900px) {
+  .preview-editor { grid-template-columns: minmax(0, 1fr); }
+  .preview-list { border-right: none; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
+  .preview-list-rows { max-height: 22vh; }
+  .preview-meta { grid-template-columns: minmax(0, 1fr); }
+}
