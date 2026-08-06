@@ -52,24 +52,35 @@ COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 # Rendered into the web root by the script below — not an nginx template, so it
 # is staged outside /etc/nginx/templates.
 COPY config.js.template /etc/nginx/config.js.template
-# --chmod rather than a following `RUN chmod +x`, for two reasons.
-#
-# The mode is set by the builder as it writes the layer, so no chmod(2) runs
-# inside a container. That matters because this stage is Alpine: its musl tries
-# fchmodat2(2) first and falls back to fchmodat(2) on ENOSYS, but a seccomp
-# profile that predates the syscall answers EPERM instead, the fallback never
-# fires, and the build dies with "chmod: Operation not permitted". Docker only
-# learned fchmodat2 in 26.0.0 (and 25.0.3/24.0.10/23.0.10), so any older daemon
-# on a 6.6+ kernel hits it. The Debian-based backend image is unaffected — its
-# glibc is old enough not to reach for the new syscall — which is why this was
-# the only step that failed.
+# --chmod rather than a following `RUN chmod +x`, because a RUN cannot be relied
+# on to have the privileges for it. A hardened base image carries its own USER,
+# and every RUN in this stage then executes as that unprivileged account — which
+# cannot chmod a file COPY brought in as root:root, so the build dies with
+# "chmod: Operation not permitted". --chmod has the builder stamp the mode as it
+# writes the layer, where the question of who is running never arises.
 #
 # It also pins the bit down rather than inheriting it from the build context: a
 # checkout on a filesystem without a POSIX executable bit would otherwise ship a
 # script the nginx entrypoint silently skips.
 COPY --chmod=0755 docker-entrypoint.d/10-app-config.sh /docker-entrypoint.d/
 
-COPY --from=builder /app/dist /var/www
+# The web root is not read-only: 10-app-config.sh writes config.js into it at
+# every start, which is the mechanism that lets one built image run in any
+# environment. So it has to be owned by whoever the image runs as, and COPY's
+# default of root:root is only right for a base image that runs as root.
+#
+# WEB_UID is that account. 1001 covers the common hardened-nginx convention of
+# an arbitrary non-root uid with group 0; override it at build time to match a
+# different base:
+#
+#     docker compose build --build-arg WEB_UID=101 frontend
+#
+# Group 0 rather than a matching gid is deliberate — those images put their
+# non-root user in the root group, so anything already group-writable stays
+# reachable. A base that does run as root is unaffected either way, since root
+# is not bound by the permission bits.
+ARG WEB_UID=1001
+COPY --from=builder --chown=${WEB_UID}:0 /app/dist /var/www
 
 EXPOSE 5173
 # Inherits nginx's own ENTRYPOINT/CMD, which runs /docker-entrypoint.d/* first.
