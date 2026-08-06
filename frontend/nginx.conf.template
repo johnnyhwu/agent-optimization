@@ -31,7 +31,19 @@ server {
     # its own; this is the belt to that pair of braces, because the failure mode
     # is silent and the cost of being explicit is four lines.
     location ~ ^/api/.*/progress$ {
-        proxy_pass ${API_URL}/;
+        # The /api prefix is stripped with an explicit rewrite, not with the
+        # trailing slash the prefix location below uses. nginx rejects a
+        # proxy_pass carrying any URI part inside a regex location — even a bare
+        # "/" — and refuses to start:
+        #
+        #     [emerg] "proxy_pass" cannot have URI part in location given by
+        #     regular expression […]
+        #
+        # `break` stops rewrite processing and proxies the rewritten URI, which
+        # leaves this equivalent to `proxy_pass ${API_URL}/` under /api/. The
+        # query string carries over on its own.
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass ${API_URL};
 
         proxy_http_version 1.1;
         proxy_set_header Connection "";
