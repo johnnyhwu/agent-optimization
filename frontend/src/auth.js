@@ -15,6 +15,7 @@
 // and the SSE client (api.js) calls it again on every reconnect instead of
 // reusing the URL it first connected with.
 import { cfg, isKeycloak } from "./app_config.js";
+import { installRandomUUID } from "./web_crypto_shim.js";
 
 let keycloak = null;
 let fakeSubject = localStorage.getItem("subject") || "alice";
@@ -78,27 +79,32 @@ export async function initAuth() {
     clientId: cfg.keycloakClientId,
   });
 
-  // Wanted for a public client: the authorization code travels through the
-  // browser's address bar, so possession of it must not be enough to redeem it.
-  // Recent keycloak-js defaults to S256; stating it means the guarantee does not
-  // depend on which version resolves in the lockfile.
+  // PKCE is wanted for a public client: the authorization code travels through
+  // the browser's address bar, so possession of it must not be enough to redeem
+  // it. Its S256 challenge is computed with crypto.subtle, which browsers expose
+  // only to secure contexts — https, or http on localhost.
   //
-  // Computing the S256 challenge needs crypto.subtle, and browsers expose that
-  // only to secure contexts — https, or http on localhost. So a stack reached
-  // over plain http at an IP or a hostname cannot run this flow at all, and
-  // keycloak-js says so only as "Web Crypto API is not available", which names
-  // neither the cause nor the fix. Check it here instead.
-  const pkceMethod = cfg.pkceMethod === "off" ? false : cfg.pkceMethod;
-  if (pkceMethod === "S256" && typeof window !== "undefined" && !window.isSecureContext) {
-    throw new Error(
-      `This page was loaded over ${window.location.protocol}//${window.location.host}, ` +
-        "which the browser treats as an insecure origin — it is neither https nor " +
-        "localhost — and it therefore withholds the Web Crypto API that the PKCE " +
-        "S256 challenge is computed with.\n\n" +
-        "Serve the app over https, or set PKCE_METHOD=off to drop PKCE. Dropping " +
-        "it leaves the authorization code redeemable by anyone who observes the " +
-        "redirect, which on a plain-http origin is already true of the session " +
-        "itself — but it is a downgrade, so it stays opt-in."
+  // So this is decided by the context rather than by configuration. A setting
+  // would have to be turned off for the one deployment that needs it and then
+  // remembered back on at the https cutover; **forgetting is silent**, and the
+  // failure it leaves behind is a production stack running without PKCE that
+  // looks exactly like one running with it. Reading isSecureContext instead
+  // means the downgrade cannot outlive the circumstance that forced it.
+  //
+  // Insecure origins also lose crypto.randomUUID, which keycloak-js uses for the
+  // state and nonce on every sign-in — PKCE or not. That one is shimmed, so the
+  // flow runs without each machine having to be told to trust the origin.
+  let pkceMethod = "S256";
+  if (typeof window !== "undefined" && !window.isSecureContext) {
+    pkceMethod = false;
+    installRandomUUID();
+    console.warn(
+      `Signing in without PKCE: this page was loaded over ${window.location.protocol}//` +
+        `${window.location.host}, which the browser treats as an insecure origin — ` +
+        "neither https nor localhost — and withholds crypto.subtle from. The " +
+        "authorization code is therefore redeemable by anyone who observes the " +
+        "redirect, which on a plain-http origin is already true of the access token " +
+        "it would be exchanged for. Serving the app over https restores both."
     );
   }
 
