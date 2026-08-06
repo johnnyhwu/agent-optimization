@@ -2,19 +2,24 @@ import React, { useEffect } from "react";
 import { IconX } from "./icons.jsx";
 
 // Reusable animated modal: backdrop fade + dialog pop-in (see styles.css).
-// ESC and backdrop click close it.
-export default function Modal({ title, subtitle, onClose, children, footer, width = 560 }) {
+// ESC and backdrop click dismiss it. A dialog with a mode of its own (the
+// upload preview's expanded editor) passes onDismiss to step out of that mode
+// instead — otherwise ESC would throw away in-progress edits.
+export default function Modal({
+  title, subtitle, onClose, children, footer, width = 560, height, onDismiss,
+}) {
+  const dismiss = onDismiss || onClose;
   useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && onClose();
+    const onKey = (e) => e.key === "Escape" && dismiss();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [dismiss]);
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" onClick={dismiss}>
       <div
         className="dialog"
-        style={{ width }}
+        style={{ width, height }}
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}

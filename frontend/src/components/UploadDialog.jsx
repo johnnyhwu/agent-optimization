@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import Modal from "./Modal.jsx";
 import ShareEditor from "./ShareEditor.jsx";
 import { useToast } from "./Toast.jsx";
+import UploadPreviewEditor from "./UploadPreviewEditor.jsx";
 import { IconPlus, IconUpload, IconX } from "./icons.jsx";
 import {
   detectFormat,
@@ -50,6 +51,10 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   const [knownKeys, setKnownKeys] = useState([]);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // The preview has two shapes: the parsed-file table, and a full-height
+  // two-pane editor for actually rewriting rows. Same `rows` either way, so
+  // toggling never costs an edit.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     api.metadataKeys().then(setKnownKeys).catch(() => {});
@@ -57,6 +62,16 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
 
   const setMeta = (i, field, val) =>
     setMetaRows((rs) => rs.map((r, j) => (j === i ? { ...r, [field]: val } : r)));
+  const removeMeta = (i) =>
+    setMetaRows((rs) => (rs.length === 1 ? [{ k: "", v: "" }] : rs.filter((_, j) => j !== i)));
+  // Clicking a known key fills the first empty key box rather than appending a
+  // row, so repeat clicks don't leave a trail of blanks.
+  const useKnownKey = (key) =>
+    setMetaRows((rs) => {
+      const i = rs.findIndex((r) => !r.k.trim());
+      if (i < 0) return [...rs, { k: key, v: "" }];
+      return rs.map((r, j) => (j === i ? { ...r, k: key } : r));
+    });
 
   const setCell = (i, field, val) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [field]: val } : r)));
@@ -120,12 +135,22 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   return (
     <Modal
       title="Upload eval set"
-      subtitle="Upload a JSONL or CSV file, preview and edit the rows, then create. The set is locked after creation."
+      subtitle={
+        expanded
+          ? "Editing rows. Collapse to get back to the rest of the form — nothing is lost."
+          : "Upload a JSONL or CSV file, preview and edit the rows, then create. The set is locked after creation."
+      }
       onClose={onClose}
-      width={960}
+      onDismiss={expanded ? () => setExpanded(false) : onClose}
+      width={expanded ? "min(1200px, 96vw)" : 960}
+      height={expanded ? "92vh" : undefined}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
+          {expanded ? (
+            <button onClick={() => setExpanded(false)}>Collapse</button>
+          ) : (
+            <button onClick={onClose}>Cancel</button>
+          )}
           <button className="primary" disabled={busy} onClick={submit}>
             {busy ? "Uploading…" : `Create${rows.length ? ` (${rows.length})` : ""}`}
           </button>
@@ -133,32 +158,61 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
       }
     >
       {error && <div className="error" style={{ whiteSpace: "pre-wrap" }}>{error}</div>}
-      <div className="field">
-        <label>Name</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My eval set" autoFocus />
-      </div>
-      <div className="field">
-        <label>Description</label>
-        <input value={description} onChange={(e) => setDescription(e.target.value)} />
-      </div>
 
-      <div className="field">
-        <label>Share with</label>
-        <ShareEditor shares={shares} setShares={setShares} currentUser={subject} />
-      </div>
-
-      <div className="field">
-        <label>Custom metadata {knownKeys.length > 0 && <span className="hint">· known: {knownKeys.join(", ")}</span>}</label>
-        {metaRows.map((r, i) => (
-          <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
-            <input list="known-keys" placeholder="key" value={r.k} onChange={(e) => setMeta(i, "k", e.target.value)} />
-            <input placeholder="value" value={r.v} onChange={(e) => setMeta(i, "v", e.target.value)} />
+      {!expanded && (
+        <>
+          <div className="field">
+            <label>Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My eval set" autoFocus />
           </div>
-        ))}
-        <datalist id="known-keys">{knownKeys.map((k) => <option key={k} value={k} />)}</datalist>
-        <button onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}><IconPlus size={14} /> add key</button>
-      </div>
+          <div className="field">
+            <label>Description</label>
+            <input value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
 
+          <div className="field">
+            <label>Custom metadata <span className="hint">· optional</span></label>
+            <p className="hint meta-help">
+              Labels for finding this set later — you can filter by them on the home page,
+              and they show on the set&rsquo;s card. For example <code>team = billing</code> or{" "}
+              <code>quarter = 2026Q3</code>.
+            </p>
+            {knownKeys.length > 0 && (
+              <div className="meta-keys">
+                <span className="hint">Already in use:</span>
+                {knownKeys.map((k) => (
+                  <button key={k} type="button" className="chip chip-btn" onClick={() => useKnownKey(k)}>
+                    {k}
+                  </button>
+                ))}
+              </div>
+            )}
+            {metaRows.map((r, i) => (
+              <div key={i} className="meta-row">
+                <input list="known-keys" placeholder="team" value={r.k} onChange={(e) => setMeta(i, "k", e.target.value)} aria-label={`Metadata key ${i + 1}`} />
+                <input placeholder="billing" value={r.v} onChange={(e) => setMeta(i, "v", e.target.value)} aria-label={`Metadata value ${i + 1}`} />
+                <button
+                  className="icon-btn"
+                  onClick={() => removeMeta(i)}
+                  disabled={metaRows.length === 1 && !r.k && !r.v}
+                  aria-label={`Remove metadata row ${i + 1}`}
+                >
+                  <IconX size={15} />
+                </button>
+              </div>
+            ))}
+            <datalist id="known-keys">{knownKeys.map((k) => <option key={k} value={k} />)}</datalist>
+            <button onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}><IconPlus size={14} /> add key</button>
+          </div>
+
+          <div className="field">
+            <label>Share with</label>
+            <ShareEditor shares={shares} setShares={setShares} currentUser={subject} />
+          </div>
+        </>
+      )}
+
+      {!expanded && (
       <div className="field">
         <label>Eval file (JSONL or CSV)</label>
         <div className="upload-picker">
@@ -181,10 +235,24 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
           </div>
         )}
       </div>
+      )}
 
-      <div className="field">
-        <label>Preview {rows.length > 0 && <span className="hint">· edit any cell before creating</span>}</label>
-        {rows.length === 0 ? (
+      <div className={`field${expanded ? " field-fill" : ""}`}>
+        <div className="field-head">
+          <label>Preview {!expanded && rows.length > 0 && <span className="hint">· edit any cell before creating</span>}</label>
+          <span className="grow" />
+          <button className="linkish" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Collapse" : "Expand"}
+          </button>
+        </div>
+        {expanded ? (
+          <UploadPreviewEditor
+            rows={rows}
+            setCell={setCell}
+            addRow={addRow}
+            removeRow={removeRow}
+          />
+        ) : rows.length === 0 ? (
           <div className="upload-empty">No rows yet — choose a JSONL/CSV file, load the sample, or add a row.</div>
         ) : (
           <div className="upload-table-wrap">
@@ -220,7 +288,9 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             </table>
           </div>
         )}
-        <button style={{ marginTop: 8 }} onClick={addRow}><IconPlus size={14} /> add row</button>
+        {!expanded && (
+          <button style={{ marginTop: 8 }} onClick={addRow}><IconPlus size={14} /> add row</button>
+        )}
       </div>
     </Modal>
   );

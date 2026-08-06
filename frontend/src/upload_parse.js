@@ -168,6 +168,18 @@ export function rowsToJsonl(rows) {
     .join("\n");
 }
 
+// Which required fields a single row is still missing. The expanded preview
+// editor marks rows with this as you type, so the same rule drives the in-place
+// hint and the pre-submit error list below.
+export function rowMissing(r) {
+  const missing = [];
+  if (!r.question.trim()) missing.push("question");
+  if (!r.response.trim()) missing.push("ground_truth_response");
+  if (!r.reasoning.trim()) missing.push("ground_truth_reasoning_process_description");
+  if (parseSkillCell(r.skill).length === 0) missing.push("skill");
+  return missing;
+}
+
 // Light client-side check mirroring the backend's required-field rules, so the
 // developer gets row-level feedback before the request. The backend remains the
 // source of truth (it re-validates and can still 422).
@@ -175,13 +187,8 @@ export function validateRows(rows) {
   const errors = [];
   if (rows.length === 0) return ["Upload a JSONL or CSV file (or add a row) first."];
   rows.forEach((r, i) => {
-    const n = i + 1;
-    const missing = [];
-    if (!r.question.trim()) missing.push("question");
-    if (!r.response.trim()) missing.push("ground_truth_response");
-    if (!r.reasoning.trim()) missing.push("ground_truth_reasoning_process_description");
-    if (parseSkillCell(r.skill).length === 0) missing.push("skill");
-    if (missing.length) errors.push(`row ${n}: missing ${missing.join(", ")}`);
+    const missing = rowMissing(r);
+    if (missing.length) errors.push(`row ${i + 1}: missing ${missing.join(", ")}`);
   });
   return errors;
 }
