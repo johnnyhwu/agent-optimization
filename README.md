@@ -316,20 +316,31 @@ KEYCLOAK_CLIENT_ID=…                             # a public client; the flow i
 ./scripts/dev.sh    # same command; AUTH_MODE decides
 ```
 
-**Reaching a deployment over plain http needs one more variable.** The PKCE
-challenge is computed with `crypto.subtle`, which browsers expose only to secure
-contexts — https, or http on `localhost`. So the stack works when you open it
-yourself at `http://localhost:5173` and fails for a colleague opening
-`http://<your-host>:5173`, with the browser withholding the API rather than
-anything going wrong on the network. Two ways out:
+**Reaching a deployment over plain http takes no configuration, and costs PKCE.**
+Browsers withhold two Web Crypto APIs from origins they consider insecure —
+anything that is neither https nor `localhost`. `crypto.subtle` computes the PKCE
+S256 challenge, and `crypto.randomUUID` produces the `state` and `nonce` that
+keycloak-js needs on *every* sign-in, PKCE or not. So the stack works when you
+open it yourself at `http://localhost:5173` and fails for a colleague opening
+`http://<your-host>:5173`, as `Web Crypto API is not available` — the browser
+withholding an API, not anything wrong on the network.
 
-- **Serve it over https.** Nothing else to configure, and the recommended
-  answer for anything that outlives a demo.
-- **`PKCE_METHOD=off`.** The authorization code is then redeemable by anyone who
-  observes the redirect — which, on a plain-http origin, is already true of the
-  session cookie and every API call. A conscious trade for an internal host, not
-  a default: the app refuses to start with S256 on an insecure origin, and says
-  this, rather than silently dropping to it.
+`initAuth` handles this by reading `window.isSecureContext`:
+
+- **Secure context** — PKCE S256, always. There is no setting that can turn it
+  off, so an https deployment cannot end up without it by forgetting something.
+- **Insecure origin** — `crypto.randomUUID` is shimmed on top of
+  `crypto.getRandomValues` (which insecure origins *do* get, so the bits still
+  come from the same CSPRNG), and PKCE is dropped with a console warning. The
+  authorization code is then redeemable by anyone who observes the redirect —
+  which on a plain-http origin is already true of the access token it would be
+  exchanged for, and of every API call after it.
+
+The shim is `frontend/src/web_crypto_shim.js`, about forty lines and no
+dependency. It deliberately does not shim `crypto.subtle`: a SHA-256 in
+JavaScript would buy back a PKCE challenge protecting a code that travels in the
+clear regardless. **Serving the app over https is what actually restores both**,
+and it is the answer for anything that outlives a demo.
 
 Pointing the **development** stack at a real Keycloak is the recommended way to
 get a realm configuration right: reload and HMR still work, and there are two
