@@ -192,7 +192,7 @@ async def get_trace(
             # Fetched even when trace_ready is false: that flag only records what
             # the orchestrator managed at run time, and never retrying means a
             # misconfigured trace store shows "generating" forever.
-            trace, fetch_error = await resolve_trace_spans(
+            trace, fetch_error, fatal = await resolve_trace_spans(
                 result.correlation_id, seams.trace
             )
             if trace is not None:
@@ -201,8 +201,14 @@ async def get_trace(
                 # see services/trace_view.span_to_out for why the view path does
                 # not truncate.
                 spans = [span_to_out(s) for s in trace.spans]
-            elif fetch_error is not None:
+            elif fetch_error is not None and fatal:
                 state = "error"
+                trace_error = fetch_error
+            elif fetch_error is not None:
+                # One Langfuse read path is broken, but another one says the
+                # trace is merely still being ingested. Show the failure — it is
+                # a real deployment fault — without declaring the trace lost.
+                state = "generating"
                 trace_error = fetch_error
             else:
                 # Genuinely not ingested yet. Still surface whatever the run hit,

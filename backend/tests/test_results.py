@@ -17,7 +17,7 @@ import pytest
 
 from app.config import settings
 from app.integrations import Seams
-from app.integrations.base import NOT_READY, Span, Trace
+from app.integrations.base import NOT_READY, Span, Trace, TraceFetchError
 from app.models import Question, QuestionResult, Run, SpanAnalysis
 from app.routers import results as results_router
 
@@ -207,3 +207,24 @@ async def test_trace_store_failure_is_reported_as_error_not_generating(call_get_
 
     assert view.trace_state == "error"
     assert "invalid credentials" in view.trace_error
+
+
+async def test_partial_trace_failure_reads_as_generating_with_the_reason(call_get_trace):
+    """One broken Langfuse read path, while another says "not ingested yet".
+
+    The trace is very likely still on its way, so the question must not be shown
+    as a dead trace — but the broken endpoint is a real deployment fault and
+    stays visible under the "generating" state.
+    """
+    client = RecordingTraceClient(
+        outcome=TraceFetchError(
+            "Langfuse partially failed while reading the trace. "
+            "[observations_api] HTTP 500: Unknown table expression 'events'",
+            partial=True,
+        )
+    )
+    result = make_result(status="done", agent_response="hello", verdict="correct")
+    view = await call_get_trace(result, client)
+
+    assert view.trace_state == "generating"
+    assert "Unknown table expression" in view.trace_error

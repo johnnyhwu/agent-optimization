@@ -379,14 +379,43 @@ async def test_auto_reports_every_endpoint_that_failed(auto_client):
 
 
 @respx.mock
-async def test_auto_keeps_polling_when_one_endpoint_says_not_ready(auto_client):
-    """A 404 (not ingested yet) plus an outright failure must not be reported as
-    a clean NotReady — the developer still needs to see the broken endpoint."""
+async def test_a_404_ends_the_read_without_touching_a_broken_endpoint(auto_client):
+    """The intermittency fix: "not ingested yet" is authoritative.
+
+    Falling through to a second endpoint after a 404 cannot produce the trace,
+    and on a deployment whose `events` query is broken it turns an ordinary
+    ingestion wait into a hard error — for whoever happens to look a second too
+    early, and nobody else.
+    """
     respx.get(TRACE_URL).mock(return_value=httpx.Response(404, json={"message": "not found"}))
+    obs_route = respx.get(OBS_URL).mock(
+        return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR)
+    )
+    assert isinstance(await auto_client.fetch_trace("corr"), NotReady)
+    assert not obs_route.called
+
+
+@respx.mock
+async def test_an_empty_trace_plus_a_broken_endpoint_is_a_partial_failure(auto_client):
+    """A trace row can land before its observations do, so an empty (but
+    successful) read is not authoritative: the other endpoint still gets a turn,
+    and its failure is reported as retryable rather than terminal."""
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(200, json={"observations": []}))
     respx.get(OBS_URL).mock(return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR))
     with pytest.raises(TraceFetchError) as exc:
         await auto_client.fetch_trace("corr")
     assert "observations_api" in str(exc.value)
+    assert exc.value.partial is True
+
+
+@respx.mock
+async def test_both_endpoints_failing_is_not_partial(auto_client):
+    """Nothing said "not yet", so there is nothing to keep waiting for."""
+    respx.get(TRACE_URL).mock(return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR))
+    respx.get(OBS_URL).mock(return_value=httpx.Response(500, text=EVENTS_TABLE_ERROR))
+    with pytest.raises(TraceFetchError) as exc:
+        await auto_client.fetch_trace("corr")
+    assert exc.value.partial is False
 
 
 @respx.mock

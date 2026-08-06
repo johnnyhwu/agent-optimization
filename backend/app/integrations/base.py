@@ -158,7 +158,16 @@ class TraceFetchError(RuntimeError):
     "ingestion hasn't landed yet" produce the same empty result otherwise, and
     collapsing them is what makes a misconfigured deployment look like a trace
     that is perpetually seconds away.
+
+    `partial` marks the in-between case: one read path failed, but another one
+    answered "the trace isn't there yet". The failure is real and worth showing,
+    yet it is *not* proof that this trace will never arrive — so the caller
+    should keep polling and report it as context, not as a dead end.
     """
+
+    def __init__(self, *args: object, partial: bool = False) -> None:
+        super().__init__(*args)
+        self.partial = partial
 
 
 # --- Protocols (the swappable seams) ----------------------------------------

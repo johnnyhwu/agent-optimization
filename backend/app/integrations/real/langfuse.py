@@ -38,6 +38,13 @@ status code and a snippet of the response body, so the UI can say what actually
 went wrong instead of showing the same "still ingesting" message forever. When
 every strategy fails, all of their errors are reported: a fallback must never
 hide the reason the primary path failed.
+
+The hedge has one rule that is easy to get backwards: a strategy answering
+"not ingested yet" **ends** the read. Falling through to a second endpoint on a
+404 gains nothing (the trace really is absent) and, where the `events` query is
+broken, replaces a normal ingestion wait with a hard error — which is exactly
+why that error looked random. Whoever's trace had already been ingested never
+reached the broken endpoint; whoever looked a second too early did.
 """
 from __future__ import annotations
 
@@ -283,11 +290,22 @@ class LangfuseTraceClient:
                 errors.append(f"[{name}] {exc}")
                 continue
             if isinstance(result, NotReady):
+                # Authoritative: Langfuse answered, and this trace does not exist
+                # yet (404). No other endpoint can conjure it — asking one can
+                # only add a failure, which on a deployment with the broken
+                # `events` query turns an ordinary ingestion wait into a hard
+                # error. That is why the error looked intermittent: whoever's
+                # trace had already landed took the trace_api hit and never
+                # reached the broken endpoint at all.
+                if not errors:
+                    return NOT_READY
                 saw_not_ready = True
-                continue
+                break
             if result:
                 return result
-            # An empty-but-successful read is also "nothing ingested yet".
+            # An empty-but-successful read is also "nothing ingested yet". Unlike
+            # a 404 it is not authoritative — the trace row can land before its
+            # observations do — so the remaining strategies still get a turn.
             saw_not_ready = True
 
         if errors and not saw_not_ready:
@@ -299,11 +317,13 @@ class LangfuseTraceClient:
             )
         if errors:
             # Mixed: something answered "not ingested yet" while something else
-            # errored. Treat it as not-ready (the caller retries) but keep the
-            # error visible in the message the orchestrator records.
+            # errored. Flagged `partial` so the caller keeps polling and shows
+            # this as context under "generating" — the trace may still be on its
+            # way, and a broken *second* endpoint must not condemn it.
             raise TraceFetchError(
                 "Langfuse partially failed while reading the trace. "
-                + " | ".join(errors)
+                + " | ".join(errors),
+                partial=True,
             )
         return NOT_READY
 
