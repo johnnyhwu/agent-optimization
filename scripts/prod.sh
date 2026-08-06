@@ -14,6 +14,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Not one of the six differences below — dev.sh sets this identically, so
+# `diff scripts/dev.sh scripts/prod.sh` still reads as exactly the deployment
+# changes.
+#
+# The frontend image sets a file mode with `COPY --chmod`, which needs BuildKit.
+# Compose v2 normally selects it unaided, but a host missing the buildx plugin
+# falls back to the legacy builder, where --chmod is a hard error. Asking for it
+# explicitly turns that into a clear message about buildx instead.
+export DOCKER_BUILDKIT=1
+
 # DIFFERS FROM dev.sh (1/6): which compose files are used.
 #
 # This is the single most important line in the script. Naming the files

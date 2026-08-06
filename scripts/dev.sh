@@ -12,6 +12,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Kept identical in prod.sh, where it actually matters: the frontend's runner
+# stage sets a file mode with `COPY --chmod`, which needs BuildKit. Compose v2
+# normally selects it unaided, but a host missing the buildx plugin falls back to
+# the legacy builder, where --chmod is a hard error. Setting it here too keeps
+# the two scripts differing only in the six ways prod.sh documents.
+export DOCKER_BUILDKIT=1
+
 # Read by docker-compose.yml and passed into the backend container. The Postgres
 # host is the compose service name, not localhost, because the backend now dials
 # it across the compose network.
