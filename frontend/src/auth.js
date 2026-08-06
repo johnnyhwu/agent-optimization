@@ -78,17 +78,37 @@ export async function initAuth() {
     clientId: cfg.keycloakClientId,
   });
 
+  // Wanted for a public client: the authorization code travels through the
+  // browser's address bar, so possession of it must not be enough to redeem it.
+  // Recent keycloak-js defaults to S256; stating it means the guarantee does not
+  // depend on which version resolves in the lockfile.
+  //
+  // Computing the S256 challenge needs crypto.subtle, and browsers expose that
+  // only to secure contexts — https, or http on localhost. So a stack reached
+  // over plain http at an IP or a hostname cannot run this flow at all, and
+  // keycloak-js says so only as "Web Crypto API is not available", which names
+  // neither the cause nor the fix. Check it here instead.
+  const pkceMethod = cfg.pkceMethod === "off" ? false : cfg.pkceMethod;
+  if (pkceMethod === "S256" && typeof window !== "undefined" && !window.isSecureContext) {
+    throw new Error(
+      `This page was loaded over ${window.location.protocol}//${window.location.host}, ` +
+        "which the browser treats as an insecure origin — it is neither https nor " +
+        "localhost — and it therefore withholds the Web Crypto API that the PKCE " +
+        "S256 challenge is computed with.\n\n" +
+        "Serve the app over https, or set PKCE_METHOD=off to drop PKCE. Dropping " +
+        "it leaves the authorization code redeemable by anyone who observes the " +
+        "redirect, which on a plain-http origin is already true of the session " +
+        "itself — but it is a downgrade, so it stays opt-in."
+    );
+  }
+
   const authenticated = await keycloak.init({
     onLoad: "login-required",
     // The check runs in a hidden iframe and needs third-party cookies, which
     // browsers increasingly refuse. `updateToken` already tells us when the
     // session is gone.
     checkLoginIframe: false,
-    // Required for a public client: the authorization code travels through the
-    // browser's address bar, so possession of it must not be enough to redeem it.
-    // Recent keycloak-js defaults to this; stating it means the guarantee does
-    // not depend on which version resolves in the lockfile.
-    pkceMethod: "S256",
+    pkceMethod,
   });
 
   // Backstop for the on-demand refresh in `getAuthHeaders`: it keeps a session

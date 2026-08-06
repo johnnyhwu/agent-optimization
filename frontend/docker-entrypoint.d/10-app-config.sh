@@ -15,9 +15,12 @@ set -eu
 : "${KEYCLOAK_URL:=}"
 : "${KEYCLOAK_REALM:=tsmc}"
 : "${KEYCLOAK_CLIENT_ID:=ai4bi-public}"
-export AUTH_MODE API_BASE KEYCLOAK_URL KEYCLOAK_REALM KEYCLOAK_CLIENT_ID
+: "${PKCE_METHOD:=S256}"
+export AUTH_MODE API_BASE KEYCLOAK_URL KEYCLOAK_REALM KEYCLOAK_CLIENT_ID PKCE_METHOD
 
-envsubst '${AUTH_MODE} ${API_BASE} ${KEYCLOAK_URL} ${KEYCLOAK_REALM} ${KEYCLOAK_CLIENT_ID}' \
+envsubst '${AUTH_MODE} ${API_BASE} ${KEYCLOAK_URL} ${KEYCLOAK_REALM} ${KEYCLOAK_CLIENT_ID} ${PKCE_METHOD}' \
     < /etc/nginx/config.js.template > /var/www/config.js
 
-echo "app config: AUTH_MODE=${AUTH_MODE} API_BASE=${API_BASE} KEYCLOAK_REALM=${KEYCLOAK_REALM}"
+# PKCE_METHOD is echoed because "off" is a security-relevant choice, and a
+# container log is where someone looks to find out whether it is in force.
+echo "app config: AUTH_MODE=${AUTH_MODE} API_BASE=${API_BASE} KEYCLOAK_REALM=${KEYCLOAK_REALM} PKCE_METHOD=${PKCE_METHOD}"

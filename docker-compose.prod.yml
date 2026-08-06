@@ -34,6 +34,12 @@ services:
       KEYCLOAK_URL: ${KEYCLOAK_URL:?set KEYCLOAK_URL, e.g. https://keycloak.example.com/auth}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
+      # S256 computes the PKCE challenge with crypto.subtle, which browsers give
+      # only to https origins and to localhost. That makes the default unusable
+      # for the common case of a colleague opening http://<this-host>:5173 —
+      # sign-in fails before it starts. PKCE_METHOD=off is the way through, at
+      # the cost described in frontend/src/auth.js; https is the way around.
+      PKCE_METHOD: ${PKCE_METHOD:-S256}
     restart: unless-stopped
     logging: &logging
       driver: json-file
