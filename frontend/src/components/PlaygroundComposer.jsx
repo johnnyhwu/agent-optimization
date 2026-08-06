@@ -6,7 +6,7 @@ import { IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget } f
 
 // What gets sent: a question, optionally an edited copy of the agent's config and
 // skill files, optionally the two ground-truth fields, and this platform's own
-// endpoints.
+// downstream services.
 //
 // Only the question is required, and that is the point of the whole tab (§10.4).
 // Everything else is a panel behind one toolbar, and **only one panel is open at
@@ -20,8 +20,20 @@ import { IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget } f
 //     "Config" and the other "Settings". Two words for two unrelated things, in
 //     the same visual register. One row of peers, each naming what it actually
 //     edits, removes the guess.
+//
+// The fourth panel no longer holds the agent's own URL and timeout: those moved
+// up to the connection bar, because they are the premise of this composer rather
+// than one more setting on it (see AgentConnectionBar). What is left here is the
+// platform's downstream services, which is what the button now says.
+//
+// `connected` gates exactly the two things that need an agent — asking a
+// question, and the two panels whose content is *read from* that agent. The
+// ground truths and the LLM/Langfuse settings stay open: they are local text and
+// downstream endpoints, and there is no reason to make someone connect before
+// they are allowed to think about the question they want to ask.
 export default function PlaygroundComposer({
   draft, setDraft, form, set, setNum, secrets, setSecrets, impls, onSend, busy,
+  connected = true,
   workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
   onReloadWorkspace,
 }) {
@@ -30,7 +42,7 @@ export default function PlaygroundComposer({
   const toggle = (name) => setPanel((p) => (p === name ? null : name));
 
   const field = (key) => (e) => setDraft({ ...draft, [key]: e.target.value });
-  const canSend = draft.question.trim().length > 0 && !busy;
+  const canSend = connected && draft.question.trim().length > 0 && !busy;
 
   // Counts stay on the toolbar so an edit is visible from the closed state.
   // Otherwise closing a panel hides the fact that the next question will not run
@@ -50,7 +62,12 @@ export default function PlaygroundComposer({
         <textarea
           className="composer-question"
           value={draft.question}
-          placeholder="Ask the agent one question…"
+          disabled={!connected}
+          placeholder={
+            connected
+              ? "Ask the agent one question…"
+              : "Connect to an agent above, then ask it one question."
+          }
           onChange={field("question")}
           onKeyDown={(e) => {
             // Enter alone inserts a newline: questions are often multi-line, and
@@ -64,18 +81,28 @@ export default function PlaygroundComposer({
       <div className="composer-toggles">
         <Toggle
           label="Agent config"
-          title="The agent's own config.json — applied to this question only"
+          title={
+            connected
+              ? "The agent's own config.json — applied to this question only"
+              : "Connect to an agent to read its config"
+          }
           icon={<IconGear size={13} />}
           active={panel === "config"}
           count={configCount}
+          disabled={!connected}
           onClick={() => toggle("config")}
         />
         <Toggle
           label="Skill files"
-          title="The agent's SKILL.md and reference files — applied to this question only"
+          title={
+            connected
+              ? "The agent's SKILL.md and reference files — applied to this question only"
+              : "Connect to an agent to read its skill files"
+          }
           icon={<IconFileText size={13} />}
           active={panel === "skills"}
           count={fileCount}
+          disabled={!connected}
           onClick={() => toggle("skills")}
         />
         <Toggle
@@ -87,8 +114,8 @@ export default function PlaygroundComposer({
           onClick={() => toggle("truth")}
         />
         <Toggle
-          label="Endpoints & keys"
-          title="Which agent, LLM and Langfuse this platform talks to"
+          label="LLM & Langfuse"
+          title="Which LLM and Langfuse this platform uses to judge, diagnose and read traces"
           icon={<IconBeaker size={13} />}
           active={panel === "endpoints"}
           onClick={() => toggle("endpoints")}
@@ -100,8 +127,11 @@ export default function PlaygroundComposer({
       </div>
 
       {/* Loud even from the closed state: a workspace nobody can read is the
-          reason someone retypes a skill from memory and tests the wrong text. */}
-      {workspaceError && panel !== "config" && panel !== "skills" && (
+          reason someone retypes a skill from memory and tests the wrong text.
+          Suppressed while disconnected, where the connection bar is already
+          showing the same reason in the place you would act on it — one failure
+          reported twice reads as two failures. */}
+      {connected && workspaceError && panel !== "config" && panel !== "skills" && (
         <div className="hint error-text composer-alert">
           <IconAlert size={13} /> Could not read the agent's workspace — open{" "}
           <button className="linkish" onClick={() => setPanel("config")}>
@@ -199,12 +229,14 @@ export default function PlaygroundComposer({
             secrets={secrets}
             setSecrets={setSecrets}
             impls={impls}
+            showAgent={false}
             showConcurrency={false}
           />
           <div className="hint">
-            Where this platform sends the question — not the agent's own settings.
-            These stay for the rest of this browser session, so keys are typed
-            once, and they are never sent back to the browser.
+            What this platform uses to grade the answer and read the trace — not
+            the agent's own settings, and not the agent itself, which is the bar
+            above. These stay for the rest of this browser session, so keys are
+            typed once, and they are never sent back to the browser.
           </div>
         </div>
       )}
@@ -215,9 +247,14 @@ export default function PlaygroundComposer({
 // One panel toggle. `count` is an edit count — amber, because it means the next
 // question will differ from what the agent server itself is configured with.
 // `flag` is a plain state word.
-function Toggle({ label, title, icon, active, count, flag, onClick }) {
+function Toggle({ label, title, icon, active, count, flag, disabled, onClick }) {
   return (
-    <button className={active ? "active" : ""} title={title} onClick={onClick}>
+    <button
+      className={active ? "active" : ""}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
       {icon}
       {label}
       {count > 0 && <span className="count edited">{count}</span>}

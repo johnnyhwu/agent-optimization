@@ -22,7 +22,7 @@ from fastapi import HTTPException
 
 from app import cancellation, fake_config as fc, playground
 from app.integrations import Seams
-from app.integrations.base import AgentResponse, Span, Trace, Verdict
+from app.integrations.base import AgentResponse, Span, Trace, Verdict, Workspace
 from app.integrations.real.prompts import build_diagnosis_messages
 from app.playground import PlaygroundAttempt
 from app.routers import playground as playground_router
@@ -733,7 +733,7 @@ async def test_an_unreachable_agent_costs_the_summary_not_the_attempt(
         async def get_workspace(self):
             raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(playground_router, "_workspace_client", lambda: Boom())
+    monkeypatch.setattr(playground_router, "_workspace_client", lambda *a, **k: Boom())
     detail = await playground_router.create_attempt(
         PlaygroundCreate(question="q", workspace={"skills": {"a/SKILL.md": "x"}}),
         subject="alice",
@@ -816,7 +816,7 @@ async def test_a_broken_workspace_is_a_503_not_an_empty_one(configure, monkeypat
         async def get_workspace(self):
             raise RuntimeError("agent server returned 500")
 
-    monkeypatch.setattr(playground_router, "_workspace_client", lambda: Boom())
+    monkeypatch.setattr(playground_router, "_workspace_client", lambda *a, **k: Boom())
     with pytest.raises(HTTPException) as exc:
         await playground_router.get_workspace(subject="alice")
     assert exc.value.status_code == 503
@@ -828,7 +828,7 @@ async def test_a_broken_version_check_is_a_503(configure, monkeypatch):
         async def get_version(self):
             raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(playground_router, "_workspace_client", lambda: Boom())
+    monkeypatch.setattr(playground_router, "_workspace_client", lambda *a, **k: Boom())
     with pytest.raises(HTTPException) as exc:
         await playground_router.get_workspace_version(subject="alice")
     assert exc.value.status_code == 503
@@ -856,6 +856,114 @@ async def test_fake_version_agrees_with_the_snapshot(configure):
         version = await playground_router.get_workspace_version(subject="alice")
 
     assert version.version == ws.version != ""
+
+
+# --- Which agent the workspace is read from ---------------------------------
+#
+# The playground lets the developer choose the agent they are asking. Everything
+# below pins the same rule from a different side: **the workspace comes from the
+# agent the question goes to.** Reading the environment instead put agent A's
+# skill files in the editor while the attempt ran against agent B — the override
+# was built from the wrong text, the "N files edited" count was computed against
+# the wrong baseline, and the staleness check compared two servers' versions,
+# which can only produce a false answer in one direction or the other.
+
+async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
+    configure, monkeypatch
+):
+    seen: list[tuple] = []
+
+    def spy(base_url=None, timeout_s=None):
+        seen.append((base_url, timeout_s))
+
+        class Client:
+            async def get_workspace(self):
+                return Workspace(
+                    version="v-from-b",
+                    config={},
+                    redacted_paths=[],
+                    skills={"b/SKILL.md": "agent B's skill"},
+                )
+
+        return Client()
+
+    with configure(workspace_impl="real"):
+        monkeypatch.setattr(
+            "app.integrations.real.workspace.HttpWorkspaceClient", spy
+        )
+        ws = await playground_router.get_workspace(
+            agent_base_url="http://agent-b:8080",
+            agent_timeout_s=42.0,
+            subject="alice",
+        )
+
+    assert seen == [("http://agent-b:8080", 42.0)]
+    assert ws.skills == {"b/SKILL.md": "agent B's skill"}
+
+
+async def test_the_version_check_asks_the_same_agent(configure, monkeypatch):
+    seen: list[tuple] = []
+
+    def spy(base_url=None, timeout_s=None):
+        seen.append((base_url, timeout_s))
+
+        class Client:
+            async def get_version(self):
+                return "v-from-b"
+
+        return Client()
+
+    with configure(workspace_impl="real"):
+        monkeypatch.setattr(
+            "app.integrations.real.workspace.HttpWorkspaceClient", spy
+        )
+        out = await playground_router.get_workspace_version(
+            agent_base_url="http://agent-b:8080", subject="alice"
+        )
+
+    assert out.version == "v-from-b"
+    assert seen == [("http://agent-b:8080", None)]
+
+
+async def test_a_blank_agent_url_still_falls_back_to_the_environment(configure):
+    """A single-agent deployment must behave exactly as it did before."""
+    with configure(workspace_impl="fake"):
+        ws = await playground_router.get_workspace(agent_base_url="", subject="alice")
+
+    assert ws.skills["billing/SKILL.md"].startswith("# Billing")
+
+
+async def test_the_edit_baseline_comes_from_the_attempts_own_agent(monkeypatch):
+    """The "N files edited" label is computed against the agent being asked."""
+    started: list[PlaygroundAttempt] = []
+    monkeypatch.setattr(playground, "start", started.append)
+
+    seen: list[str | None] = []
+
+    def spy(agent_base_url=None, agent_timeout_s=None):
+        seen.append(agent_base_url)
+
+        class Client:
+            async def get_workspace(self):
+                class WS:
+                    skills = {"a/SKILL.md": "from the right agent"}
+
+                return WS()
+
+        return Client()
+
+    monkeypatch.setattr(playground_router, "_workspace_client", spy)
+    await playground_router.create_attempt(
+        PlaygroundCreate(
+            question="q",
+            workspace={"skills": {"a/SKILL.md": "edited"}},
+            config=RunConfig(agent_base_url="http://agent-b:8080"),
+        ),
+        subject="alice",
+    )
+
+    assert seen == ["http://agent-b:8080"]
+    assert started[0].workspace_baseline == {"a/SKILL.md": "from the right agent"}
 
 
 # --- Trace view states ------------------------------------------------------

@@ -53,6 +53,13 @@ function qs(params) {
   return s ? `?${s}` : "";
 }
 
+// Which agent a playground call is about. Blank is not the same as absent here
+// only in spirit — `qs` drops both — but writing it this way keeps the two
+// workspace calls agreeing on the parameter names with one edit rather than two.
+function agentQuery({ agent_base_url, agent_timeout_s } = {}) {
+  return qs({ agent_base_url, agent_timeout_s });
+}
+
 // Export params, with `run_ids` repeated rather than joined — the endpoint reads
 // it as a list, and a comma-joined value would arrive as one malformed uuid.
 function exportQuery({ questions, runs, traces, fmt, runScope, runIds = [], lastN }) {
@@ -179,11 +186,22 @@ export const api = {
 
   // --- Playground (§10). Attempts live in the backend's memory, not the DB, so
   // there is nothing to paginate and a backend restart empties the list.
-  getWorkspace: () => req("GET", "/playground/workspace"),
+  //
+  // Both workspace calls name the agent explicitly, because the playground lets
+  // the developer pick one. A blank pair still means "the environment's", which
+  // is what a single-agent deployment sends.
+  //
+  // This one is also the playground's connect: it is the call that proves the
+  // agent is reachable and speaks the contract, and it hands back the version
+  // the staleness check needs. There is no separate ping to keep in step.
+  getWorkspace: (agent = {}) =>
+    req("GET", `/playground/workspace${agentQuery(agent)}`),
   // Cheap enough to call before every send, which is what turns "your snapshot
   // is stale" into a question asked before the experiment rather than a mystery
-  // after it.
-  getWorkspaceVersion: () => req("GET", "/playground/workspace/version"),
+  // after it. Asked of the same agent the snapshot came from — a version from
+  // anywhere else answers a different question.
+  getWorkspaceVersion: (agent = {}) =>
+    req("GET", `/playground/workspace/version${agentQuery(agent)}`),
   listAttempts: () => req("GET", "/playground/attempts"),
   createAttempt: (payload) => req("POST", "/playground/attempts", payload),
   getAttempt: (attemptId) => req("GET", `/playground/attempts/${attemptId}`),

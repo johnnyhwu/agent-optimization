@@ -10,7 +10,15 @@ import React from "react";
 //   secrets/setSecrets     write-only; the backend never sends these back
 //   impls                  {agent,judge,trace,diagnosis,workspace} -> 'fake' | 'real'
 //   kept(secretKey)        placeholder text when a key is being carried over
+//   showAgent              false where the agent is chosen elsewhere
 //   showConcurrency        false for a single question, where it means nothing
+//
+// `showAgent` is off in the playground, where picking an agent is a connection
+// step with its own bar rather than a field: the workspace it edits is read from
+// that server, so choosing it has to happen before anything else on the screen
+// means much. A run has no such step — it is triggered and gone — so the dialog
+// keeps the fields. The fields themselves are not duplicated for that: this
+// component still owns them, and the playground simply asks for the rest.
 export default function RunConfigFields({
   form,
   set,
@@ -19,33 +27,38 @@ export default function RunConfigFields({
   setSecrets,
   impls = {},
   kept = () => "",
+  showAgent = true,
   showConcurrency = true,
 }) {
   const fake = (seam) => impls[seam] === "fake";
 
   return (
     <>
-      <h4 className="cfg-section">
-        Agent {fake("agent") && <span className="hint">— AGENT_IMPL=fake, not used</span>}
-      </h4>
-      <div className="field">
-        <label>Agent Base URL</label>
-        <input
-          value={form.agent_base_url}
-          placeholder="http://agent-host:8080"
-          disabled={fake("agent")}
-          onChange={(e) => set("agent_base_url", e.target.value)}
-        />
-      </div>
-      <div className="field">
-        <label>Agent Timeout (sec)</label>
-        <input
-          type="number" min="1"
-          value={form.agent_timeout_s ?? ""}
-          disabled={fake("agent")}
-          onChange={(e) => setNum("agent_timeout_s", e.target.value)}
-        />
-      </div>
+      {showAgent && (
+        <>
+          <h4 className="cfg-section">
+            Agent {fake("agent") && <span className="hint">— AGENT_IMPL=fake, not used</span>}
+          </h4>
+          <div className="field">
+            <label>Agent Base URL</label>
+            <input
+              value={form.agent_base_url}
+              placeholder="http://agent-host:8080"
+              disabled={fake("agent")}
+              onChange={(e) => set("agent_base_url", e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>Agent Timeout (sec)</label>
+            <input
+              type="number" min="1"
+              value={form.agent_timeout_s ?? ""}
+              disabled={fake("agent")}
+              onChange={(e) => setNum("agent_timeout_s", e.target.value)}
+            />
+          </div>
+        </>
+      )}
       {showConcurrency && (
         <div className="field">
           <label>Concurrency</label>
