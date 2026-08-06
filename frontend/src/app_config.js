@@ -49,6 +49,11 @@ export const cfg = {
     import.meta.env?.VITE_KEYCLOAK_CLIENT_ID,
     "ai4bi-public"
   ),
+
+  // "S256" or "off". Only ever set to "off" to reach a deployment over plain
+  // http from another machine — see the check in auth.js, which explains what
+  // that costs and why the browser leaves no other choice.
+  pkceMethod: pick(runtime.PKCE_METHOD, import.meta.env?.VITE_PKCE_METHOD, "S256"),
 };
 
 export const isKeycloak = cfg.authMode === "keycloak";

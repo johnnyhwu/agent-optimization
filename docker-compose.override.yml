@@ -37,6 +37,10 @@ services:
       VITE_KEYCLOAK_URL: ${KEYCLOAK_URL:-}
       VITE_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-tsmc}
       VITE_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-ai4bi-public}
+      # Passed through for parity with the deployed form. Development runs on
+      # localhost, which is a secure context, so the default works here even when
+      # the deployment it mirrors has had to turn PKCE off.
+      VITE_PKCE_METHOD: ${PKCE_METHOD:-S256}
       # Bind-mounted sources don't always emit inotify events (macOS/Windows);
       # polling keeps HMR working everywhere.
       CHOKIDAR_USEPOLLING: "true"

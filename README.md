@@ -316,6 +316,21 @@ KEYCLOAK_CLIENT_ID=…                             # a public client; the flow i
 ./scripts/dev.sh    # same command; AUTH_MODE decides
 ```
 
+**Reaching a deployment over plain http needs one more variable.** The PKCE
+challenge is computed with `crypto.subtle`, which browsers expose only to secure
+contexts — https, or http on `localhost`. So the stack works when you open it
+yourself at `http://localhost:5173` and fails for a colleague opening
+`http://<your-host>:5173`, with the browser withholding the API rather than
+anything going wrong on the network. Two ways out:
+
+- **Serve it over https.** Nothing else to configure, and the recommended
+  answer for anything that outlives a demo.
+- **`PKCE_METHOD=off`.** The authorization code is then redeemable by anyone who
+  observes the redirect — which, on a plain-http origin, is already true of the
+  session cookie and every API call. A conscious trade for an internal host, not
+  a default: the app refuses to start with S256 on an insecure origin, and says
+  this, rather than silently dropping to it.
+
 Pointing the **development** stack at a real Keycloak is the recommended way to
 get a realm configuration right: reload and HMR still work, and there are two
 fewer moving parts than the deployed form.
