@@ -13,34 +13,57 @@ the very evidence a span was opened to read (§9.19).
 from __future__ import annotations
 
 import asyncio
+from typing import NamedTuple
 
 from app.config import settings
-from app.integrations.base import NotReady, Span
+from app.integrations.base import NotReady, Span, TraceFetchError
 from app.schemas import SpanOut
 
 
-async def resolve_trace_spans(correlation_id: str, trace_client):
+class TraceRead(NamedTuple):
+    """What a view-path read of the trace store came back with.
+
+    `fatal` separates "this will never work until someone fixes something"
+    (unreachable host, rejected key) from a `partial` failure, where one read
+    path broke but another said the trace simply hasn't been ingested yet. The
+    second is still worth showing — it names a genuinely broken Langfuse
+    endpoint — but as context under "generating", not as a dead end, because the
+    trace usually does arrive a moment later.
+    """
+
+    trace: object | None
+    error: str | None
+    fatal: bool = True
+
+
+async def resolve_trace_spans(correlation_id: str, trace_client) -> TraceRead:
     """Light poll of the trace store for a request path.
 
-    Returns (trace_or_None, error_or_None). The error is returned rather than
-    swallowed: an unreachable Langfuse, a rejected key and a trace that is still
-    being ingested all produce "no spans", and showing the same "still
-    generating" message for all three is indistinguishable from the platform
-    being broken.
+    The error is returned rather than swallowed: an unreachable Langfuse, a
+    rejected key and a trace that is still being ingested all produce "no
+    spans", and showing the same "still generating" message for all three is
+    indistinguishable from the platform being broken.
 
     Short sleeps on purpose: this runs inside a request, so it must not block for
     the orchestrator's much longer ingestion backoff. If the trace still isn't
     there the caller reports "generating" (or 409) and the user retries.
     """
+    partial_error: str | None = None
     for _ in range(settings.trace_poll_max_attempts):
         try:
             trace = await trace_client.fetch_trace(correlation_id)
+        except TraceFetchError as exc:
+            if not getattr(exc, "partial", False):
+                return TraceRead(None, f"{type(exc).__name__}: {exc}")
+            # Keep polling: the endpoint that answered said "not yet".
+            partial_error = f"{type(exc).__name__}: {exc}"
         except Exception as exc:  # noqa: BLE001 - reported, not raised
-            return None, f"{type(exc).__name__}: {exc}"
-        if not isinstance(trace, NotReady):
-            return trace, None
+            return TraceRead(None, f"{type(exc).__name__}: {exc}")
+        else:
+            if not isinstance(trace, NotReady):
+                return TraceRead(trace, None)
         await asyncio.sleep(0.05)
-    return None, None
+    return TraceRead(None, partial_error, fatal=False)
 
 
 def span_to_out(span: Span) -> SpanOut:

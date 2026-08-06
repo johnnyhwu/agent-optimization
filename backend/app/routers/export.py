@@ -225,14 +225,17 @@ async def _collect_traces(
             return entry
 
         async with semaphore:
-            trace, fetch_error = await resolve_trace_spans(
+            trace, fetch_error, fatal = await resolve_trace_spans(
                 result.correlation_id, seams_by_run[run.id].trace
             )
         if trace is not None:
             entry["trace_state"] = "ready"
             entry["spans"] = [span_to_out(s).model_dump() for s in trace.spans]
         elif fetch_error is not None:
-            entry["trace_state"] = "error"
+            # A partial failure still means "no spans here", but the export says
+            # generating rather than error so a slow ingestion doesn't read as a
+            # dead trace in the downloaded bundle.
+            entry["trace_state"] = "error" if fatal else "generating"
             entry["trace_error"] = fetch_error
         else:
             entry["trace_state"] = "generating"

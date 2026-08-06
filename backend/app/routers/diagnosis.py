@@ -44,7 +44,9 @@ async def re_diagnose(
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a server bug
         raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
 
-    trace, trace_error = await resolve_trace_spans(result.correlation_id, seams.trace)
+    trace, trace_error, _fatal = await resolve_trace_spans(
+        result.correlation_id, seams.trace
+    )
     if trace is None:
         detail = (
             f"could not fetch the trace: {trace_error}"
