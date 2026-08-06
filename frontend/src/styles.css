@@ -817,6 +817,84 @@ select { cursor: pointer; }
 
 /* ==== playground (§10) ==== */
 
+/* The connection bar: which agent this whole screen is about.
+
+   It carries one piece of colour and no other decoration — the rail down its
+   left edge, which is the only thing on the page encoding "is this working?".
+   A filled badge was tried and lost: verdict pills already own that register in
+   the attempt list right below, and two saturated shapes meaning unrelated
+   things read as one system. The rail is adjacent to the content it describes
+   and cannot be confused with a result.
+
+   The version is monospaced because it is an identifier — a git sha or a hash of
+   the workspace — and proportional digits make two of them hard to compare,
+   which is the one thing anybody ever does with it. */
+.agent-bar {
+  display: flex; align-items: center; gap: var(--space-3);
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-1);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.agent-bar.is-connected { border-left-color: var(--green); }
+.agent-bar.is-stale { border-left-color: var(--amber); }
+.agent-bar.is-error { border-left-color: var(--red); }
+.agent-bar.is-fake { border-left-color: var(--low); }
+.agent-bar.is-form { align-items: flex-start; }
+
+.agent-dot {
+  width: 8px; height: 8px; border-radius: 999px; flex: none;
+  background: var(--border-strong);
+}
+.agent-bar.is-connected .agent-dot { background: var(--green); }
+.agent-bar.is-stale .agent-dot { background: var(--amber); }
+.agent-bar.is-error .agent-dot { background: var(--red); }
+.agent-bar.is-fake .agent-dot { background: var(--low); }
+
+.agent-bar-main {
+  display: flex; align-items: baseline; gap: var(--space-3);
+  min-width: 0; flex: 1;
+}
+/* Truncated rather than wrapped: a long URL wrapping to a second line moves the
+   actions below the fold on a narrow window, and the full value is in `title`. */
+.agent-url {
+  font-family: var(--font-mono); font-size: var(--text-body);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-meta { display: flex; align-items: baseline; gap: var(--space-2); flex: none; }
+.agent-version {
+  font-family: var(--font-mono); font-size: var(--text-micro);
+  color: var(--muted); background: var(--code-bg);
+  padding: 1px 6px; border-radius: var(--radius-sm);
+}
+.agent-bar-actions { display: flex; gap: var(--space-2); flex: none; }
+
+.agent-bar-form { flex: 1; min-width: 0; }
+.agent-bar-head {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.agent-bar-head .hint { font-weight: var(--fw-normal); }
+/* The URL takes the room; the timeout is a number and never needs more than a
+   few characters, so it does not get an equal share of the row. */
+.agent-bar-fields {
+  display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap;
+}
+.agent-bar-fields .field { flex: 1; min-width: 220px; margin-bottom: 0; }
+.agent-bar-fields .agent-bar-timeout { flex: 0 0 120px; min-width: 120px; }
+.agent-bar-recent {
+  display: flex; align-items: center; gap: var(--space-2);
+  flex-wrap: wrap; margin-top: var(--space-2);
+}
+.agent-bar-recent .linkish { font-family: var(--font-mono); font-size: var(--text-caption); }
+.agent-bar-error { margin-top: var(--space-2); }
+/* Two actions sitting after a sentence need more than the alert's default 4px
+   between them, or "Connect to it" and "Dismiss" read as one phrase. */
+.agent-mismatch { margin-bottom: var(--space-3); gap: var(--space-3); flex-wrap: wrap; }
+.agent-mismatch span { flex: 1; min-width: 320px; }
+.amber-text { color: var(--amber); }
+
 /* The composer: question, skill override, and the two optional ground truths. */
 .composer {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);

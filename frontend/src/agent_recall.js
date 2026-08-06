@@ -1,0 +1,47 @@
+// The agents this developer has connected the playground to before.
+//
+// Kept in localStorage, keyed by subject, exactly like the shortlist: it costs
+// no migration, survives a backend restart, and nothing here is a record — it is
+// a convenience so an agent's URL is typed once rather than once per session.
+//
+// **It prefills; it does not connect.** Reconnecting on load would silently
+// point the playground at whichever agent was used last, and the whole reason
+// this screen now has a connect step is that "which agent am I talking to?" must
+// never be answered by a leftover. The one exception lives in the component: an
+// environment that ships an AGENT_BASE_URL default connects to that on its own,
+// because refusing to would make every existing single-agent deployment press a
+// button to get back to where it already was.
+
+const KEY = "playground-agents";
+const LIMIT = 5;
+
+function storageKey(subject) {
+  return `${KEY}:${subject || "anon"}`;
+}
+
+// [{ base_url, timeout_s }], most recently connected first.
+export function recentAgents(subject) {
+  try {
+    const raw = localStorage.getItem(storageKey(subject));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((a) => a && a.base_url) : [];
+  } catch {
+    // A corrupt entry is not worth breaking the page over; start clean.
+    return [];
+  }
+}
+
+// Recorded on a *successful* connect only. A URL that could not be reached is
+// precisely the one not worth offering back next time.
+export function rememberAgent(subject, { base_url, timeout_s }) {
+  if (!base_url) return recentAgents(subject);
+  const rest = recentAgents(subject).filter((a) => a.base_url !== base_url);
+  const items = [{ base_url, timeout_s: timeout_s ?? null }, ...rest].slice(0, LIMIT);
+  try {
+    localStorage.setItem(storageKey(subject), JSON.stringify(items));
+  } catch {
+    // Storage full or blocked: the connection still works, it just won't be
+    // offered back. Not worth a message.
+  }
+  return items;
+}

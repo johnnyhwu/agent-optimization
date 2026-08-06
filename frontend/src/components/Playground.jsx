@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import AgentConnectionBar from "./AgentConnectionBar.jsx";
 import AttemptList from "./AttemptList.jsx";
 import Modal from "./Modal.jsx";
 import ShortlistDialog from "./ShortlistDialog.jsx";
@@ -8,7 +9,7 @@ import PlaygroundComposer from "./PlaygroundComposer.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import SpanList from "./SpanList.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconBookmark, IconRefresh } from "./icons.jsx";
+import { IconAlert, IconBookmark, IconRefresh } from "./icons.jsx";
 import {
   diffConfig,
   editedFiles,
@@ -17,6 +18,7 @@ import {
   stripRedacted,
 } from "../workspace_util.js";
 import * as shortlist from "../shortlist.js";
+import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
 
 // The playground (§10): one question at a time, against an editable copy of the
@@ -41,6 +43,21 @@ import { href, navigate } from "../useHashRoute.js";
 // both is what makes "revert this field" and "what did I actually change?"
 // answerable — and the snapshot's `version` is what the staleness check before
 // each send compares against.
+//
+// **Everything here hangs off one connected agent, and that is now explicit.**
+// The workspace used to be read on mount from whatever `AGENT_BASE_URL` the
+// backend was started with, while the question went to whichever URL was typed
+// into the endpoints panel. Nothing enforced that these were the same server, so
+// the failure was silent and total: the editor showed agent A's skill files, the
+// override built from them went to agent B, the "N files edited" count was
+// computed against A's baseline, and the staleness check compared A's version to
+// A's — a check that cannot fail, guarding an experiment on B.
+//
+// So the agent is chosen first, and choosing it is what produces the snapshot:
+// `connect` is `GET /playground/workspace` against that URL. `agent` below is
+// the single answer to "which server is all of this about", and it is also what
+// travels in the attempt's config — the connection bar writes straight into
+// `form`, rather than keeping a second copy that could disagree with it.
 
 const EMPTY_DRAFT = {
   question: "",
@@ -71,6 +88,13 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const [impls, setImpls] = useState({});
   const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
 
+  // Which agent this screen is about: "disconnected" | "connecting" |
+  // "connected" | "error" | "fake". The URL itself is not duplicated here — it
+  // lives in `form.agent_base_url`, which is what an attempt is sent with.
+  const [conn, setConn] = useState("disconnected");
+  const [connError, setConnError] = useState(null);
+  const [recent, setRecent] = useState([]);
+
   // The agent's workspace: what it served, and what the developer has done to it.
   const [workspace, setWorkspace] = useState(null);
   const [wsEdit, setWsEdit] = useState(null);
@@ -80,6 +104,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // send waits on the answer rather than guessing: reloading throws away the
   // edit, and sending anyway may be exactly what was intended.
   const [stale, setStale] = useState(null);
+  // Set when something carried in — a cloned attempt, a question handed over
+  // from a run — names an agent other than the connected one.
+  const [agentMismatch, setAgentMismatch] = useState(null);
 
   // Questions on their way out of the playground and into an eval set (§10.8).
   // Copies, not references: an attempt is evicted at the per-user cap and lost
@@ -90,12 +117,30 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
   const active = attempts.find((a) => a.id === activeId) || null;
 
+  // The defaults decide where this screen starts: with a fake workspace seam
+  // there is no agent to connect to, and with an AGENT_BASE_URL in the
+  // environment there is one obvious answer — connecting to it keeps every
+  // existing single-agent deployment working exactly as it did, rather than
+  // making everyone press a button to get back to where they already were.
   useEffect(() => {
     api
       .runConfigDefaults()
       .then((r) => {
-        setImpls(r.impls || {});
+        const impls = r.impls || {};
+        setImpls(impls);
         setForm(r.defaults);
+        if (impls.workspace === "fake") {
+          setConn("fake");
+          // The canned workspace cannot really fail, but a rejection here would
+          // be an unhandled one — and `loadWorkspace` has already put the reason
+          // where the editor shows it.
+          loadWorkspace({}).catch(() => {});
+        } else if (r.defaults?.agent_base_url) {
+          connect({
+            base_url: r.defaults.agent_base_url,
+            timeout_s: r.defaults.agent_timeout_s ?? null,
+          });
+        }
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -106,11 +151,8 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   }, [subject]);
 
   useEffect(() => {
-    loadWorkspace();
-  }, []);
-
-  useEffect(() => {
     setShortlistItems(shortlist.readShortlist(subject));
+    setRecent(recentAgents(subject));
   }, [subject]);
 
   async function addToShortlist(attempt) {
@@ -129,37 +171,118 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     }
   }
 
-  async function loadWorkspace() {
+  // The agent whose workspace this screen is showing, in the shape both the API
+  // client and an attempt's config want. Read from `form` rather than kept
+  // beside it, so there is one answer to "which agent" and not two that can
+  // drift.
+  function agentOf(f = form) {
+    return {
+      agent_base_url: f?.agent_base_url || "",
+      agent_timeout_s: f?.agent_timeout_s ?? null,
+    };
+  }
+
+  async function loadWorkspace(agent) {
     setWsLoading(true);
     setWsError(null);
     try {
-      const ws = await api.getWorkspace();
+      const ws = await api.getWorkspace(agent);
       setWorkspace(ws);
       // Reloading starts the edit over from what the agent has now. Replaying
       // the old edits onto new text would produce a third version that matches
       // neither, which is precisely the confusion the version check exists to
       // prevent.
       setWsEdit({ config: ws.config, skills: ws.skills });
+      return ws;
     } catch (e) {
       // Never a blank editor: "this agent has no skills" and "the agent server
       // refused us" have to stay distinguishable, or the developer retypes a
       // skill from memory and tests the wrong text.
       setWsError(e.message);
+      throw e;
     } finally {
       setWsLoading(false);
     }
   }
 
+  // Connect to an agent: point the form at it, then read its workspace. The read
+  // *is* the connection test — it proves the host answers, that it speaks the
+  // §17.3 contract, and it produces the snapshot and version everything below
+  // depends on. A separate ping would prove less and be one more thing to keep
+  // in step.
+  async function connect({ base_url, timeout_s }) {
+    const agent = { agent_base_url: base_url, agent_timeout_s: timeout_s ?? null };
+    setForm((f) => ({ ...(f || {}), ...agent }));
+    setConn("connecting");
+    setConnError(null);
+    setStale(null);
+    try {
+      await loadWorkspace(agent);
+      setConn("connected");
+      // Remembered only once it worked: the URL that could not be reached is
+      // exactly the one not worth offering back next time.
+      setRecent(rememberAgent(subject, { base_url, timeout_s: timeout_s ?? null }));
+    } catch (e) {
+      setConn("error");
+      setConnError(e.message);
+      setWorkspace(null);
+      setWsEdit(null);
+    }
+  }
+
+  // How much of the workspace edit would be lost. Asked before anything that
+  // replaces the snapshot, because an edit is the expensive thing on this screen
+  // — the question can be retyped in seconds, a rewritten skill cannot.
+  function dirtyCount() {
+    if (!workspace || !wsEdit) return 0;
+    return (
+      Object.keys(diffConfig(workspace.config, wsEdit.config) || {}).length +
+      editedFiles(workspace.skills, wsEdit.skills).length
+    );
+  }
+
   function reloadWorkspace() {
-    const dirty =
-      workspace && wsEdit
-        ? Object.keys(diffConfig(workspace.config, wsEdit.config) || {}).length +
-          editedFiles(workspace.skills, wsEdit.skills).length
-        : 0;
-    if (dirty && !window.confirm("Reloading discards your edits to the workspace. Continue?")) {
+    if (
+      dirtyCount() &&
+      !window.confirm("Reloading discards your edits to the workspace. Continue?")
+    ) {
       return;
     }
-    loadWorkspace();
+    loadWorkspace(agentOf()).catch(() => {});
+  }
+
+  // Switch straight to another agent, keeping the same confirm as changing by
+  // hand — the edits being discarded are worth the same either way.
+  function changeAgentTo({ url, timeout_s }) {
+    if (
+      dirtyCount() &&
+      !window.confirm(
+        "Connecting to another agent discards your edits to this one's workspace. Continue?"
+      )
+    ) {
+      return;
+    }
+    connect({ base_url: url, timeout_s });
+  }
+
+  // Back to the connect form. The snapshot goes with it: it describes a server
+  // this screen is no longer about, and keeping the edits would mean diffing the
+  // next agent's files against the previous one's.
+  function changeAgent() {
+    if (
+      dirtyCount() &&
+      !window.confirm(
+        "Changing agent discards your edits to this agent's workspace. Continue?"
+      )
+    ) {
+      return;
+    }
+    setConn("disconnected");
+    setConnError(null);
+    setWorkspace(null);
+    setWsEdit(null);
+    setWsError(null);
+    setStale(null);
   }
 
   // What the next question should carry, or null when nothing was edited. An
@@ -187,9 +310,29 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       ground_truth_response: seed.ground_truth_response || "",
       ground_truth_reasoning: seed.ground_truth_reasoning || "",
     });
-    if (seed.config) setForm((f) => (f ? { ...f, ...stripBlank(seed.config) } : f));
+    if (seed.config) {
+      setForm((f) => (f ? { ...f, ...stripBlank(otherAgent(seed.config)) } : f));
+      noteAgentMismatch(seed.config, "The run this question came from");
+    }
     onSeedApplied?.();
   }, [seed]);
+
+  // A config arriving from somewhere else — a run, an earlier attempt — with its
+  // own agent in it. The two agent fields are held back: repointing the
+  // connection from under the developer would leave the workspace editor showing
+  // one server's files while the next question went to another, which is the
+  // exact failure this screen was restructured to make impossible. The mismatch
+  // is said out loud instead, with the switch on a button.
+  function otherAgent(config) {
+    const { agent_base_url, agent_timeout_s, ...rest } = config;
+    return rest;
+  }
+
+  function noteAgentMismatch(config, what) {
+    const url = config?.agent_base_url;
+    if (!url || !form || url === form.agent_base_url) return;
+    setAgentMismatch({ url, timeout_s: config.agent_timeout_s ?? null, what });
+  }
 
   async function reload() {
     try {
@@ -328,7 +471,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // and you would have no way of telling afterwards.
     if (workspace?.version) {
       try {
-        const { version } = await api.getWorkspaceVersion();
+        const { version } = await api.getWorkspaceVersion(agentOf());
         if (version && version !== workspace.version) {
           setStale({ version });
           return;
@@ -390,8 +533,12 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         });
       }
       // Credentials are excluded: they are write-only and never come back. They
-      // are already in this session's state anyway.
-      if (full.config) setForm((f) => ({ ...f, ...stripBlank(full.config) }));
+      // are already in this session's state anyway. So is the agent, and for a
+      // stronger reason — see `otherAgent`.
+      if (full.config) {
+        setForm((f) => ({ ...f, ...stripBlank(otherAgent(full.config)) }));
+        noteAgentMismatch(full.config, "That attempt ran against");
+      }
       toast.success("Copied into the composer");
     } catch (e) {
       toast.error(e.message);
@@ -474,6 +621,49 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       {error && <div className="error">{error}</div>}
 
       {form && (
+        <AgentConnectionBar
+          status={conn}
+          baseUrl={form.agent_base_url}
+          timeoutS={form.agent_timeout_s}
+          version={workspace?.version}
+          skillCount={workspace ? Object.keys(workspace.skills || {}).length : null}
+          stale={stale?.version || null}
+          error={connError}
+          recent={recent}
+          onConnect={connect}
+          onChangeAgent={changeAgent}
+          onReload={reloadWorkspace}
+        />
+      )}
+
+      {/* Said rather than done: something carried in names a different agent.
+          Switching is a button because it throws away the snapshot every
+          workspace edit is measured against. */}
+      {agentMismatch && (
+        <div className="hint amber-text composer-alert agent-mismatch">
+          <IconAlert size={13} />
+          <span>
+            {agentMismatch.what} <strong>{agentMismatch.url}</strong>, not the
+            agent you are connected to. The question was copied in; the
+            connection was left alone.
+          </span>
+          <button
+            className="linkish"
+            onClick={() => {
+              const target = agentMismatch;
+              setAgentMismatch(null);
+              changeAgentTo(target);
+            }}
+          >
+            Connect to it
+          </button>
+          <button className="linkish" onClick={() => setAgentMismatch(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {form && (
         <PlaygroundComposer
           draft={draft}
           setDraft={setDraft}
@@ -485,6 +675,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           impls={impls}
           onSend={send}
           busy={busy}
+          connected={conn === "connected" || conn === "fake"}
           workspace={workspace}
           workspaceEdit={wsEdit}
           onWorkspaceEdit={setWsEdit}
@@ -568,7 +759,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
               <button
                 onClick={async () => {
                   setStale(null);
-                  await loadWorkspace();
+                  // The connected agent, explicitly: an argument-less call here
+                  // would re-read the environment's agent instead, which is the
+                  // whole class of bug this screen was restructured to remove.
+                  await loadWorkspace(agentOf()).catch(() => {});
                 }}
               >
                 Reload workspace

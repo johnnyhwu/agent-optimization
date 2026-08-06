@@ -866,6 +866,9 @@ prompt 的第四塊**照樣存在**，只是改寫成
 
 ### 7.4 agent workspace 的讀取與 override
 
+- **從哪台來**：從**使用者在 connection bar 連上的那台**（§10.1），不是後端 env 的
+  `AGENT_BASE_URL`。三個地方共用這個答案，少一個就會錯：workspace 快照、送出前的版本檢查、
+  以及 `create_attempt` 算「改了哪些檔案」用的 baseline。留白才 fallback 到 env。
 - **從哪來**：`WorkspaceClient` 一次讀完整份（`WORKSPACE_IMPL=real` 打
   `GET {base}/get_workspace`），或一份罐頭 workspace（`fake`；skill 目錄名對齊 seed 的
   skill tag，且 `billing` 帶一個 `references/` 檔，因為「skill 是一個目錄」正是舊模型表達不出
@@ -1130,8 +1133,8 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /eval-sets/{id}/export/preview` | R | 下載對話框的檔案預覽：各檔真實列數 + **實際欄位名**（由寫檔用的同一組欄位定義供給）|
 | `GET /eval-sets/{id}/export` | R | 下載本體；`?questions&runs&traces&fmt=csv\|jsonl&run_scope=all\|latest\|latest_n\|selected&run_ids=`。只選一個檔 → 直接回該檔；多檔 → zip + `manifest.json`；全不選 → 422 |
 | `POST /eval-sets/from-shortlist` | — | 用 shortlist 的題目 + 複製既有 set 的題目建立新 set（§7.6）；讀不到的來源 set → 404（**寫入前**檢查）；沒有任何題目 → 422 |
-| `GET /playground/workspace` | — | agent 的 config（已移除機密）+ 全部 skill 檔 + 版本；失敗 → **503 + 原因** |
-| `GET /playground/workspace/version` | — | 只有版本字串，送出前的過期檢查用 |
+| `GET /playground/workspace` | `agent_base_url?` `agent_timeout_s?` | 指定那台 agent 的 config（已移除機密）+ 全部 skill 檔 + 版本；失敗 → **503 + 原因**。前端的 **Connect** 就是這一支 |
+| `GET /playground/workspace/version` | `agent_base_url?` `agent_timeout_s?` | 只有版本字串，送出前的過期檢查用；**必須問快照來源的同一台** |
 | `POST /playground/attempts` | — | 建立 + 起背景 task，201（回 detail）|
 | `GET /playground/attempts` | — | 我的 attempt 清單（新到舊，**不分頁**——store 本來就有上限）|
 | `GET /playground/attempts/{id}` | C | 詳情，含與 run 相同形狀的 trace payload |
@@ -1198,13 +1201,46 @@ Evaluation（三層下鑽）                        Playground
     題目清單 │ trace + 診斷 │ span 細節
 ```
 
+**Playground 先連線，才開始工作（connection bar）**
+
+編輯區之上有一條常駐的 **Target agent** bar：填 `Agent Base URL` 與 `Agent Timeout`、按
+**Connect**，Playground 才會動。**Connect 這個動作就是 `GET /playground/workspace`**——
+一次呼叫同時證明「連得到」「講的是 §17.3 的契約」並取回 `version` / `config` / `skills`，
+所以不需要另一支 health 端點（多一支就是多一份會過期的東西）。
+
+**為什麼 agent 不能只是 `Endpoints & keys` 裡的兩個欄位**：LLM base URL、judge model 這些是
+**送出一題時**的參數，填錯了下一次送出就知道；agent 的位址是**整個畫面的前提**——
+`Agent config` 與 `Skill files` 兩個面板的內容**是從那台 server 讀來的**，沒有它就沒有內容。
+
+> 這不只是資訊架構問題，舊版是一個**沉默的資料錯誤**：workspace 的兩支端點沒有吃前端的
+> agent URL（`build_seams(include_workspace=True)` 沒帶 config），一路 fallback 到後端 env 的
+> `AGENT_BASE_URL`，而題目卻送去表單裡打的那台。改了 URL 之後：編輯區顯示的是 A 的 skill、
+> override 送去 B、「改了 N 個檔案」拿 A 當 baseline 算、送出前的版本檢查拿 A 比 A——
+> 一個**永遠不會失敗的檢查**在守護一個跑在 B 上的實驗。現在兩支端點都收
+> `agent_base_url` / `agent_timeout_s`（留白仍然 fallback 到 env），`create_attempt` 取 baseline
+> 也改讀 `body.config` 的那台。
+
+- **gate 的是 composer，不是整頁**。attempt 活在後端記憶體、依 subject 分、和連哪台 agent 無關，
+  所以未連線時**左欄清單、三欄檢視、Shortlist 全部照常可用**——為了回頭看一小時前的 trace 而
+  被迫先連線是荒謬的。被鎖住的只有：問題輸入框、送出鍵，以及 `Agent config` / `Skill files`
+  這兩個內容來自 agent 的面板。`Expected answer & process` 與 `LLM & Langfuse` 不鎖。
+- **連上之後 URL 變唯讀，要改得按 Change agent**，並在有編輯時先問。換 agent 等於整份快照作廢，
+  留著編輯就會變成「拿 B 的檔案跟 A 的快照做 diff」。
+- **env 有 `AGENT_BASE_URL` 就自動連一次**；`WORKSPACE_IMPL=fake` 直接顯示 `Fake agent` 且完全不 gate。
+  否則所有既有的單 agent 部署與純 Docker demo 都會平白退化成「每次多按一顆按鈕」。
+- **clone 一個舊 attempt、或從 run 帶題目過來時，agent 欄位會被擋下來**：其餘 config 照抄，
+  但不靜默改連線，而是顯示「那個 attempt 跑在 X」+ 一顆切換鍵。靜默改連線正是上面那個 bug 的另一種長相。
+- 失敗**原樣顯示 agent server 給的理由並留在畫面上**（不是 toast）：§7.4 的「這台沒有 skill」
+  與「你的 URL 錯了」必須分得出來，而只有它自己給的那句話分得出來。
+
 **Playground 的編輯區是一排對等的面板切換，一次只開一個**
 
-`Agent config` · `Skill files` · `Expected answer & process` · `Endpoints & keys`
+`Agent config` · `Skill files` · `Expected answer & process` · `LLM & Langfuse`
 
 原本不是這樣：agent 自己的 `config.json` 藏在一顆叫 **Config** 的按鈕後面，而**這個平台**要打的
 端點藏在一顆叫 **Settings** 的按鈕後面，兩排長得一模一樣的按鈕、兩個都叫某種 settings。
-現在每顆按鈕都直說自己在編輯什麼，而且：
+現在每顆按鈕都直說自己在編輯什麼（第四顆原本叫 `Endpoints & keys`，agent 那塊上移到 connection
+bar 之後，剩下的就只是這個平台的下游服務，名字也就照實改），而且：
 
 - **一次只開一個面板，且每個面板都有高度上限**。編輯區坐在三欄之上，兩個面板同時展開會把
   三欄——以及送出按鈕——推出視窗底部。
