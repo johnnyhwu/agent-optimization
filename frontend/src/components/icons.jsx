@@ -181,3 +181,44 @@ export const IconPanelLeft = (p) => (
     <line x1="9" y1="4" x2="9" y2="20" />
   </S>
 );
+// The overflow menu's trigger.
+export const IconMore = (p) => (
+  <S {...p}>
+    <circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none" />
+  </S>
+);
+export const IconChevronDown = (p) => (
+  <S {...p}>
+    <polyline points="6 9 12 15 18 9" />
+  </S>
+);
+// Replaces the literal "▲" that used to mark an improved eval set.
+export const IconTrendUp = (p) => (
+  <S {...p}>
+    <polyline points="3 17 9 11 13 15 21 7" />
+    <polyline points="15 7 21 7 21 13" />
+  </S>
+);
+// …and the literal "⚠" beside a regressed one. Distinct from IconAlert, which
+// means "something failed"; this one means "a number moved the wrong way".
+export const IconTrendDown = (p) => (
+  <S {...p}>
+    <polyline points="3 7 9 13 13 9 21 17" />
+    <polyline points="15 17 21 17 21 11" />
+  </S>
+);
+export const IconSearch = (p) => (
+  <S {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <line x1="20" y1="20" x2="16.7" y2="16.7" />
+  </S>
+);
+// Empty states: a shelf with nothing on it.
+export const IconInbox = (p) => (
+  <S {...p}>
+    <path d="M3 13h4l2 3h6l2-3h4" />
+    <path d="M5.4 5.5A2 2 0 0 1 7.2 4.5h9.6a2 2 0 0 1 1.8 1l3.4 7.5V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5z" />
+  </S>
+);

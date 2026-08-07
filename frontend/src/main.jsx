@@ -9,7 +9,11 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/space-grotesk";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/600.css";
+// Tokens and the app shell first, then the component vocabulary built on them —
+// the order is what lets a `.ui-*` rule override the bare-element defaults in
+// styles.css without an escalating specificity war.
 import "./styles.css";
+import "./ui.css";
 
 // Set the theme before first paint to avoid a flash.
 const saved = localStorage.getItem("theme");
