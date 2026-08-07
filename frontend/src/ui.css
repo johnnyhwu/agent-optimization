@@ -494,3 +494,32 @@
 }
 .ui-chip-btn:hover { color: var(--accent); border-color: var(--accent); }
 .ok-text { display: inline-flex; align-items: center; gap: 5px; color: var(--green); }
+
+/* ---------------------------------------------------------------------------
+   Dialog: the "you are about to lose this" guard
+   --------------------------------------------------------------------------- */
+.dialog { position: relative; }
+.dialog-confirm {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-5);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  backdrop-filter: blur(3px);
+  border-radius: var(--radius-lg);
+  animation: fadeIn 0.12s ease both;
+}
+.dialog-confirm-box {
+  display: grid; grid-template-areas: "mark text" ". actions";
+  grid-template-columns: auto 1fr; gap: var(--space-3);
+  max-width: 380px; padding: var(--space-4);
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-2);
+}
+.dialog-confirm-mark {
+  grid-area: mark; display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--red-soft); color: var(--red);
+}
+.dialog-confirm-text { grid-area: text; }
+.dialog-confirm-text p { margin: 4px 0 0; font-size: var(--text-body); color: var(--muted); line-height: 1.5; }
+.dialog-confirm-actions { grid-area: actions; display: flex; justify-content: flex-end; gap: var(--space-2); }
