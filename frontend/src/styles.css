@@ -353,84 +353,81 @@ select { cursor: pointer; }
 .page-head h2 { margin: 0; font-size: var(--text-section); overflow-wrap: anywhere; }
 .error { color: var(--red); background: var(--red-soft); border: 1px solid var(--red); padding: var(--space-3); border-radius: var(--radius-sm); margin: var(--space-2) 0; }
 
-/* ---- cards ---- */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
-.card {
-  position: relative; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: var(--space-4); cursor: pointer;
-  box-shadow: var(--shadow-1);
-  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), border-color 0.18s;
-  animation: fadeInUp 0.5s var(--ease) both;
+/* ---- eval-set cards ----
+   The card is one object with three bands: identity, the number that matters,
+   and its labels. They are separated by real dividers rather than by spacing
+   alone, because the middle band is the only one anyone scans across cards and
+   it has to find the same line every time. */
+.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
+.set-card { display: flex; flex-direction: column; animation: fadeInUp 0.45s var(--ease) both; }
+.set-card-top {
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
 }
-.card:hover { transform: translateY(-4px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
-/* Room for the hover actions (gear + trash) so a long name doesn't run under them. */
-.card h3 { margin: 0 0 var(--space-1); font-size: var(--text-title); padding-right: 58px; }
-.card .meta { color: var(--muted); font-size: var(--text-caption); margin-bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
-.card-actions {
-  position: absolute; top: var(--space-3); right: var(--space-3); display: flex; gap: 2px;
-  opacity: 0; transition: opacity 0.15s;
+.set-card-heading { min-width: 0; flex: 1; }
+.set-card-heading h3 {
+  margin: 0 0 6px; font-size: var(--text-title); font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
 }
-.card:hover .card-actions, .card-actions:focus-within { opacity: 1; }
-.card .stats { display: flex; gap: var(--space-5); align-items: flex-end; }
-/* The number is the card, so it gets the display face and tabular figures —
-   pass rates read as a column when they line up. */
-.stat .num {
+.set-card-meta {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  color: var(--muted); font-size: var(--text-caption);
+}
+.set-card-menu { position: relative; flex: none; }
+/* "Nobody has reviewed how this set is graded." A dot on the menu rather than a
+   badge in the card body: it is a prompt to open something, so it belongs on the
+   thing that opens it. */
+.set-card-nudge {
+  position: absolute; top: 5px; right: 5px; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--amber);
+  box-shadow: 0 0 0 2px var(--panel);
+  pointer-events: none;
+}
+.set-card-stats {
+  display: flex; align-items: flex-end; gap: var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+/* The pass rate is what the card is for, so it gets the display face and tabular
+   figures — rates read as a column across the grid when they line up. */
+.set-stat-num {
   font-family: var(--font-display); font-size: var(--text-display);
   font-weight: var(--fw-bold); line-height: 1; font-variant-numeric: tabular-nums;
 }
-.stat .lbl { font-size: var(--text-micro); color: var(--muted); margin-top: var(--space-1); }
-.spark-wrap { margin-left: auto; }
-.badges { margin-top: var(--space-3); display: flex; gap: 6px; flex-wrap: wrap; }
-.badge { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: var(--space-1); }
-.badge.reg { color: var(--red); background: var(--red-soft); }
+.set-stat-num-sm { font-size: 18px; padding-bottom: 3px; }
+.set-stat-lbl { font-size: var(--text-micro); color: var(--muted); margin-top: 5px; }
+.set-card-spark { margin-left: auto; padding-bottom: var(--space-1); }
+.set-card-foot { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
+
+/* ---- legacy, being retired ----
+   These are the last users of the pre-primitive vocabulary: the playground and
+   the dialogs, which move onto <Badge> and <SegmentedControl> in the steps after
+   this one. Kept here — rather than left where they were — so that what is still
+   waiting to be migrated is a single visible list rather than something you have
+   to diff the tree to discover. Delete this block when it empties. */
+.badge { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: var(--space-1); background: var(--panel-2); color: var(--muted); }
+.badge.warn { color: var(--amber); background: var(--amber-soft); }
 .badge.imp { color: var(--green); background: var(--green-soft); }
-.tags { margin-top: var(--space-2); display: flex; gap: 6px; flex-wrap: wrap; }
-.tag { font-size: var(--text-micro); color: var(--muted); background: var(--panel-2); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
-.tag.people { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
-
-/* ---- run history ---- */
-.runrow {
-  display: flex; align-items: center; gap: 14px; padding: 12px 16px;
-  border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px;
-  background: var(--panel); box-shadow: var(--shadow-1);
-  /* The whole row opens the run, so it reads and reacts as one target. */
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s, background 0.15s;
-  animation: fadeInUp 0.4s var(--ease) both;
-}
-.runrow:hover {
-  transform: translateX(2px); box-shadow: var(--shadow-2);
-  border-color: var(--border-strong); background: var(--panel-2);
-}
-.runrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.runrow input[type="checkbox"] { cursor: pointer; }
-.runrow.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.runrow .grow { flex: 1; }
-.pill { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); }
-.pill.completed { color: var(--green); border-color: var(--green); background: var(--green-soft); }
-.pill.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.pill.failed { color: var(--red); border-color: var(--red); background: var(--red-soft); }
-.pill.cancelled { color: var(--muted); border-color: var(--border-strong); background: var(--panel-2); }
-
-.toolbar {
-  display: flex; gap: var(--space-2); align-items: center; margin: var(--space-3) 0;
-  padding: var(--space-3); background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow-1); flex-wrap: wrap;
-}
-/* An in-page control: "which slice of this page am I looking at". It is
-   deliberately a pill and deliberately not what the side rail looks like — the
-   two used to be the same component, which made section switching read as a
-   filter. */
+.tag { font-size: var(--text-micro); color: var(--muted); background: var(--panel-2); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); display: inline-flex; align-items: center; gap: var(--space-1); }
+.tag.warn { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .segmented { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
 .segmented button { border: none; background: transparent; border-radius: 999px; padding: 5px 12px; box-shadow: none; color: var(--muted); font-size: var(--text-body); }
 .segmented button:hover { box-shadow: none; background: transparent; color: var(--text); }
 .segmented button.active { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
 .segmented.sm button { padding: 4px 10px; font-size: 12px; }
-.segmented.sm .count {
-  margin-left: 6px; font-variant-numeric: tabular-nums; font-size: 11px;
-  padding: 0 6px; border-radius: 999px; background: var(--panel-3); color: var(--muted);
+
+/* ---- run history ---- */
+.run-flags { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
+/* The bar that appears once runs are ticked. Tinted rather than plain, because it
+   is a transient mode the page is in — it did not exist a moment ago and will go
+   away again when the selection is cleared. */
+.run-compare-bar {
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft); border: 1px solid transparent;
+  border-radius: var(--radius);
+  animation: fadeInUp 0.2s var(--ease) both;
 }
-.segmented.sm button.active .count { background: var(--accent-soft); color: var(--accent); }
 
 /* ---- run status (above the three columns) ---- */
 .runstatus {
@@ -451,7 +448,11 @@ select { cursor: pointer; }
 .stackbar .s.pending { background: transparent; }
 
 /* ---- three-column detail ---- */
-.detail-meta { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--text-body); }
+.detail-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-3); margin: 0 0 var(--space-3); min-height: var(--ctl-h-sm);
+}
+.detail-meta-facts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 /* No viewport arithmetic. The columns take what the flex chain hands down
    (.main → .page → .page-fill → here), so they end at the bottom of the window
    whatever is stacked above them — a run status bar, a breadcrumb, or the
@@ -462,22 +463,9 @@ select { cursor: pointer; }
   display: grid; grid-template-columns: 320px 1fr 1fr; gap: var(--space-3);
   flex: 1; min-height: 360px;
 }
-.col { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; box-shadow: var(--shadow-1); }
-.col h4 {
-  margin: 0; padding: 14px 16px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--muted); border-bottom: 1px solid var(--border); position: sticky; top: 0;
-  background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px); z-index: 1;
-  display: flex; align-items: center; justify-content: space-between;
-}
-/* Column header: title on the left, filter on the right. Sticky so the filter
-   stays reachable in a long question list. */
-.col-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 1;
-  background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px);
-}
-.col-head h4 { margin: 0; padding: 0; border: none; background: none; backdrop-filter: none; position: static; }
+/* A column is a Card that scrolls its own body; the header comes from
+   CardHeader, sticky so a filter stays reachable in a list of two hundred. */
+.col { overflow: auto; }
 
 /* Quiet "an update is on the way" dot in a column header. The panel deliberately
    keeps its content while refetching a live question, so this is the only signal
@@ -512,31 +500,23 @@ select { cursor: pointer; }
 .qphase.answered { color: var(--accent); }
 .qphase.failed, .qphase.cancelled { color: var(--red); }
 .qitem .qerror { font-size: 11px; color: var(--red); margin-top: 2px; line-height: 1.35; }
+.qitem:focus-visible, .spanrow:focus-visible { outline: none; box-shadow: inset var(--ring); }
 
-.banner { margin: 12px 16px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 13px; animation: fadeIn 0.3s var(--ease) both; }
-.banner .banner-detail {
-  margin-top: 6px; font-family: var(--font-mono);
-  font-size: 11.5px; line-height: 1.45; word-break: break-word;
+/* Explanations that live inside a Banner. The recognised-failure copy is prose
+   and the raw output is not, so they are typeset differently on purpose: a
+   ClickHouse stack dump is the wrong first thing to read. */
+.ui-banner .banner-explain { margin-top: 6px; line-height: 1.5; }
+.ui-banner .banner-raw { margin-top: 8px; }
+.ui-banner .banner-raw summary {
+  cursor: pointer; font-size: var(--text-caption); color: var(--muted); user-select: none;
 }
-/* A recognised failure explained in words, with the raw output tucked behind a
-   disclosure. A ClickHouse stack dump is the wrong first thing to read. */
-.banner .banner-explain { margin-top: 6px; line-height: 1.5; }
-.banner .banner-raw { margin-top: 8px; }
-.banner .banner-raw summary {
-  cursor: pointer; font-size: 11.5px; color: var(--muted); user-select: none;
-}
-.banner .banner-raw summary:hover { color: var(--text); }
-.banner .banner-raw pre {
+.ui-banner .banner-raw summary:hover { color: var(--text); }
+.ui-banner .banner-raw pre {
   margin: 6px 0 0; padding: 8px 10px; background: var(--panel-2);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+  font-size: var(--text-micro); line-height: 1.45; white-space: pre-wrap; word-break: break-word;
   max-height: 180px; overflow: auto;
 }
-.banner.diagnosis { background: var(--panel-2); border: 1px solid var(--border); }
-.banner.caveat { background: var(--amber-soft); border: 1px solid var(--amber); color: var(--text); }
-.banner.caveat strong { color: var(--amber); }
-.banner.generating { background: var(--accent-soft); border: 1px solid var(--accent); }
-.banner.error-banner { background: var(--red-soft); border: 1px solid var(--red); color: var(--text); }
 
 /* ---- middle column: labelled sections ----
    Answer, diagnosis and the span list are four unrelated kinds of content in one
@@ -568,11 +548,14 @@ select { cursor: pointer; }
 .spanrow { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.12s; }
 .spanrow:hover { background: var(--panel-2); }
 .spanrow.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-.spanrow .idx { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.conf { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-.conf.high { background: var(--high); color: #fff; }
-.conf.medium { background: var(--med); color: #fff; }
-.conf.low { background: var(--low); color: #fff; }
+.spanrow-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.spanrow-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spanrow .idx { color: var(--muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; flex: none; }
+/* The confidence marker goes to the far edge rather than trailing the tool name:
+   it is the thing being scanned down the column, and a marker whose left edge
+   moves with the length of the name beside it cannot be scanned. */
+.spanrow-conf { margin-left: auto; flex: none; }
+.spanrow-status { font-size: var(--text-caption); color: var(--muted); margin-top: 3px; }
 
 .kv { padding: 14px 16px; }
 .kv .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 5px; }

@@ -5,6 +5,8 @@ import RunStatusBar from "./RunStatusBar.jsx";
 import SpanList from "./SpanList.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import { useToast } from "./Toast.jsx";
+import Badge from "./ui/Badge.jsx";
+import Button from "./ui/Button.jsx";
 import { IconSend } from "./icons.jsx";
 
 // Bottom tier (§6.13): three columns. Left = question list (per-mode incorrect),
@@ -20,6 +22,14 @@ import { IconSend } from "./icons.jsx";
 // refetched whenever the fields that change it move (see `traceKey` below), so
 // the agent's answer, the verdict and the diagnosis appear as they happen
 // rather than on the next navigation.
+// Matches the wording of the compare bar on the run history, so the mode the
+// developer chose there is described the same way here.
+const INCORRECT_MODE_LABEL = {
+  union: "ever failed",
+  intersection: "always fails",
+  last_n: "newly failing, last",
+};
+
 export default function RunDetail({
   evalSet, runIds, mode, lastN, myRole, onSendToPlayground,
 }) {
@@ -143,6 +153,18 @@ export default function RunDetail({
     return () => es.close();
   }, [evalSet.id, liveRunId]);
 
+  // Arriving at a run and being shown two empty panels wastes the first move:
+  // the reason anyone opens a run is to read a failure, and the view already
+  // knows which questions failed. So open one — the first wrong answer if there
+  // is one, otherwise the first question. Only ever while nothing is selected,
+  // so a live run repainting the list can't yank the developer off the row they
+  // are reading.
+  useEffect(() => {
+    if (activeResultId || !results?.length) return;
+    const first = results.find((r) => r.is_incorrect) || results[0];
+    if (first) setActiveResultId(first.id);
+  }, [results, activeResultId]);
+
   function pick(r) {
     if (r.id === activeResultId) return;
     setActiveResultId(r.id);
@@ -254,14 +276,30 @@ export default function RunDetail({
           canCancel={myRole === "owner" || triggeredBy === subject}
         />
       )}
-      <p className="detail-meta">
-        {/* The handoff to the playground (§10.5). Offered on the open question
-            rather than per row: the hypothesis worth testing is formed after
-            reading a trace, not while scanning the list. */}
+      <div className="detail-meta">
+        <div className="detail-meta-facts">
+          {/* How many runs is the breadcrumb's job; this line says what was done
+              with them. */}
+          {runIds.length > 1 && (
+            <Badge tone="neutral">Wrong = {INCORRECT_MODE_LABEL[mode] || mode}{mode === "last_n" ? ` ${lastN}` : ""}</Badge>
+          )}
+          {runStatus && runStatus !== "running" && runIds.length === 1 && (
+            <Badge tone={runStatus === "completed" ? "success" : "neutral"}>run {runStatus}</Badge>
+          )}
+          {/* Across several runs the row on screen is a representative one that
+              may predate the run being watched; say which, or an old run's trace
+              and errors read as the current one's. */}
+          {runIds.length > 1 && activeResult?.run_label && (
+            <Badge tone="neutral">showing {activeResult.run_label}</Badge>
+          )}
+        </div>
+        {/* The handoff to the playground. Offered on the open question rather
+            than per row: the hypothesis worth testing is formed after reading a
+            trace, not while scanning the list. */}
         {onSendToPlayground && activeResult && (
-          <button
-            className="linkish"
-            style={{ marginRight: 10 }}
+          <Button
+            size="sm"
+            icon={<IconSend size={13} />}
             onClick={() =>
               onSendToPlayground({
                 question: activeResult.question,
@@ -271,22 +309,10 @@ export default function RunDetail({
               })
             }
           >
-            <IconSend size={12} /> Try this in the playground
-          </button>
+            Try this in the playground
+          </Button>
         )}
-        {/* How many runs is the breadcrumb's job; this line says what was done
-            with them. */}
-        Incorrect mode: <strong>{mode === "last_n" ? `last-${lastN}` : mode}</strong>
-        {runStatus && runStatus !== "running" && runIds.length === 1 && (
-          <> · run <strong>{runStatus}</strong></>
-        )}
-        {/* Across several runs the row on screen is a representative one that may
-            predate the run being watched; say which, or an old run's trace and
-            errors read as the current one's. */}
-        {runIds.length > 1 && activeResult?.run_label && (
-          <> · showing <strong>{activeResult.run_label}</strong></>
-        )}
-      </p>
+      </div>
       <div className="three">
         {results && (
           <QuestionList

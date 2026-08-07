@@ -55,9 +55,11 @@ export default function Card({
 // A card's own header strip: title on the left, controls on the right. Used by
 // the three columns of the detail view, where it is sticky so the filter stays
 // reachable in a list of two hundred questions.
-export function CardHeader({ title, count, actions, sticky = false, className = "" }) {
+// `variant="data"` for a heading that is a value rather than a label — a tool
+// name, an id. Those keep their own casing.
+export function CardHeader({ title, count, actions, sticky = false, variant, className = "" }) {
   return (
-    <div className={`ui-card-head${sticky ? " is-sticky" : ""} ${className}`.trim()}>
+    <div className={`ui-card-head${sticky ? " is-sticky" : ""}${variant === "data" ? " is-data" : ""} ${className}`.trim()}>
       <div className="ui-card-head-title">
         <h4>{title}</h4>
         {count != null && <span className="ui-card-head-count">{count}</span>}

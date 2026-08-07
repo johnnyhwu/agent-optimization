@@ -84,6 +84,11 @@
 
 .ui-spinner { animation: spin 0.75s linear infinite; }
 
+/* A ghost icon button that turns destructive on approach. Used inside table rows,
+   where a permanently red icon in every row reads as an error state rather than
+   as an available action. */
+.ui-btn-destructive-hover:hover:not(:disabled) { background: var(--red-soft); color: var(--red); }
+
 /* ---------------------------------------------------------------------------
    Menu / popover
    --------------------------------------------------------------------------- */
@@ -114,6 +119,10 @@
 .ui-menu-item-danger .ui-menu-icon { color: var(--red); }
 .ui-menu-item-danger:hover:not(:disabled) { background: var(--red-soft); }
 .ui-menu-sep { height: 1px; margin: var(--space-1) 0; background: var(--border); }
+/* A marker on a menu item sits at the far edge, so item names stay in one column
+   and the item stays one line high. */
+.ui-menu-label { display: flex; align-items: center; gap: var(--space-2); flex: 1; min-width: 0; }
+.ui-menu-label .ui-badge { margin-left: auto; }
 
 /* ---------------------------------------------------------------------------
    DataTable
@@ -169,6 +178,7 @@
   padding: 2px 9px; border-radius: 999px;
   font-size: var(--text-micro); font-weight: var(--fw-semibold);
   line-height: 1.6; white-space: nowrap;
+  text-transform: none; letter-spacing: 0;
   border: 1px solid transparent;
 }
 .ui-badge-sm { padding: 1px 7px; font-size: 10px; }
@@ -277,6 +287,36 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Banner
+   --------------------------------------------------------------------------- */
+.ui-banner {
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  margin: var(--space-3) var(--space-4);
+  padding: 10px 12px;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  font-size: var(--text-body); line-height: 1.55;
+  animation: fadeIn 0.25s var(--ease) both;
+}
+.ui-banner-mark { display: inline-flex; flex: none; margin-top: 2px; }
+.ui-banner-content { min-width: 0; flex: 1; }
+.ui-banner-title { display: block; font-weight: var(--fw-semibold); }
+.ui-banner-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.ui-banner-note { margin-top: 6px; font-size: var(--text-caption); color: var(--muted); }
+.ui-banner-detail {
+  margin-top: 6px; font-family: var(--font-mono);
+  font-size: var(--text-micro); line-height: 1.5; word-break: break-word;
+}
+
+.ui-banner-info { background: var(--panel-2); border-color: var(--border); }
+.ui-banner-info .ui-banner-mark { color: var(--muted); }
+.ui-banner-error { background: var(--red-soft); border-color: var(--red); }
+.ui-banner-error .ui-banner-mark, .ui-banner-error .ui-banner-title { color: var(--red); }
+.ui-banner-warning { background: var(--amber-soft); border-color: var(--amber); }
+.ui-banner-warning .ui-banner-mark, .ui-banner-warning .ui-banner-title { color: var(--amber); }
+.ui-banner-pending { background: var(--accent-soft); border-color: var(--accent); }
+.ui-banner-pending .ui-banner-mark, .ui-banner-pending .ui-banner-title { color: var(--accent); }
+
+/* ---------------------------------------------------------------------------
    Card
    --------------------------------------------------------------------------- */
 .ui-card {
@@ -309,6 +349,11 @@
   margin: 0; font-size: var(--text-caption); font-weight: var(--fw-bold);
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
   white-space: nowrap;
+}
+.ui-card-head.is-data .ui-card-head-title h4 {
+  text-transform: none; letter-spacing: 0; font-size: var(--text-body);
+  color: var(--text); font-family: var(--font-mono); font-weight: var(--fw-medium);
+  overflow: hidden; text-overflow: ellipsis;
 }
 .ui-card-head-count { font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
 .ui-card-head-actions { display: flex; align-items: center; gap: var(--space-2); flex: none; }
@@ -373,6 +418,11 @@
   background: var(--panel);
 }
 .ui-search input::-webkit-search-cancel-button { cursor: pointer; }
+
+/* Controls that sit loose on a toolbar rather than inside a Field: they need the
+   shared control height, but not the full-width an input takes by default. */
+.ui-inline-select { width: auto; height: var(--ctl-h); padding-right: var(--space-5); }
+.ui-inline-input { width: 170px; height: var(--ctl-h); }
 
 .ui-segmented {
   display: inline-flex; padding: 3px; flex: none;

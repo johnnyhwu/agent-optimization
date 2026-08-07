@@ -1,6 +1,9 @@
 import React from "react";
+import Card, { CardHeader } from "./ui/Card.jsx";
+import { InlineEmpty } from "./ui/EmptyState.jsx";
+import { SegmentedControl } from "./ui/Toolbar.jsx";
 
-// Left column (§6.13). Two jobs:
+// Left column. Two jobs:
 //
 //  1. Filter. The old bare "only wrong" checkbox floated in the header; a
 //     segmented control with live counts says what is being hidden as well as
@@ -17,10 +20,10 @@ const PHASE_LABEL = {
   answered: "judging…",
   failed: "failed",
   // Separated from "failed" on purpose: this one is not the agent's fault and
-  // not the network's. The judge answered in a shape we could not parse, which
-  // points at the eval set's judge prompt — the one thing an owner can go and
-  // fix. It is still not a pass, and still in the pass rate's denominator.
-  judge_invalid: "not judged",
+  // not the network's. The judge answered in a shape we could not read, which
+  // points at the eval set's grading criteria — the one thing an owner can go
+  // and fix. It is still not a pass, and still in the pass rate's denominator.
+  judge_invalid: "not graded",
   cancelled: "stopped",
 };
 
@@ -29,24 +32,23 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
   const shown = filter === "wrong" ? results.filter((r) => r.is_incorrect) : results;
 
   return (
-    <div className="col">
-      <div className="col-head">
-        <h4>Questions</h4>
-        <div className="segmented sm">
-          <button
-            className={filter === "all" ? "active" : ""}
-            onClick={() => setFilter("all")}
-          >
-            All <span className="count">{results.length}</span>
-          </button>
-          <button
-            className={filter === "wrong" ? "active" : ""}
-            onClick={() => setFilter("wrong")}
-          >
-            Wrong <span className="count">{wrongCount}</span>
-          </button>
-        </div>
-      </div>
+    <Card padded={false} className="col">
+      <CardHeader
+        title="Questions"
+        sticky
+        actions={
+          <SegmentedControl
+            value={filter}
+            onChange={setFilter}
+            size="sm"
+            ariaLabel="Filter questions"
+            options={[
+              { value: "all", label: "All", count: results.length },
+              { value: "wrong", label: "Wrong", count: wrongCount },
+            ]}
+          />
+        }
+      />
 
       {shown.map((r) => {
         // Colour follows the phase; only a judged question is green or red.
@@ -63,11 +65,24 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
           <div
             key={r.id}
             className={`qitem ${r.phase} ${activeId === r.id ? "active" : ""}`}
+            role="button"
+            tabIndex={0}
             onClick={() => onPick(r)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onPick(r);
+              }
+            }}
           >
-            <span className={`dot ${dot}`} />
+            {/* The dot is a second encoding of the word beside it, not the only
+                one — the phase is always spelled out in `note`. */}
+            <span className={`dot ${dot}`} aria-hidden="true" />
             <div className="grow">
-              <div className="qtext">{r.question.slice(0, 60)}</div>
+              {/* Cut by CSS, not by JS. Slicing to 60 characters *and* then
+                  ellipsising meant a wider column showed more empty space
+                  rather than more question. */}
+              <div className="qtext" title={r.question}>{r.question}</div>
               <div className="qid">
                 {r.question_id} · <span className={`qphase ${r.phase}`}>{note}</span>
               </div>
@@ -83,10 +98,12 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
         );
       })}
       {shown.length === 0 && (
-        <div className="notflagged">
-          {filter === "wrong" ? "No incorrect questions in this selection." : "No questions."}
-        </div>
+        <InlineEmpty>
+          {filter === "wrong"
+            ? "Every question in this selection passed."
+            : "No questions."}
+        </InlineEmpty>
       )}
-    </div>
+    </Card>
   );
 }

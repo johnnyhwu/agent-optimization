@@ -26,14 +26,22 @@ export default function DataTable({
   selectLabel = "Select row",
   rowClassName,
   rowActions,
+  actionsWidth = 76,
   empty,
   staggerWithin = 0,
 }) {
   const selectable = Boolean(onToggleSelect);
+  // Every track has to be sized independently of what is in it, because the
+  // header and each body row are *separate* grids — they only line up if the
+  // same track list resolves to the same pixels in all of them. A bare `1fr` is
+  // `minmax(auto, 1fr)`, whose auto minimum lets a long cell push its column
+  // wider in that row alone; an `auto` track for the action buttons collapses to
+  // nothing in the header, which has none. Both were visibly wrong: the column
+  // headings sat a few pixels off the values beneath them, differently per row.
   const template = [
     selectable && "34px",
-    ...columns.map((c) => c.width || "1fr"),
-    rowActions && "auto",
+    ...columns.map((c) => c.width || "minmax(0, 1fr)"),
+    rowActions && `${actionsWidth}px`,
   ]
     .filter(Boolean)
     .join(" ");

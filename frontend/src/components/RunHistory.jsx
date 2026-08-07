@@ -10,19 +10,43 @@ import ConfirmDialog from "./ConfirmDialog.jsx";
 import ConfigDialog from "./ConfigDialog.jsx";
 import DownloadDialog from "./DownloadDialog.jsx";
 import { useToast } from "./Toast.jsx";
+import Button, { IconButton } from "./ui/Button.jsx";
+import Badge from "./ui/Badge.jsx";
+import DataTable from "./ui/DataTable.jsx";
+import EmptyState from "./ui/EmptyState.jsx";
+import Menu, { MenuItem, MenuSeparator } from "./ui/Menu.jsx";
+import PageHeader from "./ui/PageHeader.jsx";
+import Skeleton from "./ui/Skeleton.jsx";
+import Toolbar, { SegmentedControl } from "./ui/Toolbar.jsx";
 import {
-  IconPlay, IconGear, IconDownload, IconFileText, IconStop, IconTrash,
+  IconDownload, IconFileText, IconGear, IconInbox, IconPlay, IconStop, IconTrash,
 } from "./icons.jsx";
 
+// Which questions the detail view treats as incorrect when several runs are
+// compared. Named for what they do rather than for the set operation they are:
+// "Union" and "Intersection" describe the implementation, and left the developer
+// to work out which one finds a stubborn failure and which one finds every
+// failure ever seen.
 const MODES = [
-  ["union", "Union"],
-  ["intersection", "Intersection"],
-  ["last_n", "Last-N"],
+  { value: "union", label: "Ever failed", title: "Wrong in at least one of the selected runs" },
+  { value: "intersection", label: "Always fails", title: "Wrong in every selected run — the stubborn ones" },
+  { value: "last_n", label: "Newly failing", title: "Wrong in the last N runs — a recent regression" },
 ];
 
 const PAGE_SIZE = 20;
 
-// Middle tier (§6.13): run history for a set; multi-select runs + the 3 incorrect
+const STATUS_TONE = {
+  completed: "success",
+  running: "accent",
+  failed: "danger",
+  cancelled: "neutral",
+};
+
+function runLabel(r) {
+  return r.name || new Date(r.started_at).toLocaleString();
+}
+
+// Middle tier: run history for a set; multi-select runs + the three incorrect
 // modes; trigger new runs (owner or viewer). Owner can edit questions.
 //
 // Runs page in newest-first as you scroll. Selection is held as a list of run
@@ -56,8 +80,8 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
     { pageSize: PAGE_SIZE, deps: [evalSet.id] }
   );
 
-  const toggle = (id) =>
-    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const toggle = (r) =>
+    setSelected((s) => (s.includes(r.id) ? s.filter((x) => x !== r.id) : [...s, r.id]));
 
   // Errors propagate so the dialog can show them inline and stay open with the
   // developer's settings intact.
@@ -89,46 +113,118 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
     load();
   }
 
-  // A viewer may trigger a run (§6.16), so they must be able to stop it.
+  // A viewer may trigger a run, so they must be able to stop it.
   const canCancel = (r) => myRole === "owner" || r.triggered_by === subject;
+  const comparing = selected.length > 1;
+
+  const columns = [
+    {
+      key: "run",
+      header: "Run",
+      width: "minmax(0, 1fr)",
+      render: (r) => (
+        <>
+          <div className="ui-table-primary">{runLabel(r)}</div>
+          <div className="ui-table-sub">
+            by {r.triggered_by}
+            {r.name && ` · ${new Date(r.started_at).toLocaleString()}`}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      width: "110px",
+      render: (r) => (
+        <Badge tone={STATUS_TONE[r.status] || "neutral"}>
+          {r.status === "running" && r.cancel_requested ? "cancelling" : r.status}
+        </Badge>
+      ),
+    },
+    {
+      key: "pass",
+      header: "Pass rate",
+      width: "92px",
+      align: "end",
+      className: "ui-num",
+      render: (r) => (r.pass_rate === null ? "—" : `${Math.round(r.pass_rate * 100)}%`),
+    },
+    {
+      key: "wrong",
+      header: "Wrong",
+      width: "70px",
+      align: "end",
+      className: "ui-num",
+      render: (r) => r.incorrect_count ?? 0,
+    },
+    {
+      key: "flags",
+      header: "Notes",
+      width: "150px",
+      render: (r) => (
+        <div className="run-flags">
+          {/* Questions whose judge replied unparseably. Not folded into the pass
+              rate (they stay in the denominator — an ungraded question is not a
+              pass), but a rate that fell because the judge broke is a different
+              problem from one that fell because the agent did. */}
+          {r.judge_invalid_count > 0 && (
+            <Badge
+              tone="warning"
+              title="The judge's reply could not be read for these questions, so they count as not passed"
+            >
+              {r.judge_invalid_count} ungraded
+            </Badge>
+          )}
+          {r.config?.judge_prompt_fingerprint &&
+            r.config.judge_prompt_fingerprint !== currentFingerprint && (
+              <Badge
+                tone="warning"
+                outline
+                title="Graded with different criteria than this set uses now — its pass rate is not directly comparable with the others"
+              >
+                other criteria
+              </Badge>
+            )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div>
-      <div className="page-head">
-        <div>
-          <h2>{evalSet.name}</h2>
-          <p className="muted" style={{ margin: "2px 0 0" }}>
-            Any role may run an eval. Owner may edit questions (set is locked — no add/delete).
-          </p>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {/* The second entry point, and the one that matters most for results:
-              the developer who wants the CSV is usually already here looking at
-              a run, and sending them back to the home page to find the card's
-              download button would be the long way round. */}
-          <button onClick={() => setShowDownload(true)}>
-            <IconDownload size={15} /> Download
-          </button>
-          {myRole === "owner" && (
-            <button onClick={() => setShowEditor(true)}><IconGear size={15} /> Edit questions</button>
-          )}
-          {/* The second entry point to the set's own settings. Without it the
-              only way to adjust the judge prompt — the setting most likely to
-              be revisited while looking at results — is to go back to the home
-              page and find the card. */}
-          {myRole === "owner" && (
-            <button
-              onClick={() => setConfigTab("judging")}
-              title="Name, sharing, and how this set's answers are graded"
-            >
-              <IconGear size={15} /> Set config{unreviewedJudging ? " !" : ""}
-            </button>
-          )}
-          <button className="primary" onClick={() => setShowRunConfig(true)}>
-            <IconPlay size={14} /> Run eval
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title={evalSet.name}
+        subtitle="Every run recorded against this set. Open one to see where its wrong answers went off the rails."
+        primary={
+          <Button variant="primary" icon={<IconPlay size={14} />} onClick={() => setShowRunConfig(true)}>
+            Run eval
+          </Button>
+        }
+        menu={
+          <Menu label="Eval set actions">
+            <MenuItem icon={<IconDownload size={15} />} onClick={() => setShowDownload(true)}>
+              Download results…
+            </MenuItem>
+            {myRole === "owner" && <MenuSeparator />}
+            {myRole === "owner" && (
+              <MenuItem icon={<IconFileText size={15} />} onClick={() => setShowEditor(true)}>
+                Edit questions
+              </MenuItem>
+            )}
+            {myRole === "owner" && (
+              <MenuItem
+                icon={<IconGear size={15} />}
+                onClick={() => setConfigTab("judging")}
+                title={unreviewedJudging ? "Nobody has reviewed how this set is graded yet" : undefined}
+              >
+                Settings
+                {unreviewedJudging && <Badge tone="warning" size="sm">review grading</Badge>}
+              </MenuItem>
+            )}
+          </Menu>
+        }
+      />
       {(error || loadError) && <div className="error">{error || loadError}</div>}
 
       {/* Driven by the run list rather than by "did I start it in this tab", so
@@ -140,136 +236,113 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
             key={r.id}
             evalSetId={evalSet.id}
             runId={r.id}
-            label={r.name || new Date(r.started_at).toLocaleString()}
+            label={runLabel(r)}
             onDone={load}
           />
         ))}
 
-      <div className="toolbar">
-        <span className="muted">Incorrect mode</span>
-        <div className="segmented">
-          {MODES.map(([m, label]) => (
-            <button key={m} className={mode === m ? "active" : ""} onClick={() => setMode(m)}>{label}</button>
-          ))}
-        </div>
-        {mode === "last_n" && (
-          <>
-            <span className="muted">N =</span>
-            <input type="number" min="1" value={lastN} onChange={(e) => setLastN(Number(e.target.value))} style={{ width: 64 }} />
-          </>
-        )}
-        <button
-          className="primary"
-          disabled={selected.length === 0}
-          onClick={() => onOpenRuns(selected, mode, lastN)}
-          style={{ marginLeft: "auto" }}
+      {/* The compare bar appears only once there is something to compare. The
+          three modes are meaningless against a single run — all three answer the
+          same question — so offering them permanently, above a list nothing was
+          yet ticked in, was asking for a decision that had no consequences. */}
+      {selected.length > 0 && (
+        <Toolbar
+          className="run-compare-bar"
+          end={
+            <>
+              <Button variant="ghost" onClick={() => setSelected([])}>Clear</Button>
+              <Button variant="primary" onClick={() => onOpenRuns(selected, mode, lastN)}>
+                {comparing ? `Compare ${selected.length} runs` : "Open run"}
+              </Button>
+            </>
+          }
         >
-          Open detail ({selected.length})
-        </button>
-      </div>
+          <span className="ui-toolbar-label">
+            <strong>{selected.length}</strong> selected
+          </span>
+          {comparing && (
+            <>
+              <span className="ui-toolbar-label">Count a question wrong when it</span>
+              <SegmentedControl
+                value={mode}
+                onChange={setMode}
+                options={MODES}
+                size="sm"
+                ariaLabel="Which questions count as incorrect"
+              />
+              {mode === "last_n" && (
+                <>
+                  <span className="ui-toolbar-label">in the last</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={lastN}
+                    onChange={(e) => setLastN(Number(e.target.value))}
+                    className="ui-inline-input"
+                    style={{ width: 64 }}
+                    aria-label="How many recent runs must fail"
+                  />
+                  <span className="ui-toolbar-label">runs</span>
+                </>
+              )}
+            </>
+          )}
+        </Toolbar>
+      )}
 
-      {runs === null && <p className="muted">Loading…</p>}
-      {runs && runs.length === 0 && <div className="empty">No runs yet — hit “Run eval”.</div>}
-      {runs &&
-        runs.map((r, i) => (
-          // The whole row opens the run (same pattern as the eval-set cards);
-          // the checkbox keeps its own click for multi-select.
-          <div
-            className={`runrow ${selected.includes(r.id) ? "sel" : ""}`}
-            key={r.id}
-            // Stagger within a page only, so appending doesn't re-animate rows
-            // the developer is already looking at.
-            style={{ animationDelay: `${(i % PAGE_SIZE) * 25}ms` }}
-            role="button"
-            tabIndex={0}
-            onClick={() => onOpenRuns([r.id], "union", 2)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onOpenRuns([r.id], "union", 2);
+      {runs === null && <Skeleton variant="row" count={5} />}
+      {runs && (
+        <DataTable
+          columns={columns}
+          rows={runs}
+          staggerWithin={PAGE_SIZE}
+          onRowClick={(r) => onOpenRuns([r.id], "union", 2)}
+          isSelected={(r) => selected.includes(r.id)}
+          onToggleSelect={toggle}
+          selectLabel="Select run to compare"
+          empty={
+            <EmptyState
+              icon={<IconInbox size={22} />}
+              title="No runs yet"
+              action={
+                <Button variant="primary" icon={<IconPlay size={14} />} onClick={() => setShowRunConfig(true)}>
+                  Run eval
+                </Button>
               }
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={selected.includes(r.id)}
-              onChange={() => toggle(r.id)}
-              onClick={(e) => e.stopPropagation()}
-              aria-label="Select run"
-              style={{ width: "auto" }}
-            />
-            <div className="grow">
-              <div style={{ fontWeight: 600 }}>{r.name || new Date(r.started_at).toLocaleString()}</div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                by {r.triggered_by}
-                {r.name && ` · ${new Date(r.started_at).toLocaleString()}`}
-              </div>
-            </div>
-            <span className={`pill ${r.status}`}>
-              {r.status === "running" && r.cancel_requested ? "cancelling" : r.status}
-            </span>
-            <div style={{ width: 96, textAlign: "right", fontWeight: 600 }}>
-              {r.pass_rate === null ? "—" : `${Math.round(r.pass_rate * 100)}% pass`}
-            </div>
-            <div style={{ width: 80, textAlign: "right" }} className="muted">{r.incorrect_count ?? 0} wrong</div>
-            {/* Questions whose judge replied unparseably. Not folded into the
-                pass rate (they stay in the denominator — an ungraded question is
-                not a pass), but a rate that fell because the judge broke is a
-                different problem from one that fell because the agent did. */}
-            {r.judge_invalid_count > 0 && (
-              <span className="pill warn" title="The judge's reply could not be parsed for these questions">
-                {r.judge_invalid_count} unjudged
-              </span>
-            )}
-            {r.config?.judge_prompt_fingerprint && (
-              <span
-                className={`chip ${
-                  r.config.judge_prompt_fingerprint === currentFingerprint ? "" : "changed"
-                }`}
-                title={
-                  r.config.judge_prompt_fingerprint === currentFingerprint
-                    ? "Graded with this set's current judge prompt"
-                    : "Graded with a different judge prompt than the set uses now — pass rates are not directly comparable"
-                }
-              >
-                judge {r.config.judge_prompt_fingerprint}
-              </span>
-            )}
-            <button
-              className="icon-btn"
-              aria-label="View run config"
-              title="View the config this run used"
-              onClick={(e) => { e.stopPropagation(); setViewConfigRun(r); }}
             >
-              <IconFileText size={16} />
-            </button>
-            {/* A run in flight offers stop; only a finished one offers delete. */}
-            {r.status === "running" ? (
-              canCancel(r) && (
-                <button
-                  className="icon-btn danger-btn"
-                  aria-label="Cancel run"
-                  title="Stop this run"
-                  disabled={r.cancel_requested}
-                  onClick={(e) => { e.stopPropagation(); cancel(r); }}
-                >
-                  <IconStop size={14} />
-                </button>
-              )
-            ) : (
-              myRole === "owner" && (
-                <button
-                  className="icon-btn danger-btn"
-                  aria-label="Delete run"
-                  title="Delete this run"
-                  onClick={(e) => { e.stopPropagation(); setDeleteRun(r); }}
-                >
-                  <IconTrash size={16} />
-                </button>
-              )
-            )}
-          </div>
-        ))}
+              Run this eval set to see how the agent scores, and where its wrong
+              answers came from.
+            </EmptyState>
+          }
+          rowActions={(r) => (
+            <>
+              <IconButton
+                label="View the settings this run used"
+                icon={<IconFileText size={16} />}
+                onClick={() => setViewConfigRun(r)}
+              />
+              {/* A run in flight offers stop; only a finished one offers delete. */}
+              {r.status === "running"
+                ? canCancel(r) && (
+                    <IconButton
+                      label="Stop this run"
+                      icon={<IconStop size={14} />}
+                      disabled={r.cancel_requested}
+                      onClick={() => cancel(r)}
+                    />
+                  )
+                : myRole === "owner" && (
+                    <IconButton
+                      label="Delete this run"
+                      icon={<IconTrash size={16} />}
+                      className="ui-btn-destructive-hover"
+                      onClick={() => setDeleteRun(r)}
+                    />
+                  )}
+            </>
+          )}
+        />
+      )}
 
       {runs && runs.length > 0 && (
         <ListFooter
@@ -299,13 +372,13 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
           initialTab={configTab}
           onClose={async () => {
             // Opening the tab is the review. Recorded on close rather than on
-            // save so the badge also clears for an owner who looked, decided
+            // save so the marker also clears for an owner who looked, decided
             // the default was right, and changed nothing.
             if (unreviewedJudging) {
               try {
                 onEvalSetChanged?.(await api.markJudgePromptReviewed(evalSet.id));
               } catch {
-                /* the badge staying lit is not worth an error toast */
+                /* the marker staying lit is not worth an error toast */
               }
             }
             setConfigTab(null);
@@ -334,7 +407,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
       {deleteRun && (
         <ConfirmDialog
           title="Delete this run?"
-          message={`“${deleteRun.name || new Date(deleteRun.started_at).toLocaleString()}” and everything recorded for it will be removed.`}
+          message={`“${runLabel(deleteRun)}” and everything recorded for it will be removed.`}
           detail="Its per-question results and stored diagnoses go with it. Other runs in this eval set are untouched."
           confirmLabel="Delete run"
           onConfirm={confirmDelete}

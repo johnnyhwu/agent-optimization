@@ -8,18 +8,33 @@ import ConfigDialog from "./ConfigDialog.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import DownloadDialog from "./DownloadDialog.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconDownload, IconGear, IconTrash, IconUpload, IconUsers } from "./icons.jsx";
+import Button from "./ui/Button.jsx";
+import Badge, { BadgeRow } from "./ui/Badge.jsx";
+import Card from "./ui/Card.jsx";
+import EmptyState from "./ui/EmptyState.jsx";
+import Menu, { MenuItem, MenuSeparator } from "./ui/Menu.jsx";
+import PageHeader from "./ui/PageHeader.jsx";
+import { SkeletonCards } from "./ui/Skeleton.jsx";
+import Toolbar, { SearchInput, SegmentedControl } from "./ui/Toolbar.jsx";
+import {
+  IconDownload, IconGear, IconInbox, IconSearch, IconTrash, IconTrendDown,
+  IconTrendUp, IconUpload, IconUsers,
+} from "./icons.jsx";
 
 const PAGE_SIZE = 24;
 
-// Top tier (§6.13): one card per eval set — run count, latest pass rate, trend
-// sparkline, regression summary. Owners get a config gear to edit the card and a
-// trash button to delete it.
+const SORTS = [
+  { value: "created_at", label: "Newest" },
+  { value: "name", label: "Name" },
+];
+
+// Top tier: one card per eval set — run count, latest pass rate, trend
+// sparkline, regression summary. Owners get the card's overflow menu.
 //
 // Cards page in as you scroll rather than rendering every set at once. The
-// toolbar above them (§6.10) filters server-side, so searching looks at every
-// set the developer can see, not just the ones already loaded — filtering only
-// the loaded page would make the result depend on how far they had scrolled.
+// toolbar above them filters server-side, so searching looks at every set the
+// developer can see, not just the ones already loaded — filtering only the loaded
+// page would make the result depend on how far they had scrolled.
 export default function EvalSetList({ onOpen, subject }) {
   const toast = useToast();
   const [showUpload, setShowUpload] = useState(false);
@@ -64,6 +79,13 @@ export default function EvalSetList({ onOpen, subject }) {
 
   const filtering = Boolean(search || metadataKey);
 
+  function clearFilters() {
+    setQuery("");
+    setSearch("");
+    setMetadataKey("");
+    setMetadataValue("");
+  }
+
   async function confirmDelete() {
     await api.deleteEvalSet(deleteSet.id);
     setDeleteSet(null);
@@ -71,19 +93,47 @@ export default function EvalSetList({ onOpen, subject }) {
     refresh();
   }
 
+  // Opening the settings counts as reviewing how the set is graded, so an owner
+  // who looked and decided the default was right isn't nagged forever.
+  async function closeConfig() {
+    if (!configSet.judge_prompt?.reviewed_at) {
+      try {
+        await api.markJudgePromptReviewed(configSet.id);
+      } catch {
+        /* a lingering marker is not worth an error toast */
+      }
+    }
+    setConfigSet(null);
+    refresh();
+  }
+
   return (
     <div>
-      <div className="page-head">
-        <h2>Eval Sets</h2>
-        <button className="primary" onClick={() => setShowUpload(true)}>
-          <IconUpload size={15} /> Upload eval set
-        </button>
-      </div>
+      <PageHeader
+        title="Eval sets"
+        subtitle="A set of questions, the answers they should get, and every run recorded against them."
+        primary={
+          <Button variant="primary" icon={<IconUpload size={15} />} onClick={() => setShowUpload(true)}>
+            Upload eval set
+          </Button>
+        }
+      />
 
-      <div className="toolbar">
-        <input
-          className="search"
-          type="search"
+      <Toolbar
+        end={
+          <>
+            <span className="ui-toolbar-label">Sort</span>
+            <SegmentedControl
+              value={sort}
+              onChange={setSort}
+              options={SORTS}
+              size="sm"
+              ariaLabel="Sort eval sets"
+            />
+          </>
+        }
+      >
+        <SearchInput
           placeholder="Search eval sets…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -95,9 +145,9 @@ export default function EvalSetList({ onOpen, subject }) {
               value={metadataKey}
               onChange={(e) => setMetadataKey(e.target.value)}
               aria-label="Filter by metadata key"
-              style={{ width: "auto" }}
+              className="ui-inline-select"
             >
-              <option value="">Any metadata</option>
+              <option value="">Any label</option>
               {metaKeys.map((k) => (
                 <option key={k} value={k}>{k}</option>
               ))}
@@ -106,132 +156,61 @@ export default function EvalSetList({ onOpen, subject }) {
                 nothing to equal is just clutter. */}
             {metadataKey && (
               <input
-                placeholder={`${metadataKey} = (any)`}
+                placeholder={`${metadataKey} = anything`}
                 value={metadataValue}
                 onChange={(e) => setMetadataValue(e.target.value)}
                 aria-label={`Filter by ${metadataKey} value`}
-                style={{ width: 160 }}
+                className="ui-inline-input"
               />
             )}
           </>
         )}
-        <span className="muted">Sort</span>
-        <div className="segmented sm">
-          <button
-            className={sort === "created_at" ? "active" : ""}
-            onClick={() => setSort("created_at")}
-          >
-            Newest
-          </button>
-          <button className={sort === "name" ? "active" : ""} onClick={() => setSort("name")}>
-            Name
-          </button>
-        </div>
-      </div>
+      </Toolbar>
 
       {error && <div className="error">{error}</div>}
-      {sets === null && (
-        <div className="cards">
-          {[0, 1, 2].map((i) => <div className="skeleton" key={i} />)}
-        </div>
-      )}
+      {sets === null && <SkeletonCards count={6} />}
+
       {sets && sets.length === 0 && (
-        <div className="empty">
-          {filtering
-            ? "No eval sets match this filter."
-            : "No eval sets yet. Upload one, or run the seed script."}
-        </div>
+        filtering ? (
+          <EmptyState
+            icon={<IconSearch size={22} />}
+            title="Nothing matches those filters"
+            action={<Button onClick={clearFilters}>Clear filters</Button>}
+          >
+            No eval set matches the search and labels you have applied.
+          </EmptyState>
+        ) : (
+          <EmptyState
+            icon={<IconInbox size={22} />}
+            title="No eval sets yet"
+            size="lg"
+            action={
+              <Button variant="primary" icon={<IconUpload size={15} />} onClick={() => setShowUpload(true)}>
+                Upload eval set
+              </Button>
+            }
+          >
+            An eval set is a spreadsheet of questions and the answers the agent
+            should give. Upload one to run your first evaluation.
+          </EmptyState>
+        )
       )}
-      <div className="cards">
+
+      <div className="set-grid">
         {sets &&
-          sets.map((s, i) => {
-            const shared = (s.roles || []).length;
-            return (
-              <div
-                className="card"
-                key={s.id}
-                // Stagger only within a page: restarting the animation for every
-                // card on each append would flash the whole grid.
-                style={{ animationDelay: `${(i % PAGE_SIZE) * 40}ms` }}
-                onClick={() => onOpen(s)}
-              >
-                {/* Download is offered to every role, config and delete only to
-                    owners. A viewer can already read every row an export
-                    contains, so withholding the file would protect nothing
-                    while denying it to most of the people who want it. */}
-                <div className="card-actions">
-                  <button
-                    className="icon-btn"
-                    aria-label="Download eval set"
-                    title="Download this eval set"
-                    onClick={(e) => { e.stopPropagation(); setDownloadSet(s); }}
-                  >
-                    <IconDownload size={16} />
-                  </button>
-                  {s.my_role === "owner" && (
-                    <>
-                      {/* The dot means "nobody has looked at how this set is
-                          graded yet", not "your judge prompt is the default
-                          one" — the latter is true of nearly every set and
-                          would be background noise inside a week. */}
-                      <button
-                        className={`icon-btn ${s.judge_prompt?.reviewed_at ? "" : "nudge"}`}
-                        aria-label="Configure"
-                        title={
-                          s.judge_prompt?.reviewed_at
-                            ? "Configure"
-                            : "Configure — nobody has checked this set's grading criteria yet"
-                        }
-                        onClick={(e) => { e.stopPropagation(); setConfigSet(s); }}
-                      >
-                        <IconGear size={16} />
-                      </button>
-                      <button
-                        className="icon-btn danger-btn"
-                        aria-label="Delete eval set"
-                        title="Delete eval set"
-                        onClick={(e) => { e.stopPropagation(); setDeleteSet(s); }}
-                      >
-                        <IconTrash size={16} />
-                      </button>
-                    </>
-                  )}
-                </div>
-                <h3>{s.name}</h3>
-                <div className="meta">
-                  {new Date(s.created_at).toLocaleDateString()}
-                  <span className={`rolechip ${s.my_role}`}>{s.my_role}</span>
-                </div>
-                <div className="stats">
-                  <div className="stat">
-                    <div className="num">{s.run_count}</div>
-                    <div className="lbl">runs</div>
-                  </div>
-                  <div className="stat">
-                    <div className="num">
-                      {s.latest_pass_rate === null ? "—" : `${Math.round(s.latest_pass_rate * 100)}%`}
-                    </div>
-                    <div className="lbl">latest pass</div>
-                  </div>
-                  <div className="spark-wrap"><Sparkline values={s.trend} /></div>
-                </div>
-                {(s.regressed > 0 || s.improved > 0) && (
-                  <div className="badges">
-                    {s.regressed > 0 && <span className="badge reg">⚠ {s.regressed} regressed</span>}
-                    {s.improved > 0 && <span className="badge imp">▲ {s.improved} improved</span>}
-                  </div>
-                )}
-                <div className="tags">
-                  {Object.entries(s.metadata || {}).map(([k, v]) => (
-                    <span className="tag" key={k}>{k}: {String(v)}</span>
-                  ))}
-                  {shared > 1 && (
-                    <span className="tag people"><IconUsers size={11} /> {shared} members</span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          sets.map((s, i) => (
+            <SetCard
+              key={s.id}
+              set={s}
+              // Stagger only within a page: restarting the animation for every
+              // card on each append would flash the whole grid.
+              index={i % PAGE_SIZE}
+              onOpen={() => onOpen(s)}
+              onDownload={() => setDownloadSet(s)}
+              onConfigure={() => setConfigSet(s)}
+              onDelete={() => setDeleteSet(s)}
+            />
+          ))}
       </div>
 
       {sets && sets.length > 0 && (
@@ -263,19 +242,7 @@ export default function EvalSetList({ onOpen, subject }) {
           evalSet={configSet}
           subject={subject}
           initialTab={configSet.judge_prompt?.reviewed_at ? "general" : "judging"}
-          onClose={async () => {
-            // Opening the tab counts as the review, so an owner who looked and
-            // decided the default was right isn't nagged forever.
-            if (!configSet.judge_prompt?.reviewed_at) {
-              try {
-                await api.markJudgePromptReviewed(configSet.id);
-              } catch {
-                /* a lingering dot is not worth an error toast */
-              }
-            }
-            setConfigSet(null);
-            refresh();
-          }}
+          onClose={closeConfig}
           onSaved={() => { setConfigSet(null); refresh(); }}
         />
       )}
@@ -294,5 +261,105 @@ export default function EvalSetList({ onOpen, subject }) {
         />
       )}
     </div>
+  );
+}
+
+function SetCard({ set: s, index, onOpen, onDownload, onConfigure, onDelete }) {
+  const owner = s.my_role === "owner";
+  const members = (s.roles || []).length;
+  // "Nobody has looked at how this set is graded yet" — not "your judge prompt is
+  // the default one", which is true of nearly every set and would be background
+  // noise inside a week.
+  const unreviewed = owner && !s.judge_prompt?.reviewed_at;
+  const labels = Object.entries(s.metadata || {});
+
+  return (
+    <Card
+      interactive
+      padded={false}
+      onClick={onOpen}
+      className="set-card"
+      style={{ animationDelay: `${index * 40}ms` }}
+    >
+      <div className="set-card-top">
+        <div className="set-card-heading">
+          <h3>{s.name}</h3>
+          <div className="set-card-meta">
+            <span>{new Date(s.created_at).toLocaleDateString()}</span>
+            <Badge tone={owner ? "success" : "neutral"} size="sm">{s.my_role}</Badge>
+            {members > 1 && (
+              <Badge tone="neutral" size="sm" icon={<IconUsers size={11} />}>
+                {members}
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {/* Always visible. These used to appear only on hover, which meant the
+            only way to discover that a set could be downloaded or deleted was to
+            happen to move the pointer over it. */}
+        <div className="set-card-menu" onClick={(e) => e.stopPropagation()}>
+          <Menu label={`Actions for ${s.name}`}>
+            {/* Download is offered to every role. A viewer can already read every
+                row an export contains, so withholding the file would protect
+                nothing while denying it to most of the people who want it. */}
+            <MenuItem icon={<IconDownload size={15} />} onClick={onDownload}>
+              Download…
+            </MenuItem>
+            {owner && (
+              <MenuItem
+                icon={<IconGear size={15} />}
+                onClick={onConfigure}
+                title={unreviewed ? "Nobody has reviewed how this set is graded yet" : undefined}
+              >
+                Settings
+                {unreviewed && <Badge tone="warning" size="sm">review grading</Badge>}
+              </MenuItem>
+            )}
+            {owner && <MenuSeparator />}
+            {owner && (
+              <MenuItem icon={<IconTrash size={15} />} variant="danger" onClick={onDelete}>
+                Delete eval set
+              </MenuItem>
+            )}
+          </Menu>
+          {unreviewed && <span className="set-card-nudge" aria-hidden="true" />}
+        </div>
+      </div>
+
+      <div className="set-card-stats">
+        <div className="set-stat">
+          <div className="set-stat-num">
+            {s.latest_pass_rate === null ? "—" : `${Math.round(s.latest_pass_rate * 100)}%`}
+          </div>
+          <div className="set-stat-lbl">latest pass rate</div>
+        </div>
+        <div className="set-stat">
+          <div className="set-stat-num set-stat-num-sm">{s.run_count}</div>
+          <div className="set-stat-lbl">{s.run_count === 1 ? "run" : "runs"}</div>
+        </div>
+        <div className="set-card-spark"><Sparkline values={s.trend} /></div>
+      </div>
+
+      {(s.regressed > 0 || s.improved > 0 || labels.length > 0) && (
+        <div className="set-card-foot">
+          <BadgeRow>
+            {s.regressed > 0 && (
+              <Badge tone="danger" icon={<IconTrendDown size={11} />}>
+                {s.regressed} regressed
+              </Badge>
+            )}
+            {s.improved > 0 && (
+              <Badge tone="success" icon={<IconTrendUp size={11} />}>
+                {s.improved} improved
+              </Badge>
+            )}
+            {labels.map(([k, v]) => (
+              <Badge key={k} tone="neutral">{k}: {String(v)}</Badge>
+            ))}
+          </BadgeRow>
+        </div>
+      )}
+    </Card>
   );
 }
