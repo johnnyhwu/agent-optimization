@@ -385,6 +385,7 @@ class StubSession:
 
     def __init__(self, eval_set=None, questions=(), runs=(), results=(), analyses=()):
         self.eval_set = eval_set
+        self.commits = 0
         self._by_entity = {
             "Question": list(questions),
             "Run": list(runs),
@@ -402,6 +403,9 @@ class StubSession:
     async def scalars(self, statement):
         entity = statement.column_descriptions[0]["entity"]
         return StubScalars(self._by_entity.get(entity.__name__, []))
+
+    async def commit(self):
+        self.commits += 1
 
 
 def build_session():
@@ -537,3 +541,113 @@ async def test_preview_serves_the_columns_the_writer_actually_uses():
     header = export_service.to_csv([], export_service.QUESTION_FIELDS)
     header = header.lstrip("﻿").splitlines()[0]
     assert header.split(",") == preview["columns"]["questions"]
+
+
+# --- Traces: the branch that reaches out of the database ---------------------
+#
+# Every test above passes `traces=False`, so `_collect_traces` — the one part of
+# an export that makes live calls to the trace store — had no coverage at all.
+# It is also the part that used to keep a pooled database connection checked out
+# for the whole fetch: `export_max_traces` is 1000 at a concurrency of 8, so one
+# download could sit on a connection for minutes while doing nothing with it,
+# and the pool is shared with every other request (see app/db.py).
+
+
+class StubTraceClient:
+    """Records the export's reads and reports the session state at each one."""
+
+    def __init__(self, outcome, session_holder=None):
+        self.calls: list[str] = []
+        self.commits_when_called: list[int] = []
+        self.outcome = outcome
+        self._session_holder = session_holder
+
+    async def fetch_trace(self, correlation_id):
+        self.calls.append(correlation_id)
+        session = self._session_holder() if self._session_holder else None
+        self.commits_when_called.append(session.commits if session else 0)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+def stub_seams(monkeypatch, trace_client):
+    from app.integrations import Seams
+
+    monkeypatch.setattr(
+        export_router, "build_seams",
+        lambda config=None, secrets=None: Seams(
+            agent=None, judge=None, trace=trace_client, diagnosis=None
+        ),
+    )
+
+
+async def test_trace_export_carries_the_spans_it_fetched(monkeypatch):
+    from app.integrations.base import Span, Trace
+
+    es, session = build_session()
+    client = StubTraceClient(
+        Trace(correlation_id="corr-q_aaa",
+              spans=[Span(index=0, tool_name="sql", status="success",
+                          input="i", output="o")]),
+        session_holder=lambda: session,
+    )
+    stub_seams(monkeypatch, client)
+
+    response = await export_router.export_eval_set(
+        eval_set_id=es.id, questions=False, runs=False, traces=True,
+        fmt="jsonl", run_scope="all", last_n=5, run_ids=[],
+        subject="alice", session=session,
+    )
+
+    document = json.loads(response.body.decode("utf-8"))
+    assert document["truncated"] is False
+    assert [e["trace_state"] for e in document["traces"]] == ["ready", "ready"]
+    assert document["traces"][0]["spans"][0]["tool_name"] == "sql"
+
+
+async def test_trace_export_releases_its_connection_before_fetching(monkeypatch):
+    """The ordering guarantee, same rule as GET .../trace.
+
+    Asserted per call rather than at the end, because "committed eventually" is
+    not the property that keeps the pool free — "committed before the first
+    outbound read" is.
+    """
+    from app.integrations.base import NOT_READY
+
+    es, session = build_session()
+    client = StubTraceClient(NOT_READY, session_holder=lambda: session)
+    stub_seams(monkeypatch, client)
+
+    await export_router.export_eval_set(
+        eval_set_id=es.id, questions=False, runs=False, traces=True,
+        fmt="jsonl", run_scope="all", last_n=5, run_ids=[],
+        subject="alice", session=session,
+    )
+
+    assert client.calls, "precondition: the export should have fetched traces"
+    assert all(commits >= 1 for commits in client.commits_when_called), (
+        "the export reached the trace store while still holding its database "
+        "connection; commit after the last read and before the gather"
+    )
+
+
+async def test_trace_export_reports_failures_instead_of_dropping_them(monkeypatch):
+    """An export that silently omitted unreachable traces would read as "this run
+    had no traces", which is a different and much more alarming claim."""
+    from app.integrations.base import TraceFetchError
+
+    es, session = build_session()
+    client = StubTraceClient(TraceFetchError("HTTP 401: invalid credentials"),
+                             session_holder=lambda: session)
+    stub_seams(monkeypatch, client)
+
+    response = await export_router.export_eval_set(
+        eval_set_id=es.id, questions=False, runs=False, traces=True,
+        fmt="jsonl", run_scope="all", last_n=5, run_ids=[],
+        subject="alice", session=session,
+    )
+
+    document = json.loads(response.body.decode("utf-8"))
+    assert [e["trace_state"] for e in document["traces"]] == ["error", "error"]
+    assert "invalid credentials" in document["traces"][0]["trace_error"]
