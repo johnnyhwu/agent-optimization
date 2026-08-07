@@ -1075,6 +1075,8 @@ select { cursor: pointer; }
   display: flex; align-items: center; gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
 }
+.composer-collapsed .phasesteps,
+.composer-collapsed .hint { flex: none; }
 .composer-last {
   min-width: 0; flex: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

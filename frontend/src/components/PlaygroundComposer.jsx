@@ -68,7 +68,7 @@ export default function PlaygroundComposer({
   connected = true,
   workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
   onReloadWorkspace,
-  open = true, onOpenChange, lastQuestion,
+  open = true, onOpenChange, lastQuestion, status,
 }) {
   // null | "config" | "skills" | "truth" | "endpoints"
   const [panel, setPanel] = useState(null);
@@ -110,6 +110,9 @@ export default function PlaygroundComposer({
             {edits} workspace edit{edits === 1 ? "" : "s"}
           </Badge>
         )}
+        {/* The open attempt's progress rides in the same row rather than on one
+            of its own: both are describing the attempt on screen below. */}
+        {status}
       </div>
     );
   }

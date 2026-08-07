@@ -646,6 +646,18 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     }
   }
 
+  const attemptStatus = active ? (
+    <>
+      <PhaseSteps attempt={active} />
+      {active.workspace_overridden && (
+        <span className="hint">
+          sent with <strong>{describeOverride(active)}</strong> — the agent's own
+          workspace was not changed
+        </span>
+      )}
+    </>
+  ) : null;
+
   const trace = detail?.trace || null;
   const suspectByIndex = {};
   (trace?.analysis?.suspects || []).forEach((s) => (suspectByIndex[s.span_index] = s));
@@ -655,7 +667,15 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     <div className="page-fill">
       <PageHeader
         title="Playground"
-        subtitle="One question against an editable copy of the agent's config and skill files, run as often as you like. Nothing here is saved — attempts last until the backend restarts."
+        // Shown while the screen is still being explained and dropped once it
+        // obviously isn't: someone reading a trace has worked out what the
+        // playground is, and two lines of description are two lines the trace
+        // could have.
+        subtitle={
+          attempts.length
+            ? null
+            : "One question against an editable copy of the agent's config and skill files, run as often as you like. Nothing here is saved — attempts last until the backend restarts."
+        }
         primary={
           <Button
             variant={shortlistItems.length ? "primary" : "secondary"}
@@ -739,21 +759,12 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           open={composerOpen}
           onOpenChange={setComposerOpen}
           lastQuestion={lastQuestion || active?.question || ""}
+          status={active ? attemptStatus : null}
         />
       )}
 
-      {active && (
-        <div className="attempt-head">
-          <PhaseSteps attempt={active} />
-          {active.workspace_overridden && (
-            <span className="hint">
-              sent with{" "}
-              <strong>{describeOverride(active)}</strong>
-              {" "}— the agent's own workspace was not changed
-            </span>
-          )}
-        </div>
-      )}
+      {/* Only when the composer is open: collapsed, it carries this itself. */}
+      {active && composerOpen && <div className="attempt-head">{attemptStatus}</div>}
 
       <div className={`three playground-three${attemptsCollapsed ? " attempts-collapsed" : ""}`}>
         <AttemptList
