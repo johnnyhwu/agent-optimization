@@ -523,3 +523,22 @@
 .dialog-confirm-text { grid-area: text; }
 .dialog-confirm-text p { margin: 4px 0 0; font-size: var(--text-body); color: var(--muted); line-height: 1.5; }
 .dialog-confirm-actions { grid-area: actions; display: flex; justify-content: flex-end; gap: var(--space-2); }
+
+/* ---------------------------------------------------------------------------
+   Trace step kind — see span_label.js
+   --------------------------------------------------------------------------- */
+/* Fixed width so the tool names beside them line up into a column: the whole
+   point of the row is scanning down the names, which a marker whose width
+   changes per row prevents. */
+.spankind {
+  flex: none; width: 52px;
+  font-size: 10px; font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.spankind.tool_call { color: var(--accent); }
+.spankind.assistant { color: var(--green); }
+.spankind.tool_result { color: var(--muted); }
+.spankind.raw { color: var(--muted); opacity: 0.7; }
+.span-rawname { font-size: var(--text-caption); color: var(--muted); margin-bottom: var(--space-3); }
+.span-rawname code { font-family: var(--font-mono); font-size: var(--text-micro); }

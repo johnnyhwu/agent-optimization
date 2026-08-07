@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { isObj, looksLikeMessage, toolCallsOf } from "../span_label.js";
 
 // Rendering for a span's input/output body (right column).
 //
@@ -22,8 +23,6 @@ import React, { useState } from "react";
 
 const CHAT_ROLES = ["system", "developer", "user", "assistant", "tool", "function"];
 const PREVIEW_CHARS = 90;
-
-const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 function pretty(value) {
   if (typeof value === "string") return value;
@@ -66,31 +65,6 @@ function contentToText(content) {
   if (Array.isArray(content)) return content.map(partToText).filter(Boolean).join("\n\n");
   return pretty(content);
 }
-
-/** Tool calls in whichever dialect the agent logged them. */
-function toolCallsOf(msg) {
-  const calls = [];
-  if (Array.isArray(msg?.tool_calls)) {
-    for (const c of msg.tool_calls) {
-      calls.push({
-        id: c?.id,
-        name: c?.function?.name ?? c?.name ?? "tool",
-        args: c?.function?.arguments ?? c?.arguments ?? c?.input,
-      });
-    }
-  }
-  if (isObj(msg?.function_call)) {
-    calls.push({ name: msg.function_call.name ?? "tool", args: msg.function_call.arguments });
-  }
-  if (Array.isArray(msg?.content)) {
-    for (const p of msg.content) {
-      if (isObj(p) && p.type === "tool_use") calls.push({ id: p.id, name: p.name, args: p.input });
-    }
-  }
-  return calls;
-}
-
-const looksLikeMessage = (v) => isObj(v) && typeof v.role === "string";
 
 function firstLine(text, limit = PREVIEW_CHARS) {
   const flat = String(text).replace(/\s+/g, " ").trim();
@@ -277,7 +251,7 @@ export default function Payload({ label, value }) {
             >
               Pretty
             </button>
-            <button className={mode === "json" ? "active" : ""} onClick={() => setMode("json")}>
+            <button className={mode === "json" ? "is-active" : ""} onClick={() => setMode("json")}>
               JSON
             </button>
           </div>
