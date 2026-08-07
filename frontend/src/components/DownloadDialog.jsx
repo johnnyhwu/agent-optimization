@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
 import { useToast } from "./Toast.jsx";
-import { IconDownload } from "./icons.jsx";
+import { IconDownload, IconRefresh } from "./icons.jsx";
+import Button from "./ui/Button.jsx";
+import Badge from "./ui/Badge.jsx";
 
 // Downloading an eval set (§6.13 card action).
 //
@@ -188,14 +190,14 @@ export default function DownloadDialog({ evalSet, subject, seedRunIds = [], onCl
       width={640}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button
-            className="primary"
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
             disabled={busy || fileCount === 0 || !preview}
             onClick={start}
           >
             <IconDownload size={15} /> {busy ? "Preparing…" : "Download"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -219,9 +221,9 @@ export default function DownloadDialog({ evalSet, subject, seedRunIds = [], onCl
               <span className="dl-count">{count(preview?.questions ?? 0)} rows</span>
               {/* The badge is the promise; the footnote below is the part
                   people get wrong, so it is stated rather than implied. */}
-              <span className="badge imp" title="Edit and re-upload to grow this set">
-                ↻ re-uploadable
-              </span>
+              <Badge tone="success" icon={<IconRefresh size={11} />} title="Edit and re-upload to grow this set">
+                re-uploadable
+              </Badge>
             </div>
             <Columns names={cols.questions} />
           </div>
@@ -327,7 +329,7 @@ export default function DownloadDialog({ evalSet, subject, seedRunIds = [], onCl
                 ) : (
                   <>
                     <span className="dl-count">{count(preview?.traces ?? 0)} traces</span>
-                    <span className="badge warn">large · slow</span>
+                    <Badge tone="warning">large · slow</Badge>
                   </>
                 )}
               </div>
@@ -370,11 +372,11 @@ export default function DownloadDialog({ evalSet, subject, seedRunIds = [], onCl
 
       <div className="dl-foot-controls">
         <span className="muted">Format</span>
-        <div className="segmented sm">
-          <button className={fmt === "csv" ? "active" : ""} onClick={() => setFmt("csv")}>
+        <div className="ui-segmented is-sm" role="tablist">
+          <button type="button" role="tab" aria-selected={fmt === "csv"} className={fmt === "csv" ? "is-active" : ""} onClick={() => setFmt("csv")}>
             CSV
           </button>
-          <button className={fmt === "jsonl" ? "active" : ""} onClick={() => setFmt("jsonl")}>
+          <button type="button" role="tab" aria-selected={fmt === "jsonl"} className={fmt === "jsonl" ? "is-active" : ""} onClick={() => setFmt("jsonl")}>
             JSONL
           </button>
         </div>
@@ -388,7 +390,7 @@ export default function DownloadDialog({ evalSet, subject, seedRunIds = [], onCl
           eval set, not across them.
         </div>
         <div>
-          ↻ Re-uploading <code>questions.{ext}</code> creates a <strong>new</strong>{" "}
+          Re-uploading <code>questions.{ext}</code> creates a <strong>new</strong>{" "}
           eval set. It does not update this one — a set is locked after creation.
         </div>
       </div>

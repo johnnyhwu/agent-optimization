@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import Modal from "./Modal.jsx";
+import Button from "./ui/Button.jsx";
+import { IconAlert } from "./icons.jsx";
 
 // Confirmation for destructive actions. Deletes here cascade (an eval set takes
 // its whole run history with it), so the caller passes a `detail` line spelling
@@ -33,15 +35,22 @@ export default function ConfirmDialog({
       width={460}
       footer={
         <>
-          <button onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="danger" onClick={confirm} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="danger" onClick={confirm} loading={busy}>
             {busy ? "Deleting…" : confirmLabel}
-          </button>
+          </Button>
         </>
       }
     >
-      <p style={{ margin: "0 0 8px" }}>{message}</p>
-      {detail && <p className="muted" style={{ margin: 0, fontSize: 13 }}>{detail}</p>}
+      {/* The mark is the point: this dialog looks like every other one until you
+          read it, and it is the only one whose confirm cannot be undone. */}
+      <div className="confirm-body">
+        <span className="confirm-mark"><IconAlert size={18} /></span>
+        <div>
+          <p className="confirm-message">{message}</p>
+          {detail && <p className="confirm-detail">{detail}</p>}
+        </div>
+      </div>
       {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
     </Modal>
   );

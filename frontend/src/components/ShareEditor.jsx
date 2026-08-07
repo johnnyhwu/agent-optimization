@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { IconPlus, IconUsers, IconX } from "./icons.jsx";
+import Button, { IconButton } from "./ui/Button.jsx";
+import Badge from "./ui/Badge.jsx";
+import { IconCheck } from "./icons.jsx";
 
 // Reusable "share with" editor used by upload + config dialogs. Edits a list of
 // {subject, role}. The current user is always an owner and is shown locked.
@@ -90,7 +93,7 @@ export default function ShareEditor({ shares, setShares, currentUser }) {
           <IconUsers size={14} />
           <strong>{currentUser}</strong> <span className="hint">(you)</span>
         </div>
-        <span className="rolechip owner">owner</span>
+        <Badge tone="success">owner</Badge>
         <span style={{ width: 30 }} />
       </div>
 
@@ -104,9 +107,7 @@ export default function ShareEditor({ shares, setShares, currentUser }) {
             <option value="viewer">viewer</option>
             <option value="owner">owner</option>
           </select>
-          <button className="icon-btn" onClick={() => remove(s.subject)} aria-label="Remove">
-            <IconX size={15} />
-          </button>
+          <IconButton label="Remove" icon={<IconX size={15} />} onClick={() => remove(s.subject)} />
         </div>
       ))}
 
@@ -122,16 +123,16 @@ export default function ShareEditor({ shares, setShares, currentUser }) {
             }
           }}
         />
-        <button onClick={add} disabled={!canAdd}>
+        <Button size="sm" onClick={add} disabled={!canAdd}>
           <IconPlus size={14} /> add
-        </button>
+        </Button>
       </div>
 
       {typed && !taken.has(typed) && (
         <div className="hint" style={{ marginTop: 4 }}>
           {check.state === "checking" && <>Checking…</>}
           {check.state === "found" && (
-            <span style={{ color: "var(--green)" }}>✓ {check.name}</span>
+            <span className="ok-text"><IconCheck size={13} /> {check.name}</span>
           )}
           {check.state === "missing" && (
             <span style={{ color: "var(--red)" }}>

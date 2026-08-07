@@ -133,44 +133,15 @@ a { color: var(--accent); text-decoration: none; cursor: pointer; }
 a:hover { text-decoration: underline; }
 .muted { color: var(--muted); }
 
-/* ---- buttons ---- */
+/* ---- buttons ----
+   Weight, colour and size all live on the Button primitive (ui.css). What is left
+   here is the reset: a bare <button> should inherit the page's typography rather
+   than the browser's, whichever screen it turns up on. */
 button {
   font: inherit;
-  font-weight: 550;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 8px 14px;
   cursor: pointer;
   display: inline-flex; align-items: center; gap: 7px;
-  transition: transform 0.08s var(--ease), background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
-button:hover { border-color: var(--accent); box-shadow: var(--shadow-1); }
-button:active { transform: translateY(1px) scale(0.99); }
-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
-button.primary {
-  background: linear-gradient(180deg, var(--accent), var(--accent-hover));
-  border-color: transparent; color: var(--accent-fg);
-  box-shadow: 0 2px 8px var(--accent-soft);
-}
-button.primary:hover { box-shadow: 0 6px 18px var(--accent-soft); }
-button.ghost { background: transparent; border-color: transparent; }
-button.ghost:hover { background: var(--panel-2); border-color: transparent; box-shadow: none; }
-.icon-btn {
-  padding: 7px; border-radius: 8px; background: transparent; border-color: transparent;
-  color: var(--muted);
-}
-.icon-btn:hover { background: var(--panel-2); color: var(--text); box-shadow: none; }
-/* Destructive actions announce themselves on hover rather than shouting at rest —
-   a row of permanently red icons reads as an error state. */
-.icon-btn.danger-btn:hover { background: var(--red-soft); color: var(--red); }
-button.danger {
-  background: var(--red); border-color: transparent; color: #fff;
-  box-shadow: 0 2px 8px var(--red-soft);
-}
-button.danger:hover { border-color: transparent; box-shadow: 0 6px 18px var(--red-soft); }
 
 input, textarea, select {
   width: 100%; font: inherit; color: var(--text);
@@ -228,7 +199,7 @@ select { cursor: pointer; }
 }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 
-/* Deliberately not the .segmented pill (which means "filter this page") and not
+/* Deliberately not the segmented pill (which means "filter this page") and not
    the inset accent bar (which means "this row of the list is selected"). A
    destination you are currently at is a filled row. */
 .rail-item {
@@ -247,22 +218,27 @@ select { cursor: pointer; }
 .rail-item svg { flex: none; }
 .rail-item.soon { cursor: default; opacity: 0.6; }
 .rail-item.soon:hover { background: none; color: var(--muted); }
-.rail-tag {
-  margin-left: auto; font-size: 10px; font-weight: var(--fw-semibold);
-  text-transform: uppercase; letter-spacing: 0.06em;
-  padding: 1px 6px; border-radius: 999px;
-  background: var(--panel-3); color: var(--muted);
+/* Quieter than a badge. This is not a status worth a coloured pill — it is a
+   note that the row is not a destination yet, and it should read as less than
+   the rows around it rather than as more. */
+.rail-soon {
+  margin-left: auto; font-size: 10px; font-weight: var(--fw-medium);
+  letter-spacing: 0.04em; color: var(--muted); opacity: 0.8;
 }
 .rail-collapse {
   margin-top: auto; justify-content: flex-start; gap: var(--space-3);
   padding: var(--space-2) var(--space-3); font-size: var(--text-caption);
+  color: var(--muted); background: none; border: none; border-radius: var(--radius-sm);
+  transition: background 0.14s, color 0.14s;
 }
+.rail-collapse:hover { background: var(--panel-2); color: var(--text); }
+.rail-collapse:focus-visible { outline: none; box-shadow: var(--ring); }
 
 /* Collapsed: icons only. The labels are removed from the flow rather than
    hidden, so the rail actually narrows; each item keeps its title tooltip. */
 :root.rail-collapsed .rail-label,
 :root.rail-collapsed .rail-brand-name,
-:root.rail-collapsed .rail-tag { display: none; }
+:root.rail-collapsed .rail-soon { display: none; }
 :root.rail-collapsed .rail-item,
 :root.rail-collapsed .rail-collapse,
 :root.rail-collapsed .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
@@ -285,18 +261,33 @@ select { cursor: pointer; }
   font-family: var(--font-display); font-size: 15px; font-weight: var(--fw-bold);
   letter-spacing: -0.02em;
 }
-.userbox { display: flex; align-items: center; gap: var(--space-2); }
-.userbox .lbl { color: var(--muted); font-size: var(--text-caption); }
+.userbox { display: flex; align-items: center; gap: var(--space-1); }
 .avatar {
-  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase;
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; flex: none;
 }
-.rolechip {
-  font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600;
-  border: 1px solid var(--border-strong);
+.usermenu-trigger {
+  display: flex; align-items: center; gap: var(--space-2);
+  height: var(--ctl-h); padding: 0 8px 0 5px;
+  font: inherit; font-size: var(--text-body); font-weight: var(--fw-medium); color: var(--text);
+  background: transparent; border: 1px solid transparent; border-radius: 999px;
+  cursor: pointer; transition: background 0.14s, border-color 0.14s;
 }
-.rolechip.owner { color: var(--green); border-color: var(--green); background: var(--green-soft); }
-.rolechip.viewer { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
+.usermenu-trigger:hover { background: var(--panel-2); border-color: var(--border); }
+.usermenu-trigger:focus-visible { outline: none; box-shadow: var(--ring); }
+.usermenu-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usermenu-chev { color: var(--muted); flex: none; }
+.usermenu-head { padding: 8px 10px 6px; }
+.usermenu-head-name { font-weight: var(--fw-semibold); font-size: var(--text-body); }
+.usermenu-head-sub { font-size: var(--text-caption); color: var(--muted); margin-top: 1px; }
+.usermenu-label {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px 4px;
+  font-size: var(--text-micro); font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+}
+/* The user you already are: still listed, so the menu shows the whole directory,
+   but marked rather than silently doing nothing when clicked. */
+.ui-menu-item.is-current { color: var(--accent); font-weight: var(--fw-semibold); }
 
 /* ---- page ----
    One wrapper for everything under the top bar, breadcrumb included. The
@@ -344,93 +335,65 @@ select { cursor: pointer; }
 .breadcrumb .sep { display: inline-flex; opacity: 0.5; }
 .breadcrumb .current { color: var(--text); font-weight: var(--fw-semibold); }
 
-.page-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: var(--space-4); gap: var(--space-4); }
-/* The title wraps; the actions never do. An eval set can be named anything, and
-   a 130-character name used to squeeze "Run eval" onto two lines. */
-.page-head > *:first-child { min-width: 0; }
-.page-head > *:last-child { flex: none; }
-.page-head button { white-space: nowrap; }
-.page-head h2 { margin: 0; font-size: var(--text-section); overflow-wrap: anywhere; }
 .error { color: var(--red); background: var(--red-soft); border: 1px solid var(--red); padding: var(--space-3); border-radius: var(--radius-sm); margin: var(--space-2) 0; }
 
-/* ---- cards ---- */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
-.card {
-  position: relative; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: var(--space-4); cursor: pointer;
-  box-shadow: var(--shadow-1);
-  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), border-color 0.18s;
-  animation: fadeInUp 0.5s var(--ease) both;
+/* ---- eval-set cards ----
+   The card is one object with three bands: identity, the number that matters,
+   and its labels. They are separated by real dividers rather than by spacing
+   alone, because the middle band is the only one anyone scans across cards and
+   it has to find the same line every time. */
+.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
+.set-card { display: flex; flex-direction: column; animation: fadeInUp 0.45s var(--ease) both; }
+.set-card-top {
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
 }
-.card:hover { transform: translateY(-4px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
-/* Room for the hover actions (gear + trash) so a long name doesn't run under them. */
-.card h3 { margin: 0 0 var(--space-1); font-size: var(--text-title); padding-right: 58px; }
-.card .meta { color: var(--muted); font-size: var(--text-caption); margin-bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
-.card-actions {
-  position: absolute; top: var(--space-3); right: var(--space-3); display: flex; gap: 2px;
-  opacity: 0; transition: opacity 0.15s;
+.set-card-heading { min-width: 0; flex: 1; }
+.set-card-heading h3 {
+  margin: 0 0 6px; font-size: var(--text-title); font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
 }
-.card:hover .card-actions, .card-actions:focus-within { opacity: 1; }
-.card .stats { display: flex; gap: var(--space-5); align-items: flex-end; }
-/* The number is the card, so it gets the display face and tabular figures —
-   pass rates read as a column when they line up. */
-.stat .num {
+.set-card-meta {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  color: var(--muted); font-size: var(--text-caption);
+}
+.set-card-menu { position: relative; flex: none; }
+/* "Nobody has reviewed how this set is graded." A dot on the menu rather than a
+   badge in the card body: it is a prompt to open something, so it belongs on the
+   thing that opens it. */
+.set-card-nudge {
+  position: absolute; top: 5px; right: 5px; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--amber);
+  box-shadow: 0 0 0 2px var(--panel);
+  pointer-events: none;
+}
+.set-card-stats {
+  display: flex; align-items: flex-end; gap: var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+/* The pass rate is what the card is for, so it gets the display face and tabular
+   figures — rates read as a column across the grid when they line up. */
+.set-stat-num {
   font-family: var(--font-display); font-size: var(--text-display);
   font-weight: var(--fw-bold); line-height: 1; font-variant-numeric: tabular-nums;
 }
-.stat .lbl { font-size: var(--text-micro); color: var(--muted); margin-top: var(--space-1); }
-.spark-wrap { margin-left: auto; }
-.badges { margin-top: var(--space-3); display: flex; gap: 6px; flex-wrap: wrap; }
-.badge { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: var(--space-1); }
-.badge.reg { color: var(--red); background: var(--red-soft); }
-.badge.imp { color: var(--green); background: var(--green-soft); }
-.tags { margin-top: var(--space-2); display: flex; gap: 6px; flex-wrap: wrap; }
-.tag { font-size: var(--text-micro); color: var(--muted); background: var(--panel-2); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
-.tag.people { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.set-stat-num-sm { font-size: 18px; padding-bottom: 3px; }
+.set-stat-lbl { font-size: var(--text-micro); color: var(--muted); margin-top: 5px; }
+.set-card-spark { margin-left: auto; padding-bottom: var(--space-1); }
+.set-card-foot { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
 
 /* ---- run history ---- */
-.runrow {
-  display: flex; align-items: center; gap: 14px; padding: 12px 16px;
-  border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px;
-  background: var(--panel); box-shadow: var(--shadow-1);
-  /* The whole row opens the run, so it reads and reacts as one target. */
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s, background 0.15s;
-  animation: fadeInUp 0.4s var(--ease) both;
+.run-flags { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
+/* The bar that appears once runs are ticked. Tinted rather than plain, because it
+   is a transient mode the page is in — it did not exist a moment ago and will go
+   away again when the selection is cleared. */
+.run-compare-bar {
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft); border: 1px solid transparent;
+  border-radius: var(--radius);
+  animation: fadeInUp 0.2s var(--ease) both;
 }
-.runrow:hover {
-  transform: translateX(2px); box-shadow: var(--shadow-2);
-  border-color: var(--border-strong); background: var(--panel-2);
-}
-.runrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.runrow input[type="checkbox"] { cursor: pointer; }
-.runrow.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.runrow .grow { flex: 1; }
-.pill { font-size: var(--text-micro); font-weight: var(--fw-semibold); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); }
-.pill.completed { color: var(--green); border-color: var(--green); background: var(--green-soft); }
-.pill.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.pill.failed { color: var(--red); border-color: var(--red); background: var(--red-soft); }
-.pill.cancelled { color: var(--muted); border-color: var(--border-strong); background: var(--panel-2); }
-
-.toolbar {
-  display: flex; gap: var(--space-2); align-items: center; margin: var(--space-3) 0;
-  padding: var(--space-3); background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow-1); flex-wrap: wrap;
-}
-/* An in-page control: "which slice of this page am I looking at". It is
-   deliberately a pill and deliberately not what the side rail looks like — the
-   two used to be the same component, which made section switching read as a
-   filter. */
-.segmented { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
-.segmented button { border: none; background: transparent; border-radius: 999px; padding: 5px 12px; box-shadow: none; color: var(--muted); font-size: var(--text-body); }
-.segmented button:hover { box-shadow: none; background: transparent; color: var(--text); }
-.segmented button.active { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
-.segmented.sm button { padding: 4px 10px; font-size: 12px; }
-.segmented.sm .count {
-  margin-left: 6px; font-variant-numeric: tabular-nums; font-size: 11px;
-  padding: 0 6px; border-radius: 999px; background: var(--panel-3); color: var(--muted);
-}
-.segmented.sm button.active .count { background: var(--accent-soft); color: var(--accent); }
 
 /* ---- run status (above the three columns) ---- */
 .runstatus {
@@ -451,7 +414,11 @@ select { cursor: pointer; }
 .stackbar .s.pending { background: transparent; }
 
 /* ---- three-column detail ---- */
-.detail-meta { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--text-body); }
+.detail-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-3); margin: 0 0 var(--space-3); min-height: var(--ctl-h-sm);
+}
+.detail-meta-facts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 /* No viewport arithmetic. The columns take what the flex chain hands down
    (.main → .page → .page-fill → here), so they end at the bottom of the window
    whatever is stacked above them — a run status bar, a breadcrumb, or the
@@ -462,22 +429,9 @@ select { cursor: pointer; }
   display: grid; grid-template-columns: 320px 1fr 1fr; gap: var(--space-3);
   flex: 1; min-height: 360px;
 }
-.col { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; box-shadow: var(--shadow-1); }
-.col h4 {
-  margin: 0; padding: 14px 16px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--muted); border-bottom: 1px solid var(--border); position: sticky; top: 0;
-  background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px); z-index: 1;
-  display: flex; align-items: center; justify-content: space-between;
-}
-/* Column header: title on the left, filter on the right. Sticky so the filter
-   stays reachable in a long question list. */
-.col-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 1;
-  background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px);
-}
-.col-head h4 { margin: 0; padding: 0; border: none; background: none; backdrop-filter: none; position: static; }
+/* A column is a Card that scrolls its own body; the header comes from
+   CardHeader, sticky so a filter stays reachable in a list of two hundred. */
+.col { overflow: auto; }
 
 /* Quiet "an update is on the way" dot in a column header. The panel deliberately
    keeps its content while refetching a live question, so this is the only signal
@@ -512,31 +466,23 @@ select { cursor: pointer; }
 .qphase.answered { color: var(--accent); }
 .qphase.failed, .qphase.cancelled { color: var(--red); }
 .qitem .qerror { font-size: 11px; color: var(--red); margin-top: 2px; line-height: 1.35; }
+.qitem:focus-visible, .spanrow:focus-visible { outline: none; box-shadow: inset var(--ring); }
 
-.banner { margin: 12px 16px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 13px; animation: fadeIn 0.3s var(--ease) both; }
-.banner .banner-detail {
-  margin-top: 6px; font-family: var(--font-mono);
-  font-size: 11.5px; line-height: 1.45; word-break: break-word;
+/* Explanations that live inside a Banner. The recognised-failure copy is prose
+   and the raw output is not, so they are typeset differently on purpose: a
+   ClickHouse stack dump is the wrong first thing to read. */
+.ui-banner .banner-explain { margin-top: 6px; line-height: 1.5; }
+.ui-banner .banner-raw { margin-top: 8px; }
+.ui-banner .banner-raw summary {
+  cursor: pointer; font-size: var(--text-caption); color: var(--muted); user-select: none;
 }
-/* A recognised failure explained in words, with the raw output tucked behind a
-   disclosure. A ClickHouse stack dump is the wrong first thing to read. */
-.banner .banner-explain { margin-top: 6px; line-height: 1.5; }
-.banner .banner-raw { margin-top: 8px; }
-.banner .banner-raw summary {
-  cursor: pointer; font-size: 11.5px; color: var(--muted); user-select: none;
-}
-.banner .banner-raw summary:hover { color: var(--text); }
-.banner .banner-raw pre {
+.ui-banner .banner-raw summary:hover { color: var(--text); }
+.ui-banner .banner-raw pre {
   margin: 6px 0 0; padding: 8px 10px; background: var(--panel-2);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+  font-size: var(--text-micro); line-height: 1.45; white-space: pre-wrap; word-break: break-word;
   max-height: 180px; overflow: auto;
 }
-.banner.diagnosis { background: var(--panel-2); border: 1px solid var(--border); }
-.banner.caveat { background: var(--amber-soft); border: 1px solid var(--amber); color: var(--text); }
-.banner.caveat strong { color: var(--amber); }
-.banner.generating { background: var(--accent-soft); border: 1px solid var(--accent); }
-.banner.error-banner { background: var(--red-soft); border: 1px solid var(--red); color: var(--text); }
 
 /* ---- middle column: labelled sections ----
    Answer, diagnosis and the span list are four unrelated kinds of content in one
@@ -568,11 +514,14 @@ select { cursor: pointer; }
 .spanrow { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.12s; }
 .spanrow:hover { background: var(--panel-2); }
 .spanrow.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-.spanrow .idx { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.conf { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-.conf.high { background: var(--high); color: #fff; }
-.conf.medium { background: var(--med); color: #fff; }
-.conf.low { background: var(--low); color: #fff; }
+.spanrow-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.spanrow-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spanrow .idx { color: var(--muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; flex: none; }
+/* The confidence marker goes to the far edge rather than trailing the tool name:
+   it is the thing being scanned down the column, and a marker whose left edge
+   moves with the length of the name beside it cannot be scanned. */
+.spanrow-conf { margin-left: auto; flex: none; }
+.spanrow-status { font-size: var(--text-caption); color: var(--muted); margin-top: 3px; }
 
 .kv { padding: 14px 16px; }
 .kv .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 5px; }
@@ -665,7 +614,6 @@ select { cursor: pointer; }
 
 .tokens { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .tokens .t { font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
-.notflagged { color: var(--muted); padding: 22px 16px; font-style: italic; }
 
 /* ---- progress ---- */
 .progress { margin: 14px 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-1); }
@@ -732,8 +680,6 @@ select { cursor: pointer; }
 
 /* ---- upload preview table ---- */
 .upload-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.link-btn { background: none; border: none; box-shadow: none; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 12px; }
-.link-btn:hover { background: none; box-shadow: none; color: var(--accent); }
 .upload-empty {
   border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 18px;
   text-align: center; color: var(--muted); font-size: 13px; background: var(--panel-2);
@@ -887,7 +833,7 @@ select { cursor: pointer; }
   display: flex; align-items: center; gap: var(--space-2);
   flex-wrap: wrap; margin-top: var(--space-2);
 }
-.agent-bar-recent .linkish { font-family: var(--font-mono); font-size: var(--text-caption); }
+.agent-bar-recent .ui-btn-link { font-family: var(--font-mono); font-size: var(--text-caption); }
 .agent-bar-error { margin-top: var(--space-2); }
 /* Two actions sitting after a sentence need more than the alert's default 4px
    between them, or "Connect to it" and "Dismiss" read as one phrase. */
@@ -904,7 +850,20 @@ select { cursor: pointer; }
 .composer textarea.composer-question { min-height: 72px; font-family: var(--font); font-size: 14px; }
 .composer-toggles { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .composer-toggles .grow { flex: 1; }
-.composer-toggles > button.active { border-color: var(--accent); color: var(--accent); }
+.composer-toggles > button {
+  height: var(--ctl-h); padding: 0 12px; gap: 7px;
+  font-size: var(--text-body); font-weight: var(--fw-medium); color: var(--text);
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.composer-toggles > button:hover:not(:disabled) { background: var(--panel-2); border-color: var(--muted); }
+.composer-toggles > button:disabled { opacity: 0.45; cursor: not-allowed; }
+.composer-toggles > button:focus-visible { outline: none; box-shadow: var(--ring); }
+/* The open panel, not a selected tab: it is the one whose content is on screen. */
+.composer-toggles > button.active {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+}
 .composer-toggles .count {
   margin-left: 6px; font-size: var(--text-micro); padding: 1px 6px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent);
@@ -1027,7 +986,7 @@ select { cursor: pointer; }
 .skill-files button.skill-file.active { background: var(--accent-soft); color: var(--accent); }
 .skill-files button.skill-file.deleted .path { text-decoration: line-through; color: var(--muted); }
 .skill-files .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.skill-files .badge { margin-left: auto; }
+.skill-files .ui-badge { margin-left: auto; }
 /* Its own footer, not another row in the list: adding a file is a different
    kind of act from picking one, and at one gap of separation it read as both. */
 .skill-add {
@@ -1055,7 +1014,7 @@ select { cursor: pointer; }
 .skill-body textarea.skill-text {
   min-height: 260px; font-family: var(--font-mono); font-size: var(--text-body);
 }
-.workspace-editor .badge {
+.workspace-editor .ui-badge {
   background: var(--amber-soft); color: var(--amber);
   font-size: var(--text-micro); font-weight: var(--fw-semibold);
   padding: 1px 6px; border-radius: 999px; white-space: nowrap;
@@ -1063,12 +1022,6 @@ select { cursor: pointer; }
 .hint.error-text { color: var(--red); }
 
 /* A button that reads as a link: used for small inline actions inside prose. */
-button.linkish {
-  background: none; border: none; padding: 0; color: var(--accent);
-  font-size: 12px; font-weight: 600; box-shadow: none; gap: 4px;
-}
-button.linkish:hover { text-decoration: underline; }
-button.linkish:disabled { color: var(--muted); text-decoration: none; }
 
 /* Per-question progress. A stacked bar over a total of one says nothing; which of
    the four calls is outstanding says everything. */
@@ -1092,7 +1045,7 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
 .phasestep.failed { color: var(--red); font-weight: 600; }
 
 .attempt-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.attempt-tags .tag.muted { opacity: 0.7; }
+
 .attempt-actions { display: flex; flex-direction: column; gap: 4px; flex: none; }
 .attempt-actions button { padding: 4px 6px; font-size: 11px; }
 .attempt-footnote {
@@ -1106,12 +1059,6 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
 .playground-three { min-height: 420px; }
 
 /* ---- shortlist: playground questions on their way into an eval set ---- */
-.page-head-actions { display: flex; gap: var(--space-2); }
-.page-head-actions button.active { border-color: var(--accent); color: var(--accent); }
-.page-head-actions .count {
-  margin-left: var(--space-1); font-size: var(--text-micro); padding: 1px 6px;
-  border-radius: 999px; background: var(--accent-soft); color: var(--accent);
-}
 .attempt-actions button.active { border-color: var(--accent); color: var(--accent); }
 
 /* Same two-pane shape as the skill editor: a list to pick from, a form to work
@@ -1134,9 +1081,8 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
   background: var(--accent-soft); border-color: var(--accent);
 }
 .shortlist-item .q { grid-area: q; font-size: var(--text-body); overflow-wrap: anywhere; }
-.shortlist-item .chips { grid-area: chips; display: flex; flex-wrap: wrap; gap: var(--space-1); }
-.shortlist-item .icon-btn { grid-area: x; }
-.tag.warn { color: var(--amber); background: var(--amber-soft); border-color: transparent; }
+.shortlist-item .ui-badge-row { grid-area: chips; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.shortlist-item .ui-btn-icon { grid-area: x; }
 
 .shortlist-editor { display: flex; flex-direction: column; min-width: 0; }
 .shortlist-editor textarea { min-height: 88px; }
@@ -1145,12 +1091,7 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
 .field-head { display: flex; align-items: center; gap: var(--space-2); }
 .field-head label { margin: 0; }
 .field-head .grow { flex: 1; }
-.field-head .linkish { gap: var(--space-1); }
-.badge.warn {
-  background: var(--amber-soft); color: var(--amber);
-  font-size: var(--text-micro); font-weight: var(--fw-semibold);
-  padding: 1px 6px; border-radius: 999px;
-}
+.field-head .ui-btn-link { gap: var(--space-1); }
 .hint.warn-text {
   color: var(--amber); background: var(--amber-soft);
   border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
@@ -1185,7 +1126,7 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
   /* Icons only, whatever the developer's saved preference — there isn't room
      for both the labels and a usable middle column. */
   .app, :root.rail-collapsed .app { grid-template-columns: var(--rail-w-collapsed) 1fr; }
-  .rail-label, .rail-brand-name, .rail-tag { display: none; }
+  .rail-label, .rail-brand-name, .rail-soon { display: none; }
   .rail-item, .rail-collapse, .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
   .rail-collapse { display: none; }
 }
@@ -1269,22 +1210,7 @@ button.linkish:disabled { color: var(--muted); text-decoration: none; }
 .dot.judge_invalid { background: var(--amber); }
 .qphase.judge_invalid { color: var(--amber); }
 .qitem.judge_invalid { opacity: 0.85; }
-.pill.warn { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
 
-/* The fingerprint of the judge prompt a run was graded with. Neutral while it
-   matches the set's current one; amber when it doesn't, because that is the row
-   whose pass rate cannot be compared with its neighbours. */
-.chip {
-  font-size: var(--text-micro);
-  font-family: var(--font-mono);
-  color: var(--muted);
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  border-radius: 999px;
-  padding: 2px 8px;
-  white-space: nowrap;
-}
-.chip.changed { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
 
 /* A note inside a dialog that is guidance rather than an error. */
 .hint.callout {
@@ -1312,17 +1238,6 @@ pre.prompt-text {
   overflow: auto;
 }
 
-/* An icon button with something behind it worth opening. One dot, no number:
-   the count would be 1 forever. */
-.icon-btn.nudge { position: relative; }
-.icon-btn.nudge::after {
-  content: "";
-  position: absolute;
-  top: 3px; right: 3px;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--amber);
-}
 
 /* ============================================================================
    Upload dialog — metadata explanation, and the expanded preview editor.
@@ -1338,11 +1253,6 @@ pre.prompt-text {
   border-radius: 4px; padding: 1px 5px; white-space: nowrap;
 }
 .meta-keys { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-button.chip-btn {
-  cursor: pointer; font-weight: var(--fw-medium);
-  padding: 2px 8px; transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-button.chip-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 .meta-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; }
 
 /* A dialog given an explicit height hands the leftover space to its body, and

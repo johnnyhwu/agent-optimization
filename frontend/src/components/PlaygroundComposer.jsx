@@ -3,12 +3,13 @@ import RunConfigFields from "./RunConfigFields.jsx";
 import WorkspaceEditor from "./WorkspaceEditor.jsx";
 import { diffConfig, editedFiles, flattenLeaves } from "../workspace_util.js";
 import { IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget } from "./icons.jsx";
+import Button from "./ui/Button.jsx";
 
 // What gets sent: a question, optionally an edited copy of the agent's config and
 // skill files, optionally the two ground-truth fields, and this platform's own
 // downstream services.
 //
-// Only the question is required, and that is the point of the whole tab (§10.4).
+// Only the question is required, and that is the point of the whole tab.
 // Everything else is a panel behind one toolbar, and **only one panel is open at
 // a time**, for two reasons this layout learned the hard way:
 //
@@ -121,9 +122,9 @@ export default function PlaygroundComposer({
           onClick={() => toggle("endpoints")}
         />
         <div className="grow" />
-        <button className="primary" disabled={!canSend} onClick={onSend}>
-          <IconSend size={14} /> {busy ? "Sending…" : "Ask the agent"}
-        </button>
+        <Button variant="primary" icon={<IconSend size={14} />} disabled={!canSend} loading={busy} onClick={onSend}>
+          {busy ? "Sending…" : "Ask the agent"}
+        </Button>
       </div>
 
       {/* Loud even from the closed state: a workspace nobody can read is the
@@ -134,7 +135,7 @@ export default function PlaygroundComposer({
       {connected && workspaceError && panel !== "config" && panel !== "skills" && (
         <div className="hint error-text composer-alert">
           <IconAlert size={13} /> Could not read the agent's workspace — open{" "}
-          <button className="linkish" onClick={() => setPanel("config")}>
+          <button className="ui-btn ui-btn-link" onClick={() => setPanel("config")}>
             Agent config
           </button>{" "}
           for the reason.
@@ -176,7 +177,7 @@ export default function PlaygroundComposer({
             />
             <div className="hint">
               Given one, the trace is diagnosed against it — coarse-grained clues,
-              not a verdict (§6.9).
+              not a verdict.
             </div>
           </div>
 
@@ -188,7 +189,7 @@ export default function PlaygroundComposer({
               line: a question carried over from a run brings that run's frozen
               judge prompt with it. */}
           <details className="field">
-            <summary className="linkish">
+            <summary className="ui-summary-link">
               Judge prompt —{" "}
               {form?.judge_prompt_fingerprint
                 ? `carried over from the run you came from (${form.judge_prompt_fingerprint})`

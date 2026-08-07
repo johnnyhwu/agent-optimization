@@ -20,12 +20,15 @@ import {
 import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
+import Button, { IconButton } from "./ui/Button.jsx";
+import Badge from "./ui/Badge.jsx";
+import PageHeader from "./ui/PageHeader.jsx";
 
-// The playground (§10): one question at a time, against an editable copy of the
+// The playground: one question at a time, against an editable copy of the
 // agent's own config and skill files.
 //
 // Structurally this is the three-column detail view with a composer on top, and
-// it reuses that view's two hard-won mechanisms (§9.18a):
+// it reuses that view's two hard-won mechanisms:
 //
 //   * The open attempt is held **by id** and re-derived from the list on every
 //     render. Holding the object froze the verdict, because the SSE stream
@@ -108,7 +111,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // from a run — names an agent other than the connected one.
   const [agentMismatch, setAgentMismatch] = useState(null);
 
-  // Questions on their way out of the playground and into an eval set (§10.8).
+  // Questions on their way out of the playground and into an eval set.
   // Copies, not references: an attempt is evicted at the per-user cap and lost
   // on a backend restart, and losing a shortlist entry to either would be worst
   // exactly when someone is iterating hardest.
@@ -207,7 +210,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
   // Connect to an agent: point the form at it, then read its workspace. The read
   // *is* the connection test — it proves the host answers, that it speaks the
-  // §17.3 contract, and it produces the snapshot and version everything below
+  // workspace contract, and it produces the snapshot and version everything below
   // depends on. A separate ping would prove less and be one more thing to keep
   // in step.
   async function connect({ base_url, timeout_s }) {
@@ -299,7 +302,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     return { config, skills };
   }
 
-  // A question handed over from the three-column view (§10.5). Only the question
+  // A question handed over from the three-column view. Only the question
   // and its ground truth travel: the workspace stays as the agent server has it,
   // so the first run of a handed-over question reproduces what the eval run did
   // rather than silently testing somebody's leftover edit.
@@ -592,31 +595,24 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
   return (
     <div className="page-fill">
-      <div className="page-head">
-        <div>
-          <h2>Playground</h2>
-          <p className="muted">
-            One question against an editable copy of the agent's config and skill
-            files, run as often as you like. Nothing here is saved — attempts live
-            in the backend's memory until it restarts.
-          </p>
-        </div>
-        <div className="page-head-actions">
-          <button
-            className={shortlistItems.length ? "active" : ""}
+      <PageHeader
+        title="Playground"
+        subtitle="One question against an editable copy of the agent's config and skill files, run as often as you like. Nothing here is saved — attempts last until the backend restarts."
+        primary={
+          <Button
+            variant={shortlistItems.length ? "primary" : "secondary"}
+            icon={<IconBookmark size={14} />}
             onClick={() => setShortlistOpen(true)}
             title="Review shortlisted questions and create an eval set from them"
           >
-            <IconBookmark size={14} /> Shortlist
-            {shortlistItems.length > 0 && (
-              <span className="count">{shortlistItems.length}</span>
-            )}
-          </button>
-          <button onClick={reload} title="Reload the attempt list">
-            <IconRefresh size={14} /> Refresh
-          </button>
-        </div>
-      </div>
+            Shortlist
+            {shortlistItems.length > 0 && <Badge tone="neutral" size="sm">{shortlistItems.length}</Badge>}
+          </Button>
+        }
+        menu={
+          <IconButton label="Reload the attempt list" icon={<IconRefresh size={16} />} onClick={reload} />
+        }
+      />
 
       {error && <div className="error">{error}</div>}
 
@@ -648,7 +644,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
             connection was left alone.
           </span>
           <button
-            className="linkish"
+            className="ui-btn ui-btn-link"
             onClick={() => {
               const target = agentMismatch;
               setAgentMismatch(null);
@@ -657,9 +653,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           >
             Connect to it
           </button>
-          <button className="linkish" onClick={() => setAgentMismatch(null)}>
+          <Button variant="link" onClick={() => setAgentMismatch(null)}>
             Dismiss
-          </button>
+          </Button>
         </div>
       )}
 
@@ -755,7 +751,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           width={520}
           footer={
             <>
-              <button onClick={() => setStale(null)}>Cancel</button>
+              <Button variant="ghost" onClick={() => setStale(null)}>Cancel</Button>
               <button
                 onClick={async () => {
                   setStale(null);
@@ -767,9 +763,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
               >
                 Reload workspace
               </button>
-              <button className="primary" onClick={sendNow}>
+              <Button variant="primary" onClick={sendNow}>
                 Send anyway
-              </button>
+              </Button>
             </>
           }
         >
@@ -801,7 +797,7 @@ function describeOverride(attempt) {
 }
 
 // A sparse config overlay merged onto a full config, the same deep merge the
-// agent server does with it (§5.2 of the agent-server contract): a key the
+// agent server does with it (the agent-server contract): a key the
 // overlay does not mention keeps the value it already had.
 function applyOverlay(base, overlay) {
   if (!overlay) return base;

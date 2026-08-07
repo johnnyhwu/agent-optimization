@@ -1,5 +1,6 @@
 import React from "react";
 import Modal from "./Modal.jsx";
+import Button from "./ui/Button.jsx";
 
 // What one run was triggered with — read-only, because a finished run's settings
 // are history. There is deliberately no input anywhere in here: the way to reuse
@@ -60,7 +61,7 @@ export default function RunConfigView({ run, onClose }) {
       subtitle={`${run.name || new Date(run.started_at).toLocaleString()} · by ${run.triggered_by}`}
       onClose={onClose}
       width={560}
-      footer={<button onClick={onClose}>Close</button>}
+      footer={<Button onClick={onClose}>Close</Button>}
     >
       <div className="hint" style={{ marginBottom: 14 }}>
         The settings this run was started with. Read-only — a finished run's
@@ -69,7 +70,7 @@ export default function RunConfigView({ run, onClose }) {
       </div>
 
       {!recorded && (
-        <div className="empty">
+        <div className="ui-empty ui-empty-sm">
           This run predates per-run config. It used whatever the server
           environment was set to at the time, which wasn’t recorded.
         </div>
@@ -98,7 +99,7 @@ export default function RunConfigView({ run, onClose }) {
           </div>
           {config.judge_system_prompt ? (
             <details style={{ marginTop: 6 }}>
-              <summary className="linkish">View the judge prompt this run used</summary>
+              <summary className="ui-summary-link">View the grading prompt this run used</summary>
               <div className="hint" style={{ marginTop: 8 }}>System</div>
               <pre className="prompt-text">{config.judge_system_prompt}</pre>
               <div className="hint" style={{ marginTop: 8 }}>User</div>

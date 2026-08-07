@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import { IconChevronDown } from "./icons.jsx";
 
 // "Use config from <run>" — a bounded picker over an unbounded list.
 //
@@ -128,7 +129,7 @@ export default function RunPicker({ evalSetId, value, onChange }) {
         onClick={() => setOpen((o) => !o)}
       >
         <span>{triggerLabel}</span>
-        <span className="chev" aria-hidden="true">▾</span>
+        <IconChevronDown size={14} className="chev" />
       </button>
 
       {open && (

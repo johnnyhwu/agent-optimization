@@ -1,4 +1,10 @@
 import React from "react";
+import Badge from "./ui/Badge.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
+import Button from "./ui/Button.jsx";
+import Card, { CardHeader } from "./ui/Card.jsx";
+import { InlineEmpty } from "./ui/EmptyState.jsx";
+import { IconRefresh } from "./icons.jsx";
 
 // Some trace-store failures are worth explaining rather than quoting. A raw
 // ClickHouse dump tells a developer nothing about what to do next, and — because
@@ -41,7 +47,7 @@ function explainTraceError(raw) {
 // disclosure — it's still the thing to paste into a bug report.
 function TraceErrorBody({ raw }) {
   const known = explainTraceError(raw);
-  if (!known) return <div className="banner-detail">{raw}</div>;
+  if (!known) return <BannerDetail>{raw}</BannerDetail>;
   return (
     <>
       {/* Prose, not the monospace treatment `.banner-detail` gives raw output. */}
@@ -86,21 +92,21 @@ export default function SpanList({
 }) {
   if (!trace) {
     return (
-      <div className="col">
-        <h4>Trace &amp; diagnosis</h4>
-        <div className="notflagged">
-          {refreshing ? "Loading…" : emptyHint || "Select a question."}
-        </div>
-      </div>
+      <Card padded={false} className="col">
+        <CardHeader title="Trace & diagnosis" sticky />
+        <InlineEmpty>
+          {refreshing ? "Loading…" : emptyHint || "Pick a question to see its trace."}
+        </InlineEmpty>
+      </Card>
     );
   }
 
   const suspectByIndex = {};
   (trace.analysis?.suspects || []).forEach((s) => (suspectByIndex[s.span_index] = s));
   const reDiagnoseButton = canReDiagnose ? (
-    <button onClick={onReDiagnose} disabled={reDiagnosing}>
-      {reDiagnosing ? "Re-diagnosing…" : "↻ Re-diagnose"}
-    </button>
+    <Button size="sm" icon={<IconRefresh size={13} />} onClick={onReDiagnose} loading={reDiagnosing}>
+      {reDiagnosing ? "Re-diagnosing…" : "Re-diagnose"}
+    </Button>
   ) : null;
 
   // One of these always renders, so the section is never an empty labelled band.
@@ -108,12 +114,11 @@ export default function SpanList({
   if (trace.analysis) {
     diagnosis = (
       <>
-        <div className="banner diagnosis">
-          <strong>Diagnosis (clue, not a verdict):</strong> {trace.analysis.overall_diagnosis}
-          {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
-        </div>
+        <Banner tone="info" title="A clue, not a verdict" actions={reDiagnoseButton}>
+          {trace.analysis.overall_diagnosis}
+        </Banner>
         {trace.analysis.caveat && (
-          <div className="banner caveat">⚠ Caveat: {trace.analysis.caveat}</div>
+          <Banner tone="warning" title="Caveat">{trace.analysis.caveat}</Banner>
         )}
       </>
     );
@@ -121,65 +126,56 @@ export default function SpanList({
     // An undiagnosed incorrect question used to look identical whether the
     // model errored or was never asked.
     diagnosis = (
-      <div className="banner error-banner">
-        <strong>✕ Diagnosis failed.</strong>
-        <div className="banner-detail">{trace.diagnosis_error}</div>
-        {reDiagnoseButton && <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>}
-      </div>
+      <Banner tone="error" title="Diagnosis failed." actions={reDiagnoseButton}>
+        <BannerDetail>{trace.diagnosis_error}</BannerDetail>
+      </Banner>
     );
   } else if (trace.verdict === "correct") {
-    diagnosis = (
-      <div className="banner diagnosis muted">Correct answer — no diagnosis generated.</div>
-    );
+    diagnosis = <Banner tone="info">Correct answer — nothing to diagnose.</Banner>;
   } else if (playground) {
     // In the playground the switch is the expected reasoning process, not the
     // verdict: with one supplied there is a diagnosis, without one there is
     // nothing to compare the trace against.
     diagnosis = reDiagnoseButton ? (
-      <div className="banner diagnosis">
-        No diagnosis for this attempt yet.
-        <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>
-      </div>
+      <Banner tone="info" actions={reDiagnoseButton}>No diagnosis for this attempt yet.</Banner>
     ) : (
-      <div className="banner diagnosis muted">
-        No diagnosis — add an expected reasoning process to have the trace
+      <Banner tone="info">
+        No diagnosis — add an expected reasoning process and the trace will be
         compared against it.
-      </div>
+      </Banner>
     );
   } else if (trace.verdict === "incorrect" && reDiagnoseButton) {
     diagnosis = (
-      <div className="banner diagnosis">
+      <Banner tone="info" actions={reDiagnoseButton}>
         No diagnosis stored for this question yet.
-        <div style={{ marginTop: 8 }}>{reDiagnoseButton}</div>
-      </div>
+      </Banner>
     );
   } else {
     diagnosis = (
-      <div className="banner diagnosis muted">
+      <Banner tone="info">
         No diagnosis — a question is diagnosed once it has been judged incorrect.
-      </div>
+      </Banner>
     );
   }
 
   return (
-    <div className="col">
-      <h4>
-        Trace &amp; diagnosis
-        {/* The panel keeps its content while a live question refetches, so this
-            dot is the only thing that says an update is on the way. */}
-        {refreshing && <span className="refreshing" title="Updating…" />}
-      </h4>
+    <Card padded={false} className="col">
+      <CardHeader
+        title="Trace & diagnosis"
+        sticky
+        /* The panel keeps its content while a live question refetches, so this
+           dot is the only thing that says an update is on the way. */
+        actions={refreshing ? <span className="refreshing" title="Updating…" /> : null}
+      />
 
       {/* Above the sections, because it explains all of them at once. */}
       {/* In the playground the message is already a whole sentence — and one of
           them describes a deliberate stop, which "hit a problem" would
           misrepresent — so it stands on its own. */}
       {trace.error_message && (
-        <div className="banner error-banner">
-          {playground
-            ? trace.error_message
-            : `✕ This question failed: ${trace.error_message}`}
-        </div>
+        <Banner tone="error" title={playground ? null : "This question failed."}>
+          {trace.error_message}
+        </Banner>
       )}
 
       {/* What the agent answered, next to what it was graded against. With a real
@@ -189,7 +185,9 @@ export default function SpanList({
         <div className="answers">
           <div className="label">
             Agent answer
-            {trace.verdict && <span className={`verdict ${trace.verdict}`}>{trace.verdict}</span>}
+            {trace.verdict && (
+              <Badge tone={trace.verdict === "correct" ? "success" : "danger"}>{trace.verdict}</Badge>
+            )}
           </div>
           <pre>{trace.agent_response || "— (no answer recorded)"}</pre>
           {/* An attempt with no expected answer was never graded, so a row
@@ -225,45 +223,43 @@ export default function SpanList({
         {/* The whole point of separating this from "generating": a wrong host or a
             rejected key is a thing the developer must go and fix, not wait out. */}
         {trace.trace_state === "error" && (
-          <div className="banner error-banner">
-            <strong>✕ Could not load the trace.</strong>
+          <Banner
+            tone="error"
+            title="Could not load the trace."
+            actions={onRetryTrace && <RetryButton onClick={onRetryTrace} />}
+          >
             <TraceErrorBody raw={trace.trace_error} />
-            {onRetryTrace && (
-              <div style={{ marginTop: 8 }}>
-                <button onClick={onRetryTrace}>↻ Retry</button>
-              </div>
-            )}
-          </div>
+          </Banner>
         )}
         {trace.trace_state === "generating" && (
-          <div className="banner generating">
-            ⏳ Trace is generating (Langfuse ingestion is async — retrying). This is not
-            "no trace"; check back shortly.
+          <Banner
+            tone="pending"
+            title="The trace hasn't arrived yet."
+            actions={onRetryTrace && <RetryButton onClick={onRetryTrace} />}
+          >
+            Traces are recorded asynchronously, so there is a short delay after the
+            agent answers. This is not a missing trace — check back shortly.
             {trace.trace_error && (
               <>
-                <div className="banner-detail">Last attempt during the run failed:</div>
+                <div className="ui-banner-note">The last attempt during the run failed:</div>
                 <TraceErrorBody raw={trace.trace_error} />
               </>
             )}
-            {onRetryTrace && (
-              <div style={{ marginTop: 8 }}>
-                <button onClick={onRetryTrace}>↻ Retry</button>
-              </div>
-            )}
-          </div>
+          </Banner>
         )}
         {/* Distinct from "generating": nothing is being waited on because nothing
             has been asked yet. Showing an ingestion message here — or, worse, a
             trace-store error from a fetch that should never have happened — made a
             brand-new run look like it had already failed. */}
         {trace.trace_state === "not_started" && (
-          <div className="banner generating">
-            ⏳ Waiting for the agent — this question hasn't been sent yet. The trace
-            appears once it answers.
-          </div>
+          <Banner tone="pending" title="Waiting for the agent.">
+            This question hasn't been sent yet. Its trace appears once the agent answers.
+          </Banner>
         )}
         {trace.trace_state === "no_trace" && (
-          <div className="banner generating">No trace — the agent call failed for this question.</div>
+          <Banner tone="warning" title="No trace.">
+            The agent call failed for this question, so nothing was recorded.
+          </Banner>
         )}
 
         {trace.spans.map((s) => {
@@ -272,11 +268,30 @@ export default function SpanList({
             <div
               key={s.index}
               className={`spanrow ${activeSpan === s.index ? "active" : ""}`}
+              role="button"
+              tabIndex={0}
               onClick={() => onPickSpan(s.index)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onPickSpan(s.index);
+                }
+              }}
             >
-              <span className="idx">#{s.index}</span> <strong>{s.tool_name}</strong>
-              {suspect && <span className={`conf ${suspect.confidence}`}>{suspect.confidence}</span>}
-              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              <div className="spanrow-head">
+                <span className="idx">#{s.index}</span>
+                <strong>{s.tool_name}</strong>
+                {suspect && (
+                  <Badge
+                    tone={suspect.confidence === "high" ? "danger" : suspect.confidence === "medium" ? "warning" : "neutral"}
+                    size="sm"
+                    className="spanrow-conf"
+                  >
+                    {suspect.confidence} confidence
+                  </Badge>
+                )}
+              </div>
+              <div className="spanrow-status">
                 {s.status}
                 {s.status_message && <span> · {s.status_message}</span>}
               </div>
@@ -284,6 +299,16 @@ export default function SpanList({
           );
         })}
       </Section>
-    </div>
+    </Card>
+  );
+}
+
+// The trace is fetched live, so "it isn't there" and "it isn't there yet" both
+// end in the same offer.
+function RetryButton({ onClick }) {
+  return (
+    <Button size="sm" icon={<IconRefresh size={13} />} onClick={onClick}>
+      Retry
+    </Button>
   );
 }

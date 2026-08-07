@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api.js";
 import { isKeycloak } from "./app_config.js";
-import { getUsername, logout, setUsername } from "./auth.js";
+import { getUsername, setUsername } from "./auth.js";
 import { href, navigate, useHashRoute } from "./useHashRoute.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
@@ -9,15 +9,12 @@ import RunDetail from "./components/RunDetail.jsx";
 import Playground from "./components/Playground.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
 import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
-import ThemeToggle from "./components/ThemeToggle.jsx";
+import UserMenu from "./components/UserMenu.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
-
-const AVATAR_COLORS = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"];
-function avatarColor(name) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_COLORS.length;
-  return AVATAR_COLORS[h];
-}
+import Button from "./components/ui/Button.jsx";
+import EmptyState from "./components/ui/EmptyState.jsx";
+import Skeleton from "./components/ui/Skeleton.jsx";
+import { IconBeaker, IconSparkles } from "./components/icons.jsx";
 
 // The whole view state lives in the URL (see useHashRoute): which section, which
 // eval set, which runs, which incorrect mode. The three tiers of §6.13 are the
@@ -99,6 +96,8 @@ export default function App() {
   // reading it there means the answer is as fresh as the set itself.
   const myRole = resolved ? resolved.my_role : undefined;
 
+  useDocumentTitle(route, resolved);
+
   return (
     <ToastProvider>
       <div className="app">
@@ -108,32 +107,7 @@ export default function App() {
           <header className="topbar">
             <div className="topbar-inner">
               <div className="topbar-title">{sectionTitle(route.section)}</div>
-              <div className="userbox">
-                <ThemeToggle />
-                <span className="lbl">Signed in as</span>
-                <div className="avatar" style={{ background: avatarColor(subject) }}>
-                  {subject.slice(0, 1)}
-                </div>
-                {isKeycloak ? (
-                  <>
-                    <strong>{subject}</strong>
-                    <button className="ghost" onClick={logout}>
-                      Sign out
-                    </button>
-                  </>
-                ) : (
-                  <select
-                    value={subject}
-                    onChange={(e) => switchUser(e.target.value)}
-                    aria-label="Switch user"
-                    style={{ width: "auto" }}
-                  >
-                    {users.map((u) => (
-                      <option key={u} value={u}>{u}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
+              <UserMenu subject={subject} users={users} onSwitchUser={switchUser} />
             </div>
           </header>
 
@@ -171,7 +145,7 @@ export default function App() {
                       }
                     />
                   ) : (
-                    !setError && <div className="skeleton" />
+                    !setError && <Skeleton variant="row" count={4} />
                   ))}
                 {route.tier === "detail" &&
                   (resolved ? (
@@ -191,7 +165,7 @@ export default function App() {
                       }}
                     />
                   ) : (
-                    !setError && <div className="skeleton" />
+                    !setError && <Skeleton variant="row" count={4} />
                   ))}
               </>
             )}
@@ -218,21 +192,35 @@ function sectionTitle(section) {
   return "Evaluation";
 }
 
+// The browser tab said "Agent Eval" no matter where you were, so two tabs open on
+// two different eval sets were indistinguishable — and this is a tool people keep
+// several tabs of.
+function useDocumentTitle(route, evalSet) {
+  useEffect(() => {
+    const where =
+      route.section === "evaluation" && evalSet ? evalSet.name : sectionTitle(route.section);
+    document.title = `${where} · Agent Eval`;
+  }, [route.section, route.tier, evalSet?.name]);
+}
+
 // Reachable only by typing the URL — the rail doesn't link here yet. Says what
 // the section will do and where the work happens today, rather than "coming
 // soon" with no direction.
 function OptimizePlaceholder() {
   return (
-    <div className="empty">
-      <h2>Optimize isn’t built yet</h2>
-      <p>
-        This is where eval results will be grouped by skill and fed to the
-        optimizer to produce an improved skill.
-      </p>
-      <p>
-        For now, edit a skill by hand in the{" "}
-        <a href={href.playground()}>playground</a> and see what it changes.
-      </p>
-    </div>
+    <EmptyState
+      icon={<IconSparkles size={22} />}
+      title="Optimize is coming"
+      size="lg"
+      action={
+        <Button variant="primary" icon={<IconBeaker size={15} />} onClick={() => navigate(href.playground())}>
+          Open the playground
+        </Button>
+      }
+    >
+      This is where eval results will be grouped by skill and fed to the optimizer
+      to produce an improved one. Until then, edit a skill by hand in the
+      playground and see what it changes.
+    </EmptyState>
   );
 }

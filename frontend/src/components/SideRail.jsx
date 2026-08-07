@@ -52,7 +52,7 @@ export default function SideRail({ section, collapsed, onToggle }) {
               <span className="rail-item soon" title={`${label} — not built yet`}>
                 <Icon size={17} />
                 <span className="rail-label">{label}</span>
-                <span className="rail-tag">Soon</span>
+                <span className="rail-soon">Soon</span>
               </span>
             ) : (
               <a

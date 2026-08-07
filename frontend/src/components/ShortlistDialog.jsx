@@ -5,6 +5,8 @@ import ShareEditor from "./ShareEditor.jsx";
 import { useToast } from "./Toast.jsx";
 import { IconAlert, IconPlus, IconSparkles, IconX } from "./icons.jsx";
 import { missingFields, toPayloadQuestion } from "../shortlist.js";
+import Button from "./ui/Button.jsx";
+import Badge from "./ui/Badge.jsx";
 
 // Review shortlisted playground questions, then turn them into an eval set
 // (§10.8).
@@ -131,16 +133,16 @@ export default function ShortlistDialog({
               <span className="error-text"> · {incomplete.length} incomplete</span>
             )}
           </span>
-          <button onClick={onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button
-            className="primary"
+          </Button>
+          <Button
+            variant="primary"
             onClick={create}
             disabled={busy || (!items.length && !includeIds.length)}
           >
             <IconPlus size={14} /> {busy ? "Creating…" : "Create eval set"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -163,15 +165,15 @@ export default function ShortlistDialog({
                   onClick={() => setActiveId(item.id)}
                 >
                   <span className="q">{item.question.slice(0, 70) || "(no question)"}</span>
-                  <span className="chips">
+                  <span className="ui-badge-row">
                     {missing.length > 0 && (
-                      <span className="tag warn">{missing.length} missing</span>
+                      <Badge tone="warning">{missing.length} missing</Badge>
                     )}
-                    {item.workspace_overridden && <span className="tag warn">override</span>}
-                    {item.answer_from_agent && <span className="tag muted">agent answer</span>}
+                    {item.workspace_overridden && <Badge tone="warning">edited workspace</Badge>}
+                    {item.answer_from_agent && <Badge tone="neutral">agent answer</Badge>}
                   </span>
                   <span
-                    className="icon-btn danger-btn"
+                    className="ui-btn ui-btn-ghost ui-btn-icon ui-btn-destructive-hover"
                     role="button"
                     tabIndex={0}
                     title="Remove from the shortlist"
@@ -221,7 +223,7 @@ export default function ShortlistDialog({
                   <div className="field-head">
                     <label htmlFor="sl-answer">Expected answer</label>
                     {active.answer_from_agent && (
-                      <span className="badge warn">the agent's own — unverified</span>
+                      <Badge tone="warning">the agent's own — unverified</Badge>
                     )}
                   </div>
                   <textarea
@@ -248,11 +250,11 @@ export default function ShortlistDialog({
                   <div className="field-head">
                     <label htmlFor="sl-reasoning">Expected reasoning process</label>
                     {active.reasoning_from_synthesis && (
-                      <span className="badge warn">drafted from the trace</span>
+                      <Badge tone="warning">drafted from the trace</Badge>
                     )}
                     <div className="grow" />
                     <button
-                      className="linkish"
+                      className="ui-btn ui-btn-link"
                       onClick={() => synthesize(active)}
                       disabled={synthesizing === active.id}
                     >
@@ -338,9 +340,9 @@ export default function ShortlistDialog({
               <option key={k} value={k} />
             ))}
           </datalist>
-          <button onClick={() => setMetaRows((rs) => [...rs, { k: "", v: "" }])}>
+          <Button size="sm" onClick={() => setMetaRows((rs) => [...rs, { k: "", v: "" }])}>
             <IconPlus size={14} /> add key
-          </button>
+          </Button>
         </div>
 
         <div className="field">

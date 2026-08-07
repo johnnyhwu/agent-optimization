@@ -48,7 +48,7 @@ export default function RunStatusBar({ results, running, cancelling, onCancel, c
           )}
         </div>
         {running && canCancel && (
-          <button className="danger" onClick={onCancel} disabled={cancelling}>
+          <button className="ui-btn ui-btn-danger ui-btn-sm" onClick={onCancel} disabled={cancelling}>
             <IconStop size={13} /> {cancelling ? "Stopping…" : "Stop run"}
           </button>
         )}

@@ -14,7 +14,7 @@ import { IconChevronRight } from "./icons.jsx";
 export default function Breadcrumb({ route, evalSet }) {
   if (route.tier !== "runs" && route.tier !== "detail") return null;
 
-  const crumbs = [{ label: "Eval Sets", to: href.evaluation() }];
+  const crumbs = [{ label: "Eval sets", to: href.evaluation() }];
   crumbs.push({
     label: evalSet ? evalSet.name : "…",
     to: route.tier === "detail" && evalSet ? href.evalSet(evalSet.id) : null,

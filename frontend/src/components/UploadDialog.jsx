@@ -5,6 +5,7 @@ import ShareEditor from "./ShareEditor.jsx";
 import { useToast } from "./Toast.jsx";
 import UploadPreviewEditor from "./UploadPreviewEditor.jsx";
 import { IconPlus, IconUpload, IconX } from "./icons.jsx";
+import Button from "./ui/Button.jsx";
 import {
   detectFormat,
   emptyRow,
@@ -31,8 +32,8 @@ const SAMPLE_ROWS = [
   },
 ];
 
-// Upload dialog: pick a JSONL or CSV file → preview it as an editable table →
-// tweak rows → Create. Owner can pick who to share with (§6.16, direct name
+// Upload dialog: pick a JSONL or CSV file, preview it as an editable table,
+// tweak rows, then Create. Owner can pick who to share with (direct name
 // entry). Existing metadata keys are auto-suggested (§6.10). The set is locked
 // after creation (§6.11), so all row add/remove happens here, pre-commit.
 export default function UploadDialog({ onClose, onCreated, subject }) {
@@ -147,13 +148,13 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
       footer={
         <>
           {expanded ? (
-            <button onClick={() => setExpanded(false)}>Collapse</button>
+            <Button variant="ghost" onClick={() => setExpanded(false)}>Collapse</Button>
           ) : (
-            <button onClick={onClose}>Cancel</button>
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
           )}
-          <button className="primary" disabled={busy} onClick={submit}>
+          <Button variant="primary" loading={busy} onClick={submit}>
             {busy ? "Uploading…" : `Create${rows.length ? ` (${rows.length})` : ""}`}
-          </button>
+          </Button>
         </>
       }
     >
@@ -181,7 +182,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
               <div className="meta-keys">
                 <span className="hint">Already in use:</span>
                 {knownKeys.map((k) => (
-                  <button key={k} type="button" className="chip chip-btn" onClick={() => useKnownKey(k)}>
+                  <button key={k} type="button" className="ui-chip-btn" onClick={() => useKnownKey(k)}>
                     {k}
                   </button>
                 ))}
@@ -192,7 +193,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
                 <input list="known-keys" placeholder="team" value={r.k} onChange={(e) => setMeta(i, "k", e.target.value)} aria-label={`Metadata key ${i + 1}`} />
                 <input placeholder="billing" value={r.v} onChange={(e) => setMeta(i, "v", e.target.value)} aria-label={`Metadata value ${i + 1}`} />
                 <button
-                  className="icon-btn"
+                  className="ui-btn ui-btn-ghost ui-btn-icon"
                   onClick={() => removeMeta(i)}
                   disabled={metaRows.length === 1 && !r.k && !r.v}
                   aria-label={`Remove metadata row ${i + 1}`}
@@ -202,7 +203,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
               </div>
             ))}
             <datalist id="known-keys">{knownKeys.map((k) => <option key={k} value={k} />)}</datalist>
-            <button onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}><IconPlus size={14} /> add key</button>
+            <Button size="sm" icon={<IconPlus size={14} />} onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}>Add label</Button>
           </div>
 
           <div className="field">
@@ -223,10 +224,10 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             style={{ display: "none" }}
             onChange={onFile}
           />
-          <button onClick={() => fileRef.current && fileRef.current.click()}>
+          <Button onClick={() => fileRef.current && fileRef.current.click()}>
             <IconUpload size={14} /> Choose file…
-          </button>
-          <button className="link-btn" onClick={loadSample}>load sample</button>
+          </Button>
+          <Button variant="link" onClick={loadSample}>load a sample</Button>
           {fileName && <span className="hint">{fileName} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>}
         </div>
         {parseErrors.length > 0 && (
@@ -241,9 +242,9 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
         <div className="field-head">
           <label>Preview {!expanded && rows.length > 0 && <span className="hint">· edit any cell before creating</span>}</label>
           <span className="grow" />
-          <button className="linkish" onClick={() => setExpanded((v) => !v)}>
+          <Button variant="link" onClick={() => setExpanded((v) => !v)}>
             {expanded ? "Collapse" : "Expand"}
-          </button>
+          </Button>
         </div>
         {expanded ? (
           <UploadPreviewEditor
@@ -278,7 +279,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
                     <td className="skillcol"><input placeholder="billing, reports" value={r.skill} onChange={(e) => setCell(i, "skill", e.target.value)} /></td>
                     <td className="qidcol"><input placeholder="auto" value={r.question_id} onChange={(e) => setCell(i, "question_id", e.target.value)} /></td>
                     <td>
-                      <button className="icon-btn" onClick={() => removeRow(i)} aria-label="Remove row">
+                      <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={() => removeRow(i)} aria-label="Remove row">
                         <IconX size={15} />
                       </button>
                     </td>
@@ -289,7 +290,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
           </div>
         )}
         {!expanded && (
-          <button style={{ marginTop: 8 }} onClick={addRow}><IconPlus size={14} /> add row</button>
+          <Button size="sm" style={{ marginTop: 8 }} icon={<IconPlus size={14} />} onClick={addRow}>Add row</Button>
         )}
       </div>
     </Modal>
