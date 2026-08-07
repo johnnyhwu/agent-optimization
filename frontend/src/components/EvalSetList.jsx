@@ -335,6 +335,12 @@ function SetCard({ set: s, index, onOpen, onDownload, onConfigure, onDelete }) {
           <div className="set-stat-lbl">latest pass rate</div>
         </div>
         <div className="set-stat">
+          <div className="set-stat-num set-stat-num-sm">{s.question_count}</div>
+          <div className="set-stat-lbl">
+            {s.question_count === 1 ? "question" : "questions"}
+          </div>
+        </div>
+        <div className="set-stat">
           <div className="set-stat-num set-stat-num-sm">{s.run_count}</div>
           <div className="set-stat-lbl">{s.run_count === 1 ? "run" : "runs"}</div>
         </div>

@@ -98,16 +98,11 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // from the list row because two of its fields (trace_ready, has_analysis) exist
   // only on the stream.
   const [live, setLive] = useState(null);
+  // Kept after a send rather than cleared: most second questions are the first
+  // one with a word changed, and re-typing it to compare two phrasings is the
+  // work this screen exists to make cheap. The attempt list is the record of
+  // what was asked, so nothing is lost by leaving the box as it was.
   const [draft, setDraft] = useState(EMPTY_DRAFT);
-  // Open before there is anything to read, collapsed once there is. The composer
-  // is the screen until a question has been asked; after that the trace is, and
-  // the composer is 170px the trace should have. Arriving with attempts already
-  // in the session (they outlive a reload of this page) starts collapsed for the
-  // same reason.
-  const [composerOpen, setComposerOpen] = useState(true);
-  // What the collapsed bar restates, so it says which question the trace below
-  // belongs to rather than just offering a button.
-  const [lastQuestion, setLastQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [reDiagnosing, setReDiagnosing] = useState(false);
   const [error, setError] = useState(null);
@@ -177,18 +172,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   }, []);
 
   useEffect(() => {
-    // Arriving with attempts already in the session — they outlive a reload of
-    // this page — means there is a trace to read, so start on it rather than on
-    // the composer. Only on the first load: after that the composer's state is
-    // whatever the developer last did with it.
-    let first = true;
     api
       .listAttempts()
-      .then((items) => {
-        setAttempts(items);
-        if (first && items.length) setComposerOpen(false);
-        first = false;
-      })
+      .then(setAttempts)
       .catch((e) => setError(e.message));
     // A different identity has a different set of attempts.
   }, [subject]);
@@ -353,9 +339,6 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       ground_truth_response: seed.ground_truth_response || "",
       ground_truth_reasoning: seed.ground_truth_reasoning || "",
     });
-    // Same reason as clone: a question handed over from a run arrived to be
-    // looked at and sent, not to be hidden behind a collapsed bar.
-    setComposerOpen(true);
     if (seed.config) {
       setForm((f) => (f ? { ...f, ...stripBlank(otherAgent(seed.config)) } : f));
       noteAgentMismatch(seed.config, "The run this question came from");
@@ -557,9 +540,6 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       setActiveId(created.id);
       setActiveSpan(null);
       jumpedFor.current = null;
-      // The question has been asked; the answer is what the screen is for now.
-      setLastQuestion(draft.question.trim());
-      setComposerOpen(false);
     } catch (e) {
       setError(e.message);
       toast.error(e.message);
@@ -580,9 +560,6 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         ground_truth_response: full.ground_truth_response || "",
         ground_truth_reasoning: full.ground_truth_reasoning || "",
       });
-      // Clone exists to be edited before sending, so a collapsed composer would
-      // hide the thing just copied in.
-      setComposerOpen(true);
       if (full.workspace && workspace) {
         // Rebuilt against the current snapshot, each half the way the agent
         // server reads it: the config overlay is sparse and merges onto what the
@@ -756,15 +733,12 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           workspaceLoading={wsLoading}
           workspaceError={wsError}
           onReloadWorkspace={reloadWorkspace}
-          open={composerOpen}
-          onOpenChange={setComposerOpen}
-          lastQuestion={lastQuestion || active?.question || ""}
+          // Rides in the composer's button row rather than on a row of its own:
+          // the composer no longer collapses, so a second row of chrome above
+          // the trace is height that has to be justified, and this is not.
           status={active ? attemptStatus : null}
         />
       )}
-
-      {/* Only when the composer is open: collapsed, it carries this itself. */}
-      {active && composerOpen && <div className="attempt-head">{attemptStatus}</div>}
 
       <div className={`three playground-three${attemptsCollapsed ? " attempts-collapsed" : ""}`}>
         <AttemptList

@@ -252,6 +252,21 @@ async def test_trend_is_oldest_to_newest_and_capped(session):
     assert len(card.trend) == TREND_RUNS
 
 
+async def test_question_count_is_per_set_and_survives_the_page_query(session):
+    # Counted in the same one-query-per-page way as everything else on the card:
+    # a set with no questions has to come back as 0 rather than be missing from
+    # the grouped result, and a set's count must not pick up its neighbour's.
+    small = await make_set(session, "Small", questions=2)
+    big = await make_set(session, "Big", questions=7)
+    empty = await make_set(session, "Empty", questions=0)
+
+    page = await fetch_cards(session)
+    by_id = {c.id: c for c in page.items}
+    assert by_id[small.id].question_count == 2
+    assert by_id[big.id].question_count == 7
+    assert by_id[empty.id].question_count == 0
+
+
 async def test_regression_summary_uses_the_latest_two_runs(session):
     es = EvalSet(name="Regressions", source_format="jsonl", meta={})
     session.add(es)

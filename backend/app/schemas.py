@@ -143,6 +143,7 @@ class EvalSetCard(BaseModel):
     created_at: datetime
     updated_at: datetime
     run_count: int
+    question_count: int
     latest_pass_rate: float | None
     trend: list[float | None]  # ordered oldest->newest pass rates (sparkline)
     regressed: int
