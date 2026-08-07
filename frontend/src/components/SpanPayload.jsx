@@ -270,9 +270,9 @@ export default function Payload({ label, value }) {
       <div className="payload-head">
         <span className="label">{label}</span>
         {structured && (
-          <div className="segmented sm">
+          <div className="ui-segmented is-sm" role="tablist">
             <button
-              className={mode === "pretty" ? "active" : ""}
+              className={mode === "pretty" ? "is-active" : ""}
               onClick={() => setMode("pretty")}
             >
               Pretty

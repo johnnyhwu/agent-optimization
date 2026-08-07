@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { IconAlert, IconRefresh, IconTarget } from "./icons.jsx";
+import Button from "./ui/Button.jsx";
 
-// Which agent the playground is talking to (§10.2 / §17.3).
+// Which agent the playground is talking to.
 //
 // This used to be two fields inside the "Endpoints & keys" panel, sitting beside
 // the Langfuse timeout as though they were the same kind of setting. They are
@@ -51,9 +52,10 @@ export default function AgentConnectionBar({
       <div className="agent-bar is-fake">
         <span className="agent-dot" />
         <div className="agent-bar-main">
-          <strong>Fake agent</strong>
+          <strong>Demo agent</strong>
           <span className="hint">
-            AGENT_IMPL=fake — canned config and skill files, no URL needed.
+            Demo mode — a built-in simulated agent, with canned config and skill
+            files. No URL needed.
           </span>
         </div>
       </div>
@@ -82,10 +84,10 @@ export default function AgentConnectionBar({
           </span>
         )}
         <div className="agent-bar-actions">
-          <button onClick={onReload} title="Re-read this agent's config and skill files">
+          <Button size="sm" onClick={onReload} title="Re-read this agent's config and skill files">
             <IconRefresh size={13} /> Reload
-          </button>
-          <button onClick={onChangeAgent}>Change agent</button>
+          </Button>
+          <Button size="sm" onClick={onChangeAgent}>Change agent</Button>
         </div>
       </div>
     );
@@ -140,9 +142,9 @@ export default function AgentConnectionBar({
               onKeyDown={(e) => e.key === "Enter" && submit()}
             />
           </div>
-          <button className="primary" disabled={!url.trim() || busy} onClick={submit}>
+          <Button variant="primary" disabled={!url.trim()} loading={busy} onClick={submit}>
             {busy ? "Connecting…" : "Connect"}
-          </button>
+          </Button>
         </div>
 
         {/* Offered rather than applied: prefilling one of these is a shortcut,
@@ -154,7 +156,7 @@ export default function AgentConnectionBar({
             {recent.map((a) => (
               <button
                 key={a.base_url}
-                className="linkish"
+                className="ui-btn ui-btn-link"
                 onClick={() => {
                   setUrl(a.base_url);
                   setTimeout_s(a.timeout_s ?? "");
@@ -167,7 +169,7 @@ export default function AgentConnectionBar({
         )}
 
         {/* The agent server's own words, not a summary of them: "no skills here"
-            and "your URL is wrong" have to stay distinguishable (§7.4), and only
+            and "your URL is wrong" have to stay distinguishable, and only
             the reason it gave can tell them apart. It stays on screen rather
             than passing as a toast, because it is a state to fix, not news. */}
         {status === "error" && error && (

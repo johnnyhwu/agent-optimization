@@ -7,9 +7,9 @@ import { overrideCounts } from "../workspace_util.js";
 // The iteration loop lives here. "Clone" is the important control — it puts an
 // attempt's question, workspace edits and settings back in the composer so the next
 // attempt differs by exactly the one thing being tested, which is the only way a
-// before/after comparison means anything given §4.8's non-determinism.
+// before/after comparison means anything, given how non-deterministic the model is.
 //
-// Attempts are held in the backend's memory (§10.3), so this list empties on a
+// Attempts are held in the backend's memory, so this list empties on a
 // backend restart. The footer says so rather than letting an empty list look like
 // a bug.
 
@@ -54,7 +54,7 @@ export default function AttemptList({
 }) {
   return (
     <div className="col">
-      <div className="col-head">
+      <div className="ui-card-head is-sticky">
         <h4>Attempts</h4>
         <span className="hint">{attempts.length}</span>
       </div>
@@ -83,16 +83,16 @@ export default function AttemptList({
             <div className="attempt-tags">
               {a.workspace_overridden ? (
                 <span
-                  className="tag"
+                  className="ui-badge ui-badge-neutral"
                   title={[...(a.config_overrides || []), ...(a.edited_skill_files || [])]
                     .join("\n") || "A workspace override was sent with this call"}
                 >
                   {overrideLabel(a)}
                 </span>
               ) : (
-                <span className="tag muted">agent's own workspace</span>
+                <span className="ui-badge ui-badge-neutral">agent's own workspace</span>
               )}
-              {!a.has_expected_answer && <span className="tag muted">not judged</span>}
+              {!a.has_expected_answer && <span className="ui-badge ui-badge-neutral">not judged</span>}
             </div>
             {a.error_message && (
               <div className="qerror" title={a.error_message}>
@@ -129,7 +129,7 @@ export default function AttemptList({
             </button>
             {a.status === "running" ? (
               <button
-                className="danger"
+                className="ui-btn ui-btn-danger ui-btn-sm"
                 title="Stop this attempt"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -154,7 +154,7 @@ export default function AttemptList({
       ))}
 
       {attempts.length === 0 && (
-        <div className="notflagged">
+        <div className="ui-empty-inline">
           No attempts yet. Ask the agent something above.
         </div>
       )}

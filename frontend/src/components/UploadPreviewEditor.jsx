@@ -66,7 +66,7 @@ export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }
             );
           })}
         </div>
-        <button className="preview-add" onClick={() => { addRow(); setActive(rows.length); }}>
+        <button className="preview-add ui-btn ui-btn-secondary" onClick={() => { addRow(); setActive(rows.length); }}>
           <IconPlus size={14} /> add row
         </button>
       </div>
@@ -81,7 +81,7 @@ export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }
                 Row {idx + 1} of {rows.length}
                 {missing.length > 0 && <span className="danger-text"> · missing {missing.map(shortName).join(", ")}</span>}
               </span>
-              <button className="icon-btn" onClick={onRemove} aria-label={`Remove row ${idx + 1}`}>
+              <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={onRemove} aria-label={`Remove row ${idx + 1}`}>
                 <IconTrash size={15} />
               </button>
             </div>

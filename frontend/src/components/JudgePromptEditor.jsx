@@ -97,10 +97,10 @@ export default function JudgePromptEditor({
     <>
       {fake && (
         <div className="hint callout">
-          <strong>JUDGE_IMPL=fake.</strong> The fake judge returns a canned verdict
-          and never reads a prompt, so nothing below affects a run on this
-          deployment. It is still saved, and applies as soon as the real judge is
-          switched on.
+          <strong>Grading is simulated here.</strong> The built-in grader returns a
+          canned verdict and never reads a prompt, so nothing below changes a run
+          in this environment. It is still saved, and takes effect as soon as a
+          real grading model is connected.
         </div>
       )}
       {!fake && prompt.is_default && (

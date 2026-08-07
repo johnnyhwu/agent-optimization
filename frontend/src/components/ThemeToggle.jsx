@@ -13,7 +13,7 @@ export default function ThemeToggle() {
     setTheme(next);
   }
   return (
-    <button className="icon-btn" onClick={toggle} aria-label="Toggle theme" title="Toggle light/dark">
+    <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={toggle} aria-label="Toggle theme" title="Toggle light/dark">
       {theme === "dark" ? <IconSun /> : <IconMoon />}
     </button>
   );

@@ -11,7 +11,7 @@ import {
 } from "../workspace_util.js";
 import { IconChevronRight, IconPlus, IconRefresh, IconTrash } from "./icons.jsx";
 
-// Edit the agent's config and skill files for one call (§10.2 / §10.7).
+// Edit the agent's config and skill files for one call.
 //
 // The editor is a working copy of the whole workspace: what the agent server
 // gave us (`snapshot`) stays untouched so every field can be reverted to it, and
@@ -61,7 +61,7 @@ export default function WorkspaceEditor({
       <div className="workspace-editor">
         <div className="hint error-text">
           Could not read the agent's workspace: {error}{" "}
-          <button className="linkish" onClick={onReload}>
+          <button className="ui-btn ui-btn-link" onClick={onReload}>
             <IconRefresh size={12} /> retry
           </button>
         </div>
@@ -134,7 +134,7 @@ export default function WorkspaceEditor({
         <span className="workspace-source">
           {fakeSeam ? (
             <>
-              <strong>WORKSPACE_IMPL=fake</strong> — a canned workspace, not the agent's.
+              <strong>Demo mode</strong> — a canned workspace, not a real agent's.
             </>
           ) : snapshot.version ? (
             <>
@@ -147,12 +147,12 @@ export default function WorkspaceEditor({
         </span>
         <div className="grow" />
         {dirty > 0 && (
-          <button className="linkish" onClick={resetAll}>
+          <button className="ui-btn ui-btn-link" onClick={resetAll}>
             Reset all {dirty}
           </button>
         )}
         <button
-          className="icon-btn"
+          className="ui-btn ui-btn-ghost ui-btn-icon"
           onClick={onReload}
           disabled={loading}
           title="Re-read the agent's config and skill files"
@@ -203,7 +203,7 @@ export default function WorkspaceEditor({
                       title={path}
                     >
                       <span className="path">{path.slice(group ? group.length + 1 : 0)}</span>
-                      {state && <span className="badge">{state}</span>}
+                      {state && <span className="ui-badge ui-badge-warning">{state}</span>}
                     </button>
                   </React.Fragment>
                 );
@@ -247,13 +247,13 @@ export default function WorkspaceEditor({
                 <div className="skill-body-head">
                   <span className="skill-path">{active}</span>
                   {snapshot.skills[active] !== edit.skills[active] && (
-                    <span className="badge">
+                    <span className="ui-badge ui-badge-warning">
                       {active in snapshot.skills ? "edited" : "new"}
                     </span>
                   )}
                   <div className="grow" />
                   <button
-                    className="icon-btn"
+                    className="ui-btn ui-btn-ghost ui-btn-icon"
                     onClick={() => restoreFile(active)}
                     disabled={snapshot.skills[active] === edit.skills[active]}
                     title="Restore the text as the agent server has it"
@@ -262,7 +262,7 @@ export default function WorkspaceEditor({
                     <IconRefresh size={14} />
                   </button>
                   <button
-                    className="icon-btn danger-btn"
+                    className="ui-btn ui-btn-ghost ui-btn-icon ui-btn-destructive-hover"
                     onClick={() => removeFile(active)}
                     title="Run the next question without this file"
                     aria-label="Delete this file for the next call"
@@ -334,7 +334,7 @@ function ConfigGroup({ name, path, node, ...rest }) {
         <span className="ws-node-meta">
           {leaves.length} {leaves.length === 1 ? "value" : "values"}
         </span>
-        {editedHere > 0 && <span className="badge">{editedHere} edited</span>}
+        {editedHere > 0 && <span className="ui-badge ui-badge-warning">{editedHere} edited</span>}
       </button>
       {open && (
         <div className="ws-children">
@@ -442,7 +442,7 @@ function ConfigRow({
       <div className="ws-field-control">{control}</div>
       {isChanged ? (
         <button
-          className="icon-btn"
+          className="ui-btn ui-btn-ghost ui-btn-icon"
           onClick={() => {
             onSet(path, original);
             clearDraft();

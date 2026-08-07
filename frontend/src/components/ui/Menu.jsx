@@ -121,12 +121,12 @@ export default function Menu({
 // `variant="danger"` is red at rest, not only on hover: inside a menu there is no
 // row of icons for a red one to disturb, and a destructive item that looks exactly
 // like its neighbours until the pointer is already on it is the wrong trade.
-export function MenuItem({ icon, variant, disabled, children, onClick, ...rest }) {
+export function MenuItem({ icon, variant, disabled, className = "", children, onClick, ...rest }) {
   return (
     <button
       type="button"
       role="menuitem"
-      className={`ui-menu-item${variant ? ` ui-menu-item-${variant}` : ""}`}
+      className={`ui-menu-item${variant ? ` ui-menu-item-${variant}` : ""} ${className}`.trim()}
       disabled={disabled}
       onClick={onClick}
       {...rest}
