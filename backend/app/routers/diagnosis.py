@@ -39,10 +39,32 @@ async def re_diagnose(
     # Re-diagnose against the endpoints the run itself used, not whatever the
     # environment happens to point at now.
     run = await session.get(Run, result.run_id)
+    # Read the question up front too, so every database read this request needs
+    # is done before the two slow external calls below.
+    question = await session.get(Question, result.question_pk)
     try:
         seams = build_seams(run.config if run else None, run.secrets if run else None)
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a server bug
         raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+
+    # Hand the pooled connection back before the trace poll and the diagnosis
+    # LLM call. Between them those can run for minutes (`trace_poll_max_attempts`
+    # reads, then `llm_timeout_s`, 120s by default), and holding a connection for
+    # that long is what let a handful of re-diagnoses exhaust the pool for every
+    # other request — see app/db.py. The session reacquires a connection by
+    # itself for the writes further down.
+    #
+    # `commit`, never `rollback`: rollback would expire `result`, `run` and
+    # `question`, turning each attribute read below into a lazy load that raises
+    # MissingGreenlet in async context.
+    #
+    # The cost of splitting one transaction into two: the writes at the end no
+    # longer see the snapshot the reads came from. Deleting this run in the
+    # window between them would make the write fail with a foreign-key error
+    # instead of being serialized against — acceptable, because deleting a
+    # running run is already refused (runs.py) and this is an owner-initiated
+    # action on their own data.
+    await session.commit()
 
     trace, trace_error, _fatal = await resolve_trace_spans(
         result.correlation_id, seams.trace
@@ -55,7 +77,6 @@ async def re_diagnose(
         )
         raise HTTPException(status_code=409, detail=detail)
 
-    question = await session.get(Question, result.question_pk)
     verdict = Verdict(
         verdict=result.verdict,
         score=float(result.judge_score) if result.judge_score is not None else 0.0,

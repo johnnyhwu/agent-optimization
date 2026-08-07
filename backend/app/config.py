@@ -29,6 +29,35 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://agentopt:agentopt@localhost:5432/agentopt"
     sync_database_url: str = "postgresql+psycopg://agentopt:agentopt@localhost:5432/agentopt"
 
+    # --- Database connection pool ------------------------------------------
+    # SQLAlchemy's defaults are 5 + 10 overflow. With a single uvicorn worker
+    # (docker-compose.prod.yml, deliberately) that is the entire backend's
+    # concurrency budget, and it was sized for the seeded demo rather than for a
+    # room full of people.
+    #
+    # `pool_size + max_overflow` is per worker. There is exactly one worker, and
+    # that is a constraint rather than a default — the SSE hub, the playground's
+    # attempt store, `cancellation`, and the startup run reaper all assume it
+    # (see docker-compose.prod.yml). So 20 + 10 is a single process's ceiling,
+    # comfortably under Postgres' `max_connections` (100, not overridden by the
+    # compose file) with room for migrations and a psql session. If the
+    # single-worker constraint is ever lifted, this has to be divided by the
+    # worker count, not carried over.
+    db_pool_size: int = 20
+    db_max_overflow: int = 10
+    # SQLAlchemy's default is 30s. Waiting half a minute and *then* failing reads
+    # to the user as a frozen page; failing sooner at least lets the UI say
+    # something. Once nothing holds a connection across an external call, a
+    # healthy backend never queues here at all.
+    db_pool_timeout_s: float = 10.0
+    # A proxy or firewall between here and Postgres will drop idle connections
+    # without telling either end; recycling ahead of that turns a mysterious
+    # first-request failure into nothing at all.
+    db_pool_recycle_s: int = 1800
+    # One lightweight round trip per checkout, in exchange for surviving a
+    # database restart without a burst of ConnectionDoesNotExistError.
+    db_pool_pre_ping: bool = True
+
     # --- Identity -----------------------------------------------------------
     # fake     -> trust the X-User-Subject header (local dev, the seeded demo,
     #             and the owner/viewer switch in the top bar).

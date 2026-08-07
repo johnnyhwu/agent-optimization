@@ -184,6 +184,17 @@ async def _collect_traces(
         except Exception as exc:  # noqa: BLE001 - reported per entry, not raised
             seam_errors[run.id] = f"{type(exc).__name__}: {exc}"
 
+    # Every database read this export needs is done by now; the gather below is
+    # pure outbound traffic. Handing the connection back first matters here more
+    # than anywhere else: `export_max_traces` is 1000 and the concurrency is 8,
+    # so a trace-carrying export can occupy one pooled connection for minutes
+    # while doing nothing with it (see app/db.py).
+    #
+    # `commit`, never `rollback`: the rows loaded above (`analyses`, and the runs
+    # and results the caller passed in) are read throughout `one`, and rollback
+    # would expire them into lazy loads that raise MissingGreenlet.
+    await session.commit()
+
     semaphore = asyncio.Semaphore(max(1, settings.export_trace_concurrency))
 
     async def one(run: Run, result: QuestionResult, question: Question) -> dict:

@@ -163,21 +163,45 @@ async def get_trace(
     phase = result_phase(
         result.status, result.agent_response, result.verdict, result.failure_kind
     )
-    if result.status in ("failed", "cancelled"):
-        # The agent never answered (or was stopped), so there is nothing to fetch.
-        state = "no_trace"
-    elif phase == "pending":
-        # The agent hasn't been asked yet, so no trace can exist for this
-        # correlation_id. Calling the trace store here was worse than useless: on
-        # a broken or misconfigured Langfuse it produced a fresh error identical
-        # to the previous run's, which reads exactly like a stale one being
-        # replayed. It also fired up to trace_poll_max_attempts requests inside
-        # this request, per click, for a question that hasn't started.
-        state = "not_started"
+    traceable = result.status not in ("failed", "cancelled") and phase != "pending"
+
+    # --- Every database read happens above this line ------------------------
+    # `question` used to be read at the very end, after the trace fetch; it is an
+    # unconditional read either way, so hoisting it changes nothing except that
+    # the session now has nothing left to do. The run is still read only when a
+    # trace is actually going to be fetched, exactly as before.
+    #
+    # The trace lives wherever the run that produced it was pointed, which is not
+    # necessarily where the environment points today.
+    question = await session.get(Question, result.question_pk)
+    run = await session.get(Run, result.run_id) if traceable else None
+
+    # Hand the connection back before touching Langfuse. `resolve_trace_spans`
+    # polls up to `trace_poll_max_attempts` times, and each attempt can wait
+    # `langfuse_timeout_s` (60s by default) per read strategy — holding a pooled
+    # connection for all of that meant a slow trace store took the whole backend
+    # down with it, not just the trace view (see app/db.py).
+    #
+    # `commit`, never `rollback`: rollback expires every loaded object, so the
+    # `result` and `question` attributes read below would each become a lazy load
+    # and raise MissingGreenlet. `expire_on_commit=False` is what makes this safe.
+    await session.commit()
+
+    if not traceable:
+        if result.status in ("failed", "cancelled"):
+            # The agent never answered (or was stopped), so there is nothing to
+            # fetch.
+            state = "no_trace"
+        else:
+            # The agent hasn't been asked yet, so no trace can exist for this
+            # correlation_id. Calling the trace store here was worse than
+            # useless: on a broken or misconfigured Langfuse it produced a fresh
+            # error identical to the previous run's, which reads exactly like a
+            # stale one being replayed. It also fired up to
+            # trace_poll_max_attempts requests inside this request, per click,
+            # for a question that hasn't started.
+            state = "not_started"
     else:
-        # The trace lives wherever the run that produced it was pointed, which is
-        # not necessarily where the environment points today.
-        run = await session.get(Run, result.run_id)
         try:
             seams = build_seams(
                 run.config if run else None, run.secrets if run else None
@@ -215,8 +239,6 @@ async def get_trace(
                 # so "waiting for ingestion" doesn't hide a 401 from an hour ago.
                 state = "generating"
                 trace_error = result.trace_error
-
-    question = await session.get(Question, result.question_pk)
 
     return TraceView(
         trace_state=state, trace_error=trace_error,

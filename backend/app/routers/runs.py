@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app import cancellation
-from app.auth import require_owner, require_reader, role_for
-from app.db import get_session
+from app.auth import current_subject, require_owner, require_reader, role_for
+from app.db import SessionLocal, get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
 from app.schemas import RunConfig, RunCreate, RunOut, RunPage
@@ -329,19 +329,64 @@ async def run_progress(
     eval_set_id: uuid.UUID,
     run_id: uuid.UUID,
     request: Request,
-    subject: str = Depends(require_reader),
-    session: AsyncSession = Depends(get_session),
+    # `current_subject` rather than `require_reader`: the latter is itself a
+    # `Depends(get_session)` consumer, and FastAPI caches sub-dependencies, so
+    # asking for it would keep a session alive for the whole stream no matter
+    # what this signature says. The role check it performs is done by hand
+    # below, against the same table with the same rule.
+    subject: str = Depends(current_subject),
 ):
     """SSE stream of live run progress (§6.15). Emits an initial snapshot, then
-    live per-question events until the run completes."""
-    run = await session.get(Run, run_id)
-    if run is None or run.eval_set_id != eval_set_id:
-        raise HTTPException(status_code=404, detail="run not found")
+    live per-question events until the run completes.
 
-    queue = hub.subscribe(run_id)
+    **This endpoint deliberately does not take `Depends(get_session)`.** That
+    dependency is torn down when the *response* ends, and this response ends
+    when the run does — so a session injected here is held, idle in transaction,
+    for minutes at a time. The pool is 20 + 10 per worker and there is one
+    worker (see app/db.py), so a few dozen people watching their runs was enough
+    to exhaust it and take down every other endpoint with
+    `QueuePool limit ... connection timed out`. Everything that needs the
+    database is done in the short block below, and the generator never touches
+    it. `routers/playground.py:attempt_progress` — the same stream for a
+    playground attempt — has always been written this way.
 
-    async def event_gen():
+    Ordering inside that block is load-bearing: authorize, subscribe, then read
+    the run and its counts. Subscribing before those reads is what stops an
+    event published in between — including the run's own `run_completed` — from
+    being dropped; authorizing before subscribing is what stops a rejected
+    caller from leaking a subscription; and the `try` around the reads covers
+    the 404, which now happens after the subscription exists.
+    """
+    async with SessionLocal() as session:
+        role = await role_for(session, eval_set_id, subject)
+        if role not in ("owner", "viewer"):
+            raise HTTPException(status_code=403, detail="no access to this eval set")
+
+        # Subscribe before the run is read, not after. The status this handler
+        # reads is the one the stream reports, and it decides whether to wait for
+        # a terminal event at all — so a run that finishes between the read and
+        # the subscription would leave the stream waiting for a `run_completed`
+        # that was published while nobody was listening, pinging every 15s
+        # forever. Subscribing first makes the two orders equivalent: either the
+        # read already sees the finished run and the stream ends immediately, or
+        # the terminal event is sitting in this queue.
+        queue = hub.subscribe(run_id)
+
+        # Once subscribed, every exit from here has to unsubscribe: the queue is
+        # unbounded and the orchestrator publishes into it for the rest of the
+        # run, so a 404 or a failed snapshot query would otherwise leave a queue
+        # growing behind a request that never streamed. The generator's own
+        # `finally` only covers the path where the generator actually starts.
         try:
+            run = await session.get(Run, run_id)
+            if run is None or run.eval_set_id != eval_set_id:
+                raise HTTPException(status_code=404, detail="run not found")
+            # Read off the ORM object now: the generator runs after this block
+            # has exited, and passing plain values keeps it incapable of
+            # triggering a lazy load (which in async context surfaces as
+            # MissingGreenlet).
+            run_status = run.status
+
             # Initial snapshot so a late subscriber sees current state.
             done = (
                 await session.scalar(
@@ -363,12 +408,22 @@ async def run_progress(
                            QuestionResult.verdict == "correct")
                 )
             ) or 0
+            # Ends the read transaction and hands the connection back before the
+            # stream starts. `commit`, not `rollback`: rollback expires every
+            # loaded object, and `run_status` above would be the last safe read.
+            await session.commit()
+        except BaseException:
+            hub.unsubscribe(run_id, queue)
+            raise
+
+    async def event_gen():
+        try:
             yield {"event": "snapshot",
-                   "data": json.dumps({"status": run.status, "done": done,
+                   "data": json.dumps({"status": run_status, "done": done,
                                        "total": total, "correct": correct})}
-            if run.status != "running":
+            if run_status != "running":
                 yield {"event": "run_completed",
-                       "data": json.dumps({"status": run.status})}
+                       "data": json.dumps({"status": run_status})}
                 return
 
             while True:

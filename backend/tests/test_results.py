@@ -23,14 +23,24 @@ from app.routers import results as results_router
 
 
 class RecordingTraceClient:
-    """Counts calls, so "did not touch the trace store" is directly assertable."""
+    """Counts calls, so "did not touch the trace store" is directly assertable.
 
-    def __init__(self, outcome=NOT_READY):
+    Also snapshots the session's commit count at the moment of each call, which
+    is what lets the pool-holding test below assert *ordering* — that the
+    database connection was released before the trace store was reached, not
+    merely that a commit happened somewhere in the request.
+    """
+
+    def __init__(self, outcome=NOT_READY, session_holder=None):
         self.calls: list[str] = []
+        self.commits_when_called: list[int] = []
         self.outcome = outcome
+        self._session_holder = session_holder
 
     async def fetch_trace(self, correlation_id):
         self.calls.append(correlation_id)
+        session = self._session_holder() if self._session_holder else None
+        self.commits_when_called.append(session.commits if session else 0)
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
@@ -39,6 +49,7 @@ class RecordingTraceClient:
 class StubSession:
     def __init__(self, **by_type):
         self._objects = by_type
+        self.commits = 0
 
     async def get(self, model, pk):
         obj = self._objects.get(model.__name__)
@@ -46,6 +57,9 @@ class StubSession:
 
     async def scalar(self, _statement):
         return self._objects.get("SpanAnalysis")
+
+    async def commit(self):
+        self.commits += 1
 
 
 def make_result(**kwargs) -> QuestionResult:
@@ -83,7 +97,11 @@ def make_run(result: QuestionResult) -> Run:
 
 @pytest.fixture
 def call_get_trace(monkeypatch):
-    """Invoke the endpoint with a given result row and trace client."""
+    """Invoke the endpoint with a given result row and trace client.
+
+    The session it built is left on `_call.session` so a test can assert what
+    the endpoint did with it, not just what it returned.
+    """
 
     async def _call(result: QuestionResult, trace_client, analysis: SpanAnalysis | None = None):
         monkeypatch.setattr(
@@ -99,11 +117,15 @@ def call_get_trace(monkeypatch):
             Run=make_run(result),
             SpanAnalysis=analysis,
         )
+        _call.session = session
+        if isinstance(trace_client, RecordingTraceClient):
+            trace_client._session_holder = lambda: session
         return await results_router.get_trace(
             eval_set_id=uuid.uuid4(), result_id=result.id,
             subject="alice", session=session,
         )
 
+    _call.session = None
     return _call
 
 
@@ -228,3 +250,50 @@ async def test_partial_trace_failure_reads_as_generating_with_the_reason(call_ge
 
     assert view.trace_state == "generating"
     assert "Unknown table expression" in view.trace_error
+
+
+# --- The pooled connection must not be held across the trace fetch -----------
+#
+# `Depends(get_session)` keeps a session — and therefore a pooled connection —
+# alive until the response ends. `resolve_trace_spans` polls Langfuse up to
+# `trace_poll_max_attempts` times, each attempt able to wait `langfuse_timeout_s`
+# per read strategy, so this handler could sit on one of a handful of pooled
+# connections for minutes at a time. Enough people opening a trace at once
+# exhausted the pool and every unrelated endpoint started failing with
+# "QueuePool limit of size 5 overflow 10 reached, connection timed out".
+#
+# The fix is one `await session.commit()` placed after the last database read
+# and before the trace store is touched. These two tests pin both halves of
+# that: that it happens at all, and that it happens *first*.
+
+
+async def test_connection_is_released_before_the_trace_store_is_reached(call_get_trace):
+    """The ordering guarantee: commit, then fetch — not the other way round."""
+    client = RecordingTraceClient()
+    result = make_result(status="done", agent_response="hello", verdict="correct")
+    await call_get_trace(result, client)
+
+    assert client.calls, "precondition: this question should have been fetched"
+    # Every fetch saw an already-committed session, so no connection was held
+    # while waiting on Langfuse.
+    assert all(commits >= 1 for commits in client.commits_when_called), (
+        "GET .../trace reached the trace store while still holding its database "
+        "connection; commit after the last read and before resolve_trace_spans"
+    )
+
+
+async def test_connection_is_released_even_when_no_trace_is_fetched(call_get_trace):
+    """The early-exit paths release it too.
+
+    A pending or failed question returns without touching Langfuse, so it was
+    never the one exhausting the pool — but leaving its transaction open still
+    pins a connection for the rest of the response, and the rule is easier to
+    keep when it has no exceptions.
+    """
+    for status in ("pending", "failed", "cancelled"):
+        client = RecordingTraceClient()
+        await call_get_trace(make_result(status=status), client)
+        assert client.calls == []
+        assert call_get_trace.session.commits >= 1, (
+            f"a {status} question left its transaction open"
+        )
