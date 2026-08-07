@@ -4,6 +4,7 @@ import Payload from "./SpanPayload.jsx";
 import Badge from "./ui/Badge.jsx";
 import Card, { CardHeader } from "./ui/Card.jsx";
 import { InlineEmpty } from "./ui/EmptyState.jsx";
+import { showRawName, spanLabel } from "../span_label.js";
 
 // Right column: upper = span input/output/token (≈ Langfuse span detail);
 // lower = this span's diagnosis reason+evidence, or "not flagged".
@@ -15,6 +16,7 @@ import { InlineEmpty } from "./ui/EmptyState.jsx";
 const CONFIDENCE_TONE = { high: "danger", medium: "warning", low: "neutral" };
 
 export default function SpanDetail({ span, suspect }) {
+  const derived = spanLabel(span);
   if (!span)
     return (
       <Card padded={false} className="col">
@@ -24,10 +26,16 @@ export default function SpanDetail({ span, suspect }) {
     );
   return (
     <Card padded={false} className="col">
-      <CardHeader title={`Step #${span.index} · ${span.tool_name}`} variant="data" sticky />
+      <CardHeader title={`Step #${span.index} · ${derived.label}`} variant="data" sticky />
       {/* Keyed by span: disclosures the developer opened belong to the span they
           opened them on, not to whichever span next occupies this column. */}
       <div className="kv" key={span.index}>
+        {/* The name the trace store actually holds, where it differs from what
+            the payload says the step did — a step has to stay findable in
+            Langfuse's own UI. */}
+        {showRawName(span, derived) && (
+          <div className="span-rawname">logged as <code>{span.tool_name}</code></div>
+        )}
         <div className="tokens">
           <div className="t">in: <strong>{span.token_usage.input ?? "—"}</strong></div>
           <div className="t">out: <strong>{span.token_usage.output ?? "—"}</strong></div>

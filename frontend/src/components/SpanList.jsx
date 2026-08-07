@@ -5,6 +5,23 @@ import Button from "./ui/Button.jsx";
 import Card, { CardHeader } from "./ui/Card.jsx";
 import { InlineEmpty } from "./ui/EmptyState.jsx";
 import { IconRefresh } from "./icons.jsx";
+import { showRawName, spanLabel } from "../span_label.js";
+
+// A one-word class for the step, so the column can be scanned for shape before
+// it is read for detail. Deliberately short: the interesting text is the tool
+// name beside it.
+const STEP_KIND_LABEL = {
+  tool_call: "calls",
+  tool_result: "result",
+  assistant: "answers",
+  raw: "step",
+};
+const STEP_KIND_HINT = {
+  tool_call: "This step asked for one or more tools",
+  tool_result: "A tool's result came back into this step",
+  assistant: "The model answered in words rather than calling a tool",
+  raw: "The trace does not say what this step did — showing the name it was logged under",
+};
 
 // Some trace-store failures are worth explaining rather than quoting. A raw
 // ClickHouse dump tells a developer nothing about what to do next, and — because
@@ -264,6 +281,10 @@ export default function SpanList({
 
         {trace.spans.map((s) => {
           const suspect = suspectByIndex[s.index];
+          // What the step did, read out of its own payload. The trace store's
+          // own name for it is usually the same string on every row (see
+          // span_label.js), so it is shown only when it says something.
+          const derived = spanLabel(s);
           return (
             <div
               key={s.index}
@@ -280,7 +301,10 @@ export default function SpanList({
             >
               <div className="spanrow-head">
                 <span className="idx">#{s.index}</span>
-                <strong>{s.tool_name}</strong>
+                <span className={`spankind ${derived.kind}`} title={STEP_KIND_HINT[derived.kind]}>
+                  {STEP_KIND_LABEL[derived.kind]}
+                </span>
+                <strong title={derived.detail || undefined}>{derived.label}</strong>
                 {suspect && (
                   <Badge
                     tone={suspect.confidence === "high" ? "danger" : suspect.confidence === "medium" ? "warning" : "neutral"}
@@ -294,6 +318,7 @@ export default function SpanList({
               <div className="spanrow-status">
                 {s.status}
                 {s.status_message && <span> · {s.status_message}</span>}
+                {showRawName(s, derived) && <span> · {s.tool_name}</span>}
               </div>
             </div>
           );

@@ -1,46 +1,77 @@
 import React, { useState } from "react";
 import RunConfigFields from "./RunConfigFields.jsx";
 import WorkspaceEditor from "./WorkspaceEditor.jsx";
-import { diffConfig, editedFiles, flattenLeaves } from "../workspace_util.js";
-import { IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget } from "./icons.jsx";
+import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
+import Drawer from "./ui/Drawer.jsx";
+import { diffConfig, editedFiles, flattenLeaves } from "../workspace_util.js";
+import {
+  IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget,
+} from "./icons.jsx";
 
 // What gets sent: a question, optionally an edited copy of the agent's config and
 // skill files, optionally the two ground-truth fields, and this platform's own
 // downstream services.
 //
 // Only the question is required, and that is the point of the whole tab.
-// Everything else is a panel behind one toolbar, and **only one panel is open at
-// a time**, for two reasons this layout learned the hard way:
 //
-//   * The composer sits above the three columns that are the actual working
-//     surface. Two panels open at once pushed the columns — and the send button
-//     — off the bottom of the window.
-//   * The panels used to be two rows of identical-looking buttons: the agent's
-//     workspace on one, this platform's settings on the other, one labelled
-//     "Config" and the other "Settings". Two words for two unrelated things, in
-//     the same visual register. One row of peers, each naming what it actually
-//     edits, removes the guess.
+// **The panels open in a sheet, not inline.** They used to expand in place,
+// above the three columns that are the actual working surface — which cost those
+// columns up to 400px, and for the config tree the cap was lifted entirely, so
+// one panel could push the trace and the send button off the bottom of the
+// window. Editing a skill file needs room; a trace needs more. A sheet spends
+// width, which a desktop has, rather than height, which this screen does not.
 //
-// The fourth panel no longer holds the agent's own URL and timeout: those moved
-// up to the connection bar, because they are the premise of this composer rather
-// than one more setting on it (see AgentConnectionBar). What is left here is the
-// platform's downstream services, which is what the button now says.
+// **The composer collapses once an attempt exists.** Before you send, this is
+// the screen; after you send, the trace is, and a composer holding 170px open to
+// re-state a question you just asked is 170px the trace should have. The
+// collapsed bar still carries the workspace edit counts, because those are the
+// only thing on screen saying the next question will not run against the agent's
+// own workspace.
 //
 // `connected` gates exactly the two things that need an agent — asking a
 // question, and the two panels whose content is *read from* that agent. The
 // ground truths and the LLM/Langfuse settings stay open: they are local text and
 // downstream endpoints, and there is no reason to make someone connect before
 // they are allowed to think about the question they want to ask.
+const PANELS = {
+  config: {
+    label: "Agent config",
+    title: "Agent config",
+    subtitle: "The agent's own config.json, applied to this question only. Nothing is written back.",
+    icon: <IconGear size={13} />,
+    needsAgent: true,
+  },
+  skills: {
+    label: "Skill files",
+    title: "Skill files",
+    subtitle: "The agent's SKILL.md and reference files, applied to this question only.",
+    icon: <IconFileText size={13} />,
+    needsAgent: true,
+  },
+  truth: {
+    label: "Expected answer & process",
+    title: "Expected answer & process",
+    subtitle: "Both optional. An expected answer turns grading on; an expected process turns diagnosis on.",
+    icon: <IconTarget size={13} />,
+  },
+  endpoints: {
+    label: "LLM & Langfuse",
+    title: "LLM & Langfuse",
+    subtitle: "What this platform uses to grade the answer and read the trace — not the agent's own settings.",
+    icon: <IconBeaker size={13} />,
+  },
+};
+
 export default function PlaygroundComposer({
   draft, setDraft, form, set, setNum, secrets, setSecrets, impls, onSend, busy,
   connected = true,
   workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
   onReloadWorkspace,
+  open = true, onOpenChange, lastQuestion, status,
 }) {
   // null | "config" | "skills" | "truth" | "endpoints"
   const [panel, setPanel] = useState(null);
-  const toggle = (name) => setPanel((p) => (p === name ? null : name));
 
   const field = (key) => (e) => setDraft({ ...draft, [key]: e.target.value });
   const canSend = connected && draft.question.trim().length > 0 && !busy;
@@ -55,12 +86,43 @@ export default function PlaygroundComposer({
   const fileCount =
     workspace && workspaceEdit ? editedFiles(workspace.skills, workspaceEdit.skills).length : 0;
   const truthSet = Boolean(draft.ground_truth_response || draft.ground_truth_reasoning);
+  const edits = configCount + fileCount;
+
+  if (!open) {
+    return (
+      <div className="composer composer-collapsed">
+        <Button
+          variant="primary"
+          icon={<IconSend size={14} />}
+          onClick={() => onOpenChange?.(true)}
+        >
+          Ask another question
+        </Button>
+        {lastQuestion && (
+          <span className="composer-last" title={lastQuestion}>
+            Last asked: {lastQuestion}
+          </span>
+        )}
+        {/* Survives the collapse on purpose: this is the only thing saying the
+            next question will not run against the agent's own workspace. */}
+        {edits > 0 && (
+          <Badge tone="warning" title="The next question will run against your edited workspace">
+            {edits} workspace edit{edits === 1 ? "" : "s"}
+          </Badge>
+        )}
+        {/* The open attempt's progress rides in the same row rather than on one
+            of its own: both are describing the attempt on screen below. */}
+        {status}
+      </div>
+    );
+  }
 
   return (
     <div className="composer">
       <div className="field">
-        <label>Question</label>
+        <label htmlFor="pg-question">Question</label>
         <textarea
+          id="pg-question"
           className="composer-question"
           value={draft.question}
           disabled={!connected}
@@ -81,48 +143,31 @@ export default function PlaygroundComposer({
 
       <div className="composer-toggles">
         <Toggle
-          label="Agent config"
-          title={
-            connected
-              ? "The agent's own config.json — applied to this question only"
-              : "Connect to an agent to read its config"
-          }
-          icon={<IconGear size={13} />}
+          name="config"
           active={panel === "config"}
           count={configCount}
           disabled={!connected}
-          onClick={() => toggle("config")}
+          onClick={setPanel}
+          hint={connected ? undefined : "Connect to an agent to read its config"}
         />
         <Toggle
-          label="Skill files"
-          title={
-            connected
-              ? "The agent's SKILL.md and reference files — applied to this question only"
-              : "Connect to an agent to read its skill files"
-          }
-          icon={<IconFileText size={13} />}
+          name="skills"
           active={panel === "skills"}
           count={fileCount}
           disabled={!connected}
-          onClick={() => toggle("skills")}
+          onClick={setPanel}
+          hint={connected ? undefined : "Connect to an agent to read its skill files"}
         />
-        <Toggle
-          label="Expected answer & process"
-          title="Optional — an expected answer turns judging on, an expected process turns diagnosis on"
-          icon={<IconTarget size={13} />}
-          active={panel === "truth"}
-          flag={truthSet ? "set" : null}
-          onClick={() => toggle("truth")}
-        />
-        <Toggle
-          label="LLM & Langfuse"
-          title="Which LLM and Langfuse this platform uses to judge, diagnose and read traces"
-          icon={<IconBeaker size={13} />}
-          active={panel === "endpoints"}
-          onClick={() => toggle("endpoints")}
-        />
+        <Toggle name="truth" active={panel === "truth"} flag={truthSet ? "set" : null} onClick={setPanel} />
+        <Toggle name="endpoints" active={panel === "endpoints"} onClick={setPanel} />
         <div className="grow" />
-        <Button variant="primary" icon={<IconSend size={14} />} disabled={!canSend} loading={busy} onClick={onSend}>
+        <Button
+          variant="primary"
+          icon={<IconSend size={14} />}
+          disabled={!canSend}
+          loading={busy}
+          onClick={onSend}
+        >
           {busy ? "Sending…" : "Ask the agent"}
         </Button>
       </div>
@@ -132,7 +177,7 @@ export default function PlaygroundComposer({
           Suppressed while disconnected, where the connection bar is already
           showing the same reason in the place you would act on it — one failure
           reported twice reads as two failures. */}
-      {connected && workspaceError && panel !== "config" && panel !== "skills" && (
+      {connected && workspaceError && (
         <div className="hint error-text composer-alert">
           <IconAlert size={13} /> Could not read the agent's workspace — open{" "}
           <button className="ui-btn ui-btn-link" onClick={() => setPanel("config")}>
@@ -142,10 +187,19 @@ export default function PlaygroundComposer({
         </div>
       )}
 
-      {(panel === "config" || panel === "skills") && (
-        <div className="composer-panel">
+      <Drawer
+        open={panel !== null}
+        title={panel ? PANELS[panel].title : ""}
+        subtitle={panel ? PANELS[panel].subtitle : ""}
+        onClose={() => setPanel(null)}
+        width={panel === "config" || panel === "skills" ? 720 : 560}
+      >
+        {/* All four render whenever any has been opened, so switching between
+            them — and closing the sheet — never discards what is half-typed in
+            another. WorkspaceEditor in particular holds not-yet-valid JSON. */}
+        <div hidden={panel !== "config" && panel !== "skills"}>
           <WorkspaceEditor
-            tab={panel}
+            tab={panel === "skills" ? "skills" : "config"}
             snapshot={workspace}
             edit={workspaceEdit}
             onChange={onWorkspaceEdit}
@@ -155,18 +209,16 @@ export default function PlaygroundComposer({
             fakeSeam={impls.workspace === "fake"}
           />
         </div>
-      )}
 
-      {panel === "truth" && (
-        <div className="composer-panel composer-truth">
+        <div hidden={panel !== "truth"} className="composer-truth">
           <div className="field">
             <label>Expected answer — optional</label>
             <textarea
               value={draft.ground_truth_response || ""}
-              placeholder="Leave blank to skip judging."
+              placeholder="Leave blank to skip grading."
               onChange={field("ground_truth_response")}
             />
-            <div className="hint">Given one, the judge grades the answer against it.</div>
+            <div className="hint">Given one, the answer is graded against it.</div>
           </div>
           <div className="field">
             <label>Expected reasoning process — optional</label>
@@ -187,10 +239,10 @@ export default function PlaygroundComposer({
               this screen is for. What it must not do is grade with a criterion
               the developer doesn't know they inherited, hence the provenance
               line: a question carried over from a run brings that run's frozen
-              judge prompt with it. */}
+              grading prompt with it. */}
           <details className="field">
             <summary className="ui-summary-link">
-              Judge prompt —{" "}
+              Grading prompt —{" "}
               {form?.judge_prompt_fingerprint
                 ? `carried over from the run you came from (${form.judge_prompt_fingerprint})`
                 : "the built-in default"}
@@ -206,7 +258,7 @@ export default function PlaygroundComposer({
               rows={8}
               spellCheck={false}
               value={form?.judge_system_prompt || ""}
-              placeholder="Blank — using the built-in judge system prompt."
+              placeholder="Blank — using the built-in system prompt."
               onChange={(e) => set("judge_system_prompt", e.target.value)}
             />
             <label style={{ marginTop: 8 }}>User</label>
@@ -214,15 +266,13 @@ export default function PlaygroundComposer({
               rows={6}
               spellCheck={false}
               value={form?.judge_user_prompt || ""}
-              placeholder="Blank — using the built-in judge user prompt."
+              placeholder="Blank — using the built-in user prompt."
               onChange={(e) => set("judge_user_prompt", e.target.value)}
             />
           </details>
         </div>
-      )}
 
-      {panel === "endpoints" && (
-        <div className="composer-panel">
+        <div hidden={panel !== "endpoints"}>
           <RunConfigFields
             form={form}
             set={set}
@@ -234,13 +284,11 @@ export default function PlaygroundComposer({
             showConcurrency={false}
           />
           <div className="hint">
-            What this platform uses to grade the answer and read the trace — not
-            the agent's own settings, and not the agent itself, which is the bar
-            above. These stay for the rest of this browser session, so keys are
-            typed once, and they are never sent back to the browser.
+            These stay for the rest of this browser session, so keys are typed
+            once, and they are never sent back to the browser.
           </div>
         </div>
-      )}
+      </Drawer>
     </div>
   );
 }
@@ -248,16 +296,17 @@ export default function PlaygroundComposer({
 // One panel toggle. `count` is an edit count — amber, because it means the next
 // question will differ from what the agent server itself is configured with.
 // `flag` is a plain state word.
-function Toggle({ label, title, icon, active, count, flag, disabled, onClick }) {
+function Toggle({ name, active, count, flag, disabled, onClick, hint }) {
+  const panel = PANELS[name];
   return (
     <button
       className={active ? "active" : ""}
-      title={title}
+      title={hint || panel.subtitle}
       disabled={disabled}
-      onClick={onClick}
+      onClick={() => onClick(active ? null : name)}
     >
-      {icon}
-      {label}
+      {panel.icon}
+      {panel.label}
       {count > 0 && <span className="count edited">{count}</span>}
       {flag && <span className="count">{flag}</span>}
     </button>

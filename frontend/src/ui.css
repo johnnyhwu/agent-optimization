@@ -23,6 +23,11 @@
   --ring: 0 0 0 3px var(--accent-soft);
 }
 
+/* The `hidden` attribute means hidden. Its UA rule is `display: none`, which any
+   class setting `display` outranks — so a panel kept mounted-but-hidden inside
+   the drawer showed through underneath the open one. */
+[hidden] { display: none !important; }
+
 /* ---------------------------------------------------------------------------
    Button
    --------------------------------------------------------------------------- */
@@ -494,3 +499,118 @@
 }
 .ui-chip-btn:hover { color: var(--accent); border-color: var(--accent); }
 .ok-text { display: inline-flex; align-items: center; gap: 5px; color: var(--green); }
+
+/* ---------------------------------------------------------------------------
+   Dialog: the "you are about to lose this" guard
+   --------------------------------------------------------------------------- */
+.dialog { position: relative; }
+.dialog-confirm {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-5);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  backdrop-filter: blur(3px);
+  border-radius: var(--radius-lg);
+  animation: fadeIn 0.12s ease both;
+}
+.dialog-confirm-box {
+  display: grid; grid-template-areas: "mark text" ". actions";
+  grid-template-columns: auto 1fr; gap: var(--space-3);
+  max-width: 380px; padding: var(--space-4);
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-2);
+}
+.dialog-confirm-mark {
+  grid-area: mark; display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--red-soft); color: var(--red);
+}
+.dialog-confirm-text { grid-area: text; }
+.dialog-confirm-text p { margin: 4px 0 0; font-size: var(--text-body); color: var(--muted); line-height: 1.5; }
+.dialog-confirm-actions { grid-area: actions; display: flex; justify-content: flex-end; gap: var(--space-2); }
+
+/* ---------------------------------------------------------------------------
+   Trace step kind — see span_label.js
+   --------------------------------------------------------------------------- */
+/* Fixed width so the tool names beside them line up into a column: the whole
+   point of the row is scanning down the names, which a marker whose width
+   changes per row prevents. */
+.spankind {
+  flex: none; width: 52px;
+  font-size: 10px; font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.spankind.tool_call { color: var(--accent); }
+.spankind.assistant { color: var(--green); }
+.spankind.tool_result { color: var(--muted); }
+.spankind.raw { color: var(--muted); opacity: 0.7; }
+.span-rawname { font-size: var(--text-caption); color: var(--muted); margin-bottom: var(--space-3); }
+.span-rawname code { font-family: var(--font-mono); font-size: var(--text-micro); }
+
+/* ---------------------------------------------------------------------------
+   Drawer — a right-hand sheet
+   --------------------------------------------------------------------------- */
+.ui-drawer-root { position: fixed; inset: 0; z-index: 60; }
+/* A closed sheet keeps its DOM (and its half-typed state) but must not catch a
+   click or occupy space. */
+.ui-drawer-root:not(.is-open) { pointer-events: none; visibility: hidden; }
+.ui-drawer-scrim {
+  position: absolute; inset: 0;
+  background: rgba(9, 12, 20, 0.42); backdrop-filter: blur(2px);
+  opacity: 0; transition: opacity 0.2s var(--ease);
+}
+.ui-drawer-root.is-open .ui-drawer-scrim { opacity: 1; }
+.ui-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  max-width: 92vw;
+  display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  transform: translateX(100%);
+  transition: transform 0.22s var(--ease);
+}
+.ui-drawer-root.is-open .ui-drawer { transform: none; }
+.ui-drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--border); flex: none;
+}
+.ui-drawer-head h3 { margin: 0; font-size: var(--text-title); }
+.ui-drawer-sub { margin: 3px 0 0; font-size: var(--text-caption); color: var(--muted); line-height: 1.5; }
+/* The sheet scrolls; nothing inside it needs its own height cap, which is the
+   whole reason the panels moved here. */
+.ui-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); }
+.ui-drawer-foot {
+  display: flex; justify-content: flex-end; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border); flex: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-drawer, .ui-drawer-scrim { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Playground: the attempt list collapsed to a rail
+   --------------------------------------------------------------------------- */
+.attempts-rail { display: flex; flex-direction: column; align-items: center; gap: 2px; padding-bottom: var(--space-2); }
+.attempts-rail-head {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  width: 100%; padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(6px);
+}
+.attempts-rail-count {
+  font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.attempts-rail-item {
+  display: grid; place-items: center;
+  width: 30px; height: 30px; flex: none;
+  background: none; border: none; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background 0.12s;
+}
+.attempts-rail-item:hover { background: var(--panel-2); }
+.attempts-rail-item.active { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.attempts-rail-item:focus-visible { outline: none; box-shadow: var(--ring); }
