@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
-import RunConfigFields from "./RunConfigFields.jsx";
+import RunConfigFields, { servicesSummary } from "./RunConfigFields.jsx";
 import RunPicker from "./RunPicker.jsx";
-import { IconPlay } from "./icons.jsx";
+import Button from "./ui/Button.jsx";
+import Field, { Disclosure, FormSection } from "./ui/Field.jsx";
+import Skeleton from "./ui/Skeleton.jsx";
+import { IconGear, IconPlay } from "./icons.jsx";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
 // the deployment's environment. Prefilled from GET /run-config/defaults so the
@@ -110,47 +113,58 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       width={620}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={busy || !form} onClick={submit}>
-            <IconPlay size={14} /> {busy ? "Starting…" : "Run eval"}
-          </button>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" icon={<IconPlay size={14} />} disabled={!form} loading={busy} onClick={submit}>
+            {busy ? "Starting…" : "Run eval"}
+          </Button>
         </>
       }
     >
       {error && <div className="error">{error}</div>}
-      {!form && <p className="muted">Loading defaults…</p>}
+      {!form && <Skeleton variant="text" count={4} />}
 
       {form && (
         <>
-          <div className="field">
-            <label>Use config from</label>
-            <RunPicker evalSetId={evalSetId} value={reuseFrom} onChange={applyReuse} />
-            {reuseFrom && (
-              <div className="hint">
-                {needsRetype.length === 0
-                  ? "That run's keys carry over — no need to retype them."
-                  : `Endpoint changed, so re-enter: ${needsRetype
-                      .map((k) => (k === "llm_api_key" ? "LLM API Key" : "Langfuse Secret Key"))
-                      .join(", ")}.`}
-              </div>
-            )}
-          </div>
-
-
-          <div className="field">
-            <label>Run name</label>
+          <Field label="Run name" help="Shown in the run history. Leave the timestamp if you have nothing better.">
             <input value={form.name} onChange={(e) => set("name", e.target.value)} autoFocus />
-          </div>
+          </Field>
 
-          <RunConfigFields
-            form={form}
-            set={set}
-            setNum={setNum}
-            secrets={secrets}
-            setSecrets={setSecrets}
-            impls={impls}
-            kept={kept}
-          />
+          <Field
+            label="Start from an earlier run's settings"
+            help={
+              reuseFrom
+                ? needsRetype.length === 0
+                  ? "That run's keys carry over — no need to retype them."
+                  : `Its endpoint changed, so re-enter: ${needsRetype
+                      .map((k) => (k === "llm_api_key" ? "the LLM API key" : "the trace store secret key"))
+                      .join(", ")}.`
+                : undefined
+            }
+          >
+            <RunPicker evalSetId={evalSetId} value={reuseFrom} onChange={applyReuse} />
+          </Field>
+
+          {/* Eleven connection fields used to sit open in front of anyone who
+              only wanted to press the button, most of them greyed out and
+              captioned with an environment-variable name. They are still all
+              here — a run records the exact settings it was triggered with, and
+              overriding one is a real need — but behind a summary that answers
+              "do I need to look at this?" without being opened. */}
+          <Disclosure
+            summary="Connection settings"
+            detail={servicesSummary(impls)}
+            icon={<IconGear size={14} />}
+          >
+            <RunConfigFields
+              form={form}
+              set={set}
+              setNum={setNum}
+              secrets={secrets}
+              setSecrets={setSecrets}
+              impls={impls}
+              kept={kept}
+            />
+          </Disclosure>
 
           {/* One line, not two textareas. The grading criteria belong to the
               eval set (only its owner may change them), so this dialog states
@@ -158,11 +172,10 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               putting the full text here would double the dialog's height for
               something nobody edits from this screen. */}
           {evalSet?.judge_prompt && (
-            <>
-              <h4 className="cfg-section">Judging</h4>
+            <FormSection title="Grading criteria">
               <div className="cfg-view">
                 <div className="cfg-row">
-                  <span className="cfg-label">Judge prompt</span>
+                  <span className="cfg-label">Prompt</span>
                   <span className="cfg-value">
                     {evalSet.judge_prompt.is_default ? "built-in default" : "custom"} ·{" "}
                     {evalSet.judge_prompt.fingerprint}
@@ -173,7 +186,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               <div className="hint" style={{ marginTop: 6 }}>
                 {evalSet.judge_prompt.missing_placeholders?.length > 0 ? (
                   <span className="danger-text">
-                    This set’s judge prompt is missing{" "}
+                    This set’s grading prompt is missing{" "}
                     {evalSet.judge_prompt.missing_placeholders
                       .map((p) => `{${p}}`)
                       .join(", ")}
@@ -188,7 +201,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
                   </>
                 )}
               </div>
-            </>
+            </FormSection>
           )}
         </>
       )}

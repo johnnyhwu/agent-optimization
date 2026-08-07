@@ -229,6 +229,12 @@ export const IconInfo = (p) => (
     <line x1="12" y1="7.6" x2="12" y2="7.7" />
   </S>
 );
+// Replaces the literal "✓" that marked a resolved name in the share editor.
+export const IconCheck = (p) => (
+  <S {...p}>
+    <polyline points="4 12.5 9 17.5 20 6.5" />
+  </S>
+);
 // Empty states: a shelf with nothing on it.
 export const IconInbox = (p) => (
   <S {...p}>

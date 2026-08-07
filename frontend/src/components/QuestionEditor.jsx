@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
 import { useToast } from "./Toast.jsx";
+import Button from "./ui/Button.jsx";
 
 // Owner-only question editing (§6.11 locked set: edit only). Demonstrates the
 // optimistic-lock 409 flow — version is held from load and sent on save.
@@ -48,7 +49,7 @@ export default function QuestionEditor({ evalSet, onClose }) {
       subtitle="Locked set: edit text only (no add/delete). question_id stays fixed; each save bumps version."
       onClose={onClose}
       width={760}
-      footer={<button onClick={onClose}>Close</button>}
+      footer={<Button onClick={onClose}>Close</Button>}
     >
       {error && <div className="error">{error}</div>}
       <div style={{ display: "flex", gap: 14 }}>
@@ -79,7 +80,7 @@ export default function QuestionEditor({ evalSet, onClose }) {
                 <label>ground truth reasoning</label>
                 <textarea style={{ minHeight: 60 }} value={draft.ground_truth_reasoning} onChange={(e) => setDraft({ ...draft, ground_truth_reasoning: e.target.value })} />
               </div>
-              <button className="primary" onClick={save}>Save (v{active.version})</button>
+              <Button variant="primary" onClick={save}>Save (v{active.version})</Button>
             </>
           )}
         </div>

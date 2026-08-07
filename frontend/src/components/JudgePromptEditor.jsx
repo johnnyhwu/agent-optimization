@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import Button from "./ui/Button.jsx";
 
 // The eval set's grading criteria — the "Judging" tab of the config dialog.
 //
@@ -205,9 +206,9 @@ export default function JudgePromptEditor({
         </div>
       </div>
 
-      <button onClick={verify} disabled={verifying || fake || !questionPk}>
+      <Button size="sm" onClick={verify} loading={verifying} disabled={fake || !questionPk}>
         {verifying ? "Verifying…" : "Verify prompt"}
-      </button>
+      </Button>
       {verifiedAt && !result && (
         <span className="muted" style={{ marginLeft: 10, fontSize: 12 }}>
           Verified {verifiedAt.toLocaleString()}

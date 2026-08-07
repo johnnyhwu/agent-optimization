@@ -5,6 +5,7 @@ import ShareEditor from "./ShareEditor.jsx";
 import JudgePromptEditor from "./JudgePromptEditor.jsx";
 import { useToast } from "./Toast.jsx";
 import { IconPlus, IconX } from "./icons.jsx";
+import Button, { IconButton } from "./ui/Button.jsx";
 
 // Owner-only set config (§6.10/§6.16): name, description, metadata keys, the
 // share list, and how this set's answers are graded. Name/desc/metadata/judge
@@ -97,18 +98,18 @@ export default function ConfigDialog({ evalSet, subject, initialTab = "general",
       width={680}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={busy} onClick={save}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={busy} onClick={save}>
             {busy ? "Saving…" : "Save changes"}
-          </button>
+          </Button>
         </>
       }
     >
       {error && <div className="error">{error}</div>}
 
-      <div className="segmented" style={{ marginBottom: 14 }}>
+      <div className="ui-segmented" style={{ marginBottom: 14 }} role="tablist">
         {TABS.map(([id, label]) => (
-          <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+          <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "is-active" : ""} onClick={() => setTab(id)}>
             {label}
             {/* Unreviewed grading criteria are the one thing here worth a nudge:
                 a brand-new set grades with a prompt nobody has looked at. */}
@@ -134,10 +135,10 @@ export default function ConfigDialog({ evalSet, subject, initialTab = "general",
               <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
                 <input placeholder="key" value={r.k} onChange={(e) => setRow(i, "k", e.target.value)} />
                 <input placeholder="value" value={r.v} onChange={(e) => setRow(i, "v", e.target.value)} />
-                <button className="icon-btn" onClick={() => removeRow(i)} aria-label="Remove"><IconX size={15} /></button>
+                <IconButton label="Remove" icon={<IconX size={15} />} onClick={() => removeRow(i)} />
               </div>
             ))}
-            <button onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}><IconPlus size={14} /> add key</button>
+            <Button size="sm" icon={<IconPlus size={14} />} onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}>Add label</Button>
           </div>
         </>
       )}

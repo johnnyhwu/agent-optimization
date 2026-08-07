@@ -217,6 +217,15 @@
 .ui-field-control > select { width: 100%; }
 .ui-field-control > input:not([type="checkbox"]):not([type="radio"]),
 .ui-field-control > select { height: var(--ctl-h); }
+/* A disabled control has to look disabled. The old rule was scoped to `.field
+   input`, so the moment the markup changed, greyed-out fields started reading as
+   editable ones — which on this form is the difference between "this setting is
+   not used here" and "you forgot to fill this in". */
+.ui-field-control input:disabled,
+.ui-field-control textarea:disabled,
+.ui-field-control select:disabled {
+  opacity: 0.5; cursor: not-allowed; background: var(--panel-3);
+}
 .ui-field-help { margin: 5px 0 0; font-size: var(--text-caption); color: var(--muted); line-height: 1.5; }
 .ui-field-error {
   margin: 5px 0 0; font-size: var(--text-caption); color: var(--red); font-weight: var(--fw-medium);
@@ -457,3 +466,31 @@
   .ui-page-head-actions { justify-content: flex-end; }
   .ui-search { flex-basis: 100%; }
 }
+
+/* ---------------------------------------------------------------------------
+   Confirmation
+   --------------------------------------------------------------------------- */
+.confirm-body { display: flex; gap: var(--space-3); align-items: flex-start; }
+.confirm-mark {
+  display: grid; place-items: center; flex: none;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--red-soft); color: var(--red);
+}
+.confirm-message { margin: 0 0 6px; line-height: 1.55; }
+.confirm-detail { margin: 0; font-size: var(--text-body); color: var(--muted); line-height: 1.55; }
+
+/* A <summary> that should read as a link rather than as a heading. */
+.ui-summary-link {
+  cursor: pointer; color: var(--accent); font-size: var(--text-body);
+  font-weight: var(--fw-medium); user-select: none;
+}
+.ui-summary-link:hover { text-decoration: underline; }
+/* A suggestion chip: a value you click to fill a field with. */
+.ui-chip-btn {
+  height: var(--ctl-h-sm); padding: 0 10px;
+  font: inherit; font-size: var(--text-caption); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+  cursor: pointer; transition: color 0.14s, border-color 0.14s;
+}
+.ui-chip-btn:hover { color: var(--accent); border-color: var(--accent); }
+.ok-text { display: inline-flex; align-items: center; gap: 5px; color: var(--green); }
