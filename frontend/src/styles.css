@@ -1046,8 +1046,17 @@ select { cursor: pointer; }
 
 .attempt-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 
-.attempt-actions { display: flex; flex-direction: column; gap: 4px; flex: none; }
-.attempt-actions button { padding: 4px 6px; font-size: 11px; }
+.attempt-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.attempt-actions button {
+  display: grid; place-items: center;
+  width: 26px; height: 26px; padding: 0;
+  color: var(--muted); background: none; border: none; border-radius: var(--radius-sm);
+  transition: background 0.12s, color 0.12s;
+}
+.attempt-actions button:hover:not(:disabled) { background: var(--panel-3); color: var(--text); }
+.attempt-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
+.attempt-actions button:focus-visible { outline: none; box-shadow: var(--ring); }
+.attempt-actions button:last-child:hover:not(:disabled) { background: var(--red-soft); color: var(--red); }
 .attempt-footnote {
   padding: 12px 14px; font-size: 11px; color: var(--muted); line-height: 1.5;
   border-top: 1px solid var(--border);
@@ -1057,9 +1066,23 @@ select { cursor: pointer; }
    work around — the columns simply take what is left, and the page scrolls once
    they hit this floor. */
 .playground-three { min-height: 420px; }
+/* Collapsed, the attempt list is a rail and the trace takes what it gave up —
+   which is the point of collapsing it. */
+.playground-three.attempts-collapsed { grid-template-columns: 52px 1fr 1fr; }
+
+/* The composer once a question has been asked: one row, not a panel. */
+.composer-collapsed {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+.composer-last {
+  min-width: 0; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-body); color: var(--muted);
+}
 
 /* ---- shortlist: playground questions on their way into an eval set ---- */
-.attempt-actions button.active { border-color: var(--accent); color: var(--accent); }
+.attempt-actions button.active { color: var(--accent); }
 
 /* Same two-pane shape as the skill editor: a list to pick from, a form to work
    in. The list carries the warnings, so what needs attention is visible without

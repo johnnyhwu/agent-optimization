@@ -24,6 +24,24 @@ import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
 
+// Whether the attempt list is collapsed to a rail. Persisted, and separate from
+// the side rail's own setting: reading a trace and picking between attempts are
+// different tasks, and someone doing the first wants the width back.
+const ATTEMPTS_KEY = "playground-attempts-collapsed";
+
+function useAttemptsCollapsed() {
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(ATTEMPTS_KEY) === "1"
+  );
+  return [
+    collapsed,
+    (v) => {
+      localStorage.setItem(ATTEMPTS_KEY, v ? "1" : "0");
+      setCollapsed(v);
+    },
+  ];
+}
+
 // The playground: one question at a time, against an editable copy of the
 // agent's own config and skill files.
 //
@@ -81,6 +99,15 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // only on the stream.
   const [live, setLive] = useState(null);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
+  // Open before there is anything to read, collapsed once there is. The composer
+  // is the screen until a question has been asked; after that the trace is, and
+  // the composer is 170px the trace should have. Arriving with attempts already
+  // in the session (they outlive a reload of this page) starts collapsed for the
+  // same reason.
+  const [composerOpen, setComposerOpen] = useState(true);
+  // What the collapsed bar restates, so it says which question the trace below
+  // belongs to rather than just offering a button.
+  const [lastQuestion, setLastQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [reDiagnosing, setReDiagnosing] = useState(false);
   const [error, setError] = useState(null);
@@ -117,6 +144,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // exactly when someone is iterating hardest.
   const [shortlistItems, setShortlistItems] = useState([]);
   const [shortlistOpen, setShortlistOpen] = useState(false);
+  const [attemptsCollapsed, setAttemptsCollapsed] = useAttemptsCollapsed();
 
   const active = attempts.find((a) => a.id === activeId) || null;
 
@@ -149,7 +177,19 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   }, []);
 
   useEffect(() => {
-    reload();
+    // Arriving with attempts already in the session — they outlive a reload of
+    // this page — means there is a trace to read, so start on it rather than on
+    // the composer. Only on the first load: after that the composer's state is
+    // whatever the developer last did with it.
+    let first = true;
+    api
+      .listAttempts()
+      .then((items) => {
+        setAttempts(items);
+        if (first && items.length) setComposerOpen(false);
+        first = false;
+      })
+      .catch((e) => setError(e.message));
     // A different identity has a different set of attempts.
   }, [subject]);
 
@@ -313,6 +353,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       ground_truth_response: seed.ground_truth_response || "",
       ground_truth_reasoning: seed.ground_truth_reasoning || "",
     });
+    // Same reason as clone: a question handed over from a run arrived to be
+    // looked at and sent, not to be hidden behind a collapsed bar.
+    setComposerOpen(true);
     if (seed.config) {
       setForm((f) => (f ? { ...f, ...stripBlank(otherAgent(seed.config)) } : f));
       noteAgentMismatch(seed.config, "The run this question came from");
@@ -459,6 +502,15 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     };
   }, [activeId, detailKey]);
 
+  // Arriving with attempts but nothing selected shows two empty columns beside a
+  // list — the same wasted first move the eval detail view had. Open the newest,
+  // which is the one the collapsed composer is talking about. Only while nothing
+  // is selected, so a live attempt repainting the list cannot steal the view.
+  useEffect(() => {
+    if (activeId || !attempts.length) return;
+    setActiveId(attempts[0].id);
+  }, [attempts, activeId]);
+
   function pick(a) {
     if (a.id === activeId) return;
     setActiveId(a.id);
@@ -505,6 +557,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       setActiveId(created.id);
       setActiveSpan(null);
       jumpedFor.current = null;
+      // The question has been asked; the answer is what the screen is for now.
+      setLastQuestion(draft.question.trim());
+      setComposerOpen(false);
     } catch (e) {
       setError(e.message);
       toast.error(e.message);
@@ -525,6 +580,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         ground_truth_response: full.ground_truth_response || "",
         ground_truth_reasoning: full.ground_truth_reasoning || "",
       });
+      // Clone exists to be edited before sending, so a collapsed composer would
+      // hide the thing just copied in.
+      setComposerOpen(true);
       if (full.workspace && workspace) {
         // Rebuilt against the current snapshot, each half the way the agent
         // server reads it: the config overlay is sparse and merges onto what the
@@ -678,6 +736,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           workspaceLoading={wsLoading}
           workspaceError={wsError}
           onReloadWorkspace={reloadWorkspace}
+          open={composerOpen}
+          onOpenChange={setComposerOpen}
+          lastQuestion={lastQuestion || active?.question || ""}
         />
       )}
 
@@ -694,10 +755,12 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         </div>
       )}
 
-      <div className="three playground-three">
+      <div className={`three playground-three${attemptsCollapsed ? " attempts-collapsed" : ""}`}>
         <AttemptList
           attempts={attempts}
           activeId={activeId}
+          collapsed={attemptsCollapsed}
+          onToggleCollapsed={setAttemptsCollapsed}
           onPick={pick}
           onClone={clone}
           onCancel={cancel}

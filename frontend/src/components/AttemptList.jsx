@@ -1,5 +1,6 @@
 import React from "react";
-import { IconCopy, IconPlus, IconStop, IconTrash } from "./icons.jsx";
+import { IconButton } from "./ui/Button.jsx";
+import { IconCopy, IconPanelLeft, IconPlus, IconStop, IconTrash } from "./icons.jsx";
 import { overrideCounts } from "../workspace_util.js";
 
 // Left column of the playground: this session's attempts, newest first.
@@ -50,13 +51,51 @@ function note(a) {
 
 export default function AttemptList({
   attempts, activeId, onPick, onClone, onCancel, onDelete,
-  shortlistedIds, onShortlist,
+  shortlistedIds, onShortlist, collapsed = false, onToggleCollapsed,
 }) {
+  // Collapsed, the list keeps only what it needs to be navigable: a dot per
+  // attempt in the order they were made, and which one is open. Picking between
+  // attempts and reading a trace are different tasks, and the second wants the
+  // 320px back.
+  if (collapsed) {
+    return (
+      <div className="col attempts-rail">
+        <div className="attempts-rail-head">
+          <IconButton
+            label="Expand the attempt list"
+            icon={<IconPanelLeft size={15} />}
+            onClick={() => onToggleCollapsed?.(false)}
+          />
+          <span className="attempts-rail-count">{attempts.length}</span>
+        </div>
+        {attempts.map((a, i) => (
+          <button
+            key={a.id}
+            className={`attempts-rail-item${activeId === a.id ? " active" : ""}`}
+            title={a.question}
+            aria-label={`Attempt ${attempts.length - i}: ${a.question}`}
+            aria-current={activeId === a.id ? "true" : undefined}
+            onClick={() => onPick(a)}
+          >
+            <span className={`dot ${dotClass(a)}`} />
+          </button>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="col">
       <div className="ui-card-head is-sticky">
         <h4>Attempts</h4>
-        <span className="hint">{attempts.length}</span>
+        <div className="ui-card-head-actions">
+          <span className="hint">{attempts.length}</span>
+          <IconButton
+            label="Collapse the attempt list"
+            icon={<IconPanelLeft size={15} />}
+            onClick={() => onToggleCollapsed?.(true)}
+          />
+        </div>
       </div>
 
       {attempts.map((a) => (
@@ -104,6 +143,7 @@ export default function AttemptList({
             {/* Only a finished attempt has an answer to promote, and the
                 shortlist copies that answer in as the starting ground truth. */}
             <button
+              aria-label="Shortlist this attempt"
               className={shortlistedIds?.has(a.id) ? "active" : ""}
               disabled={a.status === "running" || shortlistedIds?.has(a.id)}
               title={
@@ -119,6 +159,7 @@ export default function AttemptList({
               <IconPlus size={13} />
             </button>
             <button
+              aria-label="Clone this attempt into the composer"
               title="Copy this attempt's question, workspace edits and settings into the composer"
               onClick={(e) => {
                 e.stopPropagation();
@@ -130,6 +171,7 @@ export default function AttemptList({
             {a.status === "running" ? (
               <button
                 className="ui-btn ui-btn-danger ui-btn-sm"
+                aria-label="Stop this attempt"
                 title="Stop this attempt"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -140,6 +182,7 @@ export default function AttemptList({
               </button>
             ) : (
               <button
+                aria-label="Forget this attempt"
                 title="Forget this attempt"
                 onClick={(e) => {
                   e.stopPropagation();
