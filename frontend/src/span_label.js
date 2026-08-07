@@ -137,6 +137,14 @@ export const isGenericName = (name) => {
  * what it was for. A generation that both received a tool result and then asked
  * for two more tools is a tool call — the result it consumed is the previous
  * step's story.
+ *
+ * That rule applies to the *whole* output, not just to tool calls. The final
+ * step of any agent loop is fed every tool result the loop collected, so
+ * checking the input for one before checking the output for an answer labelled
+ * the step that wrote the agent's actual reply "Tool result" — which is the one
+ * step in the trace a reader is most likely to be looking for. `tool_result` is
+ * therefore what is left when the output produced nothing readable: the step
+ * carried a result back in and nothing else happened.
  */
 export function spanLabel(span) {
   const raw = span?.tool_name || "";
@@ -151,14 +159,14 @@ export function spanLabel(span) {
     };
   }
 
-  if (hasToolResult(span?.input)) {
-    return { kind: "tool_result", label: "Tool result", detail: "" };
-  }
-
   const out = messagesOf(span?.output);
   const assistant = out.find((m) => String(m.role || "").toLowerCase() === "assistant") || out[0];
   if (assistant && textOf(assistant)) {
     return { kind: "assistant", label: "Assistant response", detail: "" };
+  }
+
+  if (hasToolResult(span?.input)) {
+    return { kind: "tool_result", label: "Tool result", detail: "" };
   }
 
   // Nothing recognised. The raw name is all there is — which is the situation

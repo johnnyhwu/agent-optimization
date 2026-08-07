@@ -69,7 +69,7 @@ test("Anthropic: tool_use inside the content array", () => {
   assert.equal(got.label, "query_invoices");
 });
 
-test("a tool result coming back in is labelled as one", () => {
+test("an answer after a tool result is the answer, not the result", () => {
   const span = {
     tool_name: GENERIC,
     input: {
@@ -80,16 +80,32 @@ test("a tool result coming back in is labelled as one", () => {
     },
     output: { role: "assistant", content: "The file says…" },
   };
-  // The output has no calls and the input carries a result, so this step is
-  // where a tool's answer came back.
-  assert.equal(spanLabel(span).kind, "tool_result");
+  // The last step of every agent loop is fed the results the loop collected, so
+  // an input carrying one says nothing about this step. The output does: it
+  // wrote the reply, which is the step a reader came to the trace to find.
+  assert.equal(spanLabel(span).kind, "assistant");
 });
 
-test("Anthropic tool_result parts count as a tool result", () => {
+test("Anthropic: an answer after a tool_result part is still the answer", () => {
   const span = {
     tool_name: GENERIC,
     input: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "42" }] }],
     output: { role: "assistant", content: "The answer is 42." },
+  };
+  assert.equal(spanLabel(span).kind, "assistant");
+});
+
+test("a tool result with nothing produced after it is labelled as one", () => {
+  const span = {
+    tool_name: GENERIC,
+    input: {
+      messages: [
+        { role: "assistant", content: null, tool_calls: [{ function: { name: "read_file" } }] },
+        { role: "tool", tool_call_id: "c1", content: "file contents" },
+      ],
+    },
+    // No calls, no text: the result coming back in is the whole story.
+    output: { role: "assistant", content: "" },
   };
   assert.equal(spanLabel(span).kind, "tool_result");
 });

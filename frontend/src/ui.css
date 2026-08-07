@@ -549,45 +549,65 @@
 .span-rawname code { font-family: var(--font-mono); font-size: var(--text-micro); }
 
 /* ---------------------------------------------------------------------------
-   Drawer — a right-hand sheet
+   PanelDialog — a large centered dialog
    --------------------------------------------------------------------------- */
-.ui-drawer-root { position: fixed; inset: 0; z-index: 60; }
-/* A closed sheet keeps its DOM (and its half-typed state) but must not catch a
+.ui-panel-root {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-5);
+}
+/* A closed dialog keeps its DOM (and its half-typed state) but must not catch a
    click or occupy space. */
-.ui-drawer-root:not(.is-open) { pointer-events: none; visibility: hidden; }
-.ui-drawer-scrim {
+.ui-panel-root:not(.is-open) { pointer-events: none; visibility: hidden; }
+.ui-panel-scrim {
   position: absolute; inset: 0;
   background: rgba(9, 12, 20, 0.42); backdrop-filter: blur(2px);
   opacity: 0; transition: opacity 0.2s var(--ease);
 }
-.ui-drawer-root.is-open .ui-drawer-scrim { opacity: 1; }
-.ui-drawer {
-  position: absolute; top: 0; right: 0; bottom: 0;
-  max-width: 92vw;
+.ui-panel-root.is-open .ui-panel-scrim { opacity: 1; }
+/* Width comes from the caller — the two-pane panels need 1080, the form panels
+   880 — and is already clamped to 92vw there. Height is fixed rather than fitted
+   so switching panels does not resize the dialog under the pointer. */
+.ui-panel {
+  position: relative;
+  height: 80vh; max-height: 100%;
   display: flex; flex-direction: column;
-  background: var(--panel); border-left: 1px solid var(--border-strong);
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
-  transform: translateX(100%);
-  transition: transform 0.22s var(--ease);
+  opacity: 0; transform: translateY(8px) scale(0.985);
+  transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
 }
-.ui-drawer-root.is-open .ui-drawer { transform: none; }
-.ui-drawer-head {
+.ui-panel-root.is-open .ui-panel { opacity: 1; transform: none; }
+.ui-panel-head {
   display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border); flex: none;
 }
-.ui-drawer-head h3 { margin: 0; font-size: var(--text-title); }
-.ui-drawer-sub { margin: 3px 0 0; font-size: var(--text-caption); color: var(--muted); line-height: 1.5; }
-/* The sheet scrolls; nothing inside it needs its own height cap, which is the
-   whole reason the panels moved here. */
-.ui-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); }
-.ui-drawer-foot {
-  display: flex; justify-content: flex-end; gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+.ui-panel-head h3 { margin: 0; font-size: var(--text-title); }
+.ui-panel-sub {
+  margin: 3px 0 0; font-size: var(--text-caption); color: var(--muted);
+  line-height: 1.5; max-width: 80ch;
+}
+/* A column, not a scroll box: the panels inside stretch to the dialog's height
+   rather than stacking at the top of it, which is what every `max-height` in the
+   playground's CSS used to prevent. Each panel wrapper takes `flex: 1` and
+   decides for itself what scrolls. */
+.ui-panel-body {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: var(--space-4) var(--space-5);
+}
+.ui-panel-body > [hidden] { display: none; }
+.ui-panel-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
   border-top: 1px solid var(--border); flex: none;
 }
+.ui-panel-foot .grow { flex: 1; }
+.ui-panel-foot-hint { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .ui-drawer, .ui-drawer-scrim { transition: none; }
+  .ui-panel, .ui-panel-scrim { transition: none; }
 }
 
 /* ---------------------------------------------------------------------------

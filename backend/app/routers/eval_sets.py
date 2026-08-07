@@ -74,6 +74,21 @@ async def _build_cards(
     ).all()
     run_counts = {es_id: n for es_id, n in count_rows}
 
+    # 1b. Question count per set. Grouped for the whole page like everything
+    #     else here — asking each card's own questions endpoint would be the
+    #     N+1 this function exists to have removed, and would pull every
+    #     question's full text to render one number. The unique constraint on
+    #     (eval_set_id, question_id) leads with eval_set_id, so this needs no
+    #     index of its own.
+    question_rows = (
+        await session.execute(
+            select(Question.eval_set_id, func.count())
+            .where(Question.eval_set_id.in_(set_ids))
+            .group_by(Question.eval_set_id)
+        )
+    ).all()
+    question_counts = {es_id: n for es_id, n in question_rows}
+
     # 2. The most recent TREND_RUNS runs per set, newest first. The window
     #    function keeps this one query no matter how much history exists.
     ranked = (
@@ -162,6 +177,7 @@ async def _build_cards(
                 id=es.id, name=es.name, description=es.description, metadata=es.meta,
                 version=es.version, created_at=es.created_at, updated_at=es.updated_at,
                 run_count=run_counts.get(es.id, 0),
+                question_count=question_counts.get(es.id, 0),
                 latest_pass_rate=latest, trend=trend,
                 regressed=reg["regressed"], improved=reg["improved"],
                 my_role=next((r.role for r in roles if r.subject == subject), None),

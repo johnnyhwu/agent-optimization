@@ -343,7 +343,10 @@ select { cursor: pointer; }
    alone, because the middle band is the only one anyone scans across cards and
    it has to find the same line every time. */
 .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
-.set-card { display: flex; flex-direction: column; animation: fadeInUp 0.45s var(--ease) both; }
+.set-card {
+  display: flex; flex-direction: column; animation: fadeInUp 0.45s var(--ease) both;
+  container: set-card / inline-size;
+}
 .set-card-top {
   display: flex; align-items: flex-start; gap: var(--space-2);
   padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
@@ -368,9 +371,16 @@ select { cursor: pointer; }
   pointer-events: none;
 }
 .set-card-stats {
-  display: flex; align-items: flex-end; gap: var(--space-6);
+  display: flex; align-items: flex-end; gap: var(--space-5);
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
+}
+/* Three numbers plus a 120px sparkline do not fit the 320px grid minimum. The
+   sparkline is the one that degrades gracefully — it repeats the trend the pass
+   rate already leads with, while a question count that wrapped onto its own line
+   would break the band the whole grid is scanned across. */
+@container set-card (max-width: 350px) {
+  .set-card-spark { display: none; }
 }
 /* The pass rate is what the card is for, so it gets the display face and tabular
    figures — rates read as a column across the grid when they line up. */
@@ -651,8 +661,6 @@ select { cursor: pointer; }
   color: var(--muted); display: flex; align-items: baseline; gap: 8px;
 }
 .cfg-section .hint { text-transform: none; letter-spacing: 0; font-weight: 500; }
-/* The first section in a panel already has the panel's divider above it. */
-.composer-panel > .cfg-section:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 .field input:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Read-only view of the config a past run used — a definition list, never
@@ -844,11 +852,26 @@ select { cursor: pointer; }
 /* The composer: question, skill override, and the two optional ground truths. */
 .composer {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 14px 16px 12px; margin-bottom: 14px; box-shadow: var(--shadow-1);
+  padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3);
+  box-shadow: var(--shadow-1);
 }
 .composer .field { margin-bottom: 10px; }
-.composer textarea.composer-question { min-height: 72px; font-family: var(--font); font-size: 14px; }
-.composer-toggles { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Height is set from JS to fit the text, so no min-height fights it. The cap and
+   the overflow live here because a pasted essay must scroll rather than take the
+   trace's half of the window. */
+.composer textarea.composer-question {
+  display: block; width: 100%;
+  max-height: 200px; overflow-y: auto; resize: none;
+  margin-bottom: var(--space-3);
+  font-family: var(--font); font-size: 14px;
+}
+.composer-toggles {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+}
+/* Progress and the workspace warning sit between the toggles and the send
+   button, on the same baseline: everything in this row is describing the
+   question that is about to be, or has just been, asked. */
+.composer-toggles .phasesteps { flex: none; }
 .composer-toggles .grow { flex: 1; }
 .composer-toggles > button {
   height: var(--ctl-h); padding: 0 12px; gap: 7px;
@@ -874,21 +897,63 @@ select { cursor: pointer; }
 .composer-toggles .count.edited { background: var(--amber-soft); color: var(--amber); }
 .composer-alert { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-2); }
 
-/* One panel at a time, opening below the single toolbar — and bounded, so no
-   panel can decide how much of the window is left for the three columns below.
-   The endpoints form is the one that used to run past the fold on its own. */
-.composer-panel {
-  margin-top: var(--space-3); padding-top: var(--space-3);
-  border-top: 1px dashed var(--border);
-  max-height: 400px; overflow-y: auto;
-  animation: fadeIn 0.15s var(--ease);
+/* ---- inside a composer panel dialog ----
+
+   Every rule here exists to undo a height cap. The panels were written when they
+   expanded inline above the three columns, where a `max-height` was the only
+   thing stopping one of them deciding how much of the window was left for the
+   trace. In a dialog of its own that constraint is gone, and what is left is the
+   opposite problem: content bunched into the top of a box it does not fill.
+   So each panel stretches, and whichever part of it should scroll says so. */
+.panel-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* Expected answer & process. Two prose boxes side by side, then the grading
+   prompt across the full width beneath them — it is a third thing, not a third
+   column, and as a grid cell it was reading as a cramped footnote. */
+.composer-truth {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: minmax(180px, 1fr) auto;
+  gap: var(--space-4);
+  overflow-y: auto;
 }
-/* The config tree scrolls inside itself; a second scrollbar around it would
-   trap the pointer between two of them. */
-.composer-panel:has(.cfg-tree) { overflow: visible; max-height: none; }
-.composer-truth { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .composer-truth { grid-template-columns: 1fr; } }
-.composer-truth textarea { min-height: 80px; }
+.composer-truth > .field { display: flex; flex-direction: column; margin-bottom: 0; }
+.composer-truth > .field textarea { flex: 1; min-height: 160px; resize: none; }
+/* Two lines reserved whether the hint needs one or two, so the two boxes end on
+   the same line. Unequal hints made the textareas different heights, and two
+   fields meant to be filled in as a pair should not look like one is bigger. */
+.composer-truth > .field .hint { margin-top: var(--space-2); min-height: 2.8em; }
+.composer-judge { grid-column: 1 / -1; margin-bottom: 0; }
+.composer-judge-note { margin: var(--space-2) 0 var(--space-3); }
+.composer-judge-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.composer-judge-pair .field { margin-bottom: 0; }
+.composer-judge-pair textarea { min-height: 200px; }
+@media (max-width: 900px) {
+  .composer-truth { grid-template-columns: 1fr; grid-template-rows: none; }
+  .composer-judge-pair { grid-template-columns: 1fr; }
+}
+
+/* A box for writing in, not for typing config into: the global `.field textarea`
+   is mono at 12px, which is right for JSON and wrong for a paragraph. Scoped by
+   a class rather than by piling up ancestor selectors — one more `.composer …`
+   prefix here and the next person adding a rule loses to it silently. */
+.field-prose textarea { font-family: var(--font); font-size: var(--text-body); line-height: 1.6; }
+
+/* LLM & Langfuse. At the dialog's width a single column of inputs down the left
+   edge leaves two thirds of the row empty and makes the form look longer than it
+   is. Scoped to this panel: `.ui-field` elsewhere is used at every width. */
+.composer-endpoints { overflow-y: auto; }
+.composer-endpoints .ui-form-section {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--space-4) var(--space-5);
+}
+.composer-endpoints .ui-form-section-head { grid-column: 1 / -1; }
+/* The grid owns the spacing now; the field's own bottom margin would make every
+   other row taller than the one beside it. */
+.composer-endpoints .ui-field { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .composer-endpoints .ui-form-section { grid-template-columns: 1fr; }
+}
 
 /* The workspace editor: the agent's config and skill files, edited for one call.
 
@@ -896,22 +961,29 @@ select { cursor: pointer; }
    boxes where the only thing separating `enabled` under tools.sql_query from
    `enabled` under tools.vector_search was grey text beside the name; nested and
    collapsed, a developer opens the one branch they came for. */
-.workspace-editor { display: flex; flex-direction: column; gap: var(--space-3); }
+.workspace-editor {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
 .workspace-bar {
-  display: flex; align-items: center; gap: var(--space-2);
+  display: flex; align-items: center; gap: var(--space-2); flex: none;
   font-size: var(--text-caption); color: var(--muted);
 }
 .workspace-bar .grow { flex: 1; }
 .workspace-bar code { font-size: var(--text-micro); }
 .workspace-source { max-width: 78ch; }
-.workspace-foot { margin: 0; }
+.workspace-foot { margin: 0; flex: none; }
 
 /* ---- config tree ---- */
-/* A bounded, obviously-scrollable pane: the composer sits above the three
-   columns, so config length must not decide how much of the page is left. */
+/* Grows with the tree and stops at the dialog's floor, where it starts
+   scrolling. Not `flex: 1`: a config whose groups are all collapsed is four
+   lines, and stretching its box to fill 80vh would draw a tall empty panel
+   around them — the same dead space the 320px cap used to leave, just further
+   down. The box should be the size of what is in it. */
 .ws-tree {
+  flex: 0 1 auto; min-height: 0;
   display: flex; flex-direction: column; gap: 2px;
-  max-height: 320px; overflow-y: auto;
+  overflow-y: auto;
   padding: var(--space-2); border: 1px solid var(--border);
   border-radius: var(--radius-sm); background: var(--panel-2);
 }
@@ -940,14 +1012,14 @@ select { cursor: pointer; }
    the full width for `log_level: info` makes the eye travel the whole page for
    one word, and the column of controls stops reading as a column. */
 .ws-field {
-  display: grid; grid-template-columns: minmax(110px, 190px) minmax(0, 380px) 30px;
+  display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 520px) 30px;
   align-items: center; gap: var(--space-3);
   padding: 3px var(--space-2); border-radius: var(--radius-sm);
 }
 .ws-field:hover { background: var(--panel-3); }
 .ws-field.changed .ws-field-key { color: var(--amber); }
 .ws-field.wide {
-  grid-template-columns: minmax(110px, 190px) minmax(0, 560px) 30px; align-items: start;
+  grid-template-columns: minmax(140px, 240px) minmax(0, 760px) 30px; align-items: start;
 }
 .ws-field.wide .ws-field-key { padding-top: 8px; }
 .ws-field-key {
@@ -956,7 +1028,7 @@ select { cursor: pointer; }
 }
 .ws-field-control { min-width: 0; }
 .ws-field-control input, .ws-field-control textarea { font-size: var(--text-body); }
-.ws-field-control textarea.config-json { min-height: 64px; font-family: var(--font-mono); }
+.ws-field-control textarea.config-json { min-height: 140px; font-family: var(--font-mono); }
 .ws-field-control .checkline {
   display: flex; align-items: center; gap: var(--space-2);
   font-size: var(--text-body); color: var(--muted); margin: 0;
@@ -966,10 +1038,25 @@ select { cursor: pointer; }
 .ws-field-spacer { display: block; }
 
 /* ---- skill files ---- */
-.skills-pane { display: grid; grid-template-columns: 260px 1fr; gap: var(--space-4); }
-@media (max-width: 900px) { .skills-pane { grid-template-columns: 1fr; } }
+/* A file list beside the file, both running the full height of the dialog. The
+   two panes are separated by a rule rather than by the gap alone: at this width
+   empty space between two scrolling columns stops reading as a boundary. */
+.skills-pane {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 300px 1fr; gap: var(--space-5);
+}
+.skills-pane > .skill-body {
+  padding-left: var(--space-5); border-left: 1px solid var(--border);
+}
+@media (max-width: 900px) {
+  .skills-pane { grid-template-columns: 1fr; }
+  .skills-pane > .skill-body { padding-left: 0; border-left: none; }
+}
 .skill-files { display: flex; flex-direction: column; min-height: 0; }
-.skill-scroll { display: flex; flex-direction: column; gap: 1px; max-height: 300px; overflow-y: auto; }
+/* Scrolls to the floor of the dialog. The 300px cap it used to carry was there
+   so a long file list could not push the composer's send button off the page —
+   a page this no longer shares. */
+.skill-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
 .skill-group {
   font-size: var(--text-micro); font-weight: var(--fw-bold); color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.04em;
@@ -1001,7 +1088,7 @@ select { cursor: pointer; }
 .skill-add-row { display: flex; gap: var(--space-2); }
 .skill-add-row input { font-family: var(--font-mono); font-size: var(--text-body); }
 
-.skill-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.skill-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; min-height: 0; }
 .skill-body-head {
   display: flex; align-items: center; gap: var(--space-2);
   padding-bottom: var(--space-2); border-bottom: 1px solid var(--border);
@@ -1011,8 +1098,18 @@ select { cursor: pointer; }
   font-family: var(--font-mono); font-size: var(--text-body); font-weight: var(--fw-semibold);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* The one that matters most: a skill file is the longest thing anyone edits on
+   this screen, and it now gets everything the dialog has left rather than a
+   fixed 260px box with blank space under it. */
 .skill-body textarea.skill-text {
-  min-height: 260px; font-family: var(--font-mono); font-size: var(--text-body);
+  flex: 1; min-height: 0; resize: none;
+  font-family: var(--font-mono); font-size: var(--text-body);
+}
+/* "Pick a file to edit it." centered in the space the editor will occupy, so
+   the empty state has the shape of the thing it is standing in for. */
+.skill-body > .hint:only-child {
+  flex: 1; display: grid; place-items: center;
+  border: 1px dashed var(--border); border-radius: var(--radius-sm);
 }
 .workspace-editor .ui-badge {
   background: var(--amber-soft); color: var(--amber);
@@ -1025,9 +1122,6 @@ select { cursor: pointer; }
 
 /* Per-question progress. A stacked bar over a total of one says nothing; which of
    the four calls is outstanding says everything. */
-.attempt-head {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 12px;
-}
 .phasesteps { display: flex; align-items: center; gap: 14px; font-size: 12px; }
 .phasestep { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .phasestep .dot {
@@ -1069,19 +1163,6 @@ select { cursor: pointer; }
 /* Collapsed, the attempt list is a rail and the trace takes what it gave up —
    which is the point of collapsing it. */
 .playground-three.attempts-collapsed { grid-template-columns: 52px 1fr 1fr; }
-
-/* The composer once a question has been asked: one row, not a panel. */
-.composer-collapsed {
-  display: flex; align-items: center; gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-}
-.composer-collapsed .phasesteps,
-.composer-collapsed .hint { flex: none; }
-.composer-last {
-  min-width: 0; flex: 1;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: var(--text-body); color: var(--muted);
-}
 
 /* ---- shortlist: playground questions on their way into an eval set ---- */
 .attempt-actions button.active { color: var(--accent); }

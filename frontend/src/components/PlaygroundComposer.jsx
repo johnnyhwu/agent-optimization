@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import RunConfigFields from "./RunConfigFields.jsx";
 import WorkspaceEditor from "./WorkspaceEditor.jsx";
 import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
-import Drawer from "./ui/Drawer.jsx";
+import PanelDialog from "./ui/PanelDialog.jsx";
 import { diffConfig, editedFiles, flattenLeaves } from "../workspace_util.js";
 import {
   IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget,
@@ -15,19 +15,26 @@ import {
 //
 // Only the question is required, and that is the point of the whole tab.
 //
-// **The panels open in a sheet, not inline.** They used to expand in place,
+// **The panels open in a dialog, not inline.** They used to expand in place,
 // above the three columns that are the actual working surface — which cost those
 // columns up to 400px, and for the config tree the cap was lifted entirely, so
 // one panel could push the trace and the send button off the bottom of the
-// window. Editing a skill file needs room; a trace needs more. A sheet spends
-// width, which a desktop has, rather than height, which this screen does not.
+// window. See PanelDialog for why the dialog is centered rather than a sheet.
 //
-// **The composer collapses once an attempt exists.** Before you send, this is
-// the screen; after you send, the trace is, and a composer holding 170px open to
-// re-state a question you just asked is 170px the trace should have. The
-// collapsed bar still carries the workspace edit counts, because those are the
-// only thing on screen saying the next question will not run against the agent's
-// own workspace.
+// **The composer never collapses.** It used to, on the theory that after a send
+// the trace is the screen and a composer restating the question you just asked
+// is 170px the trace should have. The theory was right about the height and
+// wrong about the trade: asking a second question is the single most common
+// thing anyone does here, and it cost a click on "Ask another question" every
+// time. The height is bought back instead — the question box sizes itself to its
+// content rather than sitting at a fixed 72px, and the attempt's progress rides
+// in the button row instead of on a row of its own.
+//
+// **The button row is a readout, not a tab strip.** Each toggle carries the
+// state of what it holds — how many config values and skill files are overridden,
+// whether a ground truth is set — so the row answers "what will the next question
+// actually run with" without opening anything. That is why the edit counts are
+// amber and stay on screen whatever is open.
 //
 // `connected` gates exactly the two things that need an agent — asking a
 // question, and the two panels whose content is *read from* that agent. The
@@ -68,13 +75,34 @@ export default function PlaygroundComposer({
   connected = true,
   workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
   onReloadWorkspace,
-  open = true, onOpenChange, lastQuestion, status,
+  status,
 }) {
   // null | "config" | "skills" | "truth" | "endpoints"
   const [panel, setPanel] = useState(null);
+  const questionRef = useRef(null);
 
   const field = (key) => (e) => setDraft({ ...draft, [key]: e.target.value });
   const canSend = connected && draft.question.trim().length > 0 && !busy;
+
+  // Grow with the question rather than sit at a fixed height. Two rows is enough
+  // for most questions and less than the old fixed box, which is where the space
+  // for keeping this open permanently comes from; past the cap it scrolls, so a
+  // pasted essay can never push the trace off the screen. No transition — the
+  // box should track the text, not animate behind it.
+  useLayoutEffect(() => {
+    const el = questionRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [draft.question]);
+
+  // Sending from inside a panel closes it: the answer and the trace it is about
+  // to produce are behind the dialog, and leaving it open would hide the thing
+  // the button was pressed to see.
+  const sendAndClose = () => {
+    setPanel(null);
+    onSend();
+  };
 
   // Counts stay on the toolbar so an edit is visible from the closed state.
   // Otherwise closing a panel hides the fact that the next question will not run
@@ -88,58 +116,31 @@ export default function PlaygroundComposer({
   const truthSet = Boolean(draft.ground_truth_response || draft.ground_truth_reasoning);
   const edits = configCount + fileCount;
 
-  if (!open) {
-    return (
-      <div className="composer composer-collapsed">
-        <Button
-          variant="primary"
-          icon={<IconSend size={14} />}
-          onClick={() => onOpenChange?.(true)}
-        >
-          Ask another question
-        </Button>
-        {lastQuestion && (
-          <span className="composer-last" title={lastQuestion}>
-            Last asked: {lastQuestion}
-          </span>
-        )}
-        {/* Survives the collapse on purpose: this is the only thing saying the
-            next question will not run against the agent's own workspace. */}
-        {edits > 0 && (
-          <Badge tone="warning" title="The next question will run against your edited workspace">
-            {edits} workspace edit{edits === 1 ? "" : "s"}
-          </Badge>
-        )}
-        {/* The open attempt's progress rides in the same row rather than on one
-            of its own: both are describing the attempt on screen below. */}
-        {status}
-      </div>
-    );
-  }
-
   return (
     <div className="composer">
-      <div className="field">
-        <label htmlFor="pg-question">Question</label>
-        <textarea
-          id="pg-question"
-          className="composer-question"
-          value={draft.question}
-          disabled={!connected}
-          placeholder={
-            connected
-              ? "Ask the agent one question…"
-              : "Connect to an agent above, then ask it one question."
-          }
-          onChange={field("question")}
-          onKeyDown={(e) => {
-            // Enter alone inserts a newline: questions are often multi-line, and
-            // losing a half-typed one to a stray Enter would be worse than
-            // needing a modifier.
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) onSend();
-          }}
-        />
-      </div>
+      {/* No visible label: the placeholder already says what the box is for, and
+          a heading above every question would be a word that earns nothing. */}
+      <textarea
+        id="pg-question"
+        ref={questionRef}
+        className="composer-question"
+        aria-label="Question"
+        rows={2}
+        value={draft.question}
+        disabled={!connected}
+        placeholder={
+          connected
+            ? "Ask the agent one question…"
+            : "Connect to an agent above, then ask it one question."
+        }
+        onChange={field("question")}
+        onKeyDown={(e) => {
+          // Enter alone inserts a newline: questions are often multi-line, and
+          // losing a half-typed one to a stray Enter would be worse than
+          // needing a modifier.
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) onSend();
+        }}
+      />
 
       <div className="composer-toggles">
         <Toggle
@@ -161,6 +162,15 @@ export default function PlaygroundComposer({
         <Toggle name="truth" active={panel === "truth"} flag={truthSet ? "set" : null} onClick={setPanel} />
         <Toggle name="endpoints" active={panel === "endpoints"} onClick={setPanel} />
         <div className="grow" />
+        {/* The open attempt's progress rides in this row rather than on one of
+            its own — a second row of chrome is exactly the height the composer
+            just stopped collapsing to save. */}
+        {status}
+        {edits > 0 && (
+          <Badge tone="warning" title="The next question will run against your edited workspace">
+            {edits} workspace edit{edits === 1 ? "" : "s"}
+          </Badge>
+        )}
         <Button
           variant="primary"
           icon={<IconSend size={14} />}
@@ -187,17 +197,50 @@ export default function PlaygroundComposer({
         </div>
       )}
 
-      <Drawer
+      <PanelDialog
         open={panel !== null}
         title={panel ? PANELS[panel].title : ""}
         subtitle={panel ? PANELS[panel].subtitle : ""}
         onClose={() => setPanel(null)}
-        width={panel === "config" || panel === "skills" ? 720 : 560}
+        // The two-pane panels need room for a file list beside a file; the two
+        // form panels do not.
+        width={panel === "config" || panel === "skills" ? 1080 : 880}
+        footer={
+          <>
+            {/* Says what is missing rather than leaving a dead button with no
+                account of itself. */}
+            {connected && !draft.question.trim() && (
+              <span className="hint ui-panel-foot-hint">
+                Type a question to send.
+              </span>
+            )}
+            <div className="grow" />
+            <Button variant="secondary" onClick={() => setPanel(null)}>
+              Close
+            </Button>
+            {/* The same words as the composer's own button, because it is the
+                same action — settings entered here take effect on the next
+                question either way, so there is no reason to leave the dialog
+                to send one. */}
+            <Button
+              variant="primary"
+              icon={<IconSend size={14} />}
+              disabled={!canSend}
+              loading={busy}
+              onClick={sendAndClose}
+            >
+              {busy ? "Sending…" : "Ask the agent"}
+            </Button>
+          </>
+        }
       >
         {/* All four render whenever any has been opened, so switching between
-            them — and closing the sheet — never discards what is half-typed in
+            them — and closing the dialog — never discards what is half-typed in
             another. WorkspaceEditor in particular holds not-yet-valid JSON. */}
-        <div hidden={panel !== "config" && panel !== "skills"}>
+        <div
+          className="panel-fill"
+          hidden={panel !== "config" && panel !== "skills"}
+        >
           <WorkspaceEditor
             tab={panel === "skills" ? "skills" : "config"}
             snapshot={workspace}
@@ -210,8 +253,11 @@ export default function PlaygroundComposer({
           />
         </div>
 
-        <div hidden={panel !== "truth"} className="composer-truth">
-          <div className="field">
+        <div hidden={panel !== "truth"} className="panel-fill composer-truth">
+          {/* Prose, so these are set in the body face rather than the mono the
+              rest of `.field textarea` uses — an expected answer is written, not
+              typed like config. */}
+          <div className="field field-prose">
             <label>Expected answer — optional</label>
             <textarea
               value={draft.ground_truth_response || ""}
@@ -220,7 +266,7 @@ export default function PlaygroundComposer({
             />
             <div className="hint">Given one, the answer is graded against it.</div>
           </div>
-          <div className="field">
+          <div className="field field-prose">
             <label>Expected reasoning process — optional</label>
             <textarea
               value={draft.ground_truth_reasoning || ""}
@@ -240,39 +286,45 @@ export default function PlaygroundComposer({
               the developer doesn't know they inherited, hence the provenance
               line: a question carried over from a run brings that run's frozen
               grading prompt with it. */}
-          <details className="field">
+          <details className="field composer-judge">
             <summary className="ui-summary-link">
               Grading prompt —{" "}
               {form?.judge_prompt_fingerprint
                 ? `carried over from the run you came from (${form.judge_prompt_fingerprint})`
                 : "the built-in default"}
             </summary>
-            <div className="hint" style={{ margin: "8px 0" }}>
+            <div className="hint composer-judge-note">
               Applies to this attempt only, and is never written back to any eval
               set. Leave a box empty to use the built-in prompt. The user prompt
               needs <code>{"{question}"}</code>, <code>{"{ground_truth}"}</code>{" "}
               and <code>{"{agent_response}"}</code>.
             </div>
-            <label>System</label>
-            <textarea
-              rows={8}
-              spellCheck={false}
-              value={form?.judge_system_prompt || ""}
-              placeholder="Blank — using the built-in system prompt."
-              onChange={(e) => set("judge_system_prompt", e.target.value)}
-            />
-            <label style={{ marginTop: 8 }}>User</label>
-            <textarea
-              rows={6}
-              spellCheck={false}
-              value={form?.judge_user_prompt || ""}
-              placeholder="Blank — using the built-in user prompt."
-              onChange={(e) => set("judge_user_prompt", e.target.value)}
-            />
+            {/* Side by side rather than stacked: they are one prompt in two
+                parts, and the dialog is wide enough to read them as one. */}
+            <div className="composer-judge-pair">
+              <div className="field field-prose">
+                <label>System</label>
+                <textarea
+                  spellCheck={false}
+                  value={form?.judge_system_prompt || ""}
+                  placeholder="Blank — using the built-in system prompt."
+                  onChange={(e) => set("judge_system_prompt", e.target.value)}
+                />
+              </div>
+              <div className="field field-prose">
+                <label>User</label>
+                <textarea
+                  spellCheck={false}
+                  value={form?.judge_user_prompt || ""}
+                  placeholder="Blank — using the built-in user prompt."
+                  onChange={(e) => set("judge_user_prompt", e.target.value)}
+                />
+              </div>
+            </div>
           </details>
         </div>
 
-        <div hidden={panel !== "endpoints"}>
+        <div hidden={panel !== "endpoints"} className="panel-fill composer-endpoints">
           <RunConfigFields
             form={form}
             set={set}
@@ -288,7 +340,7 @@ export default function PlaygroundComposer({
             once, and they are never sent back to the browser.
           </div>
         </div>
-      </Drawer>
+      </PanelDialog>
     </div>
   );
 }
