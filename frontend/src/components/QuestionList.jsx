@@ -28,7 +28,15 @@ const PHASE_LABEL = {
   cancelled: "stopped",
 };
 
-export default function QuestionList({ results, activeId, filter, setFilter, onPick }) {
+// `runLive` says whether the run being shown is executing right now. It is what
+// decides whether a question with a start time and no measured duration is still
+// with the agent or simply never got an answer — and the second case is not
+// rare. A backend restart marks the *run* failed (main.py:reap_interrupted_runs)
+// but leaves its question rows 'pending' forever, so without this a run
+// interrupted last week would open with a timer counting up from last week.
+export default function QuestionList({
+  results, activeId, filter, setFilter, onPick, runLive = false,
+}) {
   const wrongCount = results.filter((r) => r.is_incorrect).length;
   const shown = filter === "wrong" ? results.filter((r) => r.is_incorrect) : results;
 
@@ -90,7 +98,11 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
                     on the measured value. Rows from before `started_at` was
                     recorded show nothing rather than a fabricated duration. */}
                 {(r.started_at || r.agent_latency_ms != null) && " · "}
-                <ElapsedTimer startedAt={r.started_at} finalMs={r.agent_latency_ms} />
+                <ElapsedTimer
+                  startedAt={r.started_at}
+                  finalMs={r.agent_latency_ms}
+                  running={runLive && r.status === "pending"}
+                />
               </div>
               {/* A bare "failed" says nothing once the agent is a real service. */}
               {(r.phase === "failed" || r.phase === "cancelled" || r.phase === "judge_invalid") &&

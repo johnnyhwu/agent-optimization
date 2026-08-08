@@ -145,6 +145,21 @@ export default function RunDetail({
     es.addEventListener("question_judged", patch);
     es.addEventListener("question_traced", patch);
     es.addEventListener("question_done", patch);
+    // The stream dropped events to stay bounded, so this view may be missing
+    // something — including, in the worst case, `run_completed` itself, which
+    // would otherwise leave this waiting on a run that finished long ago.
+    // Refetching answers both questions authoritatively.
+    es.addEventListener("resync", () => {
+      loadResults();
+      api
+        .getRun(evalSet.id, liveRunId)
+        .then((run) => {
+          setRunStatus(run.status);
+          setCancelling(Boolean(run.cancel_requested));
+          if (run.status !== "running") es.close();
+        })
+        .catch(() => {});
+    });
     es.addEventListener("run_completed", (e) => {
       let status = "completed";
       try {
@@ -331,6 +346,9 @@ export default function RunDetail({
             filter={filter}
             setFilter={setFilter}
             onPick={pick}
+            // Only a single selected run can be live; the multi-run modes
+            // compare finished history, where nothing is still counting.
+            runLive={Boolean(liveRunId) && running}
           />
         )}
         <SpanList

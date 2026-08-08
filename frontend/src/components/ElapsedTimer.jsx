@@ -17,6 +17,14 @@ import { elapsedSince, formatDuration, useTick } from "../useElapsed.js";
 // wants to compare between attempts incomparable. That is also why a settled
 // timer can sit next to a row still reading "judging…", and why both the tooltip
 // and the list footers say so in words rather than leaving it to be inferred.
+//
+// **`running` is load-bearing, not a convenience.** A measured duration only
+// exists once the agent has answered: a timeout, a transport error or a stop
+// press all leave the row with a start time and no duration. Deciding "still
+// running" from the absence of a duration would therefore leave a dead row
+// counting up for as long as the page stayed open — the exact never-settles
+// symptom this whole change set exists to remove. The caller knows whether the
+// work is still happening, so it says so.
 
 const RUNNING_HINT =
   "The agent has been working on this question for %s. Timing stops when it " +
@@ -24,10 +32,10 @@ const RUNNING_HINT =
 const SETTLED_HINT =
   "The agent took %s to answer. Grading and trace analysis are not counted.";
 
-function Timer({ startedAt, finalMs }) {
+function Timer({ startedAt }) {
   // Subscribed unconditionally, because hooks cannot be conditional — which is
-  // why the settled and unknown cases return before reaching this component at
-  // all. A finished list therefore holds no subscribers, and the ticker stops.
+  // why every other case returns before reaching this component at all. A list
+  // with nothing in flight therefore holds no subscribers, and the ticker stops.
   useTick();
 
   const elapsed = elapsedSince(startedAt);
@@ -42,9 +50,9 @@ function Timer({ startedAt, finalMs }) {
   );
 }
 
-export default function ElapsedTimer({ startedAt, finalMs }) {
-  // Settled: render the authoritative duration the server measured, and take no
-  // part in the ticking.
+export default function ElapsedTimer({ startedAt, finalMs, running = false }) {
+  // Settled: the server measured this, so show it whatever the row's state —
+  // an agent that answered and then failed still took the time it took.
   if (finalMs !== null && finalMs !== undefined) {
     const text = formatDuration(finalMs);
     return (
@@ -53,8 +61,11 @@ export default function ElapsedTimer({ startedAt, finalMs }) {
       </span>
     );
   }
-  // Not started, or a row from before the start time was recorded. Nothing
-  // truthful to show, so nothing is shown — better than a 0s that looks stuck.
-  if (!startedAt) return null;
-  return <Timer startedAt={startedAt} finalMs={finalMs} />;
+  // Nothing truthful to show, so nothing is shown. Three cases land here, and
+  // silence is the honest answer to all of them: the question has not started;
+  // the row predates the start time being recorded; or the work ended without
+  // the agent ever answering, so how long it *would* have taken is not a
+  // question this platform can answer.
+  if (!running || !startedAt) return null;
+  return <Timer startedAt={startedAt} />;
 }

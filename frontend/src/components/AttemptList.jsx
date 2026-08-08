@@ -127,6 +127,10 @@ export default function AttemptList({
               <ElapsedTimer
                 startedAt={a.agent_started_at}
                 finalMs={a.agent_latency_ms}
+                // A stopped or failed attempt is not still counting, even though
+                // it has a start time and no measured duration — that is exactly
+                // what "the agent never answered" looks like.
+                running={a.status === "running"}
               />
             </div>
             <div className="attempt-tags">

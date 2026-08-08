@@ -79,3 +79,28 @@ test("the ticker does not run until something is being timed", () => {
   assert.equal(_internals.subscriberCount, 0);
   assert.equal(_internals.running, false);
 });
+
+test("subscribing runs the clock; the last unsubscribe stops it", () => {
+  const a = _internals.subscribe(() => {});
+  assert.equal(_internals.running, true);
+  const b = _internals.subscribe(() => {});
+  assert.equal(_internals.subscriberCount, 2);
+
+  a();
+  assert.equal(_internals.running, true, "still one timer on screen");
+  b();
+  assert.equal(_internals.running, false, "nothing left to time");
+  assert.equal(_internals.subscriberCount, 0);
+});
+
+test("the snapshot is stable between ticks", () => {
+  // useSyncExternalStore calls getSnapshot several times per render and warns
+  // (or renders again) if the answer moves underneath it. Reading the clock
+  // there would make every render that straddled a second boundary do that.
+  const before = _internals.snapshot;
+  assert.equal(_internals.snapshot, before);
+  assert.equal(_internals.snapshot, before);
+
+  _internals.tick();
+  assert.notEqual(_internals.snapshot, before);
+});

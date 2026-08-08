@@ -180,7 +180,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   useEffect(() => {
     api
       .listAttempts()
-      .then(setAttempts)
+      .then(adopt)
       .catch((e) => setError(e.message));
     // A different identity has a different set of attempts.
   }, [subject]);
@@ -369,9 +369,38 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     setAgentMismatch({ url, timeout_s: config.agent_timeout_s ?? null, what });
   }
 
+  // Take a freshly fetched list as the new truth, without letting it undo
+  // anything the stream has already said.
+  //
+  // The fetch reflects the store at the moment the request was *served*, which
+  // can be earlier than the newest event already applied here — the two arrive
+  // over different connections and nothing orders them. Applied raw, a response
+  // served a moment before an attempt finished would paint a completed row back
+  // to "running", and with no further events coming it would stay that way: the
+  // stale row this whole change set exists to eliminate, reintroduced through
+  // the back door.
+  //
+  // Re-applying the newest known event on top is always safe, never merely
+  // usually: the stream is ordered, so `latestEvent` holds the most recent state
+  // the server published, and each event carries every field `merge` touches.
+  // If the fetch is the fresher of the two they agree and this is a no-op.
+  function adopt(fetched) {
+    // The same pass prunes the two id-keyed maps. Both would otherwise keep an
+    // entry for every attempt ever seen — including ones deleted here and ones
+    // the server evicted at the per-user cap — for as long as the tab is open.
+    const live = new Set(fetched.map((a) => a.id));
+    latestEvent.current = Object.fromEntries(
+      Object.entries(latestEvent.current).filter(([id]) => live.has(id))
+    );
+    setLiveById((prev) =>
+      Object.fromEntries(Object.entries(prev).filter(([id]) => live.has(id)))
+    );
+    setAttempts(fetched.map((a) => merge(a, latestEvent.current[a.id])));
+  }
+
   async function reload() {
     try {
-      setAttempts(await api.listAttempts());
+      adopt(await api.listAttempts());
     } catch (e) {
       setError(e.message);
     }
@@ -638,6 +667,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     try {
       await api.deleteAttempt(a.id);
       setAttempts((prev) => prev.filter((x) => x.id !== a.id));
+      // Forgotten here too, or the two id-keyed maps outlive every row they
+      // describe for as long as the tab is open.
+      delete latestEvent.current[a.id];
+      setLiveById(({ [a.id]: _gone, ...rest }) => rest);
       if (activeId === a.id) {
         setActiveId(null);
         setDetail(null);

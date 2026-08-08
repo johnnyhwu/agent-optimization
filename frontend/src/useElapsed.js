@@ -38,14 +38,27 @@ const subscribers = new Set();
 // server sends when it opens.
 let skewMs = 0;
 
+// The value `useSyncExternalStore` compares between renders. It changes only in
+// `tick`, and that is deliberate: React calls `getSnapshot` several times per
+// render and warns (or re-renders again) if the answer changes underneath it, so
+// reading the clock there would make every render that straddled a second
+// boundary do extra work for nothing. The snapshot is a *change signal*; the
+// actual duration is read from the clock at render time by `elapsedSince`.
+let snapshot = 0;
+
 function tick() {
+  snapshot += 1;
   // Copied before iterating: a subscriber may unsubscribe as a result of the
   // render this notification triggers.
   [...subscribers].forEach((fn) => fn());
 }
 
+// Guarded the same way the listener below is: this module is imported by plain
+// Node for its tests, where there is no `document` to ask.
+const hidden = () => typeof document !== "undefined" && document.hidden;
+
 function start() {
-  if (timer === null && subscribers.size > 0 && !document.hidden) {
+  if (timer === null && subscribers.size > 0 && !hidden()) {
     timer = setInterval(tick, TICK_MS);
   }
 }
@@ -81,10 +94,7 @@ function subscribe(fn) {
   };
 }
 
-// `Date.now()` is read at notification time rather than cached, so two timers
-// rendering on the same tick agree, and a component that renders between ticks
-// (because its props changed) still shows a current value.
-const getSnapshot = () => Math.floor((Date.now() + skewMs) / TICK_MS);
+const getSnapshot = () => snapshot;
 
 /** Re-render this component once a second, for as long as it is mounted. */
 export function useTick() {
@@ -135,6 +145,12 @@ export const _internals = {
     stop();
     subscribers.clear();
     skewMs = 0;
+    snapshot = 0;
+  },
+  tick,
+  subscribe,
+  get snapshot() {
+    return snapshot;
   },
   get skewMs() {
     return skewMs;

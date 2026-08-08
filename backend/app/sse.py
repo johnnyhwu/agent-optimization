@@ -79,6 +79,28 @@ class Subscription:
         return self._queue.empty()
 
 
+def resync_if_dropped(sub: Subscription) -> dict | None:
+    """A `resync` frame if this subscriber missed anything, else None.
+
+    Every stream has to ask, not just the ones that expect to be busy: the
+    dropped event may have been the terminal one (`run_completed`,
+    `attempt_completed`), and a client waiting for a terminal event that has
+    already been discarded waits for the rest of the page's life. Refetching is
+    the only recovery, so the stream's job is simply to say that it is needed.
+    """
+    return {"event": "resync", "data": "{}"} if sub.take_dropped() else None
+
+
+def resync_or_ping(sub: Subscription) -> dict:
+    """The 15-second keepalive, upgraded to a resync when events were dropped.
+
+    An idle stream still has to say something every 15s or a proxy closes it; if
+    the idleness happens to follow an overflow, that beat is the earliest moment
+    to tell the client its picture may be incomplete.
+    """
+    return resync_if_dropped(sub) or {"event": "ping", "data": "{}"}
+
+
 class ProgressHub:
     def __init__(self) -> None:
         self._subscribers: dict[Hashable, list[Subscription]] = defaultdict(list)

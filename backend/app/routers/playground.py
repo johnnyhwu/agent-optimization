@@ -44,7 +44,7 @@ from app.schemas import (
 from app.services import judge_prompt as judge_prompt_service
 from app.services import run_config
 from app.services.trace_view import span_to_out
-from app.sse import hub
+from app.sse import hub, resync_if_dropped, resync_or_ping
 
 router = APIRouter(prefix="/playground", tags=["playground"])
 
@@ -481,14 +481,15 @@ async def attempt_progress(
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
-                    yield _resync_or_ping(queue)
+                    yield resync_or_ping(queue)
                     continue
-                if queue.take_dropped():
-                    # Events were discarded to keep this subscriber's mailbox
-                    # bounded (app/sse.py). The dropped one may have been the
-                    # terminal event, so the client must refetch rather than wait
-                    # for something that has already been and gone.
-                    yield {"event": "resync", "data": "{}"}
+                # Events were discarded to keep this subscriber's mailbox
+                # bounded (app/sse.py). The dropped one may have been the
+                # terminal event, so the client must refetch rather than wait for
+                # something that has already been and gone.
+                dropped = resync_if_dropped(queue)
+                if dropped:
+                    yield dropped
                 yield {"event": event.get("type", "message"), "data": json.dumps(event)}
                 if event.get("type") == "attempt_completed":
                     break
@@ -496,18 +497,6 @@ async def attempt_progress(
             hub.unsubscribe(attempt_id, queue)
 
     return EventSourceResponse(event_gen())
-
-
-def _resync_or_ping(queue) -> dict:
-    """The 15-second keepalive, upgraded to a resync when events were dropped.
-
-    An idle stream still has to say something every 15s or a proxy closes it; if
-    the idleness happens to follow an overflow, that same beat is the earliest
-    moment to tell the client its picture may be incomplete.
-    """
-    if queue.take_dropped():
-        return {"event": "resync", "data": "{}"}
-    return {"event": "ping", "data": "{}"}
 
 
 @router.get("/progress")
@@ -569,10 +558,11 @@ async def playground_progress(
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
-                    yield _resync_or_ping(queue)
+                    yield resync_or_ping(queue)
                     continue
-                if queue.take_dropped():
-                    yield {"event": "resync", "data": "{}"}
+                dropped = resync_if_dropped(queue)
+                if dropped:
+                    yield dropped
                 yield {"event": event.get("type", "message"), "data": json.dumps(event)}
         finally:
             hub.unsubscribe(subject, queue)

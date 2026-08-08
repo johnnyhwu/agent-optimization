@@ -20,7 +20,7 @@ from app.orchestrator import run_eval
 from app.schemas import RunConfig, RunCreate, RunOut, RunPage
 from app.services import judge_prompt, run_config
 from app.services.deletion import delete_run as delete_run_rows
-from app.sse import hub
+from app.sse import hub, resync_if_dropped, resync_or_ping
 
 # A credential and the endpoint it authenticates against, for the reuse rule
 # below: {secret key in runs.secrets: endpoint key in runs.config}.
@@ -444,8 +444,16 @@ async def run_progress(
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
-                    yield {"event": "ping", "data": "{}"}
+                    yield resync_or_ping(queue)
                     continue
+                # Mailboxes are bounded (app/sse.py), so a subscriber that
+                # stopped reading loses its oldest events rather than growing
+                # without limit. `run_completed` is among the events that can be
+                # lost, and a client waiting for one that has already been
+                # discarded waits forever — so a drop is always reported.
+                dropped = resync_if_dropped(queue)
+                if dropped:
+                    yield dropped
                 yield {"event": event.get("type", "message"), "data": json.dumps(event)}
                 if event.get("type") == "run_completed":
                     break
