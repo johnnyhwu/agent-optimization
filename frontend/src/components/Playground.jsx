@@ -21,6 +21,7 @@ import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
 import { setServerTime } from "../useElapsed.js";
+import { adoptFetched, mergeAttempt, pruneById } from "../attempt_state.js";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
@@ -380,22 +381,24 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // stale row this whole change set exists to eliminate, reintroduced through
   // the back door.
   //
-  // Re-applying the newest known event on top is always safe, never merely
-  // usually: the stream is ordered, so `latestEvent` holds the most recent state
-  // the server published, and each event carries every field `merge` touches.
-  // If the fetch is the fresher of the two they agree and this is a no-op.
+  // Re-applying the newest known event on top is safe **as long as no event has
+  // been dropped**: the stream is ordered, so `latestEvent` then holds the most
+  // recent state the server published, and each event carries every field
+  // `merge` touches. If the fetch is the fresher of the two, they agree and this
+  // is a no-op.
+  //
+  // A gap breaks that premise, which is why `resync` clears the memory before
+  // calling this. Without that, a swallowed `attempt_completed` leaves
+  // `latestEvent` holding "answered", and the refetch triggered to repair the
+  // gap would faithfully paint the finished row back to running — the recovery
+  // path re-creating the exact stale row it exists to fix.
   function adopt(fetched) {
     // The same pass prunes the two id-keyed maps. Both would otherwise keep an
     // entry for every attempt ever seen — including ones deleted here and ones
     // the server evicted at the per-user cap — for as long as the tab is open.
-    const live = new Set(fetched.map((a) => a.id));
-    latestEvent.current = Object.fromEntries(
-      Object.entries(latestEvent.current).filter(([id]) => live.has(id))
-    );
-    setLiveById((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([id]) => live.has(id)))
-    );
-    setAttempts(fetched.map((a) => merge(a, latestEvent.current[a.id])));
+    latestEvent.current = pruneById(latestEvent.current, fetched);
+    setLiveById((prev) => pruneById(prev, fetched));
+    setAttempts(adoptFetched(fetched, latestEvent.current));
   }
 
   async function reload() {
@@ -441,7 +444,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       // it cost the row its start time, and therefore its timer, for the whole
       // of the one call it was meant to be timing.
       latestEvent.current[d.attempt_id] = d;
-      setAttempts((prev) => prev.map((a) => (a.id === d.attempt_id ? merge(a, d) : a)));
+      setAttempts((prev) => prev.map((a) => (a.id === d.attempt_id ? mergeAttempt(a, d) : a)));
       // trace_ready / has_analysis are part of the fingerprint but not of the
       // list row, so they are folded in here, per attempt.
       setLiveById((prev) => ({
@@ -486,7 +489,16 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
     // The stream dropped events to stay bounded, so what is on screen may be
     // incomplete. Refetching answers the question completely; replaying cannot.
-    es.addEventListener("resync", () => reload());
+    //
+    // Forgetting first is the load-bearing half. `resync` means precisely that
+    // our event history has a hole, so the newest event we hold is no longer
+    // guaranteed to be the newest the server sent — and `adopt` would otherwise
+    // re-apply it on top of the fresh rows, reverting exactly the attempt whose
+    // ending we missed.
+    es.addEventListener("resync", () => {
+      latestEvent.current = {};
+      reload();
+    });
 
     // Only ever a permanent refusal — a persistent stream retries everything
     // else itself — so there is nothing left to keep open.
@@ -606,7 +618,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       // starts the attempt before it responds to this POST, so `attempt_started`
       // — the event carrying the instant the timer counts from — is often
       // already in hand by the time the row exists to receive it.
-      setAttempts((prev) => [merge(created, latestEvent.current[created.id]), ...prev]);
+      setAttempts((prev) => [mergeAttempt(created, latestEvent.current[created.id]), ...prev]);
       setDetail(created);
       setActiveId(created.id);
       setActiveSpan(null);
@@ -917,23 +929,6 @@ function describeOverride(attempt) {
   if (configs) parts.push(`${configs} config value${configs === 1 ? "" : "s"}`);
   if (files) parts.push(`${files} skill file${files === 1 ? "" : "s"}`);
   return parts.length ? `an override of ${parts.join(" and ")}` : "a workspace override";
-}
-
-// A list row updated by one progress event. `??` throughout, so a field the
-// event does not carry keeps what the row already had rather than being blanked.
-function merge(row, event) {
-  if (!event) return row;
-  return {
-    ...row,
-    phase: event.phase ?? row.phase,
-    status: event.status ?? row.status,
-    verdict: event.verdict ?? row.verdict,
-    error_message: event.error_message ?? row.error_message,
-    // Carried on the event, so a finished row no longer costs a refetch just to
-    // learn how long the agent took.
-    agent_started_at: event.agent_started_at ?? row.agent_started_at,
-    agent_latency_ms: event.agent_latency_ms ?? row.agent_latency_ms,
-  };
 }
 
 // A sparse config overlay merged onto a full config, the same deep merge the

@@ -139,6 +139,38 @@ export function formatDuration(ms) {
   return `${minutes}m ${String(Math.floor(seconds % 60)).padStart(2, "0")}s`;
 }
 
+/**
+ * What a timer should show, given everything known about one row.
+ *
+ * Pure, and deliberately not inlined into `ElapsedTimer`: this is the decision
+ * that got it wrong once already, and as JSX it could only be checked by driving
+ * a browser. Here every case is a unit test.
+ *
+ * Returns `{ kind: "settled" | "running" | "none", ms }`.
+ *
+ *   settled  the agent answered and the server measured how long it took
+ *   running  the agent has the question right now
+ *   none     nothing truthful to show
+ *
+ * `running` has to be told, not inferred. A measured duration only exists once
+ * the agent has answered, so treating "no duration" as "still going" leaves
+ * every timeout, transport error and stop press counting upward for as long as
+ * the page is open. The eval side makes that vivid: a backend restart marks the
+ * *run* failed but leaves its question rows 'pending', so a run interrupted last
+ * week would open with a timer counting from last week.
+ */
+export function timerState({ startedAt, finalMs, running = false } = {}) {
+  // A measured duration wins over everything, including a row that has since
+  // failed — an agent that answered and then failed still took the time it took.
+  if (finalMs !== null && finalMs !== undefined) return { kind: "settled", ms: finalMs };
+  if (!running || !startedAt) return { kind: "none", ms: null };
+  const ms = elapsedSince(startedAt);
+  if (ms === null) return { kind: "none", ms: null };
+  // Whole seconds while moving: a flickering tenth on a number that is still
+  // changing is noise, and it is the settled value that deserves the precision.
+  return { kind: "running", ms: Math.floor(ms / 1000) * 1000 };
+}
+
 // Exported for the tests, which need a clean clock between cases.
 export const _internals = {
   reset() {

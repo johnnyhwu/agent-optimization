@@ -12,7 +12,10 @@ import {
   elapsedSince,
   formatDuration,
   setServerTime,
+  timerState,
 } from "./useElapsed.js";
+
+const ago = (s) => new Date(Date.now() - s * 1000).toISOString();
 
 beforeEach(() => _internals.reset());
 
@@ -78,6 +81,80 @@ test("the ticker does not run until something is being timed", () => {
   // The property that makes an idle screen free: no subscribers, no interval.
   assert.equal(_internals.subscriberCount, 0);
   assert.equal(_internals.running, false);
+});
+
+// --- What a timer decides to show ------------------------------------------
+//
+// The decision that got it wrong once: a row with a start time and no measured
+// duration was read as "still going", so every attempt that ended without an
+// answer counted upward for as long as the page stayed open. These pin down all
+// three outcomes, including every way a row can end without one.
+
+test("a question with the agent right now counts up", () => {
+  const { kind, ms } = timerState({ startedAt: ago(8), running: true });
+  assert.equal(kind, "running");
+  assert.equal(ms, 8000, "whole seconds while moving, not 8123ms");
+});
+
+test("an answered question shows what the server measured", () => {
+  assert.deepEqual(
+    timerState({ startedAt: ago(30), finalMs: 8400, running: false }),
+    { kind: "settled", ms: 8400 }
+  );
+});
+
+test("a measured duration survives the row failing afterwards", () => {
+  // The agent answered and then something downstream failed. It still took the
+  // time it took, and that is worth knowing.
+  assert.deepEqual(
+    timerState({ startedAt: ago(30), finalMs: 2600, running: false }),
+    { kind: "settled", ms: 2600 }
+  );
+});
+
+test("a row that ended without an answer shows nothing at all", () => {
+  // A timeout, a transport error, a stop press, or an interrupted run: all
+  // leave a start time and no duration. Showing the running branch here is the
+  // bug -- it counts up forever on a row that is already dead. Inventing a
+  // duration would be worse: how long it *would* have taken is not a question
+  // this platform can answer.
+  for (const startedAt of [ago(12), ago(60 * 60 * 24 * 7)]) {
+    assert.deepEqual(
+      timerState({ startedAt, finalMs: null, running: false }),
+      { kind: "none", ms: null }
+    );
+  }
+});
+
+test("a question that has not started yet shows nothing", () => {
+  assert.deepEqual(
+    timerState({ startedAt: null, running: true }),
+    { kind: "none", ms: null }
+  );
+});
+
+test("a row from before start times were recorded shows nothing", () => {
+  // question_results.started_at is nullable with no backfill, so historical
+  // rows genuinely do not know. Silence beats a fabricated duration.
+  assert.deepEqual(timerState({ startedAt: null, finalMs: null }), { kind: "none", ms: null });
+  assert.deepEqual(timerState({}), { kind: "none", ms: null });
+  assert.deepEqual(timerState(), { kind: "none", ms: null });
+});
+
+test("running is never inferred from the absence of a duration", () => {
+  // The whole property, stated once: with no measured duration, `running` alone
+  // decides -- and it defaults to not running, so a caller that forgets to pass
+  // it gets silence rather than a runaway clock.
+  const startedAt = ago(5);
+  assert.equal(timerState({ startedAt, running: true }).kind, "running");
+  assert.equal(timerState({ startedAt, running: false }).kind, "none");
+  assert.equal(timerState({ startedAt }).kind, "none");
+});
+
+test("a zero-millisecond answer is a duration, not a missing one", () => {
+  // `0` is falsy; a truthiness check here would silently drop the fastest
+  // answers into the "nothing to show" branch.
+  assert.deepEqual(timerState({ startedAt: ago(1), finalMs: 0 }), { kind: "settled", ms: 0 });
 });
 
 test("subscribing runs the clock; the last unsubscribe stops it", () => {
