@@ -579,6 +579,198 @@ async def test_no_judged_event_when_nothing_is_judged(seams, monkeypatch):
     assert types[-1] == "attempt_completed"
 
 
+# --- The per-user stream ----------------------------------------------------
+#
+# The bug this stream exists to fix: the front end could only subscribe to one
+# attempt at a time, so asking a second question closed the first one's stream
+# and everything it published afterwards was dropped. The row stayed grey until
+# it was clicked. These tests assert the property that makes that impossible —
+# progress reaches the owner's stream whatever they happen to have open.
+
+class FakeRequest:
+    """Stands in for the Request the handler polls for client disconnects.
+
+    `disconnected=True` makes the loop exit on its first pass, which is what
+    keeps a test of this never-terminating stream from blocking forever.
+    """
+
+    def __init__(self, disconnected: bool = True):
+        self._disconnected = disconnected
+
+    async def is_disconnected(self) -> bool:
+        return self._disconnected
+
+
+async def drain(response, limit=10):
+    """The stream's events as `(name, payload)` pairs.
+
+    `body_iterator` yields the generator's own dicts (sse-starlette encodes them
+    downstream), so the payload can be parsed rather than string-matched — which
+    matters here because several of these tests are about a payload's *contents*,
+    not merely about a word appearing somewhere in the frame.
+    """
+    events = []
+    async for chunk in response.body_iterator:
+        events.append((chunk.get("event"), json.loads(chunk.get("data") or "{}")))
+        if len(events) >= limit:
+            break
+    return events
+
+
+def names(events) -> list[str]:
+    return [name for name, _ in events]
+
+
+async def test_progress_for_an_unopened_attempt_still_reaches_its_owner(
+    seams, monkeypatch
+):
+    """The regression test for the reported bug, stated directly.
+
+    Nothing here subscribes to `attempt.id`. Before the per-subject topic existed
+    that meant every event below went nowhere, which is exactly what happened to
+    a second question asked while the first was still running.
+    """
+    attempt = make_attempt(subject="alice", ground_truth_response="x")
+    response = await playground_router.playground_progress(
+        request=FakeRequest(disconnected=False), subject="alice",
+    )
+    await execute(attempt, seams, monkeypatch)
+
+    events = await drain(response, limit=6)
+    assert names(events) == [
+        "snapshot", "attempt_started", "attempt_answered", "attempt_judged",
+        "attempt_traced", "attempt_completed",
+    ]
+    assert all(
+        payload["attempt_id"] == str(attempt.id) for _name, payload in events[1:]
+    )
+
+
+async def test_the_snapshot_carries_every_attempt_and_the_server_clock():
+    """What makes a reload recover attempts it never saw finish.
+
+    A per-attempt stream could only ever snapshot the one attempt it was opened
+    for, so a reload mid-flight left every other running attempt unaccounted for
+    until it was clicked.
+    """
+    running, finished = make_attempt(), make_attempt()
+    finished.status = "done"
+    theirs = make_attempt(subject="bob")
+    for attempt in (running, finished, theirs):
+        playground.add(attempt)
+
+    response = await playground_router.playground_progress(
+        request=FakeRequest(), subject="alice",
+    )
+    (name, snapshot), = await drain(response, limit=1)
+
+    assert name == "snapshot"
+    ids = {a["attempt_id"] for a in snapshot["attempts"]}
+    assert ids == {str(running.id), str(finished.id)}
+    assert snapshot["server_time"]
+
+
+async def test_another_subjects_attempts_never_reach_this_stream(seams, monkeypatch):
+    """Attempts are private scratch work; the stream is no exception.
+
+    Asserted against the topic rather than by reading alice's stream, because a
+    stream with nothing to say is indistinguishable from a slow one until its
+    15-second keepalive — and waiting that out in a unit test buys nothing the
+    subscription itself cannot answer instantly.
+    """
+    theirs = make_attempt(subject="bob")
+    alice = hub.subscribe("alice")
+    bob = hub.subscribe("bob")
+    try:
+        await execute(theirs, seams, monkeypatch)
+        assert alice.empty()
+        assert not bob.empty()
+    finally:
+        hub.unsubscribe("alice", alice)
+        hub.unsubscribe("bob", bob)
+
+
+async def test_the_stream_unsubscribes_when_it_ends():
+    response = await playground_router.playground_progress(
+        request=FakeRequest(), subject="alice",
+    )
+    await drain(response)
+
+    assert hub._subscribers.get("alice") in (None, [])
+
+
+async def test_a_backed_up_subscriber_is_told_to_resync_rather_than_growing(configure):
+    """The mailbox is bounded, so a stalled client cannot grow a queue for as
+    long as its stream is open — and the playground's stream stays open for as
+    long as the tab does.
+
+    Dropping is safe only because it is *reported*: nothing reconstructs state
+    from the event history, so `resync` plus a refetch recovers whatever the gap
+    swallowed.
+    """
+    with configure(sse_queue_max_events=2):
+        response = await playground_router.playground_progress(
+            request=FakeRequest(disconnected=False), subject="alice",
+        )
+        for i in range(5):
+            await hub.publish("alice", {"type": "attempt_answered", "n": i})
+
+        events = await drain(response, limit=4)
+
+    assert names(events) == ["snapshot", "resync", "attempt_answered", "attempt_answered"]
+    # The two most recent survived; the three oldest were discarded.
+    assert [payload["n"] for _name, payload in events[2:]] == [3, 4]
+
+
+async def test_publishing_still_reaches_the_per_attempt_stream(seams, monkeypatch):
+    """The per-attempt topic stays: `GET /attempts/{id}/progress` is still a
+    valid single-attempt API, and dropping it would be a breaking change for
+    anything driving one attempt at a time."""
+    attempt = make_attempt()
+    collector = Collector(attempt.id)
+    try:
+        await execute(attempt, seams, monkeypatch)
+        types = [e["type"] for e in collector.drain()]
+    finally:
+        collector.close()
+
+    assert types[0] == "attempt_started"
+    assert types[-1] == "attempt_completed"
+
+
+async def test_events_carry_the_timing_the_list_row_needs(seams, monkeypatch):
+    """Carried on the event so a finished row needs no follow-up request.
+
+    Once every attempt reports rather than only the open one, a refetch per
+    completion would be one extra request per completion per person.
+    """
+    attempt = make_attempt()
+    collector = Collector(attempt.id)
+    try:
+        await execute(attempt, seams, monkeypatch)
+        events = collector.drain()
+    finally:
+        collector.close()
+
+    assert events[0]["agent_started_at"] is not None
+    assert events[-1]["agent_latency_ms"] == 12
+    assert all(e["created_at"] for e in events)
+
+
+async def test_the_agent_clock_starts_before_the_call_not_at_creation(
+    seams, monkeypatch
+):
+    """`created_at` is when the request was accepted; the timer has to count from
+    when the agent was actually asked. The workspace baseline lookup sits between
+    the two, and charging it to the agent overstates every attempt that sent a
+    skill override."""
+    attempt = make_attempt()
+    await execute(attempt, seams, monkeypatch)
+
+    assert attempt.agent_started_at is not None
+    assert attempt.agent_started_at >= attempt.created_at
+
+
 # --- The store --------------------------------------------------------------
 
 async def test_store_evicts_the_oldest_finished_attempt(configure):

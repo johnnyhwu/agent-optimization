@@ -216,6 +216,16 @@ export const api = {
     req("POST", `/playground/attempts/${attemptId}/synthesize-reasoning`),
   openAttemptProgress: (attemptId) =>
     openStream(`/playground/attempts/${attemptId}/progress`),
+  // Every attempt this person has, on one connection. The per-attempt stream
+  // above can only follow the attempt that happens to be open, which is how a
+  // second question asked while the first was still running left the first one's
+  // row unfinished until it was clicked.
+  //
+  // `persistent` because this one lives as long as the page rather than as long
+  // as an attempt: a stream that gave up after a blip would put the screen right
+  // back into that stale state, silently and for the rest of the session.
+  openPlaygroundProgress: () =>
+    openStream("/playground/progress", { persistent: true }),
 };
 
 // --- Server-sent events over fetch ------------------------------------------
@@ -235,7 +245,19 @@ export const api = {
 // So: fetch, with fresh headers on every attempt.
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
 
-function openStream(path) {
+// `persistent` streams follow a *person* rather than a piece of work, so they
+// have no natural end and must never stop trying: the playground's stream is
+// open for as long as the tab is, and one that gave up after four failures would
+// leave the attempt list frozen for the rest of the session — silently, and
+// looking exactly like the bug it was built to fix. Work-shaped streams (a run,
+// one attempt) keep the old behaviour, where giving up is honest because the
+// thing being watched is finite.
+function openStream(path, { persistent = false } = {}) {
+  // A **Set** per event name, not a single handler. As a plain Map this silently
+  // kept only the last registration, so a component that added two handlers for
+  // one event name lost the first — which Playground.jsx did, for
+  // `attempt_completed`, and only got away with because a full refetch happened
+  // to paper over the missing patch.
   const listeners = new Map();
   const controller = new AbortController();
   let closed = false;
@@ -244,7 +266,12 @@ function openStream(path) {
 
   const stream = {
     addEventListener(name, fn) {
-      listeners.set(name, fn);
+      const fns = listeners.get(name);
+      if (fns) fns.add(fn);
+      else listeners.set(name, new Set([fn]));
+    },
+    removeEventListener(name, fn) {
+      listeners.get(name)?.delete(fn);
     },
     close() {
       closed = true;
@@ -255,8 +282,11 @@ function openStream(path) {
   };
 
   const emit = (name, data) => {
-    const fn = listeners.get(name);
-    if (fn) fn({ data });
+    // Copied before iterating: a handler is allowed to close the stream or
+    // register another, and mutating the set mid-iteration is how that turns
+    // into a dropped event.
+    const fns = listeners.get(name);
+    if (fns) [...fns].forEach((fn) => fn({ data }));
   };
   const fail = (err) => {
     if (!closed && stream.onerror) stream.onerror(err);
@@ -323,6 +353,20 @@ function openStream(path) {
     }
   }
 
+  // How long before the next attempt, or null to give up. A persistent stream
+  // never gives up; it just stops backing off further, so a backend that is down
+  // for an hour is retried every 8 seconds rather than abandoned after the first
+  // fifteen. `attempt` is reset by a connection that opens, so a healthy
+  // reconnect always starts from the short delays again.
+  const nextDelay = () => {
+    if (attempt < RETRY_DELAYS_MS.length) return RETRY_DELAYS_MS[attempt++];
+    return persistent ? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1] : null;
+  };
+  const wait = (delay) =>
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, delay);
+    });
+
   async function run() {
     while (!closed) {
       try {
@@ -330,11 +374,9 @@ function openStream(path) {
       } catch (err) {
         if (closed || err.name === "AbortError") return;
         if (err.permanent) return fail(err);
-        if (attempt >= RETRY_DELAYS_MS.length) return fail(err);
-        const delay = RETRY_DELAYS_MS[attempt++];
-        await new Promise((resolve) => {
-          timer = setTimeout(resolve, delay);
-        });
+        const delay = nextDelay();
+        if (delay === null) return fail(err);
+        await wait(delay);
         continue;
       }
       if (closed) return;
@@ -342,11 +384,9 @@ function openStream(path) {
       // its terminal event already fired; the components close on that, so
       // reaching here means the connection dropped mid-run. Reconnect — the
       // backend replays a snapshot to late subscribers, so nothing is lost.
-      if (attempt >= RETRY_DELAYS_MS.length) return;
-      const delay = RETRY_DELAYS_MS[attempt++];
-      await new Promise((resolve) => {
-        timer = setTimeout(resolve, delay);
-      });
+      const delay = nextDelay();
+      if (delay === null) return;
+      await wait(delay);
     }
   }
 

@@ -94,6 +94,12 @@ class PlaygroundAttempt:
     phase: str = "pending"
 
     agent_response: str | None = None
+    # When the agent call actually went out, which is what the list's timer
+    # counts from. Not the same as `created_at`: the attempt row exists from the
+    # moment the request is accepted, and the workspace baseline lookup can sit
+    # between the two. Server-side rather than noted by the browser, so the
+    # elapsed time survives a reload and reads the same for a late subscriber.
+    agent_started_at: datetime | None = None
     agent_latency_ms: int | None = None
     error_message: str | None = None
 
@@ -211,29 +217,62 @@ def _verdict_of(attempt: PlaygroundAttempt) -> Verdict | None:
     )
 
 
-async def _publish(attempt: PlaygroundAttempt, event_type: str) -> None:
-    """Push the attempt's current state to its SSE subscribers.
+def event_for(attempt: PlaygroundAttempt, event_type: str) -> dict:
+    """One attempt's current state, in the shape the streams send.
+
+    Shared with the per-user stream's snapshot (`routers/playground.py`) so a
+    late subscriber and a live event can never describe an attempt differently —
+    which matters more than it sounds, because reconciling on connect is the
+    whole mechanism by which a reload recovers attempts it missed.
 
     The field names deliberately match the run stream's (§9.10): the front end
     refetches an open question whenever `phase`, `verdict`, `trace_ready` or
     `has_analysis` changes, and reusing that vocabulary means the playground gets
     the same event-driven refresh without a second mechanism.
     """
-    await hub.publish(
-        attempt.id,
-        {
-            "type": event_type,
-            "attempt_id": str(attempt.id),
-            "phase": attempt.phase,
-            "status": attempt.status,
-            "verdict": attempt.verdict,
-            "error_message": attempt.error_message,
-            "trace_ready": attempt.trace is not None,
-            "has_analysis": attempt.analysis is not None,
-            "trace_error": attempt.trace_error,
-            "diagnosis_error": attempt.diagnosis_error,
-        },
-    )
+    return {
+        "type": event_type,
+        "attempt_id": str(attempt.id),
+        "phase": attempt.phase,
+        "status": attempt.status,
+        "verdict": attempt.verdict,
+        "error_message": attempt.error_message,
+        "trace_ready": attempt.trace is not None,
+        "has_analysis": attempt.analysis is not None,
+        "trace_error": attempt.trace_error,
+        "diagnosis_error": attempt.diagnosis_error,
+        # The three timing fields the list row needs to finish itself. Carrying
+        # them means a completed attempt no longer costs a full `listAttempts`
+        # refetch purely to pick up its latency — which, once every attempt
+        # reports rather than only the open one, would have been one extra
+        # request per completion per person.
+        "created_at": attempt.created_at.isoformat(),
+        "agent_started_at": (
+            attempt.agent_started_at.isoformat() if attempt.agent_started_at else None
+        ),
+        "agent_latency_ms": attempt.agent_latency_ms,
+    }
+
+
+async def _publish(attempt: PlaygroundAttempt, event_type: str) -> None:
+    """Push the attempt's current state to its SSE subscribers.
+
+    Published to **two topics**: the attempt's own id, and the subject who owns
+    it. The per-attempt topic is what `GET /attempts/{id}/progress` serves; the
+    per-subject topic is what lets one stream follow every attempt a person has
+    running.
+
+    That second topic is the fix for a real bug. With only the first, the front
+    end could subscribe to one attempt at a time — so asking a second question
+    closed the first one's stream, and everything that attempt published
+    afterwards went to a topic with no subscribers and was silently dropped. The
+    row then sat unfinished until it was clicked, which re-subscribed and pulled
+    a fresh snapshot. Publishing to the owner as well makes "which attempt is
+    open" irrelevant to whether its progress is delivered.
+    """
+    event = event_for(attempt, event_type)
+    await hub.publish(attempt.id, event)
+    await hub.publish(attempt.subject, event)
 
 
 def start(attempt: PlaygroundAttempt) -> None:
@@ -275,6 +314,12 @@ async def _execute(attempt: PlaygroundAttempt) -> None:
         return
 
     timeout_s = attempt.config.get("agent_timeout_s") or settings.agent_timeout_s
+    # Stamped before the event goes out, so `attempt_started` already carries the
+    # instant the list's timer counts from. Set here rather than at creation
+    # because the workspace baseline lookup (§10, up to BASELINE_TIMEOUT_S) sits
+    # between the two, and charging that to the agent would overstate every
+    # attempt that sent a skill override.
+    attempt.agent_started_at = datetime.now(timezone.utc)
     await _publish(attempt, "attempt_started")
 
     async def cancelled(message: str) -> None:

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
@@ -163,6 +164,7 @@ def _out(attempt: PlaygroundAttempt) -> PlaygroundAttemptOut:
         phase=attempt.phase,
         verdict=attempt.verdict,
         judge_score=attempt.judge_score,
+        agent_started_at=attempt.agent_started_at,
         agent_latency_ms=attempt.agent_latency_ms,
         error_message=attempt.error_message,
         config=RunConfig(**(attempt.config or {})),
@@ -479,12 +481,100 @@ async def attempt_progress(
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
-                    yield {"event": "ping", "data": "{}"}
+                    yield _resync_or_ping(queue)
                     continue
+                if queue.take_dropped():
+                    # Events were discarded to keep this subscriber's mailbox
+                    # bounded (app/sse.py). The dropped one may have been the
+                    # terminal event, so the client must refetch rather than wait
+                    # for something that has already been and gone.
+                    yield {"event": "resync", "data": "{}"}
                 yield {"event": event.get("type", "message"), "data": json.dumps(event)}
                 if event.get("type") == "attempt_completed":
                     break
         finally:
             hub.unsubscribe(attempt_id, queue)
+
+    return EventSourceResponse(event_gen())
+
+
+def _resync_or_ping(queue) -> dict:
+    """The 15-second keepalive, upgraded to a resync when events were dropped.
+
+    An idle stream still has to say something every 15s or a proxy closes it; if
+    the idleness happens to follow an overflow, that same beat is the earliest
+    moment to tell the client its picture may be incomplete.
+    """
+    if queue.take_dropped():
+        return {"event": "resync", "data": "{}"}
+    return {"event": "ping", "data": "{}"}
+
+
+@router.get("/progress")
+async def playground_progress(
+    request: Request,
+    subject: str = Depends(current_subject),
+):
+    """SSE stream for **every attempt this subject owns**.
+
+    The per-attempt stream above can only follow the attempt the developer has
+    open, and that turned out to be the wrong unit. Asking a second question
+    while the first was still running moved the selection, which closed the first
+    attempt's stream; everything it published afterwards went to a topic nobody
+    was subscribed to and was dropped. The row stayed grey until it was clicked,
+    because clicking it re-subscribed and pulled a fresh snapshot — the reported
+    bug, exactly.
+
+    So the unit here is the person, matching the eval side, where one stream per
+    *run* has always covered every question in it. Three consequences:
+
+      * **One connection per open playground, not one per attempt.** The cost of
+        watching stops growing with how much you are running, which is the point
+        at which someone iterating hard would otherwise be the heaviest user of
+        the stream infrastructure.
+      * **The stream does not end when an attempt does.** It lives as long as the
+        page, so the exits are a disconnected client and nothing else. The 15s
+        keepalive is what holds an idle one open.
+      * **The snapshot is every attempt, not one.** That is what makes a reload —
+        or a subscriber that arrives late, or one that reconnects after a network
+        blip — recover the state of everything that ran while it was away.
+
+    No database access, deliberately, exactly as the per-attempt stream has none:
+    a session injected here would be held for the life of the page rather than
+    the life of a request (see `routers/runs.py:run_progress` and `app/db.py`).
+    """
+    queue = hub.subscribe(subject)
+
+    async def event_gen():
+        try:
+            yield {
+                "event": "snapshot",
+                "data": json.dumps({
+                    # The browser's clock is not the server's, and the elapsed
+                    # times below are rendered as `now - agent_started_at`. One
+                    # server timestamp per connection lets the client correct for
+                    # the difference instead of showing a negative or inflated
+                    # duration on a machine whose clock drifted.
+                    "server_time": datetime.now(timezone.utc).isoformat(),
+                    "attempts": [
+                        playground.event_for(a, "snapshot")
+                        for a in playground.list_for(subject)
+                    ],
+                }),
+            }
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield _resync_or_ping(queue)
+                    continue
+                if queue.take_dropped():
+                    yield {"event": "resync", "data": "{}"}
+                yield {"event": event.get("type", "message"), "data": json.dumps(event)}
+        finally:
+            hub.unsubscribe(subject, queue)
 
     return EventSourceResponse(event_gen())

@@ -94,10 +94,15 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const [detailRefreshing, setDetailRefreshing] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [activeSpan, setActiveSpan] = useState(null);
-  // The last state the SSE stream reported for the open attempt. Kept separate
-  // from the list row because two of its fields (trace_ready, has_analysis) exist
-  // only on the stream.
-  const [live, setLive] = useState(null);
+  // The last state the SSE stream reported, **per attempt**. Kept separate from
+  // the list row because two of its fields (trace_ready, has_analysis) exist only
+  // on the stream.
+  //
+  // Keyed by id rather than held as one value, because the stream now reports
+  // every attempt rather than only the open one. `live` below is still a single
+  // object — whichever attempt is open — so `detailKey` and the whole
+  // detail-refetch mechanism read exactly as they did.
+  const [liveById, setLiveById] = useState({});
   // Kept after a send rather than cleared: most second questions are the first
   // one with a word changed, and re-typing it to compare two phrasings is the
   // work this screen exists to make cheap. The attempt list is the record of
@@ -379,59 +384,90 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     set(k, raw === "" || !Number.isFinite(n) || n <= 0 ? null : n);
   };
 
-  // --- Live updates for the running attempt ---------------------------------
-  // Subscribing for the open attempt is enough: a finished one closes the stream
-  // immediately, so a historical attempt costs nothing.
+  // --- Live updates for every running attempt -------------------------------
+  //
+  // **One stream for the whole screen, not one per attempt.** Subscribing to the
+  // open attempt was the bug: asking a second question moved the selection,
+  // which closed the first attempt's stream, and everything it published
+  // afterwards went to a topic nobody was listening on. The row stayed grey
+  // until it was clicked — clicking it re-subscribed and pulled a snapshot,
+  // which is why "click it again" appeared to fix it.
+  //
+  // Keyed on `subject`, so it is opened once and lives as long as the screen. A
+  // different identity has a different set of attempts, which is the only reason
+  // to tear it down.
   useEffect(() => {
-    if (!activeId) return undefined;
-    const es = api.openAttemptProgress(activeId);
+    const es = api.openPlaygroundProgress();
 
-    const patch = (e) => {
-      let d;
-      try {
-        d = JSON.parse(e.data);
-      } catch {
-        return;
-      }
+    // One attempt's worth of event, applied wherever that attempt is. Note what
+    // is *not* here: any comparison against `activeId`. Which attempt is open
+    // decides what the middle column shows, and nothing else.
+    const apply = (d) => {
+      if (!d?.attempt_id) return;
       setAttempts((prev) =>
         prev.map((a) =>
-          a.id === activeId
+          a.id === d.attempt_id
             ? {
                 ...a,
                 phase: d.phase ?? a.phase,
                 status: d.status ?? a.status,
                 verdict: d.verdict ?? a.verdict,
                 error_message: d.error_message ?? a.error_message,
+                // Carried on the event, so a finished row no longer costs a
+                // refetch just to learn how long the agent took.
+                agent_started_at: d.agent_started_at ?? a.agent_started_at,
+                agent_latency_ms: d.agent_latency_ms ?? a.agent_latency_ms,
               }
             : a
         )
       );
       // trace_ready / has_analysis are part of the fingerprint but not of the
-      // list row, so they are folded into it here.
-      setLive({
-        trace_ready: d.trace_ready,
-        has_analysis: d.has_analysis,
-        phase: d.phase,
-        verdict: d.verdict,
-        status: d.status,
-      });
+      // list row, so they are folded in here, per attempt.
+      setLiveById((prev) => ({
+        ...prev,
+        [d.attempt_id]: {
+          trace_ready: d.trace_ready,
+          has_analysis: d.has_analysis,
+          phase: d.phase,
+          verdict: d.verdict,
+          status: d.status,
+        },
+      }));
     };
 
-    ["snapshot", "attempt_started", "attempt_answered", "attempt_judged",
-     "attempt_traced", "attempt_completed"].forEach((name) =>
-      es.addEventListener(name, patch)
-    );
-    es.addEventListener("attempt_completed", () => {
-      es.close();
-      // Reconcile once at the end: latency and the final flags are only on the
-      // authoritative payload.
-      reload();
+    const patch = (e) => {
+      try {
+        apply(JSON.parse(e.data));
+      } catch {
+        /* a frame we cannot read is one to ignore, not to crash on */
+      }
+    };
+
+    ["attempt_started", "attempt_answered", "attempt_judged", "attempt_traced",
+     "attempt_completed"].forEach((name) => es.addEventListener(name, patch));
+
+    // The snapshot is every attempt at once — what makes a reload, or a
+    // reconnect after a blip, recover everything that ran while nobody was
+    // listening.
+    es.addEventListener("snapshot", (e) => {
+      try {
+        (JSON.parse(e.data).attempts || []).forEach(apply);
+      } catch {
+        /* see above */
+      }
     });
+
+    // The stream dropped events to stay bounded, so what is on screen may be
+    // incomplete. Refetching answers the question completely; replaying cannot.
+    es.addEventListener("resync", () => reload());
+
+    // Only ever a permanent refusal — a persistent stream retries everything
+    // else itself — so there is nothing left to keep open.
     es.onerror = () => es.close();
     return () => es.close();
-  }, [activeId]);
+  }, [subject]);
 
-  useEffect(() => setLive(null), [activeId]);
+  const live = liveById[activeId] || null;
 
   const detailKey = active
     ? [
