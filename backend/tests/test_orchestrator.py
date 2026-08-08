@@ -609,6 +609,43 @@ async def test_progress_events_carry_the_trace_refresh_fingerprint(seams):
     assert events["question_done"]["has_analysis"] is True
 
 
+async def test_a_question_is_stamped_before_its_agent_call_not_at_row_creation(seams):
+    """What the left column's timer counts from.
+
+    Every result row is created up front so the list can show the whole set from
+    the first second, which makes `created_at` useless as a start time: at
+    RUN_CONCURRENCY=1 the last question's row is minutes older than its own first
+    call, and counting from it would open that row at "running for 40 minutes".
+    """
+    run, questions = make_run(), [make_question()]
+    session = StubSession(run, questions)
+    collector = Collector(run.id)
+
+    observed = {}
+
+    async def watching_agent(question, correlation_id):
+        result = next(o for o in session.added if isinstance(o, QuestionResult))
+        # What the database would hand a page opened during this call.
+        observed["started_at"] = result.started_at
+        observed["commits"] = session.commits
+        return AgentResponse(response="a", correlation_id=correlation_id, latency_ms=5)
+
+    seams.agent = watching_agent
+    await orchestrator._execute_run(session, run)
+
+    events = {e["type"]: e for e in collector.drain() if "question_pk" in e}
+    collector.close()
+
+    assert observed["started_at"] is not None
+    # Two commits precede the agent: the bulk row creation, then the stamp. The
+    # second is the point — letting started_at ride along with the commit that
+    # records the agent's answer would leave it NULL for the whole call, which is
+    # exactly the window the timer exists to show.
+    assert observed["commits"] == 2
+    assert events["question_started"]["started_at"] is not None
+    assert events["question_done"]["agent_latency_ms"] == 5
+
+
 async def test_diagnosis_failure_travels_on_the_stream(seams):
     """The UI distinguishes "the model failed" from "it was never asked", so the
     reason has to reach it live, not only on the next reload."""

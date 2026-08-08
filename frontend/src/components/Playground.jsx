@@ -20,6 +20,7 @@ import {
 import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
+import { setServerTime } from "../useElapsed.js";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
@@ -404,23 +405,14 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // decides what the middle column shows, and nothing else.
     const apply = (d) => {
       if (!d?.attempt_id) return;
-      setAttempts((prev) =>
-        prev.map((a) =>
-          a.id === d.attempt_id
-            ? {
-                ...a,
-                phase: d.phase ?? a.phase,
-                status: d.status ?? a.status,
-                verdict: d.verdict ?? a.verdict,
-                error_message: d.error_message ?? a.error_message,
-                // Carried on the event, so a finished row no longer costs a
-                // refetch just to learn how long the agent took.
-                agent_started_at: d.agent_started_at ?? a.agent_started_at,
-                agent_latency_ms: d.agent_latency_ms ?? a.agent_latency_ms,
-              }
-            : a
-        )
-      );
+      // Kept whether or not the row exists yet, and merged in when it arrives.
+      // `attempt_started` genuinely races the POST that creates the row — the
+      // backend starts the attempt before it responds — so on a quick server the
+      // first event lands while the list still knows nothing about it. Dropping
+      // it cost the row its start time, and therefore its timer, for the whole
+      // of the one call it was meant to be timing.
+      latestEvent.current[d.attempt_id] = d;
+      setAttempts((prev) => prev.map((a) => (a.id === d.attempt_id ? merge(a, d) : a)));
       // trace_ready / has_analysis are part of the fingerprint but not of the
       // list row, so they are folded in here, per attempt.
       setLiveById((prev) => ({
@@ -451,7 +443,13 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // listening.
     es.addEventListener("snapshot", (e) => {
       try {
-        (JSON.parse(e.data).attempts || []).forEach(apply);
+        const d = JSON.parse(e.data);
+        // Taken on every (re)connect. The elapsed times below are rendered as
+        // `now - started_at` against timestamps this server produced, so a
+        // machine whose clock has drifted needs the difference measured before
+        // it can show an honest number.
+        setServerTime(d.server_time);
+        (d.attempts || []).forEach(apply);
       } catch {
         /* see above */
       }
@@ -485,6 +483,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // first appears — never on a background refresh, which would pull the
   // developer off the span they are reading.
   const jumpedFor = useRef(null);
+
+  // The newest event seen per attempt id, including ones that arrived before the
+  // list had a row to put them on. See `apply` and `sendNow`.
+  const latestEvent = useRef({});
 
   useEffect(() => {
     if (!activeId || !detailKey) return undefined;
@@ -571,7 +573,11 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         config: form || {},
         secrets,
       });
-      setAttempts((prev) => [created, ...prev]);
+      // Merged with anything the stream has already said about it: the backend
+      // starts the attempt before it responds to this POST, so `attempt_started`
+      // — the event carrying the instant the timer counts from — is often
+      // already in hand by the time the row exists to receive it.
+      setAttempts((prev) => [merge(created, latestEvent.current[created.id]), ...prev]);
       setDetail(created);
       setActiveId(created.id);
       setActiveSpan(null);
@@ -878,6 +884,23 @@ function describeOverride(attempt) {
   if (configs) parts.push(`${configs} config value${configs === 1 ? "" : "s"}`);
   if (files) parts.push(`${files} skill file${files === 1 ? "" : "s"}`);
   return parts.length ? `an override of ${parts.join(" and ")}` : "a workspace override";
+}
+
+// A list row updated by one progress event. `??` throughout, so a field the
+// event does not carry keeps what the row already had rather than being blanked.
+function merge(row, event) {
+  if (!event) return row;
+  return {
+    ...row,
+    phase: event.phase ?? row.phase,
+    status: event.status ?? row.status,
+    verdict: event.verdict ?? row.verdict,
+    error_message: event.error_message ?? row.error_message,
+    // Carried on the event, so a finished row no longer costs a refetch just to
+    // learn how long the agent took.
+    agent_started_at: event.agent_started_at ?? row.agent_started_at,
+    agent_latency_ms: event.agent_latency_ms ?? row.agent_latency_ms,
+  };
 }
 
 // A sparse config overlay merged onto a full config, the same deep merge the

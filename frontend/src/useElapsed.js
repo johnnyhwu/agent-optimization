@@ -1,0 +1,148 @@
+import { useSyncExternalStore } from "react";
+
+// The clock behind every "how long has this been running" in the app.
+//
+// The obvious implementation — a `setInterval` inside each row, or one interval
+// that re-renders the list — is what makes a screen like this feel heavy: an
+// attempt row carries badges, tag chips and four buttons, and re-rendering
+// twenty of them every second to change two characters of text is a second of
+// work per second. Three things keep this cheap instead:
+//
+//   1. **One ticker for the whole app**, not one per timer. Every live number on
+//      screen is driven by the same beat.
+//   2. **The interval only exists while something is being timed.** Subscribers
+//      are counted; the last one to leave stops the clock, so a screen with
+//      nothing running costs exactly nothing.
+//   3. **Only leaves subscribe.** `useSyncExternalStore` re-renders precisely
+//      the components that called it, so a tick repaints the timer text and
+//      nothing above it. That is what `ElapsedTimer` is for, and it is the
+//      difference between repainting a few text nodes and repainting a list.
+//
+// Nothing is accumulated between ticks: elapsed is always recomputed as
+// `now - startedAt`. So a missed tick is not a lost second, which is what makes
+// pausing in a hidden tab free rather than something to compensate for.
+
+// 1Hz. The value is displayed to the nearest 0.1s at most, so anything faster
+// would be work nobody can see. Deliberately not requestAnimationFrame: this is
+// a clock, not an animation, and it must keep its cost when the tab is busy.
+const TICK_MS = 1000;
+
+let timer = null;
+const subscribers = new Set();
+
+// How far this browser's clock is ahead of (or behind) the server's, in ms.
+// Durations are measured against timestamps the server produced, so on a machine
+// whose clock has drifted — which is most of them, by seconds — an uncorrected
+// subtraction shows a number that is simply wrong, and a slow clock shows a
+// negative one. Corrected once per stream connection, from the snapshot the
+// server sends when it opens.
+let skewMs = 0;
+
+function tick() {
+  // Copied before iterating: a subscriber may unsubscribe as a result of the
+  // render this notification triggers.
+  [...subscribers].forEach((fn) => fn());
+}
+
+function start() {
+  if (timer === null && subscribers.size > 0 && !document.hidden) {
+    timer = setInterval(tick, TICK_MS);
+  }
+}
+
+function stop() {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+// A hidden tab is a tab nobody is reading, and browsers throttle its timers
+// anyway. Stopping outright is both cheaper and more honest — and costs nothing
+// on return, because the first render after `visibilitychange` recomputes from
+// the timestamp rather than from a count of elapsed ticks.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stop();
+    } else {
+      start();
+      tick(); // repaint immediately rather than up to a second later
+    }
+  });
+}
+
+function subscribe(fn) {
+  subscribers.add(fn);
+  start();
+  return () => {
+    subscribers.delete(fn);
+    if (subscribers.size === 0) stop();
+  };
+}
+
+// `Date.now()` is read at notification time rather than cached, so two timers
+// rendering on the same tick agree, and a component that renders between ticks
+// (because its props changed) still shows a current value.
+const getSnapshot = () => Math.floor((Date.now() + skewMs) / TICK_MS);
+
+/** Re-render this component once a second, for as long as it is mounted. */
+export function useTick() {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * Note the server's clock, from a progress stream's snapshot.
+ *
+ * Called on every (re)connect: a long-lived stream outlives any one measurement,
+ * and reconnecting is the natural moment to take a fresh one.
+ */
+export function setServerTime(iso) {
+  if (!iso) return;
+  const server = Date.parse(iso);
+  if (Number.isFinite(server)) skewMs = server - Date.now();
+}
+
+/** Milliseconds since `startedAt`, on the server's clock. Null if unknown. */
+export function elapsedSince(startedAt) {
+  if (!startedAt) return null;
+  const start = Date.parse(startedAt);
+  if (!Number.isFinite(start)) return null;
+  // Never negative: a timestamp a moment in the server's future (the stamp
+  // arriving before the skew measurement settles) should read as 0s, not as a
+  // minus sign.
+  return Math.max(0, Date.now() + skewMs - start);
+}
+
+/**
+ * A duration for display.
+ *
+ * Sub-minute values carry a decimal because that is the range where the
+ * difference between 8.4s and 12.1s is the point; past a minute the tenth is
+ * noise and `1m 04s` reads faster than `64.3s`.
+ */
+export function formatDuration(ms) {
+  if (ms === null || ms === undefined) return null;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(Math.floor(seconds % 60)).padStart(2, "0")}s`;
+}
+
+// Exported for the tests, which need a clean clock between cases.
+export const _internals = {
+  reset() {
+    stop();
+    subscribers.clear();
+    skewMs = 0;
+  },
+  get skewMs() {
+    return skewMs;
+  },
+  get running() {
+    return timer !== null;
+  },
+  get subscriberCount() {
+    return subscribers.size;
+  },
+};

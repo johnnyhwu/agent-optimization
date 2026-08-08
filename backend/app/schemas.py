@@ -285,6 +285,10 @@ class QuestionResultOut(BaseModel):
     phase: str
     error_message: str | None = None  # why status == 'failed' / 'cancelled'
     failure_kind: str | None = None  # 'agent' | 'judge' | 'judge_invalid'
+    # When the agent call went out. NULL both for a question that has not
+    # started and for one written before the column existed — the list shows no
+    # timer for either, which beats inventing a duration for old runs.
+    started_at: datetime | None = None
     agent_latency_ms: int | None = None
     trace_ready: bool
     has_analysis: bool

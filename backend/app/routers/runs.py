@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
@@ -33,6 +34,11 @@ _SECRET_ENDPOINTS = {
 _SECRET_SLOTS = {"llm_api_key": "llm", "langfuse_secret_key": "langfuse"}
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}/runs", tags=["runs"])
+
+
+def _now_iso() -> str:
+    """This server's clock, for a client rendering durations against it."""
+    return datetime.now(timezone.utc).isoformat()
 
 # Keep strong references so background tasks aren't garbage-collected.
 _background_tasks: set[asyncio.Task] = set()
@@ -420,7 +426,13 @@ async def run_progress(
         try:
             yield {"event": "snapshot",
                    "data": json.dumps({"status": run_status, "done": done,
-                                       "total": total, "correct": correct})}
+                                       "total": total, "correct": correct,
+                                       # The question list renders elapsed times
+                                       # as `now - started_at`, and the browser's
+                                       # clock is not this one. One timestamp per
+                                       # connection is all the client needs to
+                                       # correct for the difference.
+                                       "server_time": _now_iso()})}
             if run_status != "running":
                 yield {"event": "run_completed",
                        "data": json.dumps({"status": run_status})}

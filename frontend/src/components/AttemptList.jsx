@@ -2,6 +2,7 @@ import React from "react";
 import { IconButton } from "./ui/Button.jsx";
 import { IconCopy, IconPanelLeft, IconPlus, IconStop, IconTrash } from "./icons.jsx";
 import { overrideCounts } from "../workspace_util.js";
+import ElapsedTimer from "./ElapsedTimer.jsx";
 
 // Left column of the playground: this session's attempts, newest first.
 //
@@ -117,7 +118,16 @@ export default function AttemptList({
             <div className="qtext">{a.question.slice(0, 60)}</div>
             <div className="qid">
               {relative(a.created_at)} · <span className={`qphase ${a.phase}`}>{note(a)}</span>
-              {a.agent_latency_ms != null && ` · ${(a.agent_latency_ms / 1000).toFixed(1)}s`}
+              {/* One slot for the agent's time, counting up while the question
+                  is out and settling on the measured value when it lands — so
+                  "how long has this been going" and "how long did it take" are
+                  the same number in the same place, rather than a duration that
+                  appears from nowhere at the end. */}
+              {(a.agent_started_at || a.agent_latency_ms != null) && " · "}
+              <ElapsedTimer
+                startedAt={a.agent_started_at}
+                finalMs={a.agent_latency_ms}
+              />
             </div>
             <div className="attempt-tags">
               {a.workspace_overridden ? (
@@ -203,6 +213,12 @@ export default function AttemptList({
       )}
       {attempts.length > 0 && (
         <div className="attempt-footnote">
+          {/* Said once, standing, rather than left to the tooltip: a settled
+              time sitting next to a row that still reads "judging…" is
+              confusing precisely until you know the timer is the agent's. */}
+          Times are the agent's — from sending the question to its answer.
+          Grading and trace analysis are not counted.
+          <br />
           Attempts live in the backend's memory — restarting it clears this list.
         </div>
       )}
