@@ -206,6 +206,16 @@ class Settings(BaseSettings):
     # How much of an exception message is kept in question_results.error_message.
     error_message_max_chars: int = 2000
 
+    # --- Live progress streams ----------------------------------------------
+    # How many events one subscriber's mailbox holds before the oldest are
+    # dropped and the stream tells the client to resync (see app/sse.py). The
+    # bound exists because a subscriber that stops reading — a stalled
+    # connection, a sleeping laptop — would otherwise grow a queue for as long as
+    # its stream is open, and the playground's per-user stream stays open for as
+    # long as the tab does. 512 is far more than any healthy client is ever
+    # behind by; reaching it means the connection is already broken.
+    sse_queue_max_events: int = 512
+
     # --- Playground (§10) ---------------------------------------------------
     # Playground attempts are deliberately not persisted, so they live in this
     # process's memory. The cap is not decoration: one attempt holds a whole

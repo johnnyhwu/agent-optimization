@@ -237,6 +237,15 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
             snap = (state["done"], state["correct"])
         await _publish_progress(run_id, item["pk"], result, snap[0], total, snap[1])
 
+    # Stamped and committed *before* the agent is called, not folded into the
+    # commit that records its answer. The gap between the two is exactly the
+    # window the left column's timer exists to show, so a page opened during it
+    # has to be able to read a start time — which a value still sitting in the
+    # session would not give it. Costs one small UPDATE per question, which is
+    # cheap next to the agent call it precedes.
+    async with lock:
+        result.started_at = datetime.now(timezone.utc)
+        await session.commit()
     await publish("question_started")
 
     # 1) agent
@@ -396,6 +405,12 @@ async def _publish_progress(run_id, question_pk, result: QuestionResult,
             "status": result.status,
             "error_message": result.error_message,
             "failure_kind": result.failure_kind,
+            # When the agent call went out, and how long it took. The left
+            # column counts up from the first while the question is running and
+            # settles on the second once it lands — both from the server's clock,
+            # so a reload resumes at the right number instead of restarting.
+            "started_at": result.started_at.isoformat() if result.started_at else None,
+            "agent_latency_ms": result.agent_latency_ms,
             "trace_ready": result.trace_ready,
             # The detail view refetches the trace when any of these change, so
             # the middle column follows a live question instead of freezing at

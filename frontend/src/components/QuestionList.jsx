@@ -2,6 +2,7 @@ import React from "react";
 import Card, { CardHeader } from "./ui/Card.jsx";
 import { InlineEmpty } from "./ui/EmptyState.jsx";
 import { SegmentedControl } from "./ui/Toolbar.jsx";
+import ElapsedTimer from "./ElapsedTimer.jsx";
 
 // Left column. Two jobs:
 //
@@ -27,7 +28,15 @@ const PHASE_LABEL = {
   cancelled: "stopped",
 };
 
-export default function QuestionList({ results, activeId, filter, setFilter, onPick }) {
+// `runLive` says whether the run being shown is executing right now. It is what
+// decides whether a question with a start time and no measured duration is still
+// with the agent or simply never got an answer — and the second case is not
+// rare. A backend restart marks the *run* failed (main.py:reap_interrupted_runs)
+// but leaves its question rows 'pending' forever, so without this a run
+// interrupted last week would open with a timer counting up from last week.
+export default function QuestionList({
+  results, activeId, filter, setFilter, onPick, runLive = false,
+}) {
   const wrongCount = results.filter((r) => r.is_incorrect).length;
   const shown = filter === "wrong" ? results.filter((r) => r.is_incorrect) : results;
 
@@ -85,6 +94,15 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
               <div className="qtext" title={r.question}>{r.question}</div>
               <div className="qid">
                 {r.question_id} · <span className={`qphase ${r.phase}`}>{note}</span>
+                {/* Counts up while the question is with the agent and settles
+                    on the measured value. Rows from before `started_at` was
+                    recorded show nothing rather than a fabricated duration. */}
+                {(r.started_at || r.agent_latency_ms != null) && " · "}
+                <ElapsedTimer
+                  startedAt={r.started_at}
+                  finalMs={r.agent_latency_ms}
+                  running={runLive && r.status === "pending"}
+                />
               </div>
               {/* A bare "failed" says nothing once the agent is a real service. */}
               {(r.phase === "failed" || r.phase === "cancelled" || r.phase === "judge_invalid") &&
@@ -103,6 +121,15 @@ export default function QuestionList({ results, activeId, filter, setFilter, onP
             ? "Every question in this selection passed."
             : "No questions."}
         </InlineEmpty>
+      )}
+      {shown.length > 0 && (
+        // The same standing note the attempt list carries, for the same reason:
+        // a settled time beside a row still reading "judging…" only makes sense
+        // once you know the timer is the agent's.
+        <div className="attempt-footnote">
+          Times are the agent's — from sending the question to its answer.
+          Grading and trace analysis are not counted.
+        </div>
       )}
     </Card>
   );

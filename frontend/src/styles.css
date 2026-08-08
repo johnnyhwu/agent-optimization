@@ -471,6 +471,17 @@ select { cursor: pointer; }
    been decided. */
 .dot.answered { background: transparent; border: 2px solid var(--accent); }
 .qitem .qid { font-size: 11px; color: var(--muted); margin-top: 1px; }
+/* How long the agent has been on this question, or took.
+
+   `tabular-nums` is the whole rule's reason for existing: proportional digits
+   are not the same width, so a number changing once a second reflows the text
+   beside it and the row appears to twitch. Fixed-width digits make a live
+   counter as still as a static one. */
+.elapsed { font-variant-numeric: tabular-nums; }
+/* Running: the accent the rest of the UI already uses for "in flight" (see
+   .qphase.answered and .phasestep.active), so a moving number reads as part of
+   the same story rather than as a new kind of thing. */
+.elapsed.is-running { color: var(--accent); }
 .qphase { font-weight: 600; }
 .qphase.pending { color: var(--muted); }
 .qphase.answered { color: var(--accent); }

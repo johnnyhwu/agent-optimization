@@ -180,6 +180,14 @@ class QuestionResult(Base):
     # one failure the owner can actually fix.
     failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When this question's agent call went out — what the left column's timer
+    # counts from. Distinct from `created_at` below, which is when the row was
+    # written: the orchestrator creates every row for a run up front, so at
+    # RUN_CONCURRENCY=1 the last question's row is minutes older than its own
+    # first call. NULL on rows written before this column existed.
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     trace_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     # Why the trace could not be fetched (Langfuse unreachable / 401 / timeout).
     # Distinguishes a misconfigured trace store from ingestion that simply hasn't

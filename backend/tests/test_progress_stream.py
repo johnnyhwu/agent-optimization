@@ -286,6 +286,35 @@ async def test_events_published_before_the_stream_is_read_are_not_lost(session_f
     assert "run_completed" in body
 
 
+async def test_a_backed_up_run_stream_says_resync_rather_than_losing_the_end(
+    session_factory, configure
+):
+    """Mailboxes are bounded, so a stalled subscriber loses its oldest events
+    (app/sse.py). `run_completed` is among the events that can be lost, and a
+    client waiting on a terminal event that was already discarded waits for the
+    rest of the page's life — the progress bar stuck at "running" forever.
+
+    So a drop is always reported. The client refetches the run and finds out how
+    it ended, which is the only recovery available once the event is gone.
+    """
+    eval_set_id, run_id = await make_run(session_factory)
+
+    with configure(sse_queue_max_events=2):
+        response = await runs_router.run_progress(
+            eval_set_id=eval_set_id, run_id=run_id,
+            request=FakeRequest(disconnected=False), subject="alice",
+        )
+        for i in range(5):
+            await hub.publish(run_id, {"type": "question_done", "n": i})
+
+        events = await drain(response, limit=4)
+
+    names = [e.get("event") for e in events]
+    assert names == ["snapshot", "resync", "question_done", "question_done"]
+    # Drop-oldest, so it is the newest that survive.
+    assert '"n": 3' in str(events[2]) and '"n": 4' in str(events[3])
+
+
 async def test_the_stream_unsubscribes_when_it_ends(session_factory):
     eval_set_id, run_id = await make_run(session_factory, status="completed")
     response = await runs_router.run_progress(

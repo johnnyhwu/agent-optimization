@@ -120,7 +120,7 @@ async def list_results(
                     rep.status, rep.agent_response, rep.verdict, rep.failure_kind
                 ),
                 error_message=rep.error_message, failure_kind=rep.failure_kind,
-                agent_latency_ms=rep.agent_latency_ms,
+                started_at=rep.started_at, agent_latency_ms=rep.agent_latency_ms,
                 trace_ready=rep.trace_ready, has_analysis=rep.id in analyses_qr,
                 is_incorrect=qpk in incorrect_set,
             )

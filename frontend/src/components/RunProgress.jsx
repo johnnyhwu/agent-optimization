@@ -24,6 +24,21 @@ export default function RunProgress({ evalSetId, runId, label, onDone }) {
     });
     es.addEventListener("run_started", (e) => setTotal(JSON.parse(e.data).total));
     es.addEventListener("question_done", onQ);
+    // Events were dropped to keep this subscriber bounded (app/sse.py). The lost
+    // one may have been `run_completed`, and a progress bar waiting for a
+    // terminal event that has already been discarded never finishes — so the run
+    // is re-read rather than waited on.
+    es.addEventListener("resync", () => {
+      api
+        .getRun(evalSetId, runId)
+        .then((run) => {
+          if (run.status === "running") return;
+          setStatus(run.status);
+          es.close();
+          onDone && onDone();
+        })
+        .catch(() => {});
+    });
     es.addEventListener("run_completed", (e) => {
       let s = "completed";
       try {

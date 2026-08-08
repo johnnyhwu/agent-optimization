@@ -285,6 +285,10 @@ class QuestionResultOut(BaseModel):
     phase: str
     error_message: str | None = None  # why status == 'failed' / 'cancelled'
     failure_kind: str | None = None  # 'agent' | 'judge' | 'judge_invalid'
+    # When the agent call went out. NULL both for a question that has not
+    # started and for one written before the column existed — the list shows no
+    # timer for either, which beats inventing a duration for old runs.
+    started_at: datetime | None = None
     agent_latency_ms: int | None = None
     trace_ready: bool
     has_analysis: bool
@@ -495,6 +499,11 @@ class PlaygroundAttemptOut(BaseModel):
     phase: str  # pending | answered | judged | traced | diagnosed
     verdict: str | None = None
     judge_score: float | None = None
+    # When the agent call went out, and how long it took. The list counts up from
+    # the first while the attempt is running and shows the second once it lands —
+    # so the two together are "how long has this been going" and "how long did it
+    # take", from one server-side clock rather than the browser's.
+    agent_started_at: datetime | None = None
     agent_latency_ms: int | None = None
     error_message: str | None = None
     # Non-secret settings only: RunConfig has no credential fields.

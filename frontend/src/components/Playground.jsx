@@ -20,6 +20,8 @@ import {
 import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
+import { setServerTime } from "../useElapsed.js";
+import { adoptFetched, mergeAttempt, pruneById } from "../attempt_state.js";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
@@ -94,10 +96,15 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const [detailRefreshing, setDetailRefreshing] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [activeSpan, setActiveSpan] = useState(null);
-  // The last state the SSE stream reported for the open attempt. Kept separate
-  // from the list row because two of its fields (trace_ready, has_analysis) exist
-  // only on the stream.
-  const [live, setLive] = useState(null);
+  // The last state the SSE stream reported, **per attempt**. Kept separate from
+  // the list row because two of its fields (trace_ready, has_analysis) exist only
+  // on the stream.
+  //
+  // Keyed by id rather than held as one value, because the stream now reports
+  // every attempt rather than only the open one. `live` below is still a single
+  // object — whichever attempt is open — so `detailKey` and the whole
+  // detail-refetch mechanism read exactly as they did.
+  const [liveById, setLiveById] = useState({});
   // Kept after a send rather than cleared: most second questions are the first
   // one with a word changed, and re-typing it to compare two phrasings is the
   // work this screen exists to make cheap. The attempt list is the record of
@@ -174,7 +181,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   useEffect(() => {
     api
       .listAttempts()
-      .then(setAttempts)
+      .then(adopt)
       .catch((e) => setError(e.message));
     // A different identity has a different set of attempts.
   }, [subject]);
@@ -363,9 +370,40 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     setAgentMismatch({ url, timeout_s: config.agent_timeout_s ?? null, what });
   }
 
+  // Take a freshly fetched list as the new truth, without letting it undo
+  // anything the stream has already said.
+  //
+  // The fetch reflects the store at the moment the request was *served*, which
+  // can be earlier than the newest event already applied here — the two arrive
+  // over different connections and nothing orders them. Applied raw, a response
+  // served a moment before an attempt finished would paint a completed row back
+  // to "running", and with no further events coming it would stay that way: the
+  // stale row this whole change set exists to eliminate, reintroduced through
+  // the back door.
+  //
+  // Re-applying the newest known event on top is safe **as long as no event has
+  // been dropped**: the stream is ordered, so `latestEvent` then holds the most
+  // recent state the server published, and each event carries every field
+  // `merge` touches. If the fetch is the fresher of the two, they agree and this
+  // is a no-op.
+  //
+  // A gap breaks that premise, which is why `resync` clears the memory before
+  // calling this. Without that, a swallowed `attempt_completed` leaves
+  // `latestEvent` holding "answered", and the refetch triggered to repair the
+  // gap would faithfully paint the finished row back to running — the recovery
+  // path re-creating the exact stale row it exists to fix.
+  function adopt(fetched) {
+    // The same pass prunes the two id-keyed maps. Both would otherwise keep an
+    // entry for every attempt ever seen — including ones deleted here and ones
+    // the server evicted at the per-user cap — for as long as the tab is open.
+    latestEvent.current = pruneById(latestEvent.current, fetched);
+    setLiveById((prev) => pruneById(prev, fetched));
+    setAttempts(adoptFetched(fetched, latestEvent.current));
+  }
+
   async function reload() {
     try {
-      setAttempts(await api.listAttempts());
+      adopt(await api.listAttempts());
     } catch (e) {
       setError(e.message);
     }
@@ -379,59 +417,96 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     set(k, raw === "" || !Number.isFinite(n) || n <= 0 ? null : n);
   };
 
-  // --- Live updates for the running attempt ---------------------------------
-  // Subscribing for the open attempt is enough: a finished one closes the stream
-  // immediately, so a historical attempt costs nothing.
+  // --- Live updates for every running attempt -------------------------------
+  //
+  // **One stream for the whole screen, not one per attempt.** Subscribing to the
+  // open attempt was the bug: asking a second question moved the selection,
+  // which closed the first attempt's stream, and everything it published
+  // afterwards went to a topic nobody was listening on. The row stayed grey
+  // until it was clicked — clicking it re-subscribed and pulled a snapshot,
+  // which is why "click it again" appeared to fix it.
+  //
+  // Keyed on `subject`, so it is opened once and lives as long as the screen. A
+  // different identity has a different set of attempts, which is the only reason
+  // to tear it down.
   useEffect(() => {
-    if (!activeId) return undefined;
-    const es = api.openAttemptProgress(activeId);
+    const es = api.openPlaygroundProgress();
 
-    const patch = (e) => {
-      let d;
-      try {
-        d = JSON.parse(e.data);
-      } catch {
-        return;
-      }
-      setAttempts((prev) =>
-        prev.map((a) =>
-          a.id === activeId
-            ? {
-                ...a,
-                phase: d.phase ?? a.phase,
-                status: d.status ?? a.status,
-                verdict: d.verdict ?? a.verdict,
-                error_message: d.error_message ?? a.error_message,
-              }
-            : a
-        )
-      );
+    // One attempt's worth of event, applied wherever that attempt is. Note what
+    // is *not* here: any comparison against `activeId`. Which attempt is open
+    // decides what the middle column shows, and nothing else.
+    const apply = (d) => {
+      if (!d?.attempt_id) return;
+      // Kept whether or not the row exists yet, and merged in when it arrives.
+      // `attempt_started` genuinely races the POST that creates the row — the
+      // backend starts the attempt before it responds — so on a quick server the
+      // first event lands while the list still knows nothing about it. Dropping
+      // it cost the row its start time, and therefore its timer, for the whole
+      // of the one call it was meant to be timing.
+      latestEvent.current[d.attempt_id] = d;
+      setAttempts((prev) => prev.map((a) => (a.id === d.attempt_id ? mergeAttempt(a, d) : a)));
       // trace_ready / has_analysis are part of the fingerprint but not of the
-      // list row, so they are folded into it here.
-      setLive({
-        trace_ready: d.trace_ready,
-        has_analysis: d.has_analysis,
-        phase: d.phase,
-        verdict: d.verdict,
-        status: d.status,
-      });
+      // list row, so they are folded in here, per attempt.
+      setLiveById((prev) => ({
+        ...prev,
+        [d.attempt_id]: {
+          trace_ready: d.trace_ready,
+          has_analysis: d.has_analysis,
+          phase: d.phase,
+          verdict: d.verdict,
+          status: d.status,
+        },
+      }));
     };
 
-    ["snapshot", "attempt_started", "attempt_answered", "attempt_judged",
-     "attempt_traced", "attempt_completed"].forEach((name) =>
-      es.addEventListener(name, patch)
-    );
-    es.addEventListener("attempt_completed", () => {
-      es.close();
-      // Reconcile once at the end: latency and the final flags are only on the
-      // authoritative payload.
+    const patch = (e) => {
+      try {
+        apply(JSON.parse(e.data));
+      } catch {
+        /* a frame we cannot read is one to ignore, not to crash on */
+      }
+    };
+
+    ["attempt_started", "attempt_answered", "attempt_judged", "attempt_traced",
+     "attempt_completed"].forEach((name) => es.addEventListener(name, patch));
+
+    // The snapshot is every attempt at once — what makes a reload, or a
+    // reconnect after a blip, recover everything that ran while nobody was
+    // listening.
+    es.addEventListener("snapshot", (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        // Taken on every (re)connect. The elapsed times below are rendered as
+        // `now - started_at` against timestamps this server produced, so a
+        // machine whose clock has drifted needs the difference measured before
+        // it can show an honest number.
+        setServerTime(d.server_time);
+        (d.attempts || []).forEach(apply);
+      } catch {
+        /* see above */
+      }
+    });
+
+    // The stream dropped events to stay bounded, so what is on screen may be
+    // incomplete. Refetching answers the question completely; replaying cannot.
+    //
+    // Forgetting first is the load-bearing half. `resync` means precisely that
+    // our event history has a hole, so the newest event we hold is no longer
+    // guaranteed to be the newest the server sent — and `adopt` would otherwise
+    // re-apply it on top of the fresh rows, reverting exactly the attempt whose
+    // ending we missed.
+    es.addEventListener("resync", () => {
+      latestEvent.current = {};
       reload();
     });
+
+    // Only ever a permanent refusal — a persistent stream retries everything
+    // else itself — so there is nothing left to keep open.
     es.onerror = () => es.close();
     return () => es.close();
-  }, [activeId]);
+  }, [subject]);
 
-  useEffect(() => setLive(null), [activeId]);
+  const live = liveById[activeId] || null;
 
   const detailKey = active
     ? [
@@ -449,6 +524,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // first appears — never on a background refresh, which would pull the
   // developer off the span they are reading.
   const jumpedFor = useRef(null);
+
+  // The newest event seen per attempt id, including ones that arrived before the
+  // list had a row to put them on. See `apply` and `sendNow`.
+  const latestEvent = useRef({});
 
   useEffect(() => {
     if (!activeId || !detailKey) return undefined;
@@ -535,7 +614,11 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         config: form || {},
         secrets,
       });
-      setAttempts((prev) => [created, ...prev]);
+      // Merged with anything the stream has already said about it: the backend
+      // starts the attempt before it responds to this POST, so `attempt_started`
+      // — the event carrying the instant the timer counts from — is often
+      // already in hand by the time the row exists to receive it.
+      setAttempts((prev) => [mergeAttempt(created, latestEvent.current[created.id]), ...prev]);
       setDetail(created);
       setActiveId(created.id);
       setActiveSpan(null);
@@ -596,6 +679,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     try {
       await api.deleteAttempt(a.id);
       setAttempts((prev) => prev.filter((x) => x.id !== a.id));
+      // Forgotten here too, or the two id-keyed maps outlive every row they
+      // describe for as long as the tab is open.
+      delete latestEvent.current[a.id];
+      setLiveById(({ [a.id]: _gone, ...rest }) => rest);
       if (activeId === a.id) {
         setActiveId(null);
         setDetail(null);

@@ -5,6 +5,7 @@ import RunStatusBar from "./RunStatusBar.jsx";
 import SpanList from "./SpanList.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import { useToast } from "./Toast.jsx";
+import { setServerTime } from "../useElapsed.js";
 import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
 import { IconSend } from "./icons.jsx";
@@ -110,6 +111,11 @@ export default function RunDetail({
                     verdict: d.verdict,
                     error_message: d.error_message,
                     trace_ready: d.trace_ready,
+                    // The left column's timer: counts up from the first, settles
+                    // on the second. Carried on every event so a row finishes
+                    // itself rather than waiting for the end-of-run reload.
+                    started_at: d.started_at ?? r.started_at,
+                    agent_latency_ms: d.agent_latency_ms ?? r.agent_latency_ms,
                     // Part of the open question's trace fingerprint, so the
                     // middle column follows the run instead of freezing.
                     has_analysis: d.has_analysis ?? r.has_analysis,
@@ -126,6 +132,10 @@ export default function RunDetail({
     es.addEventListener("snapshot", (e) => {
       const d = JSON.parse(e.data);
       setRunStatus(d.status);
+      // The question list renders elapsed times against timestamps this server
+      // produced, so the difference between the two clocks is measured once per
+      // connection rather than assumed to be zero.
+      setServerTime(d.server_time);
       // The rows are created before the first question runs, but a subscriber
       // that arrives in that window would otherwise sit on a stale empty list.
       if (!resultsRef.current || resultsRef.current.length !== d.total) loadResults();
@@ -135,6 +145,21 @@ export default function RunDetail({
     es.addEventListener("question_judged", patch);
     es.addEventListener("question_traced", patch);
     es.addEventListener("question_done", patch);
+    // The stream dropped events to stay bounded, so this view may be missing
+    // something — including, in the worst case, `run_completed` itself, which
+    // would otherwise leave this waiting on a run that finished long ago.
+    // Refetching answers both questions authoritatively.
+    es.addEventListener("resync", () => {
+      loadResults();
+      api
+        .getRun(evalSet.id, liveRunId)
+        .then((run) => {
+          setRunStatus(run.status);
+          setCancelling(Boolean(run.cancel_requested));
+          if (run.status !== "running") es.close();
+        })
+        .catch(() => {});
+    });
     es.addEventListener("run_completed", (e) => {
       let status = "completed";
       try {
@@ -321,6 +346,9 @@ export default function RunDetail({
             filter={filter}
             setFilter={setFilter}
             onPick={pick}
+            // Only a single selected run can be live; the multi-run modes
+            // compare finished history, where nothing is still counting.
+            runLive={Boolean(liveRunId) && running}
           />
         )}
         <SpanList
