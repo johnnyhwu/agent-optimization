@@ -1,15 +1,23 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import FormatHelp from "./FormatHelp.jsx";
 import Modal from "./Modal.jsx";
+import PreviewPager from "./PreviewPager.jsx";
+import ScriptRunPanel from "./ScriptRunPanel.jsx";
 import ShareEditor from "./ShareEditor.jsx";
 import { useToast } from "./Toast.jsx";
 import UploadPreviewEditor from "./UploadPreviewEditor.jsx";
 import { IconPlus, IconUpload, IconX } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
 import {
+  clampPage,
   detectFormat,
   emptyRow,
+  globalIndex,
+  pageOfRow,
+  pageSlice,
   parseFile,
+  rowsFromScriptOutput,
   rowsToJsonl,
   validateRows,
 } from "../upload_parse.js";
@@ -32,10 +40,29 @@ const SAMPLE_ROWS = [
   },
 ];
 
-// Upload dialog: pick a JSONL or CSV file, preview it as an editable table,
-// tweak rows, then Create. Owner can pick who to share with (direct name
-// entry). Existing metadata keys are auto-suggested (§6.10). The set is locked
-// after creation (§6.11), so all row add/remove happens here, pre-commit.
+const EMPTY_CONNECTION = {
+  host: "",
+  port: "5432",
+  database: "",
+  user: "",
+  password: "",
+};
+
+// Upload dialog: pick a JSONL, CSV or Python file, preview the rows as an
+// editable table, tweak them, then Create. Owner can pick who to share with
+// (direct name entry). Existing metadata keys are auto-suggested (§6.10). The set
+// is locked after creation (§6.11), so all row add/remove happens here, pre-commit.
+//
+// **There is no source selector, and that is deliberate.** A `.py` is chosen with
+// the same "Choose file…" button as a `.csv`, and the extension decides what
+// happens next — so the developer who only ever uploads files sees exactly the
+// dialog they saw before scripts existed, and the one uploading a script never
+// had to find a mode switch. Everything script-specific lives in
+// `ScriptRunPanel`, which does not exist in the tree unless a `.py` was chosen.
+//
+// A script's rows land in the same `rows` state as a file's, in the same shape,
+// so the preview, the row editor, validation and Create are shared code rather
+// than a second path that has to be kept in step with the first.
 export default function UploadDialog({ onClose, onCreated, subject }) {
   const toast = useToast();
   const fileRef = useRef(null);
@@ -57,6 +84,20 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   // toggling never costs an edit.
   const [expanded, setExpanded] = useState(false);
 
+  // Paging over `rows`. Applies to every source: a JSONL file can be as long as
+  // a script's output, and thousands of live <textarea>s are slow wherever they
+  // came from.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Script upload only. `null` throughout for a file upload, which is what keeps
+  // the panel and the provenance payload out of the file path entirely.
+  const [script, setScript] = useState(null); // { source, fileName }
+  const [validation, setValidation] = useState(null);
+  const [connection, setConnection] = useState(EMPTY_CONNECTION);
+  const [runResult, setRunResult] = useState(null);
+  const [running, setRunning] = useState(false);
+
   useEffect(() => {
     api.metadataKeys().then(setKnownKeys).catch(() => {});
   }, []);
@@ -77,31 +118,100 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   const setCell = (i, field, val) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [field]: val } : r)));
   const removeRow = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
-  const addRow = () => setRows((rs) => [...rs, emptyRow()]);
+  const addRow = () => {
+    // Land on the page the new row is actually on, otherwise "Add row" appears to
+    // do nothing once the list is longer than one page. Both updates are computed
+    // from `rows` here rather than inside the setRows updater — a state setter
+    // called from another setter's updater runs twice under StrictMode.
+    setPage(pageOfRow(rows.length, pageSize));
+    setRows((rs) => [...rs, emptyRow()]);
+  };
+
+  const { items: pageRows, start: pageStart } = useMemo(
+    () => pageSlice(rows, page, pageSize),
+    [rows, page, pageSize]
+  );
+
+  // Deleting rows can strand the cursor past the end of the list.
+  useEffect(() => {
+    setPage((p) => clampPage(p, rows.length, pageSize));
+  }, [rows.length, pageSize]);
+
+  function resetSource() {
+    setRows([]);
+    setParseErrors([]);
+    setScript(null);
+    setValidation(null);
+    setRunResult(null);
+    setPage(1);
+  }
 
   async function onFile(e) {
     const file = e.target.files && e.target.files[0];
+    // Reset the input so choosing the same file twice re-fires change — the
+    // normal thing to do after editing a script and trying again.
+    e.target.value = "";
     if (!file) return;
     setError(null);
+    resetSource();
+
+    const format = detectFormat(file.name);
+    setSourceFormat(format);
+    setFileName(file.name);
+
+    let text;
     try {
-      const text = await file.text();
-      const format = detectFormat(file.name);
-      const { rows: parsed, errors } = parseFile(text, format);
-      setRows(parsed);
-      setParseErrors(errors);
-      setFileName(file.name);
-      setSourceFormat(format);
-      if (parsed.length === 0 && errors.length === 0) {
-        setParseErrors(["file contained no questions"]);
-      }
+      text = await file.text();
     } catch (err) {
       setError("Could not read file: " + err.message);
+      return;
+    }
+
+    if (format === "python") {
+      setScript({ source: text, fileName: file.name });
+      try {
+        setValidation(await api.validateScript(text));
+      } catch (err) {
+        setError(err.message);
+      }
+      return;
+    }
+
+    const { rows: parsed, errors } = parseFile(text, format);
+    setRows(parsed);
+    setParseErrors(errors);
+    if (parsed.length === 0 && errors.length === 0) {
+      setParseErrors(["file contained no questions"]);
+    }
+  }
+
+  async function runScript() {
+    if (!script) return;
+    setError(null);
+    setRunning(true);
+    try {
+      const result = await api.runScript(script.source, {
+        ...connection,
+        port: Number(connection.port) || 5432,
+      });
+      setRunResult(result);
+      setRows(rowsFromScriptOutput(result.rows));
+      setPage(1);
+      if (result.ok && result.rows.length) {
+        toast.success(
+          `${result.rows.length} row${result.rows.length === 1 ? "" : "s"} loaded`
+        );
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRunning(false);
     }
   }
 
   function loadSample() {
+    resetSource();
     setRows(SAMPLE_ROWS.map((r) => ({ ...r })));
-    setParseErrors([]);
     setFileName("sample.jsonl");
     setSourceFormat("jsonl");
     setError(null);
@@ -111,7 +221,14 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
     setError(null);
     if (!name.trim()) return setError("Name is required.");
     const rowErrors = validateRows(rows);
-    if (rowErrors.length) return setError("Please fix:\n" + rowErrors.join("\n"));
+    if (rowErrors.length) {
+      // Jump to the first offending row: with a paginated preview, naming a row
+      // the user cannot see is only half an error message.
+      if (rowErrors[0].index >= 0) setPage(pageOfRow(rowErrors[0].index, pageSize));
+      return setError(
+        "Please fix:\n" + rowErrors.map((e) => e.message).join("\n")
+      );
+    }
 
     const metadata = {};
     metaRows.forEach((r) => { if (r.k.trim()) metadata[r.k.trim()] = r.v; });
@@ -121,6 +238,20 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
         name, description, metadata, shares,
         jsonl: rowsToJsonl(rows),
         source_format: sourceFormat,
+        // Provenance for a script-built set: which script produced these rows and
+        // which database it read. No password — the field does not exist on the
+        // server's model, and a payload carrying one is refused.
+        ...(sourceFormat === "python" && script
+          ? {
+              script: {
+                source: script.source,
+                db_host: connection.host,
+                db_port: Number(connection.port) || 5432,
+                db_name: connection.database,
+                db_user: connection.user,
+              },
+            }
+          : {}),
       });
       toast.success("Eval set created");
       onCreated();
@@ -133,13 +264,15 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
     }
   }
 
+  const isScript = sourceFormat === "python" && script;
+
   return (
     <Modal
       title="Upload eval set"
       subtitle={
         expanded
           ? "Editing rows. Collapse to get back to the rest of the form — nothing is lost."
-          : "Upload a JSONL or CSV file, preview and edit the rows, then create. The set is locked after creation."
+          : "Upload a JSONL or CSV file, or a Python script that queries your database. Preview and edit the rows, then create. The set is locked after creation."
       }
       onClose={onClose}
       onDismiss={expanded ? () => setExpanded(false) : onClose}
@@ -215,25 +348,42 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
 
       {!expanded && (
       <div className="field">
-        <label>Eval file (JSONL or CSV)</label>
+        <label>Eval file <span className="hint">· JSONL, CSV, or a Python script</span></label>
         <div className="upload-picker">
           <input
             ref={fileRef}
             type="file"
-            accept=".jsonl,.json,.csv,text/csv,application/json"
+            accept=".jsonl,.json,.csv,.py,text/csv,application/json,text/x-python"
             style={{ display: "none" }}
             onChange={onFile}
           />
           <Button onClick={() => fileRef.current && fileRef.current.click()}>
             <IconUpload size={14} /> Choose file…
           </Button>
-          <Button variant="link" onClick={loadSample}>load a sample</Button>
-          {fileName && <span className="hint">{fileName} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>}
+          {/* Before FormatHelp: that panel is full-width and wraps onto its own
+              line when open, which would push "legacy.csv · 3 rows" below it and
+              away from the button it describes. A script's filename is not shown
+              here — it heads the checklist instead. */}
+          {fileName && !isScript && (
+            <span className="hint">{fileName} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>
+          )}
+          <FormatHelp onLoadSample={loadSample} />
         </div>
         {parseErrors.length > 0 && (
           <div className="error" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
             {"Parse warnings:\n" + parseErrors.join("\n")}
           </div>
+        )}
+        {isScript && (
+          <ScriptRunPanel
+            fileName={script.fileName}
+            validation={validation}
+            connection={connection}
+            setConnection={setConnection}
+            onRun={runScript}
+            running={running}
+            result={runResult}
+          />
         )}
       </div>
       )}
@@ -252,42 +402,65 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             setCell={setCell}
             addRow={addRow}
             removeRow={removeRow}
+            page={page}
+            pageSize={pageSize}
+            setPage={setPage}
+            setPageSize={setPageSize}
           />
         ) : rows.length === 0 ? (
-          <div className="upload-empty">No rows yet — choose a JSONL/CSV file, load the sample, or add a row.</div>
-        ) : (
-          <div className="upload-table-wrap">
-            <table className="upload-table">
-              <thead>
-                <tr>
-                  <th className="rownum">#</th>
-                  <th>question</th>
-                  <th>ground_truth_response</th>
-                  <th>reasoning_process_description</th>
-                  <th className="skillcol">skill(s)</th>
-                  <th className="qidcol">question_id</th>
-                  <th aria-label="remove" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i}>
-                    <td className="rownum">{i + 1}</td>
-                    <td><textarea rows={2} value={r.question} onChange={(e) => setCell(i, "question", e.target.value)} /></td>
-                    <td><textarea rows={2} value={r.response} onChange={(e) => setCell(i, "response", e.target.value)} /></td>
-                    <td><textarea rows={2} value={r.reasoning} onChange={(e) => setCell(i, "reasoning", e.target.value)} /></td>
-                    <td className="skillcol"><input placeholder="billing, reports" value={r.skill} onChange={(e) => setCell(i, "skill", e.target.value)} /></td>
-                    <td className="qidcol"><input placeholder="auto" value={r.question_id} onChange={(e) => setCell(i, "question_id", e.target.value)} /></td>
-                    <td>
-                      <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={() => removeRow(i)} aria-label="Remove row">
-                        <IconX size={15} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="upload-empty">
+            {isScript
+              ? "No rows yet — fill in the database connection above and run the script."
+              : "No rows yet — choose a JSONL/CSV file, load the sample, or add a row."}
           </div>
+        ) : (
+          <>
+            <div className="upload-table-wrap">
+              <table className="upload-table">
+                <thead>
+                  <tr>
+                    <th className="rownum">#</th>
+                    <th>question</th>
+                    <th>ground_truth_response</th>
+                    <th>reasoning_process_description</th>
+                    <th className="skillcol">skill(s)</th>
+                    <th className="qidcol">question_id</th>
+                    <th aria-label="remove" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((r, i) => {
+                    // Every write goes through the global index. Editing row 3 of
+                    // page 2 must change row 23, not row 3 — see globalIndex and
+                    // its tests in upload_parse.test.js.
+                    const gi = globalIndex(page, pageSize, i);
+                    return (
+                      <tr key={gi}>
+                        <td className="rownum">{gi + 1}</td>
+                        <td><textarea rows={2} value={r.question} onChange={(e) => setCell(gi, "question", e.target.value)} /></td>
+                        <td><textarea rows={2} value={r.response} onChange={(e) => setCell(gi, "response", e.target.value)} /></td>
+                        <td><textarea rows={2} value={r.reasoning} onChange={(e) => setCell(gi, "reasoning", e.target.value)} /></td>
+                        <td className="skillcol"><input placeholder="billing, reports" value={r.skill} onChange={(e) => setCell(gi, "skill", e.target.value)} /></td>
+                        <td className="qidcol"><input placeholder="auto" value={r.question_id} onChange={(e) => setCell(gi, "question_id", e.target.value)} /></td>
+                        <td>
+                          <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={() => removeRow(gi)} aria-label={`Remove row ${gi + 1}`}>
+                            <IconX size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <PreviewPager
+              total={rows.length}
+              page={page}
+              size={pageSize}
+              onPage={setPage}
+              onSize={setPageSize}
+            />
+          </>
         )}
         {!expanded && (
           <Button size="sm" style={{ marginTop: 8 }} icon={<IconPlus size={14} />} onClick={addRow}>Add row</Button>

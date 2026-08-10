@@ -232,6 +232,36 @@ class Settings(BaseSettings):
     export_trace_concurrency: int = 8
     export_max_traces: int = 1000
 
+    # --- Logging -------------------------------------------------------------
+    # Applied to the root logger at startup (app/main.py). INFO because the
+    # eval-set script audit trail is written at that level and is meant to be on
+    # by default — see the comment there.
+    log_level: str = "INFO"
+
+    # --- Eval sets built by running an uploaded Python script ----------------
+    # Every number here is a containment boundary rather than a preference, so
+    # each is settable per deployment but none is meant to be raised casually.
+    # See app/services/script_runner.py for what each one prevents.
+    #
+    # Per query. Breaching it raises *into the script* rather than truncating:
+    # an eval set computed from half the rows looks fine and is wrong.
+    script_max_rows_per_query: int = 50_000
+    # Enforced by the target database via `statement_timeout`, so it holds even
+    # when this process is busy.
+    script_statement_timeout_s: int = 30
+    # The whole run. A sleeping script burns no CPU, so this — not RLIMIT_CPU —
+    # is what bounds the request.
+    script_wall_clock_s: int = 60
+    script_max_queries: int = 50
+    # stdout+stderr kept per stream; the rest is dropped with a notice, because
+    # "read it all" is a memory bomb with a friendly face.
+    script_max_output_chars: int = 256 * 1024
+    script_memory_mb: int = 1024
+    # There is one uvicorn worker. Each run forks a process and holds a worker
+    # thread for up to `script_wall_clock_s`, so this is the number of people who
+    # can press Run at once before the rest queue — deliberately small.
+    script_max_concurrent_runs: int = 2
+
     @field_validator("judge_score_threshold", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:

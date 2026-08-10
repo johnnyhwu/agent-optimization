@@ -7,8 +7,15 @@
 // Editable row shape (kept flat/string-y so <input>/<textarea> bind directly):
 //   { question, response, reasoning, skill (comma text), question_id }
 
+// Which of the three upload routes a chosen file takes. Extension alone, on
+// purpose: the dialog has one "Choose file…" button and no source selector, so
+// that adding scripts costs a CSV user nothing. `.py` does not go through
+// parseFile at all — it is sent to the backend to be checked and run.
 export function detectFormat(filename) {
-  return /\.csv$/i.test(filename || "") ? "csv" : "jsonl";
+  const name = filename || "";
+  if (/\.py$/i.test(name)) return "python";
+  if (/\.csv$/i.test(name)) return "csv";
+  return "jsonl";
 }
 
 export function skillToText(arr) {
@@ -150,6 +157,16 @@ export function parseFile(text, format) {
   return format === "csv" ? parseCsv(text) : parseJsonl(text);
 }
 
+// Rows produced by running an uploaded Python script. The backend validates the
+// script's output against the required shape and sends it back under the same
+// wire names a JSONL line uses, so this is `rowFromObject` and nothing more —
+// which is the point: past this line the preview cannot tell a script's rows
+// from a file's, and every feature built on the preview works for both.
+export function rowsFromScriptOutput(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map(rowFromObject);
+}
+
 // Re-serialize the edited table back to JSONL for the backend. Rows with an
 // empty question_id omit the key so the backend generates an immutable one.
 export function rowsToJsonl(rows) {
@@ -183,12 +200,71 @@ export function rowMissing(r) {
 // Light client-side check mirroring the backend's required-field rules, so the
 // developer gets row-level feedback before the request. The backend remains the
 // source of truth (it re-validates and can still 422).
+//
+// Each error carries the row's index as well as its message. The preview is
+// paginated, so "row 287 is missing skill" is unusable on its own — the index is
+// what lets the dialog offer to jump to the page that row is on. `index` is -1
+// for a problem with the upload as a whole.
 export function validateRows(rows) {
   const errors = [];
-  if (rows.length === 0) return ["Upload a JSONL or CSV file (or add a row) first."];
+  if (rows.length === 0) {
+    return [
+      {
+        index: -1,
+        message: "Add rows first — choose a JSONL, CSV or Python file, or add a row by hand.",
+      },
+    ];
+  }
   rows.forEach((r, i) => {
     const missing = rowMissing(r);
-    if (missing.length) errors.push(`row ${i + 1}: missing ${missing.join(", ")}`);
+    // 1-based in the message because the preview numbers rows from 1; 0-based in
+    // `index` because that is what indexes the array.
+    if (missing.length) {
+      errors.push({ index: i, message: `row ${i + 1}: missing ${missing.join(", ")}` });
+    }
   });
   return errors;
+}
+
+// --- Preview paging ---------------------------------------------------------
+//
+// Every upload source shares this. A script can return three thousand rows and a
+// JSONL file can be just as long; rendering all of them puts thousands of live
+// <textarea>s in the document, which is slow to mount and slower to type into.
+// The rows all stay in memory and all get submitted — only the window rendered
+// changes.
+//
+// These are separate pure functions rather than logic inside the component
+// because the arithmetic is where the bug lives: an edit on page 2 must write to
+// the row the user is looking at, and getting that wrong corrupts data silently
+// rather than throwing.
+
+export const PAGE_SIZES = [20, 50, 100];
+
+export function pageCount(total, size) {
+  return Math.max(1, Math.ceil(total / size));
+}
+
+// 1-based page number, clamped into a page that exists. Called after every
+// change to the row count, since deleting rows can strand the cursor past the
+// end — which reads as an empty preview with no way back.
+export function clampPage(page, total, size) {
+  return Math.min(Math.max(1, page || 1), pageCount(total, size));
+}
+
+export function pageSlice(rows, page, size) {
+  const start = (clampPage(page, rows.length, size) - 1) * size;
+  const end = Math.min(start + size, rows.length);
+  return { items: rows.slice(start, end), start, end };
+}
+
+// Where row `i` of the current page lives in the full list. Every edit, delete
+// and row number on screen goes through this.
+export function globalIndex(page, size, indexOnPage) {
+  return (page - 1) * size + indexOnPage;
+}
+
+// Which page a row is on — used to jump to the row a validation error names.
+export function pageOfRow(index, size) {
+  return Math.floor(Math.max(0, index) / size) + 1;
 }

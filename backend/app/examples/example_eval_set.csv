@@ -1,0 +1,4 @@
+question,ground_truth_response,ground_truth_reasoning_process_description,skill,question_id
+How much did ACME owe at the end of Q2?,"ACME owed $42,180.00.","Read the billing skill, query billing_summary for ACME in 2026Q2, report the closing balance.",billing,
+List the overdue invoices for EMEA.,"INV-1021, INV-1044 and INV-1102 are overdue.","Read the billing skill, filter invoices to region EMEA with due_date in the past and status unpaid, list the invoice numbers.","billing, reports",
+Which customer had the largest balance increase this quarter?,"Northwind, up $18,400.00 quarter on quarter.",Compare closing_balance between 2026Q1 and 2026Q2 per customer and take the largest positive difference.,reports,q_northwind

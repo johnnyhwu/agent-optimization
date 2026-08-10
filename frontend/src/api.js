@@ -133,6 +133,20 @@ export const api = {
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
   createEvalSet: (payload) => req("POST", "/eval-sets", payload),
+  // Static checks on an uploaded .py: does it parse, is there a top-level
+  // main(), does it take the one argument. No database, no execution — which is
+  // what lets the dialog run this the moment a file is chosen and hold back the
+  // credential prompt until the answer is yes.
+  validateScript: (source) => req("POST", "/eval-sets/script/validate", { source }),
+  // Run the script against the caller's database and get preview rows back. The
+  // connection (password included) is used for this one request and is never
+  // stored; a script that fails comes back as 200 with `error` populated, since
+  // its traceback and printed output are the point of the call.
+  runScript: (source, connection) =>
+    req("POST", "/eval-sets/script/run", { source, connection }),
+  // A working example of one upload format (python | csv | jsonl).
+  downloadTemplate: (kind) =>
+    download(`/eval-sets/templates/${kind}`, `example_eval_set.${kind}`),
   // Promote shortlisted playground questions into a new eval set, optionally
   // copying in the questions of sets that already exist (§10.8). A set is locked
   // after creation, so "the old questions plus these" can only be a new set.

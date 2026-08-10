@@ -15,6 +15,7 @@ from app.db import get_session
 from app.models import (
     EvalSet,
     EvalSetRole,
+    EvalSetScript,
     Question,
     QuestionResult,
     QuestionSkill,
@@ -38,6 +39,7 @@ from app.schemas import (
 from app.services import judge_prompt as judge_prompt_service
 from app.services.aggregation import RunVerdicts, regression_summary
 from app.services.deletion import delete_eval_set as delete_eval_set_rows
+from app.services.script_provenance import source_fingerprint
 from app.services.upload import generate_question_id, parse_jsonl
 
 router = APIRouter(prefix="/eval-sets", tags=["eval-sets"])
@@ -247,9 +249,14 @@ async def create_eval_set(
     session: AsyncSession = Depends(get_session),
 ):
     """Create an eval set from JSONL question lines. A CSV upload is parsed and
-    converted to JSONL client-side (§9.1); `source_format` records which format the
-    developer actually uploaded. Creator becomes owner. Set is LOCKED afterward
-    (no add/delete question endpoints exist)."""
+    converted to JSONL client-side (§9.1), and a Python script's output is parsed
+    and converted server-side; `source_format` records which the developer
+    actually uploaded. Creator becomes owner. Set is LOCKED afterward (no
+    add/delete question endpoints exist).
+
+    Everything below this line is identical for all three sources — that is the
+    point of converging on JSONL before this endpoint, rather than teaching it
+    three ways to build the same rows."""
     parsed = parse_jsonl(payload.jsonl)
     if parsed.errors:
         raise HTTPException(status_code=422, detail={"upload_errors": parsed.errors})
@@ -274,6 +281,26 @@ async def create_eval_set(
         await session.flush()
         for ordinal, skill in enumerate(pq.skills):
             session.add(QuestionSkill(question_pk=q.id, skill_name=skill, ordinal=ordinal))
+
+    # Provenance for a script-built set: which script produced these questions,
+    # and which database it read. Gated on source_format rather than on the field
+    # being present, so a client that sends both cannot attach a script to a set
+    # no script produced. The connection's password is not in `ScriptProvenance`
+    # at all — see its definition.
+    if payload.source_format == "python" and payload.script is not None:
+        session.add(
+            EvalSetScript(
+                eval_set_id=es.id,
+                source=payload.script.source,
+                source_sha256=source_fingerprint(payload.script.source),
+                db_host=payload.script.db_host,
+                db_port=payload.script.db_port,
+                db_name=payload.script.db_name,
+                db_user=payload.script.db_user,
+                row_count=len(parsed.questions),
+                executed_by=subject,
+            )
+        )
     await session.commit()
     return {"id": str(es.id), "question_count": len(parsed.questions)}
 

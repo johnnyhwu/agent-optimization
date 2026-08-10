@@ -135,6 +135,20 @@ services:
       # Playground attempts are held in memory (§10.3), so this caps how many
       # each user keeps before the oldest finished ones are dropped.
       PLAYGROUND_MAX_ATTEMPTS_PER_USER: ${PLAYGROUND_MAX_ATTEMPTS_PER_USER:-20}
+      # An eval set can be built by uploading a Python script that queries a
+      # business database. Every number below is a containment boundary rather
+      # than a preference — see app/services/script_runner.py for what each one
+      # prevents — so they are overridable per deployment but none should be
+      # raised without reading that file first.
+      SCRIPT_MAX_ROWS_PER_QUERY: ${SCRIPT_MAX_ROWS_PER_QUERY:-50000}
+      SCRIPT_STATEMENT_TIMEOUT_S: ${SCRIPT_STATEMENT_TIMEOUT_S:-30}
+      SCRIPT_WALL_CLOCK_S: ${SCRIPT_WALL_CLOCK_S:-60}
+      SCRIPT_MAX_QUERIES: ${SCRIPT_MAX_QUERIES:-50}
+      SCRIPT_MAX_OUTPUT_CHARS: ${SCRIPT_MAX_OUTPUT_CHARS:-262144}
+      SCRIPT_MEMORY_MB: ${SCRIPT_MEMORY_MB:-1024}
+      # There is one uvicorn worker; each run forks a process and holds a worker
+      # thread for up to SCRIPT_WALL_CLOCK_S.
+      SCRIPT_MAX_CONCURRENT_RUNS: ${SCRIPT_MAX_CONCURRENT_RUNS:-2}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)\""]
       interval: 3s

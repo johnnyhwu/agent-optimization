@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     EvalSet,
     EvalSetRole,
+    EvalSetScript,
     Question,
     QuestionResult,
     QuestionSkill,
@@ -73,5 +74,8 @@ async def delete_eval_set(session: AsyncSession, eval_set_id: uuid.UUID) -> None
     await session.execute(delete(Question).where(Question.eval_set_id == eval_set_id))
     await session.execute(
         delete(EvalSetRole).where(EvalSetRole.eval_set_id == eval_set_id)
+    )
+    await session.execute(
+        delete(EvalSetScript).where(EvalSetScript.eval_set_id == eval_set_id)
     )
     await session.execute(delete(EvalSet).where(EvalSet.id == eval_set_id))
