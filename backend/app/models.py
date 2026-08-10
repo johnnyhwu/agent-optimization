@@ -70,6 +70,55 @@ class EvalSet(Base):
     roles: Mapped[list["EvalSetRole"]] = relationship(
         back_populates="eval_set", cascade="all, delete-orphan"
     )
+    # Present only for sets built by running an uploaded Python script.
+    script: Mapped["EvalSetScript | None"] = relationship(
+        back_populates="eval_set", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class EvalSetScript(Base):
+    """The Python script an eval set was generated from, kept for provenance.
+
+    A table of its own rather than columns on `eval_sets` for one concrete
+    reason: `_build_cards` in routers/eval_sets.py reads a page of sets to render
+    the home page, and it was deliberately rewritten to touch a bounded number of
+    rows. Hanging a full script body off every row of that query would undo it,
+    to display something the home page never shows.
+
+    **There is no password column, and there must never be one.** The credentials
+    a script ran with are supplied per run, used, and forgotten; what is recorded
+    is where it connected and as whom, which is what someone auditing or
+    reproducing the set actually needs.
+    """
+
+    __tablename__ = "eval_set_scripts"
+    # One script per set: a set is locked at creation (§6.11), so there is exactly
+    # one run that produced it and no way to add a second.
+    __table_args__ = (UniqueConstraint("eval_set_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    eval_set_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_sets.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    # sha256 of the source, so two sets built from the same script are visibly the
+    # same without diffing two bodies of text.
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+
+    db_host: Mapped[str] = mapped_column(Text, nullable=False)
+    db_port: Mapped[int] = mapped_column(Integer, nullable=False)
+    db_name: Mapped[str] = mapped_column(Text, nullable=False)
+    db_user: Mapped[str] = mapped_column(Text, nullable=False)
+
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    executed_by: Mapped[str] = mapped_column(Text, nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+    eval_set: Mapped["EvalSet"] = relationship(back_populates="script")
 
 
 class Question(Base):

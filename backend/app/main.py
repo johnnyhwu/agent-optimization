@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import logging
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,7 @@ from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
 from app.routers import (
     diagnosis,
+    eval_set_scripts,
     eval_sets,
     export,
     playground,
@@ -25,6 +27,26 @@ from app.routers import (
     users,
 )
 from app.services import run_config
+
+# Give the application's own loggers somewhere to go.
+#
+# Uvicorn configures handlers for the `uvicorn.*` loggers and leaves the root
+# logger alone, so until this line every `logging.getLogger(__name__).info(...)`
+# in this codebase — the orchestrator's, the pipeline's, the playground's — was
+# formatted and then discarded, and nobody noticed because the only way to tell
+# is to go looking for a line that should be there.
+#
+# It became load-bearing with the eval-set script runner: an audit record of who
+# ran what against which database is the compensating control for the one thing
+# an in-container sandbox cannot prevent (outbound network access), and a
+# control that writes to a logger with no handler is not a control.
+#
+# `force=False` (the default) means a deployment that configures logging itself,
+# or a test harness that has already installed handlers, wins.
+logging.basicConfig(
+    level=settings.log_level.upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 
 async def reap_interrupted_runs(session_factory=None) -> int:
@@ -98,6 +120,7 @@ app.add_middleware(
 
 app.include_router(users.router)
 app.include_router(eval_sets.router)
+app.include_router(eval_set_scripts.router)
 app.include_router(questions.router)
 app.include_router(runs.router)
 app.include_router(results.router)

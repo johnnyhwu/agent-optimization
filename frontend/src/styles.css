@@ -1429,10 +1429,128 @@ pre.prompt-text {
 .preview-meta input.mono { font-family: var(--font-mono); font-size: var(--text-caption); }
 .preview-keys { flex: none; margin: 0; }
 
+/* --- Preview paging ------------------------------------------------------
+   Renders only above one page (see PreviewPager), so this is chrome the
+   single-screen upload never grows. */
+.preview-pager {
+  display: flex; align-items: center; gap: var(--space-3);
+  margin-top: var(--space-2); flex: none;
+}
+.preview-pager-size { display: flex; align-items: center; gap: 6px; margin: 0; }
+.preview-pager-size select {
+  padding: 3px 6px; font-size: var(--text-caption);
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.preview-pager-steps { display: flex; align-items: center; gap: 2px; }
+.preview-pager-count { min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
+.preview-list-pager { margin-top: 0; padding-top: var(--space-2); border-top: 1px solid var(--border); }
+.preview-list-pager .preview-pager-size { display: none; }  /* the table's selector governs both */
+
+/* --- Formats & examples --------------------------------------------------- */
+.format-help {
+  width: 100%; margin-top: var(--space-2); padding: var(--space-3);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.format-help-head { display: flex; align-items: center; gap: var(--space-2); }
+.format-help-tabs { display: flex; gap: 2px; }
+.format-help-tab {
+  background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  padding: 4px 10px; font: inherit; font-size: var(--text-caption); color: var(--muted);
+  cursor: pointer;
+}
+.format-help-tab:hover { color: var(--text); }
+.format-help-tab.active {
+  background: var(--panel); border-color: var(--border); color: var(--text);
+  font-weight: var(--fw-medium);
+}
+.format-help-note { margin: var(--space-2) 0; line-height: 1.5; }
+.format-help-code {
+  margin: 0; padding: var(--space-3); background: var(--code-bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: var(--text-micro); line-height: 1.5;
+  max-height: 260px; overflow: auto; white-space: pre;
+}
+.format-help-actions {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+.format-help-fields { margin: var(--space-2) 0 0; line-height: 1.6; }
+
+/* --- Uploaded Python script ----------------------------------------------
+   Present only when the chosen file is a .py; a CSV upload never renders any
+   of this. */
+.script-panel {
+  display: flex; flex-direction: column; gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.script-checks {
+  padding: var(--space-3); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.script-checks-title { display: block; margin-bottom: var(--space-2); }
+.script-checks ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.script-check { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--text-body); }
+.script-check svg { flex: none; margin-top: 2px; }
+.script-check-label { display: block; }
+.script-check-detail {
+  display: block; margin-top: 2px; color: var(--muted);
+  font-size: var(--text-caption); line-height: 1.5;
+}
+.script-check-ok svg { color: var(--green); }
+.script-check-warn svg { color: var(--amber); }
+.script-check-bad svg { color: var(--red); }
+.script-check-bad .script-check-label { color: var(--red); }
+.script-check-muted svg, .script-check-muted .script-check-label { color: var(--muted); }
+.script-panel-blocked { margin: 0; line-height: 1.5; }
+
+.script-conn {
+  padding: var(--space-3); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.script-conn-title { display: block; margin-bottom: var(--space-2); }
+.script-conn-grid {
+  display: grid; gap: var(--space-2) var(--space-3);
+  grid-template-columns: minmax(0, 2fr) 90px minmax(0, 1fr);
+}
+.script-conn-grid .field { margin: 0; }
+.script-conn-grid .field > span {
+  display: block; margin-bottom: 4px;
+  font-size: var(--text-caption); color: var(--muted);
+}
+.script-conn-host { grid-column: 1; }
+.script-conn-port { grid-column: 2; }
+.script-conn-run {
+  display: flex; align-items: center; gap: var(--space-3);
+  margin-top: var(--space-3); flex-wrap: wrap;
+}
+.script-conn-run .hint { flex: 1; min-width: 220px; line-height: 1.5; }
+
+.script-details { font-size: var(--text-caption); }
+.script-details > summary {
+  cursor: pointer; color: var(--muted); padding: 4px 0;
+}
+.script-details > summary:hover { color: var(--text); }
+.script-output, .ui-banner-detail {
+  margin: 6px 0 0; padding: 8px 10px; background: var(--code-bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: var(--text-micro); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow: auto;
+}
+.script-warning-list {
+  margin: 6px 0 0; padding-left: 18px; line-height: 1.6; color: var(--muted);
+  max-height: 200px; overflow: auto;
+}
+
 /* Under ~900px the two panes stop being two panes. */
 @media (max-width: 900px) {
   .preview-editor { grid-template-columns: minmax(0, 1fr); }
   .preview-list { border-right: none; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
   .preview-list-rows { max-height: 22vh; }
   .preview-meta { grid-template-columns: minmax(0, 1fr); }
+  /* Five connection fields in a row is one row too many on a phone. */
+  .script-conn-grid { grid-template-columns: minmax(0, 1fr) 90px; }
+  .script-conn-host { grid-column: 1 / -1; }
+  .script-conn-port { grid-column: 1; }
 }

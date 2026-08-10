@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { IconPlus, IconTrash } from "./icons.jsx";
-import { rowMissing } from "../upload_parse.js";
+import PreviewPager from "./PreviewPager.jsx";
+import { globalIndex, pageOfRow, pageSlice, rowMissing } from "../upload_parse.js";
 
 // The upload preview, expanded. Same rows, same edits — a different shape for a
 // different job: the table is for scanning what parsed, this is for rewriting a
@@ -8,7 +9,16 @@ import { rowMissing } from "../upload_parse.js";
 // since fixing them is why you came here), full-height fields on the right.
 // Mirrors QuestionEditor's two-pane layout so per-question editing looks the
 // same wherever you meet it.
-export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }) {
+export default function UploadPreviewEditor({
+  rows,
+  setCell,
+  addRow,
+  removeRow,
+  page,
+  pageSize,
+  setPage,
+  setPageSize,
+}) {
   const [active, setActive] = useState(0);
   const listRef = useRef(null);
 
@@ -16,10 +26,32 @@ export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }
   const idx = Math.min(active, Math.max(rows.length - 1, 0));
   const row = rows[idx];
 
+  // The left-hand list is paged like the table is: a script can return three
+  // thousand rows, and three thousand buttons is a slow mount and an unusable
+  // scrollbar. The *selection* is still an index into the whole list, so ⌘↓ walks
+  // off the end of a page and the page follows — paging is a rendering budget
+  // here, not a boundary on where you can be.
+  const { items: pageRows } = pageSlice(rows, page, pageSize);
+
   const move = (delta) => {
     if (rows.length === 0) return;
-    setActive((i) => Math.min(Math.max(i + delta, 0), rows.length - 1));
+    setActive((i) => {
+      const next = Math.min(Math.max(i + delta, 0), rows.length - 1);
+      const nextPage = pageOfRow(next, pageSize);
+      if (nextPage !== page) setPage(nextPage);
+      return next;
+    });
   };
+
+  // Clicking a row in the table, then expanding, should not drop the cursor on a
+  // page that no longer contains it.
+  useEffect(() => {
+    const onPage = pageOfRow(idx, pageSize);
+    if (onPage !== page) setPage(onPage);
+    // Only when the selection moves — following the page instead would fight the
+    // pager buttons.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, pageSize]);
 
   // ⌘/Ctrl+Enter and ⌘/Ctrl+↑/↓ step through rows without leaving the field
   // you're typing in. Bare arrows are left alone — they move the caret.
@@ -30,9 +62,11 @@ export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }
   }
 
   useEffect(() => {
-    const el = listRef.current && listRef.current.children[idx];
+    // The list only holds this page's rows, so scroll to the row's position
+    // within the page rather than its position in the whole set.
+    const el = listRef.current && listRef.current.children[idx - (page - 1) * pageSize];
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
-  }, [idx]);
+  }, [idx, page, pageSize]);
 
   function onRemove() {
     removeRow(idx);
@@ -45,7 +79,8 @@ export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }
     <div className="preview-editor" onKeyDown={onKeyDown}>
       <div className="preview-list">
         <div className="preview-list-rows" ref={listRef}>
-          {rows.map((r, i) => {
+          {pageRows.map((r, j) => {
+            const i = globalIndex(page, pageSize, j);
             const gaps = rowMissing(r);
             return (
               <button
@@ -66,6 +101,14 @@ export default function UploadPreviewEditor({ rows, setCell, addRow, removeRow }
             );
           })}
         </div>
+        <PreviewPager
+          total={rows.length}
+          page={page}
+          size={pageSize}
+          onPage={setPage}
+          onSize={setPageSize}
+          className="preview-list-pager"
+        />
         <button className="preview-add ui-btn ui-btn-secondary" onClick={() => { addRow(); setActive(rows.length); }}>
           <IconPlus size={14} /> add row
         </button>

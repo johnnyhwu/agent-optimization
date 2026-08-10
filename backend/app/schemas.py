@@ -16,6 +16,24 @@ class ShareEntry(BaseModel):
     role: str  # 'owner' | 'viewer'
 
 
+class ScriptProvenance(BaseModel):
+    """How a script-built eval set was produced, stored alongside it.
+
+    `extra="forbid"` is the point of the model, not a detail: the obvious way for
+    a password to end up in the database is for a client to helpfully include the
+    connection it used, password and all, and for the server to accept the fields
+    it recognises and silently store the rest. A payload carrying one is refused.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    db_host: str
+    db_port: int
+    db_name: str
+    db_user: str
+
+
 class EvalSetCreate(BaseModel):
     name: str
     description: str | None = None
@@ -23,11 +41,76 @@ class EvalSetCreate(BaseModel):
     # Optional access grants beyond the creator (who is always owner).
     shares: list[ShareEntry] = Field(default_factory=list)
     # Questions, always serialized as JSONL. A CSV upload is parsed and converted
-    # to JSONL in the browser (§9.1), so the wire contract stays JSONL-only.
+    # to JSONL in the browser (§9.1), so the wire contract stays JSONL-only — and
+    # a script's rows arrive the same way, so everything below this line is
+    # identical no matter where the questions came from.
     jsonl: str
     # Which format the developer actually uploaded — recorded on the eval set for
     # provenance (§6.14 `source_format`). The payload above is JSONL either way.
-    source_format: Literal["csv", "jsonl"] = "jsonl"
+    source_format: Literal["csv", "jsonl", "python"] = "jsonl"
+    # Only read when source_format is "python"; ignored otherwise, so a confused
+    # client cannot attach a script to a set no script produced.
+    script: ScriptProvenance | None = None
+
+
+# --- Script upload ----------------------------------------------------------
+
+class ScriptSource(BaseModel):
+    source: str
+
+
+class ScriptTarget(BaseModel):
+    """The database a script reads from, for the duration of one request.
+
+    Never stored, never logged, never returned. `ScriptProvenance` above is the
+    subset that is allowed to be written down, and it has no password field.
+    """
+
+    host: str
+    port: int = 5432
+    database: str
+    user: str
+    password: str = ""
+
+
+class ScriptRunRequest(BaseModel):
+    source: str
+    connection: ScriptTarget
+
+
+class ScriptCheckOut(BaseModel):
+    id: str
+    label: str
+    status: Literal["pass", "warn", "fail", "skipped"]
+    detail: str = ""
+
+
+class ScriptValidationOut(BaseModel):
+    ok: bool
+    checks: list[ScriptCheckOut]
+
+
+class ScriptRunOut(BaseModel):
+    """Everything the upload dialog needs to render one run.
+
+    `rows` uses the same wire names as a JSONL upload, so the browser maps them
+    with the parser it already has and the preview cannot tell the two apart.
+    """
+
+    ok: bool
+    checks: list[ScriptCheckOut]
+    rows: list[dict] = Field(default_factory=list)
+    # Per-row problems: the rows above are the ones that survived.
+    warnings: list[str] = Field(default_factory=list)
+    # System ceilings the run bumped into (row caps, output cap). Shown as
+    # banners, not list items — they are about our limits, not the user's data.
+    limits_hit: list[str] = Field(default_factory=list)
+    stdout: str = ""
+    stderr: str = ""
+    error: str | None = None
+    traceback: str = ""
+    duration_ms: int = 0
+    query_count: int = 0
 
 
 class EvalSetUpdate(BaseModel):

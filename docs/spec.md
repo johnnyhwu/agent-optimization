@@ -534,7 +534,7 @@ trace 檢視有**五種狀態**（見 §6.4）；錯誤訊息帶 host + HTTP 狀
 | `id` | uuid pk | |
 | `name` | text | |
 | `description` | text null | |
-| `source_format` | text | `'csv' \| 'jsonl'`——**開發者實際上傳的檔案格式**。因為 CSV 在前端就被轉成 JSONL，後端 payload 恆為 JSONL，此欄是唯一保留原始格式的地方 |
+| `source_format` | text | `'csv' \| 'jsonl' \| 'python'`——**開發者實際上傳的內容形式**。CSV 在前端就被轉成 JSONL，Python script 的輸出在後端被轉成同一組 row，後端 payload 恆為 JSONL，此欄是唯一保留原始形式的地方 |
 | `metadata` | jsonb | 開發者自訂的 metadata key-value。**單一 JSONB 欄位**，未建 keys 表——key 量不大，「既有 key 自動帶出」以掃描 JSONB 支援。ORM 屬性叫 `meta`（`metadata` 在 declarative Base 上是保留字）|
 | `version` | int | 樂觀鎖 |
 | `judge_system_prompt` | text null | 本 set 的 judge system prompt。**NULL = 用程式碼的預設**（§8.1a），不是預設值的副本 |
@@ -625,19 +625,37 @@ trace 檢視有**五種狀態**（見 §6.4）；錯誤訊息帶 host + HTTP 狀
 | `role` | text——`owner \| viewer` |
 | | pk `(eval_set_id, user_subject)` |
 
+**8. `eval_set_scripts`**（由 Python script 產生的 set 的 provenance，§10.3）
+
+| 欄 | 說明 |
+|---|---|
+| `id` | uuid pk |
+| `eval_set_id` | uuid fk (CASCADE)，**unique**——set 建立後即鎖定，因此每個 set 至多一次執行 |
+| `source` | text——script 全文。不設長度上限：在「已經跑成功之後」才因長度被拒是最糟的時機 |
+| `source_sha256` | text——兩個 set 是否出自同一份 script，不必 diff 全文 |
+| `db_host` / `db_port` / `db_name` / `db_user` | 讀了哪個資料庫、以誰的身分 |
+| `row_count` / `executed_by` / `executed_at` | |
+
+> **沒有 password 欄位，也不會有。** 憑證只存在於那一個 request 之中：用完即忘，
+> 不入庫、不入 log、不回傳。獨立成表而非掛在 `eval_sets` 上，是因為
+> `_build_cards`（首頁）刻意被改寫成只讀有限列數，把一整份 script 掛上去會抵銷它，
+> 而卡片根本不顯示這欄。
+
 **未建的表**：`skills`、`skill_versions`、`skillopt_runs`（Stage 3）；
 `eval_set_metadata_keys`（改用單一 JSONB）；`playground_*`（刻意不落庫，§7）。
 
-### 5.2 六個 Alembic migration
+### 5.2 八個 Alembic migration
 
 | Revision | 內容 |
 |---|---|
-| `0001_stage1_schema` | 上述 7 張表 |
+| `0001_stage1_schema` | 上述前 7 張表 |
 | `0002_real_integration` | `question_results.agent_response` / `error_message` / `agent_latency_ms`、`runs.error_message`。假資料時代不需要，接真實服務後「看得到 eval 結果」少不了它們 |
 | `0003_run_config` | `runs.name` / `runs.config` / `runs.secrets`——逐 run 設定（§4.7）|
 | `0004_run_lifecycle` | `runs.cancel_requested`、`question_results.trace_error` / `diagnosis_error` |
 | `0005_list_indexes` | 三個索引（見下）|
-| `0006_judge_prompt` | `eval_sets` 的五個 judge-prompt 欄位、`question_results.failure_kind`（§8.1a）。兩者都**可為 NULL 且不回填**：prompt 回填等於凍結今天的措辭，`failure_kind` 回填等於替不知道的歷史編一個答案。**head 是這一個** |
+| `0006_judge_prompt` | `eval_sets` 的五個 judge-prompt 欄位、`question_results.failure_kind`（§8.1a）。兩者都**可為 NULL 且不回填**：prompt 回填等於凍結今天的措辭，`failure_kind` 回填等於替不知道的歷史編一個答案 |
+| `0007_question_started_at` | `question_results.started_at`——左欄計時器要有一個「從何時算起」。同樣可為 NULL 且不回填：那些列真的不知道自己何時開始 |
+| `0008_eval_set_scripts` | `eval_set_scripts` 表（§5.1 第 8 張）——由 Python script 產生的 set 的 provenance。**head 是這一個** |
 
 **慣例**：檔名 `NNNN_snake_name.py`，`revision` 字串**等於檔名 stem**（不是 hash）；
 `down_revision` 指向前一個 stem；**autogenerate 不使用**（`target_metadata = None`），
@@ -1110,7 +1128,10 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /users/lookup?username=` | — | 分享前對員工目錄查核（§11.3）。查無此人 → **404**；目錄連不上 → **200 但 `verified:false`**，前端警告卻放行 |
 | `GET /me` | — | 目前 subject 與其在各 eval set 的角色。**UI 不用它 gate 權限**（§11.4）——每個 eval set 的 payload 自己就帶 `my_role` |
 | `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **六個 `*_IMPL` 現況** |
-| `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares` |
+| `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares`；`source_format='python'` 時可帶 `script`（provenance，**無 password 欄位**，多帶會被拒）|
+| `POST /eval-sets/script/validate` | — | 上傳 `.py` 的**靜態**檢查（有無 `main`、參數）；不執行、不連 DB、不需憑證 |
+| `POST /eval-sets/script/run` | — | 在 sandbox 中執行 script，回傳預覽 row + warning + 上限告知 + stdout/stderr。**script 失敗回 200 帶 `error`**，不是 4xx——traceback 與 print 輸出正是呼叫它的目的。憑證用完即忘 |
+| `GET /eval-sets/templates/{python\|csv\|jsonl}` | — | 三種上傳格式的可用範例檔 |
 | `GET /eval-sets` | — | 我有權限的卡片。分頁 + 篩選：`?limit&offset&q&metadata_key&metadata_value&sort`，回 `{items,total,has_more}` |
 | `GET /eval-sets/metadata/keys` | — | 掃 JSONB 得既有 metadata key |
 | `GET /eval-sets/{id}` | R | 單一卡片 |
@@ -1358,6 +1379,30 @@ assistant 的 `tool_calls` 另外以工具名 + 重新縮排後的 arguments 呈
 - 按 Create 時前端把表格**重新序列化為 JSONL** 送給後端，並附上 `source_format`。
   > 因此**後端只有一條 JSONL 寫入路徑**；CSV 的 quoting / 換行由前端處理。
 - `question_id` 留白代表由後端生成 immutable id。
+- **預覽表格分頁**（20 / 50 / 100，預設 20）：不分來源一律套用。列全部留在記憶體、
+  全部送出，只有 render 的視窗受限——一份 3,000 列的 set 若整張表都畫出來，
+  等於一次掛上一萬多個 `<textarea>`。
+
+**由 Python script 產生（`source_format = 'python'`）**
+
+- 使用者上傳**單一 `.py`**，內含 top-level `main(database_handler)`，回傳 list of dict
+  （欄位契約同下表）。系統在 sandbox 中執行它，結果進入**同一個預覽表格**——
+  之後的路徑（編輯、Create、鎖定、`question_id` 生成）與檔案上傳**完全相同**。
+- `database_handler` 只有一個方法 `run_sql(sql, params=None) -> list[dict]`。
+- **憑證不進入 sandbox**：`run_sql` 是回到 server process 的 RPC，連線由 server 持有，
+  因此**唯讀、statement timeout、單查詢列數上限、查詢次數上限**都在 script 碰不到的
+  地方強制執行。詳見 `backend/app/services/script_runner.py` 的 module docstring。
+- **兩段式檢查**：`POST /eval-sets/script/validate` 只做靜態解析（有沒有 `main`、
+  參數是不是唯一的 `database_handler`），不執行、不連線；靜態檢查過了 UI 才顯示
+  資料庫連線欄位。沒有人應該為了得知自己漏寫 `main()` 而先輸入正式庫密碼。
+  `POST /eval-sets/script/run` 才執行。
+- **靜態檢查不是安全機制**（不做 import 黑名單）；隔離全部由 runner 負責。
+- 上限打到時：查詢層（列數、statement timeout）**丟例外進 script**，不靜默截斷——
+  用半份資料算出來的 eval set 看起來正常但是錯的；最終輸出上限（3,000 列）則截斷
+  並在 UI 上顯著告知。
+- 部分失敗比照 JSONL：好的列進預覽，壞的列成 warning。
+- **provenance**：script 全文、sha256、目標 DB 的 host/port/name/user、執行者、列數
+  存進 `eval_set_scripts`（見 §6.14）。**沒有 password 欄位，也不會有**。
 
 **上傳欄位契約**
 

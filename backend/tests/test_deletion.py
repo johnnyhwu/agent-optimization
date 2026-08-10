@@ -16,6 +16,7 @@ from sqlalchemy import delete as sa_delete
 from app.models import (
     EvalSet,
     EvalSetRole,
+    EvalSetScript,
     Question,
     QuestionResult,
     QuestionSkill,
@@ -85,6 +86,7 @@ async def test_delete_eval_set_order_is_deepest_first():
         "question_skills",
         "questions",
         "eval_set_roles",
+        "eval_set_scripts",
         "eval_sets",
     ]
     # The rule the FK actually enforces: question_results must be gone before
@@ -101,8 +103,18 @@ async def test_delete_eval_set_with_no_runs_skips_run_children():
         "question_skills",
         "questions",
         "eval_set_roles",
+        "eval_set_scripts",
         "eval_sets",
     ]
+
+
+async def test_the_stored_script_goes_with_the_set_that_produced_it():
+    """A set built from a Python script keeps that script for provenance; deleting
+    the set must take it with it, or the source of a deleted set outlives it."""
+    session = RecordingSession({Question.__tablename__: _ids(1)})
+    await delete_eval_set(session, uuid.uuid4())
+    assert "eval_set_scripts" in session.deleted
+    assert session.deleted.index("eval_set_scripts") < session.deleted.index("eval_sets")
 
 
 def test_every_child_table_is_covered():
@@ -115,6 +127,7 @@ def test_every_child_table_is_covered():
         QuestionSkill.__tablename__,
         Question.__tablename__,
         EvalSetRole.__tablename__,
+        EvalSetScript.__tablename__,
         EvalSet.__tablename__,
     }
     from app.db import Base

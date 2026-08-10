@@ -20,6 +20,18 @@ ENV UV_SYSTEM_PYTHON=1 \
 
 WORKDIR /app
 
+# The user an uploaded eval-set script is executed as (app/services/script_runner.py).
+#
+# A separate uid is not cosmetic here. The server runs as root, and RLIMIT_NPROC —
+# the fork-bomb defence — is simply not enforced against a process holding
+# CAP_SYS_RESOURCE, so a child left running as root would walk through it. The
+# same uid split is what makes /proc/1/environ, the source tree under /app and any
+# mounted CA material unreadable to the script.
+#
+# No shell, no home directory, no group memberships: it exists to be dropped to
+# and to own nothing.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin scriptrunner
+
 # Copy the requirements alone first so the dependency layer is cached across
 # source-only edits.
 COPY requirements.txt ./
