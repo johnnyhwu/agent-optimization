@@ -43,7 +43,10 @@ export default function Button({
     .join(" ");
 
   return (
-    <button className={cls} disabled={disabled || loading} {...rest}>
+    // `type` before the spread so a caller can still ask for a submit button.
+    // The default is deliberate: a bare <button> inside a <form> submits it, and
+    // "the copy button reloaded the page" is a bug nobody looks for.
+    <button type="button" className={cls} disabled={disabled || loading} {...rest}>
       {loading ? <Spinner /> : icon}
       {children != null && children !== false && <span className="ui-btn-label">{children}</span>}
       {iconRight}

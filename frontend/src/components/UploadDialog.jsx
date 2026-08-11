@@ -357,8 +357,11 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             style={{ display: "none" }}
             onChange={onFile}
           />
-          <Button onClick={() => fileRef.current && fileRef.current.click()}>
-            <IconUpload size={14} /> Choose file…
+          <Button
+            icon={<IconUpload size={14} />}
+            onClick={() => fileRef.current && fileRef.current.click()}
+          >
+            Choose file…
           </Button>
           {/* Before FormatHelp: that panel is full-width and wraps onto its own
               line when open, which would push "legacy.csv · 3 rows" below it and

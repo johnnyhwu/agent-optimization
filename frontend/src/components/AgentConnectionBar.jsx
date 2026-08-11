@@ -84,8 +84,13 @@ export default function AgentConnectionBar({
           </span>
         )}
         <div className="agent-bar-actions">
-          <Button size="sm" onClick={onReload} title="Re-read this agent's config and skill files">
-            <IconRefresh size={13} /> Reload
+          <Button
+            size="sm"
+            icon={<IconRefresh size={13} />}
+            onClick={onReload}
+            title="Re-read this agent's config and skill files"
+          >
+            Reload
           </Button>
           <Button size="sm" onClick={onChangeAgent}>Change agent</Button>
         </div>
