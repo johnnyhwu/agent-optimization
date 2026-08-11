@@ -17,7 +17,9 @@ What the child gets and what it is denied:
 |------------------------------------------|---------------------------------------|
 | read `os.environ` for our secrets        | environment scrubbed to PATH/LANG/HOME |
 | read /proc/1/environ, other processes    | dropped to an unprivileged uid        |
-| read /app sources, .env, CA bundles      | same uid, plus an empty cwd           |
+| read /app sources, .env, CA bundles      | same uid, plus an empty cwd (the      |
+|                                          | child needs nothing from /app: it     |
+|                                          | executes a copy — see _stage)         |
 | write files, fill the disk               | RLIMIT_FSIZE = 0                      |
 | fork bomb                                | RLIMIT_NPROC, own session, killpg     |
 |                                          | (see the note on _preexec: the limit  |
@@ -43,6 +45,7 @@ import errno
 import json
 import os
 import resource
+import shutil
 import signal
 import subprocess
 import sys
@@ -55,6 +58,9 @@ from dataclasses import dataclass, field
 # its path, which means the parent can import it but never the reverse.
 from app.services.script_runner_child import jsonable
 
+# Read by *this* process and copied into each run's own directory; the child
+# executes the copy and never opens this path. That is what keeps the feature
+# independent of how /app happens to be mounted or chmodded — see _stage.
 CHILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "script_runner_child.py")
 
 # Users the child is dropped to, in order of preference. The first is created by
@@ -188,6 +194,37 @@ def _preexec(limits: Limits):
     return apply
 
 
+def _stage(sandbox: str) -> tuple[str, str]:
+    """Lay out one run's private directory: an empty cwd, and our own module.
+
+    The child is dropped to another uid, so it has to be able to *read* the module
+    it is about to execute — and the directory that module normally lives in,
+    `/app`, is the one whose permissions this process does not control: a bind
+    mount of the host's checkout in development, the build context's file modes in
+    the image. A host with a strict umask therefore failed every run with
+    `can't open file ... [Errno 13] Permission denied`, after a perfectly good
+    exec. Copying the module into the run's own directory removes the dependency
+    outright: nothing under `/app` needs to be readable by the runner uid, which is
+    also what makes locking `/app` down a thing this feature can survive.
+
+    The copy is deliberately *not* put in the cwd — the script's working directory
+    stays empty, as the comment there promises.
+
+    Modes are set rather than inherited: tempfile creates 0700, and the copy's mode
+    would otherwise follow this process's umask, so `umask 077` would produce a
+    0600 file the child cannot read — the same bug again, in a new place.
+    """
+    workdir = os.path.join(sandbox, "cwd")
+    bindir = os.path.join(sandbox, "bin")
+    for path in (workdir, bindir):
+        os.mkdir(path)
+        os.chmod(path, 0o755)
+    child = os.path.join(bindir, os.path.basename(CHILD))
+    shutil.copyfile(CHILD, child)
+    os.chmod(child, 0o644)
+    return workdir, child
+
+
 def _drain(stream, cap: int, into: dict, key: str) -> threading.Thread:
     """Read a child stream to exhaustion on its own thread.
 
@@ -238,11 +275,18 @@ def run_script(source: str, executor, limits: Limits | None = None) -> RunResult
 
     # An empty, private working directory. The child cannot write to it
     # (RLIMIT_FSIZE), but a process still needs a cwd it is allowed to be in, and
-    # this keeps it out of the source tree.
+    # this keeps it out of the source tree. Alongside it, out of the script's
+    # sight, goes the copy of our own module the child executes — see _stage.
     import tempfile
 
-    with tempfile.TemporaryDirectory(prefix="evalscript-") as workdir:
-        os.chmod(workdir, 0o755)
+    with tempfile.TemporaryDirectory(prefix="evalscript-") as sandbox:
+        os.chmod(sandbox, 0o755)
+        try:
+            workdir, child = _stage(sandbox)
+        except OSError as exc:
+            result.error = launch_reason(exc)
+            result.duration_ms = int((time.monotonic() - started) * 1000)
+            return result
         credentials = _runner_uid()
         # Dropped by CPython itself rather than by our preexec_fn, because it has
         # to happen before the limits are applied — see _preexec.
@@ -257,7 +301,7 @@ def run_script(source: str, executor, limits: Limits | None = None) -> RunResult
                 # -u because a killed process loses whatever is still sitting in a
                 # block-buffered pipe, and the run that had to be killed is
                 # precisely the one whose print() output the user needs to read.
-                [sys.executable, "-I", "-B", "-u", CHILD, str(p2c_r), str(c2p_w)],
+                [sys.executable, "-I", "-B", "-u", child, str(p2c_r), str(c2p_w)],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
