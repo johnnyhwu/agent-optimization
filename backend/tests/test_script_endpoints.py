@@ -170,6 +170,25 @@ async def test_run_reports_a_connection_failure_as_an_error_not_a_crash(monkeypa
     assert "no such host" in out.error
 
 
+async def test_run_reports_a_sandbox_that_will_not_start_as_an_error_not_a_500(monkeypatch):
+    # The failure this covers took the whole endpoint down with a 500 — the user
+    # saw a broken page instead of the checklist and a sentence they could act on.
+    import errno
+
+    def boom(*a, **k):
+        raise BlockingIOError(errno.EAGAIN, os.strerror(errno.EAGAIN), "/usr/local/bin/python")
+
+    monkeypatch.setattr(scripts_router, "open_executor", boom)
+    out = await scripts_router.run_script_endpoint(
+        ScriptRunRequest(source=GOOD_SCRIPT, connection=target()), subject="alice"
+    )
+    assert out.ok is False
+    assert out.error is not None
+    assert "could not be started" in out.error
+    # The checklist still comes back, which is the point of not raising.
+    assert out.checks
+
+
 # --- the password ------------------------------------------------------------
 
 async def test_the_password_never_appears_in_the_response(monkeypatch):
