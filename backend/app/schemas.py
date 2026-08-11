@@ -367,7 +367,11 @@ class QuestionResultOut(BaseModel):
     # live SSE events come from one rule.
     phase: str
     error_message: str | None = None  # why status == 'failed' / 'cancelled'
-    failure_kind: str | None = None  # 'agent' | 'judge' | 'judge_invalid'
+    # 'agent' | 'agent_timeout' | 'judge' | 'judge_timeout' | 'judge_invalid'.
+    # The *_timeout kinds carry no extra state — the message says what happened;
+    # this is what lets the list mark them without reading it. NULL on rows
+    # written before the column existed.
+    failure_kind: str | None = None
     # When the agent call went out. NULL both for a question that has not
     # started and for one written before the column existed — the list shows no
     # timer for either, which beats inventing a duration for old runs.
@@ -440,6 +444,10 @@ class TraceView(BaseModel):
     # attached — the hypothesis being tested was formed while reading this trace.
     ground_truth_reasoning: str | None = None
     error_message: str | None = None
+    # Which step failed, so the column can explain a timeout as a timeout rather
+    # than quoting the sentence back as a generic error. Same vocabulary as
+    # QuestionResultOut.failure_kind.
+    failure_kind: str | None = None
 
 
 # --- Playground (§10) -------------------------------------------------------
@@ -589,6 +597,9 @@ class PlaygroundAttemptOut(BaseModel):
     agent_started_at: datetime | None = None
     agent_latency_ms: int | None = None
     error_message: str | None = None
+    # Which step failed, in the same vocabulary a run's results use, so the
+    # attempt list can mark a timeout without parsing the message.
+    failure_kind: str | None = None
     # Non-secret settings only: RunConfig has no credential fields.
     config: RunConfig = Field(default_factory=RunConfig)
 

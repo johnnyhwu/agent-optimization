@@ -167,6 +167,7 @@ def _out(attempt: PlaygroundAttempt) -> PlaygroundAttemptOut:
         agent_started_at=attempt.agent_started_at,
         agent_latency_ms=attempt.agent_latency_ms,
         error_message=attempt.error_message,
+        failure_kind=attempt.failure_kind,
         config=RunConfig(**(attempt.config or {})),
     )
 
@@ -221,6 +222,7 @@ def _trace_view(attempt: PlaygroundAttempt) -> TraceView:
         ground_truth_response=attempt.ground_truth_response,
         ground_truth_reasoning=attempt.ground_truth_reasoning,
         error_message=attempt.error_message,
+        failure_kind=attempt.failure_kind,
     )
 
 

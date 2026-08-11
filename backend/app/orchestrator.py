@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -72,6 +73,7 @@ from app.pipeline import (
     wait_for_trace,
 )
 from app.services.aggregation import result_phase
+from app.services.failure_text import describe_failure
 from app.sse import hub
 
 log = logging.getLogger(__name__)
@@ -249,6 +251,10 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     await publish("question_started")
 
     # 1) agent
+    # Measured, not computed from the timeout: `call_agent` retries, so what a
+    # developer watched elapse is a multiple of the limit they set, and only the
+    # measurement can say so.
+    agent_started = time.monotonic()
     try:
         agent_resp = await call_agent(
             seams, item["question"], correlation_id, user_id, tags,
@@ -259,7 +265,13 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         return
     except Exception as exc:  # noqa: BLE001
         log.warning("agent call failed for %s: %s", correlation_id, exc)
-        await fail(f"Agent call failed: {exc!s}", kind="agent")
+        message, kind = describe_failure(
+            "agent", exc,
+            timeout_s=agent_timeout_s,
+            attempts=settings.agent_max_retries + 1,
+            waited_s=time.monotonic() - agent_started,
+        )
+        await fail(message, kind=kind)
         return
 
     if agent_resp.failed:
@@ -279,6 +291,7 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     if cancel_event.is_set():
         await cancel("Run cancelled before judging; the agent's answer was kept.")
         return
+    judge_started = time.monotonic()
     try:
         verdict = await call_judge(
             seams, item["question"], agent_resp.response, item["ground_truth"],
@@ -299,7 +312,17 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         log.warning("judge call failed for %s: %s", correlation_id, exc)
         # Deliberately NOT defaulted to 'correct' — an unjudged question is an
         # unknown, and silently passing it would inflate the pass rate.
-        await fail(f"Judge call failed: {exc!s}", kind="judge")
+        #
+        # The judge's limit is `LLM_TIMEOUT_S`, which unlike the agent's is not
+        # part of the run config — so naming it in the message is the only way a
+        # developer finds out that this is the number that stopped them.
+        message, kind = describe_failure(
+            "judge", exc,
+            timeout_s=settings.llm_timeout_s,
+            attempts=settings.llm_max_retries + 1,
+            waited_s=time.monotonic() - judge_started,
+        )
+        await fail(message, kind=kind)
         return
 
     async with lock:
