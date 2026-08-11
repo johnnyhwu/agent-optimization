@@ -249,4 +249,5 @@ async def get_trace(
         ground_truth_response=question.ground_truth_response if question else None,
         ground_truth_reasoning=question.ground_truth_reasoning if question else None,
         error_message=result.error_message,
+        failure_kind=result.failure_kind,
     )

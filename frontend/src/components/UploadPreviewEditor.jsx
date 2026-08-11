@@ -76,9 +76,9 @@ export default function UploadPreviewEditor({
   const missing = row ? rowMissing(row) : [];
 
   return (
-    <div className="preview-editor" onKeyDown={onKeyDown}>
-      <div className="preview-list">
-        <div className="preview-list-rows" ref={listRef}>
+    <div className="pane-editor" onKeyDown={onKeyDown}>
+      <div className="pane-list">
+        <div className="pane-list-rows" ref={listRef}>
           {pageRows.map((r, j) => {
             const i = globalIndex(page, pageSize, j);
             const gaps = rowMissing(r);
@@ -86,7 +86,7 @@ export default function UploadPreviewEditor({
               <button
                 key={i}
                 type="button"
-                className={`preview-item${i === idx ? " active" : ""}${gaps.length ? " incomplete" : ""}`}
+                className={`pane-item${i === idx ? " active" : ""}${gaps.length ? " incomplete" : ""}`}
                 onClick={() => setActive(i)}
                 aria-current={i === idx}
               >
@@ -114,7 +114,7 @@ export default function UploadPreviewEditor({
         </button>
       </div>
 
-      <div className="preview-pane">
+      <div className="pane-fields">
         {!row ? (
           <div className="upload-empty">No rows yet — add one, or collapse and choose a file.</div>
         ) : (

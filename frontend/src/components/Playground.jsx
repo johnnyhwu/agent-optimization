@@ -842,6 +842,8 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         />
         <SpanList
           trace={trace}
+          // The whole question, which the list on the left cannot show.
+          question={active?.question}
           refreshing={detailRefreshing}
           activeSpan={activeSpan}
           onPickSpan={setActiveSpan}

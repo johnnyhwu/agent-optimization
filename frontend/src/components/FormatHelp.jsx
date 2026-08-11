@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
+import { COPY_OK, copyText } from "../clipboard.js";
+import { useToast } from "./Toast.jsx";
 import { IconCopy, IconDownload } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
 
@@ -70,18 +72,27 @@ const NOTES = {
 };
 
 export default function FormatHelp({ onLoadSample }) {
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("python");
   const [copied, setCopied] = useState(false);
 
+  // Answered twice on purpose. The label flip is where the eyes already are —
+  // on the button that was just pressed — but it is two words on a small
+  // control, and someone reading the snippet above it will miss it entirely.
+  // The toast is the one that carries across the dialog, and it is also the
+  // only way to report the failure, which has no label state to flip.
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(SNIPPETS[tab]);
+    const label = TABS.find((t) => t.id === tab)?.label || "Example";
+    if ((await copyText(SNIPPETS[tab])) === COPY_OK) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
-    } catch {
-      /* clipboard blocked (insecure origin) — the download is still there */
+      toast.success(`${label} example copied`);
+      return;
     }
+    // Names the way out rather than apologising: the download beside this
+    // button produces the same text as a file, and always works.
+    toast.error("Could not reach the clipboard — use Download example instead.");
   }
 
   if (!open) {

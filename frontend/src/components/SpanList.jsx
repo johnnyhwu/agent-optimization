@@ -1,11 +1,12 @@
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import Badge from "./ui/Badge.jsx";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 import Button from "./ui/Button.jsx";
 import Card, { CardHeader } from "./ui/Card.jsx";
 import { InlineEmpty } from "./ui/EmptyState.jsx";
-import { IconRefresh } from "./icons.jsx";
+import { IconClock, IconRefresh } from "./icons.jsx";
 import { showRawName, spanLabel } from "../span_label.js";
+import { isTimeout, timeoutAdvice, timeoutTitle } from "../failure.js";
 
 // A one-word class for the step, so the column can be scanned for shape before
 // it is read for detail. Deliberately short: the interesting text is the tool
@@ -82,6 +83,54 @@ function TraceErrorBody({ raw }) {
 // This column carries four unrelated kinds of content — what the agent said,
 // what it should have said, why it was judged that way, and the trace itself.
 // Run together they read as one wall of text, so each gets a labelled band.
+// The question this column is about.
+//
+// It was nowhere on this screen. Both left columns elide it — one row, one line,
+// ellipsis — so a question longer than the column was unreadable in the entire
+// interface, which is a problem when the thing being judged is whether an answer
+// matches it.
+//
+// Clamped rather than dumped: the trace below is what most visits are for, and a
+// six-line question would push it under the fold on every attempt to buy full
+// text on the few that need it.
+//
+// Whether the toggle appears is *measured*, not guessed from the string length.
+// A character count cannot know the column's width, and this column is resized
+// by collapsing the attempt list as well as by the window — so a guess produces
+// the two worst outcomes: an offer to reveal text that is already fully visible,
+// and no offer on the questions that are actually cut off.
+function QuestionSection({ question }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    // Only meaningful while clamped; expanded, the answer is already "yes".
+    const measure = () => {
+      if (!open) setClipped(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [question, open]);
+
+  return (
+    <Section title="Question">
+      <div ref={ref} className={`question-text${open ? "" : " is-clamped"}`}>
+        {question}
+      </div>
+      {clipped && (
+        <Button variant="link" size="sm" onClick={() => setOpen((v) => !v)}>
+          {open ? "Show less" : "Show the whole question"}
+        </Button>
+      )}
+    </Section>
+  );
+}
+
 function Section({ title, count, children }) {
   return (
     <section className="section">
@@ -105,7 +154,7 @@ function Section({ title, count, children }) {
 // verdict would both be false there.
 export default function SpanList({
   trace, refreshing, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing,
-  onRetryTrace, playground = false, emptyHint,
+  onRetryTrace, playground = false, emptyHint, question,
 }) {
   if (!trace) {
     return (
@@ -189,11 +238,32 @@ export default function SpanList({
       {/* In the playground the message is already a whole sentence — and one of
           them describes a deliberate stop, which "hit a problem" would
           misrepresent — so it stands on its own. */}
+      {/* A timeout is not a crash, and showing it as one sent developers looking
+          for a broken agent when what they had was a limit. The clock says which
+          of the two it is before the sentence is read, and the note says where
+          the limit that stopped this actually lives. */}
       {trace.error_message && (
-        <Banner tone="error" title={playground ? null : "This question failed."}>
-          {trace.error_message}
-        </Banner>
+        isTimeout(trace.failure_kind) ? (
+          <Banner
+            tone="error"
+            icon={<IconClock size={15} />}
+            title={timeoutTitle(trace.failure_kind)}
+          >
+            {trace.error_message}
+            <div className="ui-banner-note">
+              {timeoutAdvice(trace.failure_kind, { playground })}
+            </div>
+          </Banner>
+        ) : (
+          <Banner tone="error" title={playground ? null : "This question failed."}>
+            {trace.error_message}
+          </Banner>
+        )
       )}
+
+      {/* Above the answer, because an answer is only readable against the
+          question it answers. */}
+      {question && <QuestionSection question={question} />}
 
       {/* What the agent answered, next to what it was graded against. With a real
           agent this is the first thing to read — the verdict alone doesn't say

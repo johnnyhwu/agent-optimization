@@ -46,7 +46,12 @@
 .ui-btn:focus-visible { outline: none; box-shadow: var(--ring); }
 .ui-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .ui-btn svg { flex: none; }
-.ui-btn-label { display: inline-block; }
+/* inline-flex, not inline-block: an icon passed as *children* rather than via the
+   `icon` prop ends up inside this span, and as an inline SVG it then sat on the
+   text baseline instead of being centred by .ui-btn — which is what put the "+"
+   a couple of pixels low on half the buttons in the app. The call sites pass
+   `icon` now; this keeps the next one that forgets from showing it. */
+.ui-btn-label { display: inline-flex; align-items: center; gap: var(--space-1); }
 
 /* The one action a screen is for. Flat, not gradient: a gradient reads as
    decoration, and this button's job is to be the obvious one, which it achieves

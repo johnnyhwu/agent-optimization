@@ -456,7 +456,14 @@ select { cursor: pointer; }
 .qitem:hover { background: var(--panel-2); }
 .qitem.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .qitem .grow { min-width: 0; flex: 1; }
-.qitem .qtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two lines, not one. These columns are ~240px wide and a real question rarely
+   fits in one of them; the second line is usually the difference between "which
+   of these is the ACME one" and having to click each. The full text is in the
+   title, and in the middle column. */
+.qitem .qtext {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
+}
 /* Not started yet: present in the list (so the run's size is visible from the
    first second) but visibly not carrying a result. */
 .qitem.pending { opacity: 0.55; }
@@ -487,6 +494,11 @@ select { cursor: pointer; }
 .qphase.answered { color: var(--accent); }
 .qphase.failed, .qphase.cancelled { color: var(--red); }
 .qitem .qerror { font-size: 11px; color: var(--red); margin-top: 2px; line-height: 1.35; }
+/* Two words and a clock instead of 80 truncated characters. A timeout has one
+   cause and the middle column explains it in full; here the row only has to be
+   countable. Same red as any other failure — it is one — with the clock as the
+   only thing that distinguishes it, exactly as in the banner. */
+.qitem .qerror.is-timeout { display: inline-flex; align-items: center; gap: 4px; }
 .qitem:focus-visible, .spanrow:focus-visible { outline: none; box-shadow: inset var(--ring); }
 
 /* Explanations that live inside a Banner. The recognised-failure copy is prose
@@ -517,6 +529,21 @@ select { cursor: pointer; }
 }
 .section-title { font-weight: 700; color: var(--text); opacity: 0.75; }
 .section-count { font-variant-numeric: tabular-nums; }
+
+/* The question this column is about. Prose in the body face, not the monospace
+   the answers get: those are quoted output, this is the sentence someone typed. */
+.question-text {
+  padding: 8px 16px 10px; margin: 0;
+  font-size: var(--text-body); line-height: 1.55; overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.question-text.is-clamped {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+/* Pulled back under the text it belongs to, rather than sitting on the section's
+   own left margin. */
+.question-text + .ui-btn-link { margin: 0 0 10px 16px; }
 
 /* Agent answer vs expected answer, above the diagnosis in the middle column. */
 .answers { padding: 10px 16px 14px; }
@@ -691,11 +718,40 @@ select { cursor: pointer; }
 .cfg-value.empty { color: var(--muted); font-style: italic; font-family: inherit; }
 
 /* ---- share editor ---- */
-.share-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.share-row .who { flex: 1; display: flex; align-items: center; gap: 8px; }
-.share-row select { width: 120px; }
-.share-add { display: flex; gap: 8px; margin-top: 6px; }
-.share-add input { flex: 1; }
+/* ---- share with ----
+   One bordered list rather than loose rows: "who can see this" is a single
+   answer, and the box is what says the add field belongs to it. Three columns,
+   declared once — name, role, remove — so every row lines up because it is on
+   the same grid, not because two hardcoded widths happened to be close. */
+/* Capped: a row is a name and a role, and stretching that pair across a 1000px
+   dialog leaves the role marooned at the far edge of its own row. */
+.share-editor {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; max-width: 640px;
+}
+.share-list { display: flex; flex-direction: column; }
+.share-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 116px var(--ctl-h);
+  align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+.share-row + .share-row { border-top: 1px solid var(--border); }
+.share-who { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.share-who .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--fw-medium); }
+.share-row select { width: 100%; }
+/* The owner's badge sits in the role column beside the selects rather than
+   filling it: it is a statement, not a control, and stretching it to the width
+   of a <select> would invite it to be clicked. */
+.share-row .ui-badge { justify-self: start; }
+
+.share-add {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border); background: var(--panel-2);
+}
+.share-add-row { display: flex; gap: var(--space-2); }
+.share-add-row input { flex: 1; min-width: 0; }
+.share-check { margin: 0; }
 
 /* ---- upload preview table ---- */
 .upload-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1128,6 +1184,9 @@ select { cursor: pointer; }
   padding: 1px 6px; border-radius: 999px; white-space: nowrap;
 }
 .hint.error-text { color: var(--red); }
+/* Standalone too, for a phrase coloured inside a hint rather than a whole hint
+   that is one — same shape as .amber-text and .danger-text above. */
+.error-text { color: var(--red); }
 
 /* A button that reads as a link: used for small inline actions inside prose. */
 
@@ -1178,35 +1237,38 @@ select { cursor: pointer; }
 /* ---- shortlist: playground questions on their way into an eval set ---- */
 .attempt-actions button.active { color: var(--accent); }
 
-/* Same two-pane shape as the skill editor: a list to pick from, a form to work
-   in. The list carries the warnings, so what needs attention is visible without
-   opening every entry. */
-.shortlist-pane { display: grid; grid-template-columns: 280px 1fr; gap: var(--space-4); }
-@media (max-width: 900px) { .shortlist-pane { grid-template-columns: 1fr; } }
-.shortlist-items {
-  display: flex; flex-direction: column; gap: var(--space-1);
-  max-height: 420px; overflow-y: auto;
-}
-.shortlist-items > button.shortlist-item {
+/* The list lives in the shared `.pane-list-rows` column; only the row itself is
+   the shortlist's own, because it carries the warnings — what needs attention
+   has to be visible without opening every entry. */
+.shortlist-tabs { margin-bottom: var(--space-3); }
+.pane-list-rows > button.shortlist-item {
   display: grid; grid-template-columns: 1fr auto; grid-template-areas: "q x" "chips x";
   gap: var(--space-1) var(--space-2); align-items: center; text-align: left;
   background: none; border: 1px solid transparent; box-shadow: none;
   padding: var(--space-2); border-radius: var(--radius-sm); color: var(--text);
 }
-.shortlist-items > button.shortlist-item:hover { background: var(--panel-2); }
-.shortlist-items > button.shortlist-item.active {
+.pane-list-rows > button.shortlist-item:hover { background: var(--panel-2); }
+.pane-list-rows > button.shortlist-item.active {
   background: var(--accent-soft); border-color: var(--accent);
 }
-.shortlist-item .q { grid-area: q; font-size: var(--text-body); overflow-wrap: anywhere; }
+.shortlist-item .q {
+  grid-area: q; font-size: var(--text-body); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
 .shortlist-item .ui-badge-row { grid-area: chips; display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .shortlist-item .ui-btn-icon { grid-area: x; }
 
-.shortlist-editor { display: flex; flex-direction: column; min-width: 0; }
-.shortlist-editor textarea { min-height: 88px; }
 /* Label, state and action on one line — the action is a sibling of the label,
    not a child of it, so a click meant for the button cannot land on the field. */
 .field-head { display: flex; align-items: center; gap: var(--space-2); }
-.field-head label { margin: 0; }
+/* `.field > label` cannot reach a label that has been moved inside this row, so
+   it was inheriting the body face and sat a size larger and a shade darker than
+   the labels of the fields either side of it. Same treatment, stated again. */
+.field-head label {
+  margin: 0; display: block;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
 .field-head .grow { flex: 1; }
 .field-head .ui-btn-link { gap: var(--space-1); }
 .hint.warn-text {
@@ -1215,7 +1277,9 @@ select { cursor: pointer; }
   margin-bottom: var(--space-3);
 }
 
-.shortlist-newset { margin-top: var(--space-4); }
+/* Its own tab now, so it starts at the top of the body rather than a gap below
+   the review pane. */
+.shortlist-newset { margin-top: 0; }
 .include-sets {
   display: flex; flex-direction: column; gap: 2px;
   max-height: 160px; overflow-y: auto;
@@ -1380,51 +1444,72 @@ pre.prompt-text {
 .field-fill { display: flex; flex-direction: column; min-height: 0; flex: 1; margin-bottom: 0; }
 .field-fill > .field-head { flex: none; }
 
-/* Expanded preview: rows on the left, one row's fields on the right — the same
-   shape as QuestionEditor, since it's the same job. */
-.preview-editor {
+/* ---- the two-pane question editor -----------------------------------------
+   Rows on the left, one row's fields on the right. Three screens do this exact
+   job — the upload preview's expanded editor, QuestionEditor on a locked set,
+   and the shortlist's review pane — so the shape is named for the shape rather
+   than for whichever of the three grew it first. Each of them contributes only
+   what is genuinely its own: the upload preview adds paging and a row counter,
+   the shortlist adds its warning chips.
+
+   All three fill the dialog. That is the point: these panes hold a question, an
+   expected answer and an expected process, and every previous version of this
+   layout gave them a fixed ~90px box inside a page-length scroll, which is
+   about enough room to read one sentence of something you are being asked to
+   rewrite. */
+.pane-editor {
   display: grid; grid-template-columns: 260px minmax(0, 1fr);
   gap: var(--space-4); flex: 1; min-height: 0; margin-top: var(--space-2);
 }
-.preview-list {
+.pane-list {
   display: flex; flex-direction: column; gap: var(--space-2); min-height: 0;
   border-right: 1px solid var(--border); padding-right: var(--space-3);
 }
-.preview-list-rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.pane-list-rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .preview-add { flex: none; justify-content: center; }
 
-.preview-item {
+.pane-item {
   display: flex; align-items: baseline; gap: var(--space-2); width: 100%;
   text-align: left; font-weight: var(--fw-normal);
   background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
   padding: 7px 10px; color: var(--text);
 }
-.preview-item:hover { background: var(--panel-2); border-color: transparent; box-shadow: none; }
-.preview-item.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-.preview-item .n {
+.pane-item:hover { background: var(--panel-2); border-color: transparent; box-shadow: none; }
+.pane-item.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.pane-item .n {
   flex: none; width: 2ch; text-align: right;
   color: var(--muted); font-size: var(--text-micro); font-variant-numeric: tabular-nums;
 }
-.preview-item .grow { min-width: 0; flex: 1; }
-.preview-item .qtext {
+.pane-item .grow { min-width: 0; flex: 1; }
+.pane-item .qtext {
   display: block; font-size: var(--text-body);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* A row you still have to fix is why you expanded the preview — mark it in
    shape, not only in the error list you'd otherwise meet at submit time. */
-.preview-item.incomplete { box-shadow: inset 3px 0 0 var(--red); }
-.preview-item.incomplete.active { box-shadow: inset 3px 0 0 var(--red), 0 0 0 1px var(--border); }
-.preview-item .gaps { display: block; margin-top: 1px; font-size: var(--text-micro); color: var(--red); }
+.pane-item.incomplete { box-shadow: inset 3px 0 0 var(--red); }
+.pane-item.incomplete.active { box-shadow: inset 3px 0 0 var(--red), 0 0 0 1px var(--border); }
+.pane-item .gaps { display: block; margin-top: 1px; font-size: var(--text-micro); color: var(--red); }
+/* Identity under the text: question_id and version, for the locked-set editor
+   where both are what a save is asserting. */
+.pane-item .qid { display: block; margin-top: 1px; font-size: var(--text-micro); color: var(--muted); }
 
-.preview-pane { display: flex; flex-direction: column; min-height: 0; gap: var(--space-3); overflow-y: auto; }
+.pane-fields { display: flex; flex-direction: column; min-height: 0; gap: var(--space-3); overflow-y: auto; }
 .preview-pane-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.preview-pane .field { margin-bottom: 0; }
-/* Questions and answers are prose, not payloads: read them in the body face. */
-.preview-pane .grow-field { display: flex; flex-direction: column; flex: 1 1 0; min-height: 120px; }
-.preview-pane .grow-field textarea {
+.pane-fields .field { margin-bottom: 0; }
+/* Questions and answers are prose, not payloads: read them in the body face.
+   Written as `.field.grow-field` (0,2,1) rather than scoped to a parent, so it
+   outweighs the global `.field textarea` by specificity instead of by which
+   rule happens to come last in this file. */
+.field.grow-field { display: flex; flex-direction: column; flex: 1 1 0; min-height: 120px; }
+.field.grow-field textarea {
   flex: 1; min-height: 96px; resize: none;
   font-family: var(--font); font-size: var(--text-body); line-height: 1.55;
 }
+/* Short by nature — a question is a sentence, the answer and the process are
+   paragraphs, and splitting the height evenly starves the two that need it. */
+.field.grow-field.grow-field-sm { flex: 0 1 auto; min-height: 0; }
+.field.grow-field.grow-field-sm textarea { min-height: 62px; }
 .preview-meta { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); flex: none; }
 .preview-meta input.mono { font-family: var(--font-mono); font-size: var(--text-caption); }
 .preview-keys { flex: none; margin: 0; }
@@ -1545,9 +1630,9 @@ pre.prompt-text {
 
 /* Under ~900px the two panes stop being two panes. */
 @media (max-width: 900px) {
-  .preview-editor { grid-template-columns: minmax(0, 1fr); }
-  .preview-list { border-right: none; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
-  .preview-list-rows { max-height: 22vh; }
+  .pane-editor { grid-template-columns: minmax(0, 1fr); }
+  .pane-list { border-right: none; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
+  .pane-list-rows { max-height: 22vh; }
   .preview-meta { grid-template-columns: minmax(0, 1fr); }
   /* Five connection fields in a row is one row too many on a phone. */
   .script-conn-grid { grid-template-columns: minmax(0, 1fr) 90px; }

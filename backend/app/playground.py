@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -50,6 +51,7 @@ from app.pipeline import (
     run_diagnosis,
     wait_for_trace,
 )
+from app.services.failure_text import describe_failure
 from app.sse import hub
 
 log = logging.getLogger(__name__)
@@ -102,6 +104,11 @@ class PlaygroundAttempt:
     agent_started_at: datetime | None = None
     agent_latency_ms: int | None = None
     error_message: str | None = None
+    # Which step failed and how, in the same vocabulary a run's question_results
+    # use ('agent' | 'agent_timeout' | 'judge' | 'judge_timeout'). The message
+    # already says it in words; this is what lets the list mark a timed-out
+    # attempt without reading the sentence.
+    failure_kind: str | None = None
 
     verdict: str | None = None
     judge_score: float | None = None
@@ -328,6 +335,9 @@ async def _execute(attempt: PlaygroundAttempt) -> None:
         await _publish(attempt, "attempt_completed")
 
     # 1) agent
+    # Measured rather than derived from the limit: the call is retried, so the
+    # time a developer actually waited is a multiple of what they configured.
+    agent_started = time.monotonic()
     try:
         agent_resp = await call_agent(
             seams, attempt.question, attempt.correlation_id, attempt.subject,
@@ -339,8 +349,15 @@ async def _execute(attempt: PlaygroundAttempt) -> None:
         return
     except Exception as exc:  # noqa: BLE001
         log.warning("playground agent call failed for %s: %s", attempt.correlation_id, exc)
+        message, kind = describe_failure(
+            "agent", exc,
+            timeout_s=timeout_s,
+            attempts=settings.agent_max_retries + 1,
+            waited_s=time.monotonic() - agent_started,
+        )
         attempt.status = "failed"
-        attempt.error_message = clip(f"Agent call failed: {exc!s}")
+        attempt.error_message = clip(message)
+        attempt.failure_kind = kind
         await _publish(attempt, "attempt_completed")
         return
 
@@ -358,6 +375,7 @@ async def _execute(attempt: PlaygroundAttempt) -> None:
 
     # 2) judge — only when there is an expected answer to grade against.
     if attempt.judged and not cancel_event.is_set():
+        judge_started = time.monotonic()
         try:
             verdict = await call_judge(
                 seams, attempt.question, agent_resp.response,
@@ -372,7 +390,14 @@ async def _execute(attempt: PlaygroundAttempt) -> None:
             # why there is no verdict. Nothing aggregates these numbers, so
             # there is no pass rate to inflate.
             log.warning("playground judge call failed for %s: %s", attempt.correlation_id, exc)
-            attempt.error_message = clip(f"Judge call failed: {exc!s}")
+            message, kind = describe_failure(
+                "judge", exc,
+                timeout_s=settings.llm_timeout_s,
+                attempts=settings.llm_max_retries + 1,
+                waited_s=time.monotonic() - judge_started,
+            )
+            attempt.error_message = clip(message)
+            attempt.failure_kind = kind
         else:
             attempt.verdict = verdict.verdict
             attempt.judge_score = verdict.score

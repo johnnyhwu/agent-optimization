@@ -3,6 +3,8 @@ import Card, { CardHeader } from "./ui/Card.jsx";
 import { InlineEmpty } from "./ui/EmptyState.jsx";
 import { SegmentedControl } from "./ui/Toolbar.jsx";
 import ElapsedTimer from "./ElapsedTimer.jsx";
+import { IconClock } from "./icons.jsx";
+import { isTimeout } from "../failure.js";
 
 // Left column. Two jobs:
 //
@@ -104,12 +106,22 @@ export default function QuestionList({
                   running={runLive && r.status === "pending"}
                 />
               </div>
-              {/* A bare "failed" says nothing once the agent is a real service. */}
+              {/* A bare "failed" says nothing once the agent is a real service.
+                  A timeout is the exception: it has one cause, so the row says
+                  it in two words instead of spending 80 characters restating a
+                  sentence the middle column explains in full. Scanning a run for
+                  "how many of these ran out of time" is then a glance. */}
               {(r.phase === "failed" || r.phase === "cancelled" || r.phase === "judge_invalid") &&
                 r.error_message && (
-                <div className="qerror" title={r.error_message}>
-                  {r.error_message.slice(0, 80)}
-                </div>
+                isTimeout(r.failure_kind) ? (
+                  <div className="qerror is-timeout" title={r.error_message}>
+                    <IconClock size={11} /> timed out
+                  </div>
+                ) : (
+                  <div className="qerror" title={r.error_message}>
+                    {r.error_message.slice(0, 80)}
+                  </div>
+                )
               )}
             </div>
           </div>
