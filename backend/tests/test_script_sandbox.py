@@ -14,13 +14,16 @@ cannot reach.
 """
 from __future__ import annotations
 
+import errno
 import os
+import subprocess
 import sys
 import textwrap
 
 import pytest
 
-from app.services.script_runner import Limits, QueryError, run_script
+from app.services import script_runner
+from app.services.script_runner import Limits, QueryError, _runner_uid, run_script
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
@@ -212,6 +215,120 @@ def test_a_fork_bomb_does_not_escape():
     # Either the fork is refused or the run is killed; what must not happen is a
     # successful return, and the parent must survive to report it.
     assert result.error is not None
+
+
+def test_the_child_is_unprivileged_and_carries_its_limits():
+    """Both halves of the containment still arrive, and in the right order.
+
+    The uid drop is done by Popen and the limits by preexec_fn, which run at
+    different points in the child; asserting them from inside the script is what
+    catches either one silently going missing.
+    """
+    result = run("""
+        import os, resource
+        def main(database_handler):
+            return [{
+                "uid": os.getuid(),
+                "nproc": resource.getrlimit(resource.RLIMIT_NPROC),
+                "fsize": resource.getrlimit(resource.RLIMIT_FSIZE),
+            }]
+    """, max_processes=32)
+    assert result.error is None
+    seen = result.value[0]
+    assert seen["nproc"] == [32, 32]
+    assert seen["fsize"] == [0, 0]
+    if _runner_uid() is not None:
+        # Privileged enough to drop: the script must not be running as us.
+        assert seen["uid"] != os.getuid()
+        assert seen["uid"] != 0
+
+
+def test_a_busy_runner_uid_still_lets_the_sandbox_start():
+    """Regression: the fork-bomb limit must not stop the sandbox from starting.
+
+    RLIMIT_NPROC counts tasks per uid across the whole user namespace, which a
+    container shares with its host — so the uid the child is dropped to is
+    routinely busy for reasons this container cannot see. Applying the limit
+    *before* the uid drop made the kernel fail the following `execve` with EAGAIN
+    (`BlockingIOError: [Errno 11] ... '/usr/local/bin/python'`) on every single
+    run, before the script executed a line. Here the runner uid is deliberately
+    put over its limit and the run must still work.
+    """
+    credentials = _runner_uid()
+    if credentials is None:
+        pytest.skip("unprivileged: the child is not dropped to another uid here")
+    uid, gid = credentials
+
+    busy = [
+        subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            user=uid,
+            group=gid,
+            extra_groups=[],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(8)
+    ]
+    try:
+        result = run("""
+            def main(database_handler):
+                return [{"question": "q"}]
+        """, max_processes=4)
+    finally:
+        for proc in busy:
+            proc.kill()
+            proc.wait()
+
+    assert result.error is None
+    assert result.value == [{"question": "q"}]
+
+
+def test_a_sandbox_that_cannot_start_is_a_result_not_an_exception(monkeypatch):
+    """A failed launch is a failed run, not a 500.
+
+    The endpoint's contract is that a run that did not work comes back as a 200
+    carrying `error`, the checklist and whatever output there was. An OSError
+    escaping this function skips all of that.
+    """
+
+    def refuse(*args, **kwargs):
+        raise BlockingIOError(errno.EAGAIN, os.strerror(errno.EAGAIN), sys.executable)
+
+    monkeypatch.setattr(script_runner.subprocess, "Popen", refuse)
+
+    result = run("""
+        def main(database_handler):
+            return []
+    """)
+    assert result.value is None
+    assert result.error is not None
+    assert "could not be started" in result.error
+    # The message names what the user can do about it, not the errno.
+    assert "11" not in result.error
+
+
+def test_a_failed_launch_does_not_leak_file_descriptors(monkeypatch):
+    """Four descriptors are opened before Popen; a failure must close all four.
+
+    Closing only the child's half — the shape a plain `finally` gives you — leaks
+    two per attempt, so a feature that fails every time degrades from a readable
+    error into EMFILE.
+    """
+
+    def refuse(*args, **kwargs):
+        raise BlockingIOError(errno.EAGAIN, os.strerror(errno.EAGAIN), sys.executable)
+
+    monkeypatch.setattr(script_runner.subprocess, "Popen", refuse)
+
+    def open_fds():
+        return len(os.listdir("/proc/self/fd"))
+
+    run("def main(database_handler):\n    return []\n")  # warm up any lazy imports
+    before = open_fds()
+    for _ in range(25):
+        run("def main(database_handler):\n    return []\n")
+    assert open_fds() == before
 
 
 def test_memory_hog_is_stopped():

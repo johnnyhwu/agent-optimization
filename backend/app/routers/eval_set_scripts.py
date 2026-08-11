@@ -201,14 +201,23 @@ def _execute(source: str, target: DbTarget, limits: Limits):
     A database that cannot be reached is the single most common way this fails,
     and it is the user's typo to fix — so it comes back as a readable error on the
     run, not as a 500.
+
+    `OSError` is caught for the same reason: the run failing to start at all is
+    still a failed run, and this endpoint's contract is that failed runs arrive as
+    a 200 carrying `error`, checks and output — none of which survive a 500.
+    `run_script` already translates a sandbox that will not launch, so this is the
+    backstop for the rest (the connection, the executor).
     """
-    from app.services.script_runner import RunResult
+    from app.services.script_runner import RunResult, launch_reason
 
     try:
         with open_executor(target, limits) as executor:
             return run_script(source, executor, limits)
     except QueryError as exc:
         return RunResult(error=str(exc))
+    except OSError as exc:
+        log.exception("eval-set script run could not start")
+        return RunResult(error=launch_reason(exc))
 
 
 def _audit(subject: str, target: DbTarget, source: str, result) -> None:

@@ -20,6 +20,9 @@ What the child gets and what it is denied:
 | read /app sources, .env, CA bundles      | same uid, plus an empty cwd           |
 | write files, fill the disk               | RLIMIT_FSIZE = 0                      |
 | fork bomb                                | RLIMIT_NPROC, own session, killpg     |
+|                                          | (see the note on _preexec: the limit  |
+|                                          | is per-uid and host-wide, so it is    |
+|                                          | applied *after* the uid drop)         |
 | memory bomb                              | RLIMIT_AS                             |
 | infinite loop                            | RLIMIT_CPU + a wall clock in *this*   |
 |                                          | process (a sleeping script burns no   |
@@ -36,6 +39,7 @@ then, the audit log of every run and every statement is the compensating control
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import resource
@@ -135,8 +139,29 @@ def _child_environment(home: str) -> dict[str, str]:
     }
 
 
-def _preexec(limits: Limits, credentials: tuple[int, int] | None):
-    """Applied in the forked child, before exec. Order matters: limits, then uid.
+def _preexec(limits: Limits):
+    """Applied in the forked child, after the uid drop and before exec.
+
+    **The uid drop is not done here, and that ordering is load-bearing.** It is
+    handed to Popen's `user=`/`group=`/`extra_groups=`, which CPython performs in
+    the child *before* it calls `preexec_fn` — so by the time this runs the
+    process is already unprivileged, and every call below only ever lowers a
+    limit, which needs no privilege.
+
+    Doing it the other way around — the obvious order, limits then setuid — is a
+    trap. `RLIMIT_NPROC` is not a per-process or per-container limit: the kernel
+    counts tasks (threads included) per uid across the whole user namespace, and
+    a container without userns-remap shares that namespace with the host. On
+    `setuid` the kernel compares that host-wide count against the limit in force
+    and, if it is over, flags the process so that the *next* `execve` fails with
+    EAGAIN — surfacing as `BlockingIOError: [Errno 11] ... '/usr/local/bin/python'`
+    before the script has run a single line. Whether the uid we drop to happens
+    to be busy elsewhere on the host is not something this container can know, so
+    the limit is applied only once the drop is already done.
+
+    What that costs: on a host where the runner uid is already over the limit,
+    the child cannot fork at all. The fork-bomb defence fails closed — the
+    direction to fail in — instead of taking the whole feature down with it.
 
     (`preexec_fn` is documented as unsafe in the presence of threads; the output
     drain threads are started only after Popen returns, so nothing else is running
@@ -159,11 +184,6 @@ def _preexec(limits: Limits, credentials: tuple[int, int] | None):
         # it cannot cover — a child that survives the parent.
         cpu = max(2, limits.wall_clock_s + 2)
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-        if credentials:
-            uid, gid = credentials
-            os.setgroups([])
-            os.setgid(gid)
-            os.setuid(uid)
 
     return apply
 
@@ -224,6 +244,12 @@ def run_script(source: str, executor, limits: Limits | None = None) -> RunResult
     with tempfile.TemporaryDirectory(prefix="evalscript-") as workdir:
         os.chmod(workdir, 0o755)
         credentials = _runner_uid()
+        # Dropped by CPython itself rather than by our preexec_fn, because it has
+        # to happen before the limits are applied — see _preexec.
+        drop = {}
+        if credentials:
+            uid, gid = credentials
+            drop = {"user": uid, "group": gid, "extra_groups": []}
         p2c_r, p2c_w = os.pipe()
         c2p_r, c2p_w = os.pipe()
         try:
@@ -238,16 +264,30 @@ def run_script(source: str, executor, limits: Limits | None = None) -> RunResult
                 pass_fds=(p2c_r, c2p_w),
                 cwd=workdir,
                 env=_child_environment(workdir),
-                preexec_fn=_preexec(limits, credentials),  # noqa: PLW1509
+                preexec_fn=_preexec(limits),  # noqa: PLW1509
                 start_new_session=True,  # its own process group, so kills are total
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                **drop,
             )
-        finally:
-            os.close(p2c_r)
-            os.close(c2p_w)
+        except BaseException as exc:
+            # Nothing adopted any of the four descriptors, so all four are ours to
+            # close — including the two the RPC loop below would have taken over.
+            # Closing only the child's half here (the obvious `finally`) leaks two
+            # per failed launch, and a feature that fails every time turns that
+            # into EMFILE.
+            _close_fds(p2c_r, c2p_w, p2c_w, c2p_r)
+            if isinstance(exc, OSError):
+                # The sandbox failing to start is not a crash to hand the user as
+                # a 500 — it is a run that did not happen, and it is reported the
+                # same way as every other failed run.
+                result.error = launch_reason(exc)
+                result.duration_ms = int((time.monotonic() - started) * 1000)
+                return result
+            raise
+        _close_fds(p2c_r, c2p_w)
 
         streams: dict[str, str] = {}
         threads = [
@@ -398,6 +438,27 @@ def _answer(message, executor, limits: Limits, result: RunResult, queries: int) 
 def _note_limit(result: RunResult, note: str) -> None:
     if note not in result.limits_hit:
         result.limits_hit.append(note)
+
+
+def _close_fds(*fds: int) -> None:
+    for fd in fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def launch_reason(exc: OSError) -> str:
+    """Why the sandbox could not be started, in words the user can act on."""
+    if exc.errno == errno.EAGAIN:
+        return (
+            "The script could not be started: the system refused to create the "
+            "sandbox process. The host has no process slots left for the user "
+            "scripts run as. Try again in a moment; if it persists, this needs "
+            "an administrator."
+        )
+    detail = exc.strerror or str(exc)
+    return f"The script could not be started: {detail}."
 
 
 def _kill(proc) -> None:
