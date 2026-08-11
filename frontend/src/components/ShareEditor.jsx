@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import { IconPlus, IconUsers, IconX } from "./icons.jsx";
+import { IconCheck, IconPlus, IconX } from "./icons.jsx";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
-import { IconCheck } from "./icons.jsx";
 
-// Reusable "share with" editor used by upload + config dialogs. Edits a list of
-// {subject, role}. The current user is always an owner and is shown locked.
+// Reusable "share with" editor used by the upload, config and shortlist dialogs.
+// Edits a list of {subject, role}. The current user is always an owner and is
+// shown locked.
 //
 // Sharing is still a person typing a colleague's username — but the name is now
 // checked against the employee directory before it can be added. The failure
@@ -18,6 +18,14 @@ import { IconCheck } from "./icons.jsx";
 // the first blocks. If the directory itself is down, refusing to add anyone
 // would turn an outage over there into "nobody in the company can share
 // anything" over here — so that case warns and lets the add through.
+//
+// Presentationally this is one bordered list, not a stack of loose rows. It used
+// to be three unrelated flex rows whose columns lined up by coincidence — the
+// owner row held its last column open with a hardcoded 30px spacer next to a
+// control that is 34px, and the add row paired a full-height input with a
+// short button. Columns are a grid now, so they line up because they are the
+// same columns, and the directory's answer sits under the field that caused it
+// rather than at the bottom of the whole block.
 const IDLE = { state: "idle" };
 
 export default function ShareEditor({ shares, setShares, currentUser }) {
@@ -87,66 +95,80 @@ export default function ShareEditor({ shares, setShares, currentUser }) {
   }
 
   return (
-    <div>
-      <div className="share-row">
-        <div className="who">
-          <IconUsers size={14} />
-          <strong>{currentUser}</strong> <span className="hint">(you)</span>
+    <div className="share-editor">
+      <div className="share-list">
+        <div className="share-row">
+          <span className="share-who">
+            <strong className="nm">{currentUser}</strong>
+            <span className="hint">you</span>
+          </span>
+          <Badge tone="success">owner</Badge>
+          {/* The grid holds this column open, so there is nothing to measure
+              and nothing to get wrong. */}
+          <span />
         </div>
-        <Badge tone="success">owner</Badge>
-        <span style={{ width: 30 }} />
-      </div>
 
-      {shares.map((s) => (
-        <div className="share-row" key={s.subject}>
-          <div className="who">
-            <IconUsers size={14} />
-            {s.subject}
+        {shares.map((s) => (
+          <div className="share-row" key={s.subject}>
+            <span className="share-who">
+              <span className="nm">{s.subject}</span>
+            </span>
+            <select
+              value={s.role}
+              aria-label={`Role for ${s.subject}`}
+              onChange={(e) => setRole(s.subject, e.target.value)}
+            >
+              <option value="viewer">viewer</option>
+              <option value="owner">owner</option>
+            </select>
+            <IconButton
+              label={`Stop sharing with ${s.subject}`}
+              icon={<IconX size={15} />}
+              onClick={() => remove(s.subject)}
+            />
           </div>
-          <select value={s.role} onChange={(e) => setRole(s.subject, e.target.value)}>
-            <option value="viewer">viewer</option>
-            <option value="owner">owner</option>
-          </select>
-          <IconButton label="Remove" icon={<IconX size={15} />} onClick={() => remove(s.subject)} />
-        </div>
-      ))}
+        ))}
+      </div>
 
       <div className="share-add">
-        <input
-          placeholder="type a username to share with"
-          value={freeText}
-          onChange={(e) => setFreeText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add();
-            }
-          }}
-        />
-        <Button size="sm" onClick={add} disabled={!canAdd}>
-          <IconPlus size={14} /> add
-        </Button>
-      </div>
-
-      {typed && !taken.has(typed) && (
-        <div className="hint" style={{ marginTop: 4 }}>
-          {check.state === "checking" && <>Checking…</>}
-          {check.state === "found" && (
-            <span className="ok-text"><IconCheck size={13} /> {check.name}</span>
-          )}
-          {check.state === "missing" && (
-            <span style={{ color: "var(--red)" }}>
-              No employee named “{typed}”. Check the spelling.
-            </span>
-          )}
-          {check.state === "unverified" && (
-            <span style={{ color: "var(--amber)" }}>
-              Could not verify this name — the employee directory did not answer.
-              You can still add it.
-            </span>
-          )}
+        <div className="share-add-row">
+          <input
+            placeholder="username"
+            aria-label="Username to share with"
+            value={freeText}
+            onChange={(e) => setFreeText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                add();
+              }
+            }}
+          />
+          <Button icon={<IconPlus size={14} />} onClick={add} disabled={!canAdd}>
+            Add
+          </Button>
         </div>
-      )}
+
+        {/* Directly under the field it is about. As a loose line at the bottom
+            of the block it read as a statement about the whole share list. */}
+        {typed && !taken.has(typed) && (
+          <div className="hint share-check">
+            {check.state === "checking" && <>Checking the directory…</>}
+            {check.state === "found" && (
+              <span className="ok-text"><IconCheck size={13} /> {check.name}</span>
+            )}
+            {check.state === "missing" && (
+              <span className="error-text">No employee named “{typed}”. Check the spelling.</span>
+            )}
+            {check.state === "unverified" && (
+              <span className="amber-text">
+                Could not verify this name — the employee directory did not answer.
+                You can still add it.
+              </span>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
