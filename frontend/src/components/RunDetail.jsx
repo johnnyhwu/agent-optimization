@@ -353,6 +353,8 @@ export default function RunDetail({
         )}
         <SpanList
           trace={trace}
+          // The whole question, which the list on the left cannot show.
+          question={activeResult?.question}
           refreshing={traceRefreshing}
           activeSpan={activeSpan}
           onPickSpan={setActiveSpan}

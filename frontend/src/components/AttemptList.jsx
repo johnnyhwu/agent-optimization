@@ -1,8 +1,9 @@
 import React from "react";
 import { IconButton } from "./ui/Button.jsx";
-import { IconCopy, IconPanelLeft, IconPlus, IconStop, IconTrash } from "./icons.jsx";
+import { IconClock, IconCopy, IconPanelLeft, IconPlus, IconStop, IconTrash } from "./icons.jsx";
 import { overrideCounts } from "../workspace_util.js";
 import ElapsedTimer from "./ElapsedTimer.jsx";
+import { isTimeout } from "../failure.js";
 
 // Left column of the playground: this session's attempts, newest first.
 //
@@ -115,7 +116,12 @@ export default function AttemptList({
         >
           <span className={`dot ${dotClass(a)}`} />
           <div className="grow">
-            <div className="qtext">{a.question.slice(0, 60)}</div>
+            {/* Two lines, elided by the column's width. It used to be cut at 60
+                characters *and* ellipsed, with no title — so a long question was
+                unreadable here and nowhere else showed it either. The middle
+                column carries the full text now; this only has to be enough to
+                tell two attempts apart. */}
+            <div className="qtext" title={a.question}>{a.question}</div>
             <div className="qid">
               {relative(a.created_at)} · <span className={`qphase ${a.phase}`}>{note(a)}</span>
               {/* One slot for the agent's time, counting up while the question
@@ -148,9 +154,15 @@ export default function AttemptList({
               {!a.has_expected_answer && <span className="ui-badge ui-badge-neutral">not judged</span>}
             </div>
             {a.error_message && (
-              <div className="qerror" title={a.error_message}>
-                {a.error_message.slice(0, 80)}
-              </div>
+              isTimeout(a.failure_kind) ? (
+                <div className="qerror is-timeout" title={a.error_message}>
+                  <IconClock size={11} /> timed out
+                </div>
+              ) : (
+                <div className="qerror" title={a.error_message}>
+                  {a.error_message.slice(0, 80)}
+                </div>
+              )
             )}
           </div>
           <div className="attempt-actions">
