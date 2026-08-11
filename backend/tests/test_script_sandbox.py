@@ -243,6 +243,67 @@ def test_the_child_is_unprivileged_and_carries_its_limits():
         assert seen["uid"] != 0
 
 
+def test_a_source_tree_the_runner_uid_cannot_read_still_runs(tmp_path, monkeypatch):
+    """Regression: the child must not depend on /app being readable.
+
+    The child is dropped to another uid, so exec'ing our module straight out of
+    /app required that uid to be able to read it — and /app's permissions come
+    from the host (a bind mount in development, the build context's file modes in
+    the image), not from anything this code controls. A strict umask on the host
+    therefore failed every run with `can't open file ... Permission denied`, right
+    after a successful exec. Here the module's directory is closed to everyone but
+    us, exactly as it was on the host that reported it, and the run must work.
+    """
+    if _runner_uid() is None:
+        pytest.skip("unprivileged: the child is not dropped to another uid here")
+
+    private = tmp_path / "private"
+    private.mkdir()
+    hidden = private / os.path.basename(script_runner.CHILD)
+    hidden.write_bytes(open(script_runner.CHILD, "rb").read())
+    hidden.chmod(0o600)
+    private.chmod(0o700)  # ours to read; unreadable to the uid the child runs as
+    monkeypatch.setattr(script_runner, "CHILD", str(hidden))
+
+    result = run("""
+        def main(database_handler):
+            return [{"question": "q"}]
+    """)
+    assert result.error is None
+    assert result.value == [{"question": "q"}]
+
+
+def test_the_script_working_directory_is_empty():
+    """The copied module goes beside the cwd, not in it.
+
+    An empty working directory is one of the stated properties of the sandbox;
+    dropping our own module into it would quietly retire that, and hand the script
+    a file to read for no reason.
+    """
+    result = run("""
+        import os
+        def main(database_handler):
+            return [{"entries": sorted(os.listdir("."))}]
+    """)
+    assert result.error is None
+    assert result.value[0]["entries"] == []
+
+
+def test_a_sandbox_that_cannot_be_laid_out_is_a_result_not_an_exception(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+    monkeypatch.setattr(script_runner.shutil, "copyfile", refuse)
+
+    result = run("""
+        def main(database_handler):
+            return []
+    """)
+    assert result.value is None
+    assert result.error is not None
+    assert "could not be started" in result.error
+
+
 def test_a_busy_runner_uid_still_lets_the_sandbox_start():
     """Regression: the fork-bomb limit must not stop the sandbox from starting.
 
