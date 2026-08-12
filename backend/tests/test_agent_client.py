@@ -9,7 +9,11 @@ import pytest
 import respx
 
 from app.integrations.base import WorkspaceOverride
-from app.integrations.real.agent import AgentHttpError, HttpAgentClient
+from app.integrations.real.agent import (
+    AgentHttpError,
+    HttpAgentClient,
+    server_budget_s,
+)
 
 URL = "https://agent.test"
 EXECUTE_URL = f"{URL}/execute"
@@ -17,7 +21,11 @@ EXECUTE_URL = f"{URL}/execute"
 
 @pytest.fixture
 def client(configure):
-    with configure(agent_base_url=URL, agent_timeout_s=5.0):
+    # A round timeout and margin, so the budget the server is sent (55) is
+    # visibly neither of them.
+    with configure(
+        agent_base_url=URL, agent_timeout_s=60.0, agent_server_timeout_margin_s=5.0
+    ):
         yield HttpAgentClient()
 
 
@@ -57,17 +65,59 @@ async def test_tags_default_to_empty_list(client):
 
 @respx.mock
 async def test_no_workspace_key_without_one(client):
-    """An eval run's request body must be what it always was (§10.7).
+    """The playground's override must not leak into every other call (§10.7).
 
-    The playground is the only caller that sends an override, so its existence
-    must not add a key — or change one — for every other call.
+    `timeout_s` is the one key that rides along unconditionally — it states
+    something true of every call. `workspace` is the opposite: only the
+    playground sends one, so its existence must not add a key, or change one,
+    for an eval run.
     """
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
     await client.call("q", "corr-1", "bob", ["eval_billing"])
 
     metadata = json.loads(respx.calls[0].request.content)["metadata"]
     assert "workspace" not in metadata
-    assert set(metadata) == {"trace_data"}
+    assert set(metadata) == {"trace_data", "timeout_s"}
+
+
+@respx.mock
+async def test_request_carries_the_server_budget(client):
+    """The agent server is told how long it has (§17.0 #6) — a shorter time than
+    we are prepared to wait, so that it is the end that times out first."""
+    respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
+    await client.call("q", "corr-1", "bob")
+
+    body = json.loads(respx.calls[0].request.content)
+    assert body["metadata"]["timeout_s"] == 55.0
+    # The margin is only ever subtracted from the number we send. What we
+    # ourselves wait — the httpx timeout, and `pipeline.wait_for` above it — is
+    # the full configured timeout, or the server would have no head start.
+    assert client.timeout_s == 60.0
+
+
+@respx.mock
+async def test_per_run_timeout_reaches_the_server_budget(configure):
+    """The timeout a developer typed into the run dialog is the one that travels."""
+    with configure(
+        agent_base_url=URL, agent_timeout_s=60.0, agent_server_timeout_margin_s=5.0
+    ):
+        respx.post(EXECUTE_URL).mock(
+            return_value=httpx.Response(200, json={"content": "hi"})
+        )
+        await HttpAgentClient(timeout_s=600.0).call("q", "corr-1", "bob")
+
+    assert json.loads(respx.calls[0].request.content)["metadata"]["timeout_s"] == 595.0
+
+
+def test_server_budget_never_falls_below_half_the_timeout():
+    """A margin wider than the timeout itself must not produce a zero or
+    negative budget — a 3s question would otherwise be sent as "you have -2s"."""
+    assert server_budget_s(60.0, 5.0) == 55.0
+    assert server_budget_s(3.0, 5.0) == 1.5
+    assert server_budget_s(10.0, 10.0) == 5.0
+    # A negative margin is a misconfiguration, not licence to hand the server
+    # *more* time than we will wait.
+    assert server_budget_s(60.0, -5.0) == 60.0
 
 
 @respx.mock
