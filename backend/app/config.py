@@ -248,10 +248,19 @@ class Settings(BaseSettings):
     script_max_rows_per_query: int = 50_000
     # Enforced by the target database via `statement_timeout`, so it holds even
     # when this process is busy.
-    script_statement_timeout_s: int = 30
+    script_statement_timeout_s: int = 600
     # The whole run. A sleeping script burns no CPU, so this — not RLIMIT_CPU —
     # is what bounds the request.
-    script_wall_clock_s: int = 60
+    #
+    # Ten minutes, not the minute this started life as: the scripts people
+    # actually write query a warehouse, and a warehouse answers when it answers.
+    # Two consequences worth knowing before lowering or raising it again. It is a
+    # *held HTTP request* — nginx has to be willing to wait at least this long
+    # (frontend/nginx.conf.template), or the run is killed by the proxy and the
+    # user is told nothing useful. And it multiplies straight into the queue: with
+    # `script_max_concurrent_runs` slots, the person who presses Run third waits
+    # this long behind the two ahead of them, with no progress to look at.
+    script_wall_clock_s: int = 600
     script_max_queries: int = 50
     # stdout+stderr kept per stream; the rest is dropped with a notice, because
     # "read it all" is a memory bomb with a friendly face.

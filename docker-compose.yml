@@ -141,8 +141,11 @@ services:
       # prevents — so they are overridable per deployment but none should be
       # raised without reading that file first.
       SCRIPT_MAX_ROWS_PER_QUERY: ${SCRIPT_MAX_ROWS_PER_QUERY:-50000}
-      SCRIPT_STATEMENT_TIMEOUT_S: ${SCRIPT_STATEMENT_TIMEOUT_S:-30}
-      SCRIPT_WALL_CLOCK_S: ${SCRIPT_WALL_CLOCK_S:-60}
+      SCRIPT_STATEMENT_TIMEOUT_S: ${SCRIPT_STATEMENT_TIMEOUT_S:-600}
+      # Raising this alone is not enough in the deployed form: nginx has to be
+      # willing to hold the request open at least as long, or it answers 504
+      # first — see proxy_read_timeout in frontend/nginx.conf.template.
+      SCRIPT_WALL_CLOCK_S: ${SCRIPT_WALL_CLOCK_S:-600}
       SCRIPT_MAX_QUERIES: ${SCRIPT_MAX_QUERIES:-50}
       SCRIPT_MAX_OUTPUT_CHARS: ${SCRIPT_MAX_OUTPUT_CHARS:-262144}
       SCRIPT_MEMORY_MB: ${SCRIPT_MEMORY_MB:-1024}

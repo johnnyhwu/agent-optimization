@@ -19,8 +19,8 @@ Limits, so a runaway query cannot take the system down with it:
 
   * 50,000 rows per query        -> raises, so you never build an eval set from
                                     half the data without noticing
-  * 30 seconds per statement     -> raises
-  * 60 seconds for the whole run -> the script is stopped
+  * 600 seconds per statement    -> raises
+  * 600 seconds for the whole run -> the script is stopped
   * 3,000 rows returned          -> the rest are dropped, and you are told
 
 Besides the standard library, two third-party packages are installed and can be
