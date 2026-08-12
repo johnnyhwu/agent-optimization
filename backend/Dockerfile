@@ -37,6 +37,24 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin scriptrunner
 COPY requirements.txt ./
 RUN uv pip install --system --no-cache -r requirements.txt
 
+# The packages an *uploaded* script may import (pandas, tabulate), installed
+# beside the server's rather than into it.
+#
+# --target, not --system, and that is the whole point: the two dependency trees
+# are resolved separately, so adding pandas for user scripts can never move a
+# version the API itself depends on, and a CVE in pandas does not sit in the
+# server process's import path. app/services/script_runner.py puts this directory
+# on the sandbox child's sys.path and nowhere else.
+#
+# The chmod is load-bearing, not tidiness: the child is dropped to the
+# `scriptrunner` uid, and `uv pip install --target` writes with this build's
+# umask — a strict one produces a tree the runner uid cannot read, which is
+# exactly the bug _stage() in script_runner.py exists to document. a+rX (capital
+# X: directories and already-executable files only) leaves nothing writable.
+COPY requirements-scripts.txt ./
+RUN uv pip install --target /opt/scriptlibs --no-cache -r requirements-scripts.txt \
+ && chmod -R a+rX /opt/scriptlibs
+
 COPY . .
 RUN chmod +x /app/docker-entrypoint.sh
 

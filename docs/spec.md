@@ -1397,6 +1397,11 @@ assistant 的 `tool_calls` 另外以工具名 + 重新縮排後的 arguments 呈
   資料庫連線欄位。沒有人應該為了得知自己漏寫 `main()` 而先輸入正式庫密碼。
   `POST /eval-sets/script/run` 才執行。
 - **靜態檢查不是安全機制**（不做 import 黑名單）；隔離全部由 runner 負責。
+- **可用套件是一份允許清單**：標準函式庫之外只有 `pandas` 與 `tabulate`（numpy 隨
+  pandas 而來），清單住在 `backend/requirements-scripts.txt`，裝在與 server 相依樹
+  分開的 `/opt/scriptlibs`，由 runner 以 argv 傳給 sandbox child 加進 `sys.path`
+  （不能走 `PYTHONPATH`——child 跑在 `-I` 下會忽略它）。這不放寬任何一條隔離：
+  sandbox 管的是 script 碰得到什麼，不是它能 import 什麼。
 - 上限打到時：查詢層（列數、statement timeout）**丟例外進 script**，不靜默截斷——
   用半份資料算出來的 eval set 看起來正常但是錯的；最終輸出上限（3,000 列）則截斷
   並在 UI 上顯著告知。

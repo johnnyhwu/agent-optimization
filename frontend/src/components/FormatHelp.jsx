@@ -59,6 +59,8 @@ const NOTES = {
       list of dicts with the keys below. <code>database_handler.run_sql(sql, params)</code>
       is the only method you get; the connection is read-only, and{" "}
       <code>params</code> handles the quoting so you never build SQL with f-strings.
+      On top of the standard library you may import <code>pandas</code> and{" "}
+      <code>tabulate</code>; nothing else is installed.
     </>
   ),
   jsonl: <>One JSON object per line. <code>skill</code> is a list of strings.</>,

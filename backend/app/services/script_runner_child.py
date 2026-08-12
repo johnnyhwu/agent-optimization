@@ -127,8 +127,31 @@ def _user_traceback(exc: BaseException) -> str:
     return "".join(kept).strip()
 
 
+def _add_library_path(spec):
+    """Put the allowed third-party packages within reach of the uploaded script.
+
+    `spec` is os.pathsep-separated and arrives on argv rather than in the
+    environment, because the interpreter runs under `-I` and isolated mode
+    ignores PYTHONPATH outright — see SCRIPT_LIBS in script_runner.py.
+
+    Appended, never prepended: a directory of ordinary PyPI packages must not be
+    able to shadow the standard library, whatever ends up installed in it.
+
+    Missing directories are skipped rather than reported. Outside the container
+    there is nothing at this path, and a developer running the tests on their own
+    machine should get today's behaviour — stdlib only — not a failure about a
+    directory they were never told to create.
+    """
+    for entry in (spec or "").split(os.pathsep):
+        if entry and os.path.isdir(entry):
+            sys.path.append(entry)
+
+
 def main() -> int:
     req_fd, resp_fd = int(sys.argv[1]), int(sys.argv[2])
+    # Optional, so that the two-argument call this file was born with still
+    # works: nothing about the protocol depends on there being libraries.
+    _add_library_path(sys.argv[3] if len(sys.argv) > 3 else "")
     rx = os.fdopen(req_fd, "r", encoding="utf-8")
     tx = os.fdopen(resp_fd, "w", encoding="utf-8")
 
