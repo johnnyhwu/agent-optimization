@@ -35,7 +35,16 @@ class AgentHttpError(RuntimeError):
     """The agent server answered, but with a 5xx we want the retry loop to see."""
 
 
-def server_budget_s(timeout_s: float, margin_s: float) -> float:
+# How much less time the agent server is given than we are prepared to wait.
+# Deliberately not a setting: every deployment wants the same thing from it —
+# enough room for the far side to finish its own timeout and get a 5xx onto the
+# wire before we stop listening — and a value nobody tunes per environment is a
+# value that only costs something to keep in sync across .env, compose and
+# whatever the deployment sets.
+SERVER_TIMEOUT_MARGIN_S = 5.0
+
+
+def server_budget_s(timeout_s: float, margin_s: float = SERVER_TIMEOUT_MARGIN_S) -> float:
     """The time budget handed to the agent server: our own limit, minus a margin.
 
     Both ends need a deadline, and they must not be the same number. The agent
@@ -110,9 +119,7 @@ class HttpAgentClient:
                 # opted into. Compatibility rests on the far side ignoring keys
                 # it does not know — a server that has not implemented §17's
                 # sixth requirement yet answers exactly as it did before.
-                "timeout_s": server_budget_s(
-                    self.timeout_s, settings.agent_server_timeout_margin_s
-                ),
+                "timeout_s": server_budget_s(self.timeout_s),
             },
         }
         if workspace is not None:

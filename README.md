@@ -545,8 +545,8 @@ attempt sends the same shape with `tags: ["playground"]`, plus
 question (spec §17.0 #6), and it is sent on every call. Both ends need a
 deadline: the agent server enforces its own limit, so until it is told ours it
 uses a built-in default — which is why raising the timeout in the UI past that
-default used to change nothing. The value sent is `AGENT_TIMEOUT_S` minus
-`AGENT_SERVER_TIMEOUT_MARGIN_S` (5s), so the server runs out first and can
+default used to change nothing. The value sent is `AGENT_TIMEOUT_S` minus a
+fixed 5s margin (`SERVER_TIMEOUT_MARGIN_S`), so the server runs out first and can
 answer with a 5xx and a reason rather than leaving the platform to drop the
 connection; what the platform itself waits is still the full `AGENT_TIMEOUT_S`.
 An agent server that has not implemented this yet must ignore the unknown key

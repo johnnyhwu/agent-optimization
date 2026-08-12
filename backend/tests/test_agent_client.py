@@ -10,6 +10,7 @@ import respx
 
 from app.integrations.base import WorkspaceOverride
 from app.integrations.real.agent import (
+    SERVER_TIMEOUT_MARGIN_S,
     AgentHttpError,
     HttpAgentClient,
     server_budget_s,
@@ -21,11 +22,9 @@ EXECUTE_URL = f"{URL}/execute"
 
 @pytest.fixture
 def client(configure):
-    # A round timeout and margin, so the budget the server is sent (55) is
-    # visibly neither of them.
-    with configure(
-        agent_base_url=URL, agent_timeout_s=60.0, agent_server_timeout_margin_s=5.0
-    ):
+    # A round timeout, so the budget the server is sent (60 - the 5s margin) is
+    # visibly neither the timeout nor the margin.
+    with configure(agent_base_url=URL, agent_timeout_s=60.0):
         yield HttpAgentClient()
 
 
@@ -98,9 +97,7 @@ async def test_request_carries_the_server_budget(client):
 @respx.mock
 async def test_per_run_timeout_reaches_the_server_budget(configure):
     """The timeout a developer typed into the run dialog is the one that travels."""
-    with configure(
-        agent_base_url=URL, agent_timeout_s=60.0, agent_server_timeout_margin_s=5.0
-    ):
+    with configure(agent_base_url=URL, agent_timeout_s=60.0):
         respx.post(EXECUTE_URL).mock(
             return_value=httpx.Response(200, json={"content": "hi"})
         )
@@ -113,6 +110,9 @@ def test_server_budget_never_falls_below_half_the_timeout():
     """A margin wider than the timeout itself must not produce a zero or
     negative budget — a 3s question would otherwise be sent as "you have -2s"."""
     assert server_budget_s(60.0, 5.0) == 55.0
+    # The margin the payload actually uses is the default, not something the
+    # caller passes — this is what ties the two together.
+    assert server_budget_s(60.0) == server_budget_s(60.0, SERVER_TIMEOUT_MARGIN_S)
     assert server_budget_s(3.0, 5.0) == 1.5
     assert server_budget_s(10.0, 10.0) == 5.0
     # A negative margin is a misconfiguration, not licence to hand the server
