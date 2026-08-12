@@ -1415,6 +1415,12 @@ assistant 的 `tool_calls` 另外以工具名 + 重新縮排後的 arguments 呈
   分開的 `/opt/scriptlibs`，由 runner 以 argv 傳給 sandbox child 加進 `sys.path`
   （不能走 `PYTHONPATH`——child 跑在 `-I` 下會忽略它）。這不放寬任何一條隔離：
   sandbox 管的是 script 碰得到什麼，不是它能 import 什麼。
+- **數值函式庫在 sandbox 內單執行緒執行**（`OPENBLAS_NUM_THREADS` 等四個變數由
+  `_child_environment()` 設定）。numpy 的 OpenBLAS 預設**每個核心開一條執行緒**，
+  而 `RLIMIT_NPROC` 連執行緒一起算、且是跨主機 per-uid 計數：8 核機器上 `import pandas`
+  會直接撞上限，OpenBLAS 印完訊息後對自己送 SIGINT，使用者看到的是 import 那行的
+  `KeyboardInterrupt`。這裡的工作量（≤50,000 列）用不到 BLAS 平行化，而後端只有
+  單一 uvicorn worker，讓每支上傳的 script 吃掉所有核心也不對。
 - 上限打到時：查詢層（列數、statement timeout）**丟例外進 script**，不靜默截斷——
   用半份資料算出來的 eval set 看起來正常但是錯的；最終輸出上限（3,000 列）則截斷
   並在 UI 上顯著告知。

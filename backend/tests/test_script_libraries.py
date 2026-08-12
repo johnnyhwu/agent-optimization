@@ -122,6 +122,82 @@ def test_the_library_directory_does_not_widen_the_sandbox(monkeypatch):
         assert seen["uid"] != 0
 
 
+def test_numeric_libraries_are_pinned_to_one_thread():
+    """The environment half of the fix, asserted from inside the sandbox.
+
+    Cheap to delete by accident — `_child_environment` reads as a list of things
+    the script needs, and these four look like tuning next to PATH and HOME. They
+    are not: without them the run below spawns a thread per core.
+    """
+    result = run("""
+        import os
+
+        def main(database_handler):
+            return [{name: os.environ.get(name) for name in (
+                "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
+                "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+            )}]
+    """)
+    assert result.error is None
+    assert result.value == [{
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+    }]
+
+
+@requires_libs
+def test_a_matrix_operation_does_not_spawn_a_thread_per_core():
+    """The regression itself: OpenBLAS sizing its pool from the host's core count.
+
+    Reported as `KeyboardInterrupt` on the `import pandas` line, which is as
+    misleading as an error gets — OpenBLAS prints its complaint to stderr and then
+    SIGINTs the process, so the traceback points at the import and says nothing
+    about threads. It only fires on a host with enough cores to exceed
+    RLIMIT_NPROC, which is why the assertion here is on the thread count itself
+    rather than on the run succeeding: on a two-core CI box the unfixed code
+    passes that weaker test every time.
+
+    /proc/self/task is the count the kernel charges against the limit, so it is
+    the number to look at — Python's threading module cannot see a BLAS pool.
+    """
+    result = run("""
+        import os
+        import numpy as np
+
+        def main(database_handler):
+            # Large enough that a threaded BLAS would certainly use its pool.
+            np.zeros((512, 512)) @ np.zeros((512, 512))
+            return [{"threads": len(os.listdir("/proc/self/task"))}]
+    """)
+    assert result.error is None
+    assert result.value[0]["threads"] <= 2
+
+
+def test_a_refused_thread_is_explained_rather_than_passed_along():
+    """The fallback, unit-tested: the note fires on the marker and nowhere else.
+
+    Driven directly rather than through a run, because provoking it for real needs
+    a host whose core count exceeds the process limit — the exact fragility that
+    let this ship in the first place.
+    """
+    openblas = (
+        "OpenBLAS blas_thread_init: pthread_create failed for thread 3 of 8: "
+        "Resource temporarily unavailable\n"
+        "OpenBLAS blas_thread_init: ensure that your address space and process "
+        "count limits are big enough (ulimit -a)\n"
+    )
+    note = script_runner.thread_limit_note(openblas)
+    assert note and "single-threaded" in note
+    # The library's own advice is aimed at whoever runs the machine; it must not
+    # be what the person who uploaded a script is told to do.
+    assert "ulimit" not in note
+
+    assert script_runner.thread_limit_note("") is None
+    assert script_runner.thread_limit_note("Traceback ... KeyError: 'quarter'") is None
+
+
 @requires_libs
 def test_a_library_allocation_still_hits_the_memory_limit():
     """numpy allocates in C, where RLIMIT_AS is the only thing in the way.
