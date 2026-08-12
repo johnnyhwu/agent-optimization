@@ -226,6 +226,8 @@ GET  /get_workspace       -> {"version", "config", "redacted_paths", "skills"}
 GET  /get_config_version  -> {"version"}   the same string, on its own
 POST /execute             also reads metadata.workspace = {"config", "skills"},
                              applying it to this call only and never persisting it
+                          ...and metadata.timeout_s, this call's time budget,
+                             replacing the server's own hard-coded limit
 ```
 
 Two rules on the agent's side carry the design: the incoming `config` is
@@ -483,7 +485,7 @@ so on.
 
 | env var | seam | what `real` means |
 |---|---|---|
-| `AGENT_IMPL` | `AgentClient` | POST `{"message", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data` (spec §3.3) |
+| `AGENT_IMPL` | `AgentClient` | POST `{"message", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data`, and this call's time budget in `metadata.timeout_s` (spec §3.3) |
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
@@ -530,13 +532,25 @@ make preflight   # OK / FAIL per seam, with the reason
 as its Langfuse trace id. Without that the platform has no way to find the
 trace it just caused. The full metadata shape sent on every call is:
 ```json
-{"trace_data": {"trace_id": "...", "session_id": "...", "user_id": "...", "tags": ["eval_<eval_set_name>"]}}
+{"trace_data": {"trace_id": "...", "session_id": "...", "user_id": "...", "tags": ["eval_<eval_set_name>"]},
+ "timeout_s": 115}
 ```
 `trace_id` and `session_id` are the same value (each question is its own
 correlation unit); `user_id` is the subject who triggered the run. A playground
 attempt sends the same shape with `tags: ["playground"]`, plus
 `metadata.workspace` when the agent's config or skill files were edited
 ([the playground](#the-playground)) — an eval run never sends that key at all.
+
+`timeout_s` is the budget the agent server should give **itself** for this one
+question (spec §17.0 #6), and it is sent on every call. Both ends need a
+deadline: the agent server enforces its own limit, so until it is told ours it
+uses a built-in default — which is why raising the timeout in the UI past that
+default used to change nothing. The value sent is `AGENT_TIMEOUT_S` minus
+`AGENT_SERVER_TIMEOUT_MARGIN_S` (5s), so the server runs out first and can
+answer with a 5xx and a reason rather than leaving the platform to drop the
+connection; what the platform itself waits is still the full `AGENT_TIMEOUT_S`.
+An agent server that has not implemented this yet must ignore the unknown key
+and answer as before.
 
 Notes:
 - A question that fails (agent unreachable, judge unparseable, timeout) is
@@ -552,7 +566,9 @@ Notes:
 - `RUN_CONCURRENCY` defaults to 1 (strictly sequential) and is the default for
   the dialog's **Concurrency** field, which sets it per run.
 - `AGENT_TIMEOUT_S` and `LANGFUSE_TIMEOUT_S` are settable per run; `LLM_TIMEOUT_S`
-  is not — it stays process-wide.
+  is not — it stays process-wide. The agent timeout also travels to the agent
+  server on every call as `metadata.timeout_s` (above), so a per-run value larger
+  than the server's own default is honoured instead of silently capped.
 - **A trace is re-read until it stops growing before it is used** (spec §6.1a).
   Langfuse ingests a trace incrementally, so the first read that returns any
   observation at all can be a trace that is still filling up — and the span that

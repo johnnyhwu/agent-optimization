@@ -146,6 +146,10 @@ class Settings(BaseSettings):
     agent_base_url: str = ""
     agent_timeout_s: float = 120.0
     agent_max_retries: int = 2
+    # The agent server is told to give itself slightly less time than we are
+    # willing to wait, so a call that overruns comes back as the server's own
+    # error — with a reason — instead of as a bare client-side disconnect.
+    agent_server_timeout_margin_s: float = 5.0
 
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
     llm_base_url: str = "http://litellm-ai4bi.cpoap-dev.dev.tsmc.com"

@@ -293,6 +293,7 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
       "user_id":    "<觸發者的 subject>",
       "tags":       ["eval_<eval set 名稱>"]
     },
+    "timeout_s": 115,
     "workspace": {
       "config": { "agents": { "defaults": { "model": "…" } } },
       "skills": { "billing/SKILL.md": "…", "billing/references/refunds.md": "…" }
@@ -304,6 +305,13 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 - `trace_id` 與 `session_id` **是同一個值**：每題都是自己的 correlation 單位，
   所以也是自己的 Langfuse session。
 - `tags` 在 eval run 是 `["eval_<eval set 名稱>"]`，在 Playground 是 `["playground"]`。
+- **`metadata.timeout_s` 是給 agent server 的執行預算**（每次呼叫都送，契約見 [§17](#17-對-agent-server-端的相依需求) 第 6 項）。
+  它是這次呼叫的 `AGENT_TIMEOUT_S` **減掉 `AGENT_SERVER_TIMEOUT_MARGIN_S`**（預設 5s），
+  平台自己的等待上限（httpx timeout 與 §6.2 的 `wait_for`）仍然是完整的 `AGENT_TIMEOUT_S`。
+  > 兩端都需要一個期限，而且**不能是同一個數字**。agent server 本來就有自己的上限；不告訴它
+  > 平台的設定，它就只會用內建預設值——這正是「在 UI 把 timeout 調大卻沒有任何效果」的原因。
+  > 但送**一樣**的值只是把「誰先放棄」變成 race，而兩種結果差很多：server 超時是一個
+  > **帶原因的回應**，平台超時只是一條被切斷的連線。所以刻意讓 server 先到期。
 - **`metadata.workspace` 只在 Playground 改過 agent 的 config 或 skill 檔時才出現**；
   eval run 的 request body 與 Stage 4 出現之前**完全相同**（連 key 都不會多）。
   兩半各自可省略：只改 config 就不送 `skills`，反之亦然。
@@ -764,6 +772,10 @@ trace 物件 / 診斷 / 三個錯誤欄位。
 
 **其他執行控制**
 - **timeout**：agent 呼叫包 `asyncio.wait_for`（`AGENT_TIMEOUT_S`），client 自身另有 httpx timeout。
+  **同一個預算也會隨 request 送給 agent server**（`metadata.timeout_s`，比平台自己少
+  `AGENT_SERVER_TIMEOUT_MARGIN_S`，見 §3.3 / §17 第 6 項）——否則 agent server 只會用它內建的
+  上限，平台這邊把 timeout 調大就毫無作用。**server 超時應回 5xx**，而 5xx 走的是
+  `AgentHttpError`、**不在重試名單裡**，所以該題直接判 failed，不會再燒兩次同樣的時間。
 - **重試**：對暫時性錯誤（timeout / 連線錯誤 / OSError）做**有上限的指數退避**重試
   （`AGENT_MAX_RETRIES` / `LLM_MAX_RETRIES`，預設各 2 次）。**4xx 這類必然重現的錯誤不重試**。
 - **併發**：`RUN_CONCURRENCY`（預設 1 = 嚴格序列）以 `asyncio.Semaphore` 控制同時打 agent 的題數。
@@ -1600,6 +1612,7 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SYNTHESIS_IMPL`** / **`WORKSPACE_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
 | `AGENT_BASE_URL` | 空 | agent server base URL；client 打 `{base}/execute`、`{base}/get_workspace`、`{base}/get_config_version` |
 | `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | |
+| `AGENT_SERVER_TIMEOUT_MARGIN_S` | `5` | 送給 agent server 的 `metadata.timeout_s` 要比平台自己的 `AGENT_TIMEOUT_S` 少多少秒（§3.3 / §17 第 6 項）。留一段差距是為了讓 **server 先超時並回一個帶原因的 5xx**，而不是平台這邊直接斷線。下限是 `AGENT_TIMEOUT_S / 2`，所以 margin 設得比 timeout 還大也不會送出 0 或負數 |
 | `LLM_BASE_URL` / `LLM_API_KEY` | （內部 litellm 端點）/ 空 | **OpenAI 相容**端點，可指向 self-hosted |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
 | `SYNTHESIS_MODEL` | `Qwen3.6-27B` | §8.3 的草稿模型；與 judge / diagnosis 共用 `LLM_BASE_URL` |
@@ -1731,7 +1744,7 @@ LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_st
 
 | 檔案 | 數量 | 涵蓋 |
 |---|---|---|
-| `test_agent_client.py` | 17 | request body 的 `message` + `metadata.trace_data`；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.workspace` 出現、沒有時整個 key 不存在**；只改一半時另一半整個省略（`config` 缺席 ≠ `config: null`）；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」）|
+| `test_agent_client.py` | 20 | request body 的 `message` + `metadata.trace_data`；**`metadata.timeout_s` 每次都送、值是 `timeout_s − margin`（逐 run 的 timeout 也會反映進去），且下限是 `timeout_s / 2`——margin 比 timeout 還大時不會送出 0 或負數**；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.workspace` 出現、沒有時整個 key 不存在**；只改一半時另一半整個省略（`config` 缺席 ≠ `config: null`）；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」）|
 | `test_langfuse_client.py` | 27 | 空頁 → NotReady；時間排序與重新編號（**含混用有／無小數秒的 ISO 時間**——字串比較會把 `…:00.500Z` 排在 `…:00Z` 前面；時間讀不懂的 span 仍然保留；同時間以 id 打破平手，使重讀不會重排）；observation 型別過濾；分頁；Basic auth；`usageDetails` 與舊版 `usage` 兩種 token 欄位；ERROR level 映射；401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼；**兩條讀取策略**（兩者映出的 span 完全相同、404 → NotReady、auto 命中第一條時不會多打第二條、第一條壞掉會 fallback、**全失敗時兩條的原因都在訊息裡**）|
 | `test_judge_and_diagnosis.py` | 24 | verdict 正規化與非法值；門檻覆寫兩個方向；**§4.4 截斷保留所有 span**；越界 `span_index` 剔除；§8.2 四段 prompt 的順序；JSON 修復重試（成功與放棄各一）；**§8.1a 的純函式**——空值回落到內建預設、指紋只跟文字走、佔位符缺漏逐一點名、`{"verdict"...}` 這種 JSON 大括號不會被 `str.format` 吃掉、eval set 的 prompt 真的傳進 judge client |
 | `test_orchestrator.py` | 21 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**、且 `failure_kind` 分得出是哪一步；**judge 回覆 parse 不出來時記成 `judge_invalid`**——不算 pass、仍留在分母、舊資料（NULL）照樣畫成 `failed`；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位；**送去診斷的是 settle 過的 trace**（§6.1a——落庫的診斷沒有第二次機會）|
@@ -1914,9 +1927,12 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 | 3 | `GET /get_config_version` → `{version}`，與上面同一個字串 | 送出前的過期檢查（§4.10a）。單獨一個端點是因為它被問得頻繁得多 | ✅ 已實作 |
 | 4 | `POST /execute` 讀 `metadata.workspace = {config?, skills?}`，**只影響這一次呼叫、不落磁碟、不影響其他 request** | Playground 的迭代沙盒（Stage 4）與 Stage 3 的重跑實驗都靠它 | ✅ 已實作 |
 | 5 | skill 更新 API + 版本控制 / rollback | Stage 3 的「存回 agent server」 | 🔴 Stage 3，未規劃 |
+| 6 | `POST /execute` 讀 `metadata.timeout_s` **當這一次呼叫的時間預算**，取代內建的固定上限 | agent server 內部寫死的上限（目前 120s）會**蓋掉**使用者在平台上設定的 timeout：調小有效、**調大完全無效**。長題目因此永遠跑不完 | 🔴 **待實作** |
 
 **第 2–4 項都是加法**，不改動既有 `/execute` 契約：**沒有 override 時 request body 與加這個功能之前
 完全相同**（連 `workspace` 這個 key 都不會出現）。這是相容性要求，不是巧合。
+**第 6 項同樣是加法**，但方向相反：`timeout_s` **每次呼叫都會送**，相容性靠的是
+**收到不認得的 key 就忽略**——還沒實作第 6 項的 agent server 收到新 body 必須照常回答。
 
 ### 17.1 前提：workspace 的形狀與兩個名詞
 
@@ -1984,13 +2000,30 @@ per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
 
 **`GET /get_config_version`** — 無 input，回 `{"version": "a1b2c3d"}`，與上面**同一個字串**。
 
-**`POST /execute`** — 既有端點，多讀一個選填的 `metadata.workspace`：
+**`POST /execute`** — 既有端點，多讀一個選填的 `metadata.workspace` 與一個 `metadata.timeout_s`：
 
 ```json
-{ "message": "<題目>", "metadata": { "trace_data": {...}, "workspace": { "config": {...}, "skills": {...} } } }
+{ "message": "<題目>", "metadata": { "trace_data": {...}, "timeout_s": 115, "workspace": { "config": {...}, "skills": {...} } } }
 ```
 
 回應不變：`{"content": "<agent 的回答>"}`。
+
+**`metadata.timeout_s`（秒，float）——這一次呼叫的執行預算**，取代 agent server 內建的固定上限：
+
+- **缺席時 fallback 回 server 自己的預設值**（今天的 120s）。舊的呼叫端因此完全不受影響。
+- **仍然要 clamp 到 server 自己的上限**（例如一個 `MAX_TIMEOUT_S` 環境變數）。
+  不要無條件相信呼叫端——這個欄位是要讓上限**可調**，不是要把上限拿掉。
+  上限本身可以放寬（呼叫端會送 600、1800 這種值），但必須存在：一個掛住的 request
+  會一直佔著 worker，而平台這一側早就斷線了。
+- **超時的時候要回 `504`（或其他 5xx）+ 原因**，不要靜默回一個被截斷的答案。
+  平台會把「空的 / 半截的答案」拿去給 judge 評分，那會產生一個毫無意義的 incorrect，
+  反而蓋掉真正的問題。
+- 平台送過來的值**已經比它自己的等待上限少 5 秒**（§3.3），所以正常情況下**是 server 先到期**，
+  這正是為了讓上面那個 5xx 有機會送出去。
+  > ⚠️ 平台側的既有行為：5xx 會 raise `AgentHttpError`，而它**不在重試名單**
+  > （`pipeline.py` 的 `RETRYABLE` 只收 timeout / 連線錯誤 / OSError），
+  > 所以 server 回 504 **不會被重試**、該題直接判 failed。這是刻意的——
+  > 一個已經超時的呼叫再重試兩次只是花三倍時間得到同一個結果。
 
 **路徑安全檢查**：`skills` 的 key 會被當成檔案路徑寫到磁碟，含 `..` / 以 `/` 開頭 / 含 `\` /
 含 NUL / 空字串 → 一律 `400`。通過後再確認「暫存目錄 + 相對路徑」解析出的絕對路徑
@@ -2037,6 +2070,13 @@ test "$(curl -s $AGENT/get_workspace | jq -r .version)" \
 # ⑤ 路徑攻擊必須被擋下
 curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: application/json' \
   -d '{"message":"x","metadata":{"workspace":{"skills":{"../../etc/passwd":"x"}}}}'   # 期望 400
+
+# ⑥ timeout_s（§17.0 第 6 項）
+#   a. 帶一個很小的預算 —— 必須在那個時間左右回 5xx + 原因，而不是跑滿內建上限
+time curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: application/json' \
+  -d '{"message":"<一題會跑很久的題目>","metadata":{"trace_data":{"trace_id":"t2"},"timeout_s":5}}'
+#   b. 帶一個大於內建上限的預算 —— 這一題必須真的跑得比 120s 久（這才是整件事的目的）
+#   c. 相容性回歸：上面第 ① 條那個「不帶 timeout_s」的 body 行為必須完全不變
 ```
 
 ⚠️ 第 ④ 項是這份清單裡最重要的一項：它是唯一能證明 §17.4 的 config 規則沒被做成「取代」的檢查，
@@ -2057,7 +2097,10 @@ curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: applic
    診斷指對的比例大概多少？caveat 出現的頻率？多少題其實錯在 tool 而不在 skill？
    > **這一步的觀察是整個專案最重要的一份資料。** 它決定 Stage 2（機率熱點）值不值得做，
    > 也決定 Stage 3（SkillOpt）的前提假設站不站得住。在此之前投入 Stage 2/3 是在賭博。
-4. **完成 agent server 那一側的對接驗證**（§17 的 2–4 項已經實作，但兩邊還沒一起跑過）。
+4. **完成 agent server 那一側的對接驗證**（§17 的 2–4 項已經實作，但兩邊還沒一起跑過），
+   並請 agent server 端補上**第 6 項 `metadata.timeout_s`**——在那之前，
+   平台上把 timeout 調得比 agent server 內建上限（120s）大是**沒有作用的**，
+   跑得久的題目一律在 120s 被砍。
    優先確認的順序是：`get_workspace` 讀得回來 → 帶 `metadata.workspace` 送一題、
    **確認 agent 仍然叫得動 LLM**（這一項在驗 config 是 merge 而不是取代）→
    注入的文字出現在 trace 第一個 span 的 system message 裡。

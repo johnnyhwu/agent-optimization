@@ -10,6 +10,10 @@ A playground attempt may also carry `metadata.workspace`, the config/skills the
 agent should use for this one call (see docs/spec.md §17).
 An eval run never sends it, so the run path's request body is unchanged.
 
+Every call also carries `metadata.timeout_s`, the budget the agent server should
+give itself for this one question (§17.0 #6) — see `server_budget_s` for why it
+is not simply this client's own timeout.
+
 The correlation mechanism (§6.2 / §6.7) is the whole point of this client: the
 platform mints a correlation_id per question and puts it in
 `metadata.trace_data.trace_id` (and reuses it as `session_id`, since each
@@ -29,6 +33,25 @@ from app.integrations.base import AgentResponse, WorkspaceOverride
 
 class AgentHttpError(RuntimeError):
     """The agent server answered, but with a 5xx we want the retry loop to see."""
+
+
+def server_budget_s(timeout_s: float, margin_s: float) -> float:
+    """The time budget handed to the agent server: our own limit, minus a margin.
+
+    Both ends need a deadline, and they must not be the same number. The agent
+    server enforces its own limit on how long one `/execute` may run; without
+    being told ours it uses a built-in default, which is why raising the
+    platform's timeout past that default used to change nothing. Sending it
+    solves that — but sending the *same* value would make "who gives up first" a
+    race, and the two outcomes read very differently: the server timing out is
+    an answer with a reason in it, while we timing out is a dropped connection.
+    So the server is asked to finish first, by `margin_s`.
+
+    Never less than half of `timeout_s`: a margin wider than the timeout itself
+    (a 3s timeout against the default 5s margin) must not become a zero or
+    negative budget.
+    """
+    return round(max(timeout_s - max(margin_s, 0.0), timeout_s / 2), 3)
 
 
 def _extract_text(resp: httpx.Response) -> str | None:
@@ -82,6 +105,14 @@ class HttpAgentClient:
                     "user_id": user_id,
                     "tags": tags or [],
                 },
+                # Unlike `workspace` below, this key is always sent: it states
+                # something true of every call, not an override the playground
+                # opted into. Compatibility rests on the far side ignoring keys
+                # it does not know — a server that has not implemented §17's
+                # sixth requirement yet answers exactly as it did before.
+                "timeout_s": server_budget_s(
+                    self.timeout_s, settings.agent_server_timeout_margin_s
+                ),
             },
         }
         if workspace is not None:

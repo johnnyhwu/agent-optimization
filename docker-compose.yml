@@ -115,6 +115,7 @@ services:
       # app/config.py so an unset variable here doesn't blank out its default.
       AGENT_BASE_URL: ${AGENT_BASE_URL:-}
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
+      AGENT_SERVER_TIMEOUT_MARGIN_S: ${AGENT_SERVER_TIMEOUT_MARGIN_S:-5}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm-ai4bi.cpoap-dev.dev.tsmc.com}
       LLM_API_KEY: ${LLM_API_KEY:-}
       JUDGE_MODEL: ${JUDGE_MODEL:-Qwen3.6-27B}
