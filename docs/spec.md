@@ -306,7 +306,8 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
   所以也是自己的 Langfuse session。
 - `tags` 在 eval run 是 `["eval_<eval set 名稱>"]`，在 Playground 是 `["playground"]`。
 - **`metadata.timeout_s` 是給 agent server 的執行預算**（每次呼叫都送，契約見 [§17](#17-對-agent-server-端的相依需求) 第 6 項）。
-  它是這次呼叫的 `AGENT_TIMEOUT_S` **減掉 `AGENT_SERVER_TIMEOUT_MARGIN_S`**（預設 5s），
+  它是這次呼叫的 `AGENT_TIMEOUT_S` **減掉一個固定的 5 秒 margin**（`SERVER_TIMEOUT_MARGIN_S`，
+  寫在 `integrations/real/agent.py`——它是機制常數，不是逐環境的旋鈕），
   平台自己的等待上限（httpx timeout 與 §6.2 的 `wait_for`）仍然是完整的 `AGENT_TIMEOUT_S`。
   > 兩端都需要一個期限，而且**不能是同一個數字**。agent server 本來就有自己的上限；不告訴它
   > 平台的設定，它就只會用內建預設值——這正是「在 UI 把 timeout 調大卻沒有任何效果」的原因。
@@ -773,7 +774,7 @@ trace 物件 / 診斷 / 三個錯誤欄位。
 **其他執行控制**
 - **timeout**：agent 呼叫包 `asyncio.wait_for`（`AGENT_TIMEOUT_S`），client 自身另有 httpx timeout。
   **同一個預算也會隨 request 送給 agent server**（`metadata.timeout_s`，比平台自己少
-  `AGENT_SERVER_TIMEOUT_MARGIN_S`，見 §3.3 / §17 第 6 項）——否則 agent server 只會用它內建的
+  固定 5 秒，見 §3.3 / §17 第 6 項）——否則 agent server 只會用它內建的
   上限，平台這邊把 timeout 調大就毫無作用。**server 超時應回 5xx**，而 5xx 走的是
   `AgentHttpError`、**不在重試名單裡**，所以該題直接判 failed，不會再燒兩次同樣的時間。
 - **重試**：對暫時性錯誤（timeout / 連線錯誤 / OSError）做**有上限的指數退避**重試
@@ -1612,7 +1613,6 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SYNTHESIS_IMPL`** / **`WORKSPACE_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
 | `AGENT_BASE_URL` | 空 | agent server base URL；client 打 `{base}/execute`、`{base}/get_workspace`、`{base}/get_config_version` |
 | `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | |
-| `AGENT_SERVER_TIMEOUT_MARGIN_S` | `5` | 送給 agent server 的 `metadata.timeout_s` 要比平台自己的 `AGENT_TIMEOUT_S` 少多少秒（§3.3 / §17 第 6 項）。留一段差距是為了讓 **server 先超時並回一個帶原因的 5xx**，而不是平台這邊直接斷線。下限是 `AGENT_TIMEOUT_S / 2`，所以 margin 設得比 timeout 還大也不會送出 0 或負數 |
 | `LLM_BASE_URL` / `LLM_API_KEY` | （內部 litellm 端點）/ 空 | **OpenAI 相容**端點，可指向 self-hosted |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
 | `SYNTHESIS_MODEL` | `Qwen3.6-27B` | §8.3 的草稿模型；與 judge / diagnosis 共用 `LLM_BASE_URL` |
