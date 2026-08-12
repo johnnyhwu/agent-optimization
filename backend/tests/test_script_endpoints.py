@@ -255,6 +255,84 @@ def test_each_template_is_served_with_a_filename(kind):
     assert "attachment" in response.headers["content-disposition"]
 
 
+def test_the_python_template_quotes_the_limits_that_are_actually_configured():
+    """The example tells people how long they get; it must not tell them wrong.
+
+    The numbers in that docstring are prose, so nothing keeps them honest when a
+    deployment changes the settings — and being told 60 seconds while the server
+    allows 600 sends people off rewriting a query that was fine.
+    """
+    from app.config import settings
+
+    body = scripts_router.template("python").body.decode()
+    assert f"{settings.script_wall_clock_s} seconds for the whole run" in body
+    assert f"{settings.script_statement_timeout_s} seconds per statement" in body
+
+
+# --- limits ------------------------------------------------------------------
+
+def test_the_endpoint_takes_every_limit_from_settings():
+    """The wiring a deployment relies on to change any of these at all.
+
+    `_limits()` is small enough to look like a formality, and a hardcoded number
+    slipped into it would leave the corresponding setting silently inert.
+    """
+    from app.config import settings
+
+    limits = scripts_router._limits()
+    assert limits.wall_clock_s == settings.script_wall_clock_s
+    assert limits.statement_timeout_s == settings.script_statement_timeout_s
+    assert limits.max_rows_per_query == settings.script_max_rows_per_query
+    assert limits.max_queries == settings.script_max_queries
+    assert limits.max_output_chars == settings.script_max_output_chars
+    assert limits.memory_mb == settings.script_memory_mb
+
+
+def test_a_statement_may_not_be_allowed_to_outlive_the_run():
+    """A per-query timeout above the wall clock is one the database never applies.
+
+    The run is killed first, so the larger number is decoration — and worse, it
+    reads as a promise that a single query may take that long.
+    """
+    from app.config import settings
+
+    assert settings.script_statement_timeout_s <= settings.script_wall_clock_s
+
+
+def test_the_proxy_outwaits_a_script_run():
+    """nginx must be willing to hold /script/run open for the whole wall clock.
+
+    The two numbers live in different files and different languages, and the
+    failure when they disagree is invisible from either side: nginx answers 504
+    at its own limit and the run is lost with no message, minutes after Run was
+    pressed. Nothing else in the request path has a shorter deadline — uvicorn
+    sets none, and the browser's fetch has no timeout of its own.
+
+    Only runs from a full checkout: `make test` builds the backend image, whose
+    context is backend/ alone, so the template is not there to read.
+    """
+    import re
+
+    from app.config import settings
+
+    template = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "frontend",
+        "nginx.conf.template",
+    )
+    if not os.path.exists(template):
+        pytest.skip("frontend/nginx.conf.template is outside the backend image")
+
+    with open(template, encoding="utf-8") as handle:
+        conf = handle.read()
+    # The /api/ location's own timeout — not the progress stream's, which is a
+    # separate block with its own much longer one.
+    api_block = conf.split("location /api/")[1]
+    timeout = re.search(r"proxy_read_timeout\s+(\d+)s", api_block)
+    assert timeout, "the /api/ location has no proxy_read_timeout"
+    assert int(timeout.group(1)) >= settings.script_wall_clock_s
+
+
 def test_the_python_template_passes_our_own_static_checks():
     # The example we hand out must satisfy the rules we enforce; a template that
     # fails validation is the worst possible first experience.

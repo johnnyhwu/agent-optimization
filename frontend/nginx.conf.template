@@ -74,7 +74,16 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
+        # Long enough to outlast a script run, with a minute to spare.
+        # POST /eval-sets/script/run holds the request open for as long as the
+        # uploaded script is allowed to take (SCRIPT_WALL_CLOCK_S, 600s), and it
+        # sends nothing until it finishes — there is no keepalive to prove the
+        # connection is alive the way the progress stream above has. If this is
+        # ever the smaller of the two numbers, nginx kills the run at its own
+        # limit and answers 504, which reaches the user as a failure with no
+        # message and no traceback, several minutes after they pressed Run. Raise
+        # SCRIPT_WALL_CLOCK_S and this stops being true, so they move together.
+        proxy_read_timeout 660s;
     }
 
     # --- Static assets ------------------------------------------------------

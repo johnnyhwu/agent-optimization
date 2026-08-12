@@ -105,8 +105,10 @@ class Limits:
     # a script that computes its answer from half the rows produces a plausible,
     # wrong eval set, which is worse than a failed run.
     max_rows_per_query: int = 50_000
-    statement_timeout_s: int = 30
-    wall_clock_s: int = 60
+    # Kept in step with app/config.py, which is where a deployment changes them;
+    # these are the fallback for a caller that passes no Limits at all.
+    statement_timeout_s: int = 600
+    wall_clock_s: int = 600
     max_queries: int = 50
     max_output_chars: int = 256 * 1024
     memory_mb: int = 1024
@@ -237,7 +239,7 @@ def _preexec(limits: Limits):
         resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
         # Deliberately *past* the wall clock rather than level with it. Both would
         # race on a CPU-bound loop, and whichever won decided what the user was
-        # told: "terminated by SIGXCPU" instead of "exceeded the 60 second limit".
+        # told: "terminated by SIGXCPU" instead of "exceeded the time limit".
         # The wall clock owns the message; this stays as the backstop for the case
         # it cannot cover — a child that survives the parent.
         cpu = max(2, limits.wall_clock_s + 2)
