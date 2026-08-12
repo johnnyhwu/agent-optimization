@@ -26,7 +26,10 @@ Limits, so a runaway query cannot take the system down with it:
 Besides the standard library, two third-party packages are installed and can be
 imported: **pandas** and **tabulate** (numpy comes with pandas). Anything else
 will not be found — the list is deliberately short, and lives in
-`backend/requirements-scripts.txt`.
+`backend/requirements-scripts.txt`. They run single-threaded: the sandbox caps
+how many processes a run may create, and a BLAS that starts one thread per
+processor would spend that budget before your first line runs. Don't set
+OPENBLAS_NUM_THREADS or the like yourself.
 
 `print()` anything you like; the output comes back with the results.
 

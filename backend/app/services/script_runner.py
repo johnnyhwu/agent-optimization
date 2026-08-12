@@ -160,13 +160,40 @@ def _runner_uid() -> tuple[int, int] | None:
 
 
 def _child_environment(home: str) -> dict[str, str]:
-    """Everything the script is allowed to see. Allow-list, never a deny-list."""
+    """Everything the script is allowed to see. Allow-list, never a deny-list.
+
+    The four thread limits are not tuning; without them `import pandas` fails on
+    any host with enough cores. numpy's OpenBLAS starts **one thread per core** as
+    it loads, and `RLIMIT_NPROC` counts threads — per uid, across the whole host,
+    for the reasons `_preexec` sets out at length. On an eight-core machine that
+    is eight tasks a script has not asked for and cannot see, charged against a
+    limit it shares with every other run. When `pthread_create` is refused,
+    OpenBLAS does not raise: it prints its advice to stderr and SIGINTs the
+    process, which reaches the author as `KeyboardInterrupt` on the import line —
+    an error with no visible cause and nothing to act on.
+
+    It has to be the environment, and it has to be here. OpenBLAS reads these
+    once, while the extension module loads, so setting them from inside the script
+    is already too late; and this is the last point that runs before exec, in the
+    one mapping the script cannot reach. Only the first is read today — the others
+    cover OpenMP, MKL and pandas' numexpr, so that a wheel built against a
+    different backend does not quietly bring the bug back.
+
+    One thread is also simply the right answer here. The work is shaping at most a
+    few tens of thousands of rows, where BLAS parallelism buys nothing, and the
+    backend runs a single uvicorn worker — letting each uploaded script help itself
+    to every core is a way to make one upload everybody's problem.
+    """
     return {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
         "HOME": home,
         "TMPDIR": home,
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
     }
 
 
@@ -400,6 +427,13 @@ def run_script(source: str, executor, limits: Limits | None = None) -> RunResult
                 "characters; the output below is truncated."
             )
 
+        # Before the verdict below, because a refused thread usually ends the run
+        # through some other exit — a signal, or an import that never finished —
+        # and the reason for it is only ever in what the library printed.
+        threads_refused = thread_limit_note(result.stderr)
+        if threads_refused:
+            _note_limit(result, threads_refused)
+
         if killed.is_set():
             result.timed_out = True
             result.value = None
@@ -507,6 +541,37 @@ def _answer(message, executor, limits: Limits, result: RunResult, queries: int) 
 def _note_limit(result: RunResult, note: str) -> None:
     if note not in result.limits_hit:
         result.limits_hit.append(note)
+
+
+# What a library prints when the kernel refuses it a thread. OpenBLAS' wording is
+# first because it is the one that has actually happened here; the second is the
+# generic phrasing most C libraries use for the same EAGAIN.
+_THREAD_FAILURE_MARKERS = ("blas_thread_init", "pthread_create failed")
+
+
+def thread_limit_note(stderr: str) -> str | None:
+    """Turn a refused thread into a sentence, or None if that is not what happened.
+
+    Reads stderr rather than the exit status on purpose: the library prints this
+    itself and then takes the process down by a route that tells us nothing —
+    OpenBLAS SIGINTs it, which arrives as `KeyboardInterrupt` on whichever import
+    line was executing. The advice it prints ("raise your process count limit") is
+    addressed to whoever runs the machine, not to the person who uploaded a
+    script, so it is replaced here rather than passed along.
+
+    `_child_environment` pins the thread counts that cause this, so on a current
+    image this should never fire. It stays because the next library to be added to
+    requirements-scripts.txt may bring its own thread pool and its own variable to
+    turn it off, and one clear sentence is the difference between a bug report and
+    an afternoon.
+    """
+    if not stderr or not any(marker in stderr for marker in _THREAD_FAILURE_MARKERS):
+        return None
+    return (
+        "A library tried to start one worker thread per processor and the sandbox "
+        "refused. Numeric libraries run single-threaded here; if the script sets a "
+        "thread count of its own, remove it."
+    )
 
 
 def _close_fds(*fds: int) -> None:
