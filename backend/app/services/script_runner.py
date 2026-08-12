@@ -33,6 +33,10 @@ What the child gets and what it is denied:
 | abuse the RPC with a million queries     | query-count and row caps below        |
 | shell injection through the interpreter  | argv list, never a shell              |
 
+A script may also import a short list of third-party packages (pandas, tabulate);
+see `SCRIPT_LIBS` below for where they come from and why that list changes none of
+the above.
+
 **Known gap, stated rather than hidden:** a subprocess in this container cannot be
 denied network egress. A determined script can still reach internal services. The
 `run_script` signature is the seam for closing that later — moving execution into
@@ -62,6 +66,27 @@ from app.services.script_runner_child import jsonable
 # executes the copy and never opens this path. That is what keeps the feature
 # independent of how /app happens to be mounted or chmodded — see _stage.
 CHILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "script_runner_child.py")
+
+# Third-party packages an uploaded script is allowed to import — pandas and
+# tabulate today, listed in backend/requirements-scripts.txt and installed here
+# by the Dockerfile. Overridable so the tests can point at a provisioned
+# directory (or at a missing one, which must stay harmless) without a container.
+#
+# Passed to the child on argv and appended to its sys.path there. **Not** through
+# PYTHONPATH, which would look like the obvious way to do it and would silently
+# do nothing: the child runs under `-I`, and isolated mode ignores PYTHONPATH,
+# the user site directory and the script's own directory. Dropping `-I` to make
+# the environment variable work would trade a layer of hardening for a longer
+# argv, so the path travels as an argument instead.
+#
+# This does not widen the sandbox, and is not the place that keeps a script
+# honest: containment is about what a script can *reach* — no credentials, no
+# writable disk, an unprivileged uid — never about which modules it can name. A
+# script has always been able to import anything the server's own site-packages
+# holds (httpx, psycopg, openai are all in there). Narrowing *that* is a separate
+# and larger job; this constant only adds a second directory to it, deliberately
+# and in one visible place.
+SCRIPT_LIBS = os.environ.get("SCRIPT_LIBS_DIR", "/opt/scriptlibs")
 
 # Users the child is dropped to, in order of preference. The first is created by
 # the backend image; `nobody` is the fallback everywhere else. Running the child
@@ -301,7 +326,7 @@ def run_script(source: str, executor, limits: Limits | None = None) -> RunResult
                 # -u because a killed process loses whatever is still sitting in a
                 # block-buffered pipe, and the run that had to be killed is
                 # precisely the one whose print() output the user needs to read.
-                [sys.executable, "-I", "-B", "-u", child, str(p2c_r), str(c2p_w)],
+                [sys.executable, "-I", "-B", "-u", child, str(p2c_r), str(c2p_w), SCRIPT_LIBS],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

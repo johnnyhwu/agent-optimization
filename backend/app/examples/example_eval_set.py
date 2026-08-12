@@ -23,6 +23,11 @@ Limits, so a runaway query cannot take the system down with it:
   * 60 seconds for the whole run -> the script is stopped
   * 3,000 rows returned          -> the rest are dropped, and you are told
 
+Besides the standard library, two third-party packages are installed and can be
+imported: **pandas** and **tabulate** (numpy comes with pandas). Anything else
+will not be found — the list is deliberately short, and lives in
+`backend/requirements-scripts.txt`.
+
 `print()` anything you like; the output comes back with the results.
 
 `main()` must return a list of dicts with these keys:

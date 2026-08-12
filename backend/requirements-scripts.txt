@@ -1,0 +1,19 @@
+# Third-party packages an *uploaded eval-set script* may import.
+#
+# Deliberately a separate file from requirements.txt, and installed into a
+# separate directory (/opt/scriptlibs — see Dockerfile). Nothing here is
+# importable by the server process, and nothing in requirements.txt is added to
+# this list by being there; the two dependency trees are resolved apart so that
+# giving a user script pandas cannot move a version the API depends on.
+#
+# **This is an allow-list.** Adding a line widens what an uploaded script can do,
+# for every user, forever — the sandbox contains what a script may *reach*
+# (app/services/script_runner.py), not what it may import. Add sparingly, and
+# pin: an unpinned major bump changes the behaviour of scripts people already
+# wrote and stored.
+#
+# numpy, python-dateutil and six arrive as pandas' own dependencies. They are
+# left unpinned-by-us on purpose — pandas' metadata picks compatible versions,
+# and a second opinion here is how you get an unsolvable resolution later.
+pandas==3.0.5
+tabulate==0.10.0
