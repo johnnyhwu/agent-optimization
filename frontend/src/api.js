@@ -282,6 +282,10 @@ export const api = {
       "GET",
       `/optimization/runs/${runId}/steps/${stepNo}/rollouts/${split}/results/${resultId}/trace`,
     ),
+  // Part 2. `base` is "parent" (the last accepted step, which is usually not
+  // the previous one) or "initial".
+  getStepSkillDiff: (runId, stepNo, base = "parent") =>
+    req("GET", `/optimization/runs/${runId}/steps/${stepNo}/skill${qs({ base })}`),
   // The run's one deliverable. `step` is "best" or a step number — any step is
   // fetchable, and the manifest inside says whether the gate kept it.
   downloadOptimizedSkill: (runId, step = "best", fallbackName) =>

@@ -156,6 +156,11 @@ def upgrade() -> None:
         sa.Column("n_edits_ranked", sa.Integer(), nullable=True),
         sa.Column("n_edits_applied", sa.Integer(), nullable=True),
         sa.Column("n_edits_skipped", sa.Integer(), nullable=True),
+        # What became of each proposed edit, as the apply stage reported it.
+        # The counts above cannot tell a bad idea from a mistyped target string,
+        # and the status is decided during apply — there is no way to work it
+        # out afterwards from the before and after snapshots.
+        _json("edit_reports", default="'[]'::jsonb"),
         sa.Column("lines_added", sa.Integer(), nullable=True),
         sa.Column("lines_removed", sa.Integer(), nullable=True),
         sa.Column("files_touched", sa.Integer(), nullable=True),

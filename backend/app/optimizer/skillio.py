@@ -12,10 +12,18 @@ chart tooltip all read the same `per_file_stats` output. The browser renders its
 own side-by-side diff for the rows, but it never recounts — two implementations
 of "how many lines changed" would eventually disagree, on screen, about the same
 edit.
+
+Not recounting is necessary and it turned out not to be sufficient. The browser
+still has to *align* the two files to draw them, and an alignment implies a
+count whether or not anything prints it: rows are green and red. So both sides
+compute a genuine longest common subsequence — `_opcodes` here,
+`frontend/src/diff.js` there — because the LCS length is unique even when the
+alignment achieving it is not, which makes the two agree by construction rather
+than by luck. `difflib.SequenceMatcher` is not an LCS and disagreed with the
+browser on about 4% of randomly generated skill edits, always by over-reporting.
 """
 from __future__ import annotations
 
-import difflib
 import io
 import json
 import zipfile
@@ -100,11 +108,88 @@ def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
     )
 
 
+def _opcodes(before: list[str], after: list[str]) -> list[tuple[str, int, int, int, int]]:
+    """difflib-shaped opcodes over a genuine longest common subsequence.
+
+    `difflib.SequenceMatcher` is deliberately *not* an LCS — it finds the longest
+    matching block and recurses, which is often prettier and sometimes matches
+    fewer lines than it could. That is fine in isolation and wrong here, because
+    the browser draws the side-by-side rows for these same two files
+    (`frontend/src/diff.js`) and it *is* an LCS. Where the two disagree the page
+    contradicts itself: `+4 / −3` in the file tree beside three green stripes in
+    the pane, with no way for a reader to tell which half to believe.
+
+    An optimal LCS makes that agreement a property rather than a coincidence:
+    the LCS *length* is unique even when the alignment achieving it is not, and
+    both counts follow from the length alone. It is also what `git diff` reports,
+    Myers' algorithm being an LCS by another route.
+    """
+    n, m = len(before), len(after)
+    # lcs[i][j] = length of the LCS of before[i:] and after[j:]
+    lcs = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        row, nxt = lcs[i], lcs[i + 1]
+        for j in range(m - 1, -1, -1):
+            row[j] = nxt[j + 1] + 1 if before[i] == after[j] else max(nxt[j], row[j + 1])
+
+    steps: list[str] = []
+    i = j = 0
+    while i < n and j < m:
+        if before[i] == after[j]:
+            steps.append("equal")
+            i, j = i + 1, j + 1
+        # A tie means both branches reach the same LCS length, so the choice is
+        # free and only has to be the *same* choice the browser makes — hence
+        # deletion first, matching `frontend/src/diff.js`. It cannot change the
+        # counts either way; it changes which of two equally valid alignments a
+        # moved line is shown as.
+        elif lcs[i + 1][j] >= lcs[i][j + 1]:
+            steps.append("delete")
+            i += 1
+        else:
+            steps.append("insert")
+            j += 1
+    steps += ["delete"] * (n - i)
+    steps += ["insert"] * (m - j)
+
+    opcodes: list[tuple[str, int, int, int, int]] = []
+    i = j = 0
+    pos = 0
+    while pos < len(steps):
+        tag = steps[pos]
+        end = pos
+        while end < len(steps) and steps[end] == tag:
+            end += 1
+        count = end - pos
+        if tag == "equal":
+            opcodes.append(("equal", i, i + count, j, j + count))
+            i, j = i + count, j + count
+        elif tag == "delete":
+            # A run of deletions immediately followed by a run of insertions is
+            # one edit seen twice; difflib calls that a `replace` and so does
+            # everything downstream of these opcodes.
+            inserted = 0
+            if end < len(steps) and steps[end] == "insert":
+                while end + inserted < len(steps) and steps[end + inserted] == "insert":
+                    inserted += 1
+            if inserted:
+                opcodes.append(("replace", i, i + count, j, j + inserted))
+                i, j = i + count, j + inserted
+                end += inserted
+            else:
+                opcodes.append(("delete", i, i + count, j, j))
+                i += count
+        else:
+            opcodes.append(("insert", i, i, j, j + count))
+            j += count
+        pos = end
+    return opcodes
+
+
 def _line_opcodes(before: str, after: str):
     before_lines = before.splitlines(keepends=True)
     after_lines = after.splitlines(keepends=True)
-    matcher = difflib.SequenceMatcher(None, before_lines, after_lines, autojunk=False)
-    return before_lines, after_lines, matcher.get_opcodes()
+    return before_lines, after_lines, _opcodes(before_lines, after_lines)
 
 
 def _counts(before: str, after: str) -> tuple[int, int]:

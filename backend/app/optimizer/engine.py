@@ -493,6 +493,7 @@ async def _run_step(
         candidate_hash=candidate_hash, candidate_from_cache=from_cache,
         n_edits_merged=outcome.n_edits_merged, n_edits_ranked=outcome.n_edits_ranked,
         n_edits_applied=outcome.n_edits_applied, n_edits_skipped=outcome.n_edits_skipped,
+        edit_reports=outcome.reports,
         lines_added=lines_added, lines_removed=lines_removed, files_touched=len(stats),
         skill_len=sum(len(text) for text in candidate.values()),
         edit_summary=outcome.edit_summary,

@@ -836,3 +836,50 @@ def test_a_later_epoch_reshuffles():
     first = engine.train_batch(items, epoch_no=1, step_in_epoch=1, batch_size=4, seed=5)
     later = engine.train_batch(items, epoch_no=2, step_in_epoch=1, batch_size=4, seed=5)
     assert [i.item_key for i in first] != [i.item_key for i in later]
+
+
+# --- What the step row keeps of the update stage -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_per_edit_apply_report_reaches_the_step_row(monkeypatch):
+    """A count cannot say *why* an edit never landed, and nothing can recover it.
+
+    `apply_patch_with_report` decides each edit's status while it applies the
+    patch — "the target string was not in the file", "that path is outside the
+    skill", "that region is protected". None of it is derivable afterwards from
+    the before and after snapshots, so if the engine forwards only
+    `n_edits_skipped` the reason is gone for good and Part 2 can only say "2
+    edits were skipped", which is compatible with three different problems that
+    call for three different responses.
+    """
+    reports = [
+        {"index": 1, "op": "append", "path": "billing/SKILL.md", "path_defaulted": False,
+         "target": "", "content_preview": "Mention the period.",
+         "status": "applied_append"},
+        {"index": 2, "op": "replace", "path": "billing/SKILL.md", "path_defaulted": False,
+         "target": "a line that is not there", "content_preview": "…",
+         "status": "skipped_replace_target_not_found"},
+    ]
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        candidate = dict(files)
+        entry = f"{skill_dir}/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + "Mention the period.\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "stubbed", "edits": []},
+            reports=reports, minibatches=[], n_edits_merged=2, n_edits_ranked=2,
+            n_edits_applied=1, n_edits_skipped=1, edit_summary="one of two landed",
+            tokens={"calls": 1},
+        )
+
+    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
+                           make_items(2), make_items(2, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["edit_reports"] == reports
+    assert store.step(1)["n_edits_skipped"] == 1

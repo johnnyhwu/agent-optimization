@@ -486,6 +486,16 @@ class OptimizationStep(Base):
     n_edits_ranked: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_edits_applied: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_edits_skipped: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Upstream's per-edit apply report: `{op, path, target, content_preview,
+    # status}` for every edit that was proposed. The count above cannot say
+    # whether an edit was skipped because it named a protected region, a path
+    # outside the skill, or a target string that did not exist — three different
+    # problems — and the status is decided inside `apply_patch_with_report`, so
+    # it cannot be recomputed later from the snapshots. Bounded by construction:
+    # the edit budget is single digits and both text fields are clipped to 200.
+    edit_reports: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
 
     lines_added: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lines_removed: Mapped[int | None] = mapped_column(Integer, nullable=True)

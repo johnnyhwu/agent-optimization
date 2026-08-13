@@ -3,6 +3,7 @@ import { href, navigate } from "../../useHashRoute.js";
 import RolloutDetail from "./RolloutDetail.jsx";
 import RunList from "./RunList.jsx";
 import RunPanel from "./RunPanel.jsx";
+import SkillDiff from "./SkillDiff.jsx";
 import Wizard from "./Wizard.jsx";
 
 // The Optimize section: a list of past runs on the left, and whatever the route
@@ -26,6 +27,19 @@ export default function OptimizeSection({ route, subject }) {
         runId={route.runId}
         stepNo={route.stepNo}
         split={route.split}
+        onBack={() => navigate(href.optimizeRun(route.runId))}
+      />
+    );
+  }
+  // Part 2, likewise full width: a file tree beside a side-by-side diff is
+  // three columns of text, and a diff squeezed into a third of the page wraps
+  // every line it is supposed to be lining up.
+  if (route.tier === "skill") {
+    return (
+      <SkillDiff
+        key={`${route.runId}/${route.stepNo}`}
+        runId={route.runId}
+        stepNo={route.stepNo}
         onBack={() => navigate(href.optimizeRun(route.runId))}
       />
     );

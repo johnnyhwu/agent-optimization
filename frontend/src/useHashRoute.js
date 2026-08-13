@@ -34,6 +34,7 @@ export const href = {
   optimizeRun: (runId) => `#/optimize/${runId}`,
   optimizeRollout: (runId, stepNo, split) =>
     `#/optimize/${runId}/steps/${stepNo}/${split}`,
+  optimizeSkill: (runId, stepNo) => `#/optimize/${runId}/steps/${stepNo}/skill`,
 };
 
 export function navigate(to) {
@@ -63,6 +64,18 @@ export function parseHash(hash) {
     // it is a page a developer sends to a colleague ("look at what the analyst
     // was shown here"), so every part of it belongs in the address.
     if (parts[1] && parts[2] === "steps" && parts[3] != null) {
+      // `skill` occupies the same slot as the split, so it has to be taken
+      // first: the split falls back to `train`, and without this a link to the
+      // diff would quietly open the training rollout instead — a real page,
+      // showing real numbers, that is not the one that was asked for.
+      if (parts[4] === "skill") {
+        return {
+          section: "optimize",
+          tier: "skill",
+          runId: parts[1],
+          stepNo: Number(parts[3]),
+        };
+      }
       return {
         section: "optimize",
         tier: "rollout",

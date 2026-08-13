@@ -978,3 +978,82 @@ class OptimizationRolloutDetail(BaseModel):
     results: list[OptimizationResultOut] = Field(default_factory=list)
     # Empty on validation, which is measured and never reflected on.
     minibatches: list[OptimizationMinibatchOut] = Field(default_factory=list)
+
+
+class SkillDiffFile(BaseModel):
+    """One file's two sides, for a diff the browser lays out itself.
+
+    `before` and `after` are `None` — not `""` — when the file did not exist on
+    that side. A created file and an emptied one produce the same line counts,
+    and only this distinguishes them; the tree labels one "new" and the other
+    "removed", and a reader deciding whether the agent can still reach a
+    reference document needs the difference.
+    """
+
+    path: str
+    before: str | None = None
+    after: str | None = None
+    # From `skillio.per_file_stats`, never recounted downstream: two answers to
+    # "how many lines changed" eventually disagree on screen about one edit.
+    added: int = 0
+    removed: int = 0
+
+
+class AnswerLeak(BaseModel):
+    """A gold answer this step copied verbatim into the skill."""
+
+    path: str
+    answer: str
+    line: str
+
+
+class EditReportOut(BaseModel):
+    """What became of one proposed edit.
+
+    Every field has a default because this comes from the vendored apply stage:
+    a shape change upstream should show up as a thinner row on the page, not as
+    a 500 on a run that has already finished.
+    """
+
+    index: int | None = None
+    op: str = ""
+    path: str = ""
+    path_defaulted: bool = False
+    target: str = ""
+    content_preview: str = ""
+    status: str = ""
+    error: str | None = None
+
+
+class OptimizationSkillDiff(BaseModel):
+    """Part 2: one step's edits, against the snapshot they were derived from."""
+
+    run_id: uuid.UUID
+    skill_name: str
+    mode: str
+    step_no: int
+    # What was asked for, and what it resolved to. `parent` is the last step the
+    # gate *accepted* — usually not `step_no - 1`, because a rejected step rolls
+    # the skill back — and it is NULL until the first acceptance, which is what
+    # `base_is_fallback` reports rather than hiding.
+    base: str
+    base_step_no: int
+    base_is_fallback: bool = False
+
+    gate_action: str | None = None
+    gate_reject_reason: str | None = None
+    is_best: bool = False
+    step_status: str
+    edit_summary: str | None = None
+    n_edits_applied: int | None = None
+    n_edits_skipped: int | None = None
+
+    files: list[SkillDiffFile] = Field(default_factory=list)
+    # Named, not carried. The tree is a picture of the whole skill, but sending
+    # every file's text on every request grows the payload with the skill rather
+    # than with the edit.
+    unchanged_paths: list[str] = Field(default_factory=list)
+    lines_added: int = 0
+    lines_removed: int = 0
+    answer_leaks: list[AnswerLeak] = Field(default_factory=list)
+    edit_reports: list[EditReportOut] = Field(default_factory=list)

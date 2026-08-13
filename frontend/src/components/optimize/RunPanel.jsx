@@ -226,6 +226,7 @@ export default function RunPanel({ runId, subject }) {
             onOpenRollout={(stepNo, split) =>
               navigate(href.optimizeRollout(runId, stepNo, split))
             }
+            onOpenSkill={(stepNo) => navigate(href.optimizeSkill(runId, stepNo))}
           />
         )}
       </Card>

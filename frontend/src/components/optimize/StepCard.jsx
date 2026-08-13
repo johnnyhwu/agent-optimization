@@ -16,7 +16,9 @@ import { IconChevronRight, IconDownload, IconX } from "../icons.jsx";
 //     that exclusion is the first thing that makes an accuracy suspicious.
 //   Part 2 — what the step did to the skill, and whether the gate kept it.
 
-export default function StepCard({ step, run, onClose, onDownload, downloading, onOpenRollout }) {
+export default function StepCard({
+  step, run, onClose, onDownload, downloading, onOpenRollout, onOpenSkill,
+}) {
   const isBaseline = step.step_no === 0;
   const isBest = run.best_step === step.step_no;
   const errors = (step.val_n_agent_error || 0) + (step.val_n_judge_error || 0)
@@ -122,6 +124,16 @@ export default function StepCard({ step, run, onClose, onDownload, downloading, 
               {step.edit_summary && (
                 <p className="opt-stepcard-summary">{step.edit_summary}</p>
               )}
+              {/* Offered whether or not the gate kept the edits: reading what
+                  was turned down is how "the idea was bad" gets told apart
+                  from "the rollout was noisy". Step 0 is excluded because
+                  there is nothing before it to compare against. */}
+              <div className="opt-stepcard-links">
+                <Button variant="ghost" icon={<IconChevronRight size={14} />}
+                        onClick={() => onOpenSkill(step.step_no)}>
+                  What changed in the skill
+                </Button>
+              </div>
             </>
           )}
         </section>

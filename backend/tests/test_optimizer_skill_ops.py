@@ -582,3 +582,55 @@ def test_find_answer_leaks_ignores_text_that_was_already_there():
     after = {ENTRY: BODY + "$42,180.00\nAlways cite the period.\n"}
 
     assert skillio.find_answer_leaks(seeded, after, ["$42,180.00"]) == []
+
+
+# --- The counts and the browser's rows have to describe the same edit --------
+
+
+def test_line_counts_are_minimal_so_the_browser_can_reproduce_them():
+    """The file tree and the diff pane are drawn by two different programs.
+
+    `skillio` counts the lines here; `frontend/src/diff.js` aligns the same two
+    files in the browser to draw the rows. Nothing forces those to agree except
+    both computing a genuine longest common subsequence — the LCS *length* is
+    unique even where the alignment is not, so both counts follow from it.
+
+    This pair is one that `difflib.SequenceMatcher` gets wrong. It is not an LCS:
+    it takes the longest matching block and recurses, and here that costs it a
+    match, so it reports 3 added and 3 removed where 2 and 2 suffice. On screen
+    that is `+3 / −3` in the tree beside two green stripes in the pane, with no
+    way for a reader to tell which half is lying.
+    """
+    before = (
+        "- always cite the policy\n\n- always cite the policy\n"
+        "Escalate over $500.\n\n- never guess\nRefunds take 5 days.\n"
+    )
+    after = (
+        "\n## Rules\n- always cite the policy\n## Rules\n\n"
+        "- never guess\nRefunds take 5 days.\n"
+    )
+    assert skillio._counts(before, after) == (2, 2)
+
+
+def test_the_counts_never_exceed_what_the_edit_could_possibly_be():
+    """A property, checked on the shapes a skill edit actually takes.
+
+    Both counts are bounded below by the difference in length and above by the
+    longer file, and their difference is exactly the change in line count. A
+    matcher that misses an alignment breaks the upper bound quietly — the number
+    is still plausible, just too big.
+    """
+    cases = [
+        ("a\nb\nc\n", "a\nb\nc\n"),
+        ("a\nb\nc\n", "a\nX\nb\nc\n"),
+        ("\n\n\n- rule\n\n\n", "\n- rule\n\n- rule\n\n"),
+        ("x\n" * 10 + "y\n", "y\n" + "x\n" * 10),
+        ("", "a\nb\n"),
+        ("a\nb\n", ""),
+    ]
+    for before, after in cases:
+        added, removed = skillio._counts(before, after)
+        n_before = len(before.splitlines())
+        n_after = len(after.splitlines())
+        assert added - removed == n_after - n_before, (before, after)
+        assert added <= n_after and removed <= n_before, (before, after)

@@ -52,6 +52,8 @@ from app.optimizer import dataset, runner, skillio
 from app.optimizer.adapter import DEFAULT_ERROR_THRESHOLD
 from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS
 from app.schemas import (
+    AnswerLeak,
+    EditReportOut,
     ImportPreview,
     ImportPreviewRequest,
     OptimizationConfig,
@@ -62,10 +64,12 @@ from app.schemas import (
     OptimizationRunDetail,
     OptimizationRunOut,
     OptimizationRunPage,
+    OptimizationSkillDiff,
     OptimizationStepSummary,
     PreviewQuestion,
     PreviewSource,
     SkillCheck,
+    SkillDiffFile,
     SkillGroup,
     TraceView,
 )
@@ -1206,6 +1210,130 @@ async def get_rollout_result_trace(
         ground_truth_reasoning=item.ground_truth_reasoning if item else None,
         error_message=result.error_message,
         failure_kind=result.failure_kind,
+    )
+
+
+BASES = ("parent", "initial")
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_no}/skill", response_model=OptimizationSkillDiff
+)
+async def get_step_skill_diff(
+    run_id: uuid.UUID,
+    step_no: int,
+    base: str = Query("parent", description="`parent` (last accepted step) or `initial`"),
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Part 2: what this step did to the skill, against the right baseline.
+
+    "The right baseline" is the entire difficulty. `parent_step_no` is the last
+    step whose candidate the gate **accepted**, which is usually not
+    `step_no - 1`: a rejected step is rolled back, so step 4 may well be derived
+    from step 2. Diffing against the previous step number would fold a discarded
+    proposal into the next step's diff and attribute one model's edits to
+    another, on the one page whose job is to say who changed what.
+
+    Both snapshots are whole files rather than stored patches, so the comparison
+    is a straight one — and the second base, `initial`, answers the question the
+    first cannot: not "what did this step do" but "what does this run's skill now
+    contain that the original did not". That is the view worth reading before
+    deploying, and the reason the answer-leak check runs against whichever base
+    was actually asked for.
+    """
+    if base not in BASES:
+        raise HTTPException(
+            status_code=400, detail=f"base must be one of {', '.join(BASES)}"
+        )
+    run = await _load_visible_run(session, run_id, subject)
+    step = await session.scalar(
+        select(OptimizationStep).where(
+            OptimizationStep.run_id == run_id, OptimizationStep.step_no == step_no
+        )
+    )
+    if step is None:
+        raise HTTPException(status_code=404, detail=f"this run has no step {step_no}")
+
+    # `parent_step_no` is NULL until the gate accepts something, and every step
+    # before that really is derived from the skill as it arrived. Reporting the
+    # fallback rather than quietly substituting step 0 lets the page say which
+    # question it is answering.
+    wanted = 0 if base == "initial" else step.parent_step_no
+    base_step_no = 0 if wanted is None else wanted
+    fallback = base == "parent" and step.parent_step_no is None
+
+    snapshots = {
+        row.step_no: dict(row.files)
+        for row in (
+            await session.scalars(
+                select(OptimizationSkill).where(
+                    OptimizationSkill.run_id == run_id,
+                    OptimizationSkill.step_no.in_({step_no, base_step_no}),
+                )
+            )
+        ).all()
+    }
+    after = snapshots.get(step_no)
+    # A step row exists from the moment the step starts; the candidate only
+    # exists once the update stage finishes. An empty diff for the gap between
+    # them would read as "this step changed nothing" — a claim about the skill,
+    # when the truth is about the run being cut short.
+    if after is None:
+        raise HTTPException(
+            status_code=404, detail=f"no skill was recorded for step {step_no}"
+        )
+    before = snapshots.get(base_step_no, dict(run.initial_skill or {}))
+
+    stats = skillio.per_file_stats(before, after)
+    files = [
+        SkillDiffFile(
+            path=path,
+            before=before.get(path),
+            after=after.get(path),
+            added=counts["added"],
+            removed=counts["removed"],
+        )
+        for path, counts in stats.items()
+    ]
+    lines_added, lines_removed = skillio.total_line_changes(before, after)
+
+    # Training answers only. Held-out validation answers are never shown to an
+    # analyst, so one appearing in the skill cannot have been copied from a
+    # prompt — flagging it would put a coincidence behind the same red banner as
+    # a real leak, and the two would stop being distinguishable. A question in
+    # both splits has a training row, so overlap is still covered.
+    golds = (
+        await session.scalars(
+            select(OptimizationItem.ground_truth_response).where(
+                OptimizationItem.run_id == run_id, OptimizationItem.split == "train"
+            )
+        )
+    ).all()
+
+    return OptimizationSkillDiff(
+        run_id=run_id,
+        skill_name=run.skill_name,
+        mode=run.mode,
+        step_no=step_no,
+        base=base,
+        base_step_no=base_step_no,
+        base_is_fallback=fallback,
+        gate_action=step.gate_action,
+        gate_reject_reason=step.gate_reject_reason,
+        is_best=run.best_step is not None and run.best_step == step_no,
+        step_status=step.status,
+        edit_summary=step.edit_summary,
+        n_edits_applied=step.n_edits_applied,
+        n_edits_skipped=step.n_edits_skipped,
+        files=files,
+        unchanged_paths=sorted((set(before) | set(after)) - set(stats)),
+        lines_added=lines_added,
+        lines_removed=lines_removed,
+        answer_leaks=[
+            AnswerLeak(**leak) for leak in skillio.find_answer_leaks(before, after, golds)
+        ],
+        edit_reports=[EditReportOut(**report) for report in (step.edit_reports or [])],
     )
 
 
