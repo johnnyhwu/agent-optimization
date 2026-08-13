@@ -620,3 +620,111 @@ class PlaygroundAttemptDetail(PlaygroundAttemptOut):
     # worthless.
     workspace: WorkspaceOverrideIn | None = None
     trace: TraceView
+
+
+# --- Optimize (Stage 3) -----------------------------------------------------
+#
+# No model here has a field that could carry a credential outward, exactly as
+# `RunOut` has none: `optimization_runs.secrets` is a separate column and
+# nothing below reads it. That is what makes "keys never leave the server"
+# structural rather than a habit somebody has to remember.
+
+
+class OptimizationStepSummary(BaseModel):
+    """One row of the chart. The overview fetches every step in one payload.
+
+    `train_*` is measured with the skill as it *entered* the step; `val_*` with
+    the candidate the step produced. They are two different skills, which is why
+    the chart draws train half a step to the left — and why they are named apart
+    rather than sharing a `hard`.
+    """
+
+    step_no: int
+    epoch_no: int
+    step_in_epoch: int
+    parent_step_no: int | None = None
+    status: str
+    gate_action: str | None = None
+    gate_reject_reason: str | None = None
+    retried: bool = False
+    abort_reason: str | None = None
+
+    train_hard: float | None = None
+    train_soft: float | None = None
+    train_activation_rate: float | None = None
+    train_n_scored: int | None = None
+    train_n_items: int | None = None
+    train_n_agent_error: int | None = None
+    train_n_judge_error: int | None = None
+    train_latency_min_ms: int | None = None
+    train_latency_p50_ms: int | None = None
+    train_latency_max_ms: int | None = None
+
+    val_hard: float | None = None
+    val_soft: float | None = None
+    val_activation_rate: float | None = None
+    val_n_scored: int | None = None
+    val_n_items: int | None = None
+    val_n_agent_error: int | None = None
+    val_n_judge_error: int | None = None
+    val_latency_min_ms: int | None = None
+    val_latency_p50_ms: int | None = None
+    val_latency_max_ms: int | None = None
+
+    # The second half of the hover card: what this step did to the skill.
+    lines_added: int | None = None
+    lines_removed: int | None = None
+    files_touched: int | None = None
+    n_edits_applied: int | None = None
+    n_edits_skipped: int | None = None
+    edit_summary: str | None = None
+    skill_len: int | None = None
+    candidate_from_cache: bool = False
+
+    current_score: float | None = None
+    best_score: float | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+
+
+class OptimizationRunOut(BaseModel):
+    """One optimization run, as the left rail lists it."""
+
+    id: uuid.UUID
+    name: str | None
+    created_by: str
+    status: str
+    mode: str
+    skill_name: str
+    num_epochs: int
+    batch_size: int
+    steps_per_epoch: int
+    total_steps: int
+    steps_done: int = 0
+    best_step: int | None = None
+    best_score: float | None = None
+    cancel_requested: bool = False
+    error_message: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+    # Which eval sets this run drew questions from, for the list row's subtitle.
+    source_eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+    n_train: int = 0
+    n_val: int = 0
+
+
+class OptimizationRunDetail(OptimizationRunOut):
+    """The overview page: the run, its settings, and every step of the chart."""
+
+    # Non-secret settings only, by construction — `secrets` is a different column.
+    config: dict = Field(default_factory=dict)
+    detector: dict = Field(default_factory=dict)
+    workspace_version: str | None = None
+    steps: list[OptimizationStepSummary] = Field(default_factory=list)
+    # Questions that landed in both splits. Not an error — the wizard offers it —
+    # but validation is not held out for those, so the page says so.
+    overlap_item_keys: list[str] = Field(default_factory=list)
+
+
+class OptimizationRunPage(Page):
+    items: list[OptimizationRunOut]

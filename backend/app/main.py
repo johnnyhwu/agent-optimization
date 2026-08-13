@@ -20,6 +20,7 @@ from app.routers import (
     eval_set_scripts,
     eval_sets,
     export,
+    optimization,
     playground,
     questions,
     results,
@@ -127,6 +128,7 @@ app.include_router(results.router)
 app.include_router(export.router)
 app.include_router(diagnosis.router)
 app.include_router(playground.router)
+app.include_router(optimization.router)
 
 
 @app.get("/health")
