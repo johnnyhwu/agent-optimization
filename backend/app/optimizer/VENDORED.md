@@ -75,20 +75,47 @@ untouched, and the diff is the five lines that redirect
 state is "not a feature", not "a feature that silently does nothing".
 
 That is a smaller claim than the plan's ("implemented and wired, default off")
-and it is the honest one. Wiring `run_slow_update` is not a switch: its
-`build_comparison_pairs` reads trajectories out of a `rollout_dir` of JSON files
-on disk, which is upstream's checkpoint world and precisely the part this port
-replaced with database rows (see `store.py`). Doing it properly means forking
-that function the way `reflect.py` was forked, plus an epoch-boundary hook in
-`engine.py`, plus tests — and it would ship default-off, so it would be a code
-path nobody exercises. A default-off path that has never run is not a feature
-in reserve; it is a liability that looks like one.
+and it is the honest one. What is actually left is this, in order of difficulty:
 
-What *is* in place is the half that would otherwise be dangerous: `skill.py`
-carries `_strip_slow_update_markers`, so a step-level analyst that writes the
-`<!-- SLOW_UPDATE_START -->` markers into its `content` cannot forge the
-protected block. That guard is tested in `test_optimizer_skill_ops.py` and is
-worth having whether or not the feature ever arrives.
+1. **The comparison set does not exist in our data model.** A slow update
+   compares *the same samples* rolled out under the previous epoch's skill and
+   under the current one (`results_prev` / `results_curr`, Markov — adjacent
+   epochs only). This loop never produces that pairing: the training minibatch
+   is a different draw of questions every step. The validation split *is* a
+   fixed set rolled out every step, so it is the obvious candidate — but
+   deciding that, and deciding which two step rows are "the epoch boundary",
+   is a design choice nobody has made. It is not a wiring task.
+2. **No epoch-boundary hook.** `engine.py` knows `epoch_no` but has nowhere to
+   run anything when one ends.
+3. **No config key**, in `OptimizationConfig` or anywhere else.
+4. `inject_empty_slow_update_field` is never called, so the protected block does
+   not exist on any skill this system produces.
+5. Trajectories would be degraded. `build_comparison_pairs` takes
+   `prev_rollout_dir` / `curr_rollout_dir` and reads `conversation.json` from
+   them — upstream's checkpoint world, which this port replaced with database
+   rows. Both arguments default to `""`, in which case the trajectory fields are
+   simply empty strings, so this degrades rather than breaking: the comparison
+   pairs still carry the item, both results and the change category.
+   Feeding real trajectories means a fork like `reflect.py`'s. Worth being
+   precise about — this is the *smallest* of the five, not the blocker.
+
+`meta_skill.py` is further from reachable, not closer. `format_meta_skill_context`
+is called by the vendored `reflect.py`, but `update.py` never passes a
+`meta_skill_context`, so it is always `""` and always a no-op; `run_meta_skill`
+is never called at all, and optimizer-side memory would need somewhere to live
+across epochs — arguably across *runs*, which is a table that does not exist.
+
+None of it would ship on, so all of it would be a code path nobody exercises. A
+default-off path that has never run is not a feature in reserve; it is a
+liability that looks like one.
+
+What *is* in place is the half that would otherwise be dangerous. `skill.py`
+carries `_strip_slow_update_markers`, so a step-level analyst cannot forge the
+block by writing `<!-- SLOW_UPDATE_START -->` into its own `content`; and
+`_marker_spans` — which `_protected_spans` includes for every mode — means that
+if the block ever does exist, an edit targeting text inside it is refused with
+`skipped_protected_region`. Both are tested in `test_optimizer_skill_ops.py` and
+are worth having whether or not the feature ever arrives.
 
 `skill_aware.py` is vendored although the feature it implements
 (EmbodiSkill appendix notes) is off by default — `reflect.py` imports it at
