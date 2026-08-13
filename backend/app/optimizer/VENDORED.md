@@ -68,6 +68,28 @@ cleanly. `import block only` means literally that: the module's own code is
 untouched, and the diff is the five lines that redirect
 `from skillopt.…` to `from app.optimizer.vendor.…`.
 
+### Two files are vendored and deliberately not reachable
+
+`slow_update.py` and `meta_skill.py` are here, redirected and diffable, and
+**nothing calls them.** There is no config key that turns either on, so the
+state is "not a feature", not "a feature that silently does nothing".
+
+That is a smaller claim than the plan's ("implemented and wired, default off")
+and it is the honest one. Wiring `run_slow_update` is not a switch: its
+`build_comparison_pairs` reads trajectories out of a `rollout_dir` of JSON files
+on disk, which is upstream's checkpoint world and precisely the part this port
+replaced with database rows (see `store.py`). Doing it properly means forking
+that function the way `reflect.py` was forked, plus an epoch-boundary hook in
+`engine.py`, plus tests — and it would ship default-off, so it would be a code
+path nobody exercises. A default-off path that has never run is not a feature
+in reserve; it is a liability that looks like one.
+
+What *is* in place is the half that would otherwise be dangerous: `skill.py`
+carries `_strip_slow_update_markers`, so a step-level analyst that writes the
+`<!-- SLOW_UPDATE_START -->` markers into its `content` cannot forge the
+protected block. That guard is tested in `test_optimizer_skill_ops.py` and is
+worth having whether or not the feature ever arrives.
+
 `skill_aware.py` is vendored although the feature it implements
 (EmbodiSkill appendix notes) is off by default — `reflect.py` imports it at
 module scope, and a stub would be a bigger and less honest difference than the

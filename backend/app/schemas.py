@@ -675,6 +675,12 @@ class OptimizationStepSummary(BaseModel):
     lines_added: int | None = None
     lines_removed: int | None = None
     files_touched: int | None = None
+    # Training gold answers this step copied in verbatim, against its parent.
+    # Zero on a well-behaved step; the overview raises it as a warning.
+    n_answer_leaks: int | None = None
+    # The agent's config version while this step ran; None if never probed.
+    # Compared against the run's pinned version to spot a mid-run deploy.
+    workspace_version: str | None = None
     n_edits_applied: int | None = None
     n_edits_skipped: int | None = None
     edit_summary: str | None = None

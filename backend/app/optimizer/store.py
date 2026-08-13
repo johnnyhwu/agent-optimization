@@ -65,6 +65,9 @@ class RunSpec:
     batch_size: int
     steps_per_epoch: int
     total_steps: int
+    # The agent config version pinned when the run was created. Each step
+    # records what it actually saw, so a mid-run deploy is visible.
+    workspace_version: str | None = None
 
 
 @dataclass
@@ -212,6 +215,7 @@ class DbOptimizationStore:
             secrets=run.secrets or {},
             initial_skill=dict(run.initial_skill or {}),
             workspace_baseline=dict(run.workspace_baseline) if run.workspace_baseline else None,
+            workspace_version=run.workspace_version,
             detector=dict(run.detector or {}),
             num_epochs=run.num_epochs,
             batch_size=run.batch_size,

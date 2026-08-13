@@ -44,7 +44,7 @@ from app.optimizer.adapter import DEFAULT_ERROR_THRESHOLD, run_rollout, score_ro
 from app.optimizer.detector import DEFAULT_PATH_PATTERNS
 from app.optimizer.gating import decide_gate
 from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS, build_analyst_items
-from app.optimizer.skillio import per_file_stats, total_line_changes
+from app.optimizer.skillio import find_answer_leaks, per_file_stats, total_line_changes
 from app.optimizer.store import Item, OptimizationStore, ResumeState, RunSpec
 from app.optimizer.update import run_update_stage
 from app.optimizer.vendor.gate import select_gate_score
@@ -316,6 +316,10 @@ async def _baseline_step(
 
     await store.finish_step(
         step_id, status="done", retried=retried, candidate_hash=content_hash,
+        # The baseline is a measurement too, and every later step is compared
+        # against it — so a deploy between creating the run and running step 0
+        # invalidates the whole chart rather than one point of it.
+        workspace_version=await _agent_version(seams),
         current_score=score, best_score=score,
         skill_len=sum(len(text) for text in spec.initial_skill.values()),
         completed_at=datetime.now(timezone.utc),
@@ -359,6 +363,36 @@ async def _step(
             completed_at=datetime.now(timezone.utc),
         )
         raise
+
+
+async def _agent_version(seams: Seams) -> str | None:
+    """The agent's config version right now, or None if it cannot be had.
+
+    A run is a comparison and it only holds if the other side holds still. A
+    config deployed to the agent server halfway through makes the steps before
+    and after it measurements of two different systems, and the gate will accept
+    or reject a candidate for a reason that has nothing to do with its edits —
+    while the only visible symptom is the accuracy moving, which is exactly what
+    the chart is supposed to be showing.
+
+    Recorded per step rather than as one flag on the run, because "which steps
+    are comparable" is the question a reader has once they know something moved.
+
+    Never raises. An hour of agent calls is already paid for by the time this
+    runs, and discarding it over a flaky `GET /get_config_version` would be
+    throwing away the measurement to report a caveat about it. `None` rather
+    than `""` for the same reason the detector distinguishes "unknown" from
+    "no": an empty string would disagree with every pinned version and warn
+    about drift on every run that never probed.
+    """
+    client = getattr(seams, "workspace", None)
+    if client is None:
+        return None
+    try:
+        return await client.get_version()
+    except Exception as exc:  # noqa: BLE001 - an observation, not a dependency
+        log.warning("could not read the agent's config version: %s", exc)
+        return None
 
 
 async def _run_step(
@@ -436,6 +470,14 @@ async def _run_step(
     candidate_hash = skill_hash(candidate)
     stats = per_file_stats(state.current_files, candidate)
     lines_added, lines_removed = total_line_changes(state.current_files, candidate)
+    # Against the parent skill and the *training* answers — the same comparison
+    # `GET .../steps/{n}/skill?base=parent` makes, through the same function, so
+    # the overview's warning and Part 2's marked lines cannot disagree. Every
+    # training answer, not just this batch's: an analyst that memorised one in
+    # step 2 has still put it in the skill at step 7.
+    leaks = find_answer_leaks(
+        state.current_files, candidate, [item.ground_truth_response for item in train]
+    )
     await store.record_skill(
         run_id, step_no=step_no, kind="candidate", files=candidate,
         content_hash=candidate_hash, per_file_stats=stats,
@@ -489,12 +531,14 @@ async def _run_step(
 
     await store.finish_step(
         step_id, status="done", retried=retried, edit_budget=edit_budget,
+        workspace_version=await _agent_version(seams),
         gate_action=gate.action, gate_reject_reason=gate.reject_reason,
         candidate_hash=candidate_hash, candidate_from_cache=from_cache,
         n_edits_merged=outcome.n_edits_merged, n_edits_ranked=outcome.n_edits_ranked,
         n_edits_applied=outcome.n_edits_applied, n_edits_skipped=outcome.n_edits_skipped,
         edit_reports=outcome.reports,
         lines_added=lines_added, lines_removed=lines_removed, files_touched=len(stats),
+        n_answer_leaks=len(leaks),
         skill_len=sum(len(text) for text in candidate.values()),
         edit_summary=outcome.edit_summary,
         current_score=gate.current_score, best_score=gate.best_score,

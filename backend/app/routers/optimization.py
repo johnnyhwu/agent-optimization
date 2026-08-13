@@ -800,6 +800,8 @@ def _step_summary(step: OptimizationStep, rollouts: dict) -> OptimizationStepSum
         lines_added=step.lines_added,
         lines_removed=step.lines_removed,
         files_touched=step.files_touched,
+        n_answer_leaks=step.n_answer_leaks,
+        workspace_version=step.workspace_version,
         n_edits_applied=step.n_edits_applied,
         n_edits_skipped=step.n_edits_skipped,
         edit_summary=step.edit_summary,

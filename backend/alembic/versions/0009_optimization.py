@@ -164,6 +164,13 @@ def upgrade() -> None:
         sa.Column("lines_added", sa.Integer(), nullable=True),
         sa.Column("lines_removed", sa.Integer(), nullable=True),
         sa.Column("files_touched", sa.Integer(), nullable=True),
+        # Gold answers copied verbatim into the skill by this step. Measured on
+        # write because the alternative is a diff per step inside a page that
+        # reloads while the run is still going.
+        sa.Column("n_answer_leaks", sa.Integer(), nullable=True),
+        # The agent's config version while this step ran, so a deploy midway
+        # through a run is visible instead of just moving the accuracy.
+        sa.Column("workspace_version", sa.Text(), nullable=True),
         sa.Column("skill_len", sa.Integer(), nullable=True),
         sa.Column("edit_summary", sa.Text(), nullable=True),
         sa.Column("current_score", sa.Numeric(), nullable=True),

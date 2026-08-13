@@ -883,3 +883,218 @@ async def test_the_per_edit_apply_report_reaches_the_step_row(monkeypatch):
 
     assert store.step(1)["edit_reports"] == reports
     assert store.step(1)["n_edits_skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_that_memorised_a_gold_answer_is_counted_at_write_time(monkeypatch):
+    """The overview warns about leaks, and it cannot afford to look for them.
+
+    Finding a leak means diffing a step's candidate against its parent and
+    searching the added lines — quadratic in the file, once per step. The run
+    overview streams and reloads on every terminal event, so doing that at read
+    time would put a whole run's worth of diffs inside a request that fires
+    repeatedly while the run is live. It is measured once, here, exactly as
+    `lines_added` is.
+
+    The count is taken against the *parent* skill and the *training* answers,
+    which is what `GET .../steps/{n}/skill?base=parent` reports. If the two ever
+    drift, the overview and Part 2 disagree about the same step.
+    """
+    leaked = "The Northwind Q2 balance is $42,180.00."
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        candidate = dict(files)
+        entry = f"{skill_dir}/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + f"If asked: {leaked}\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "stubbed", "edits": []}, reports=[],
+            minibatches=[], n_edits_merged=1, n_edits_ranked=1, n_edits_applied=1,
+            n_edits_skipped=0, edit_summary="stubbed", tokens={},
+        )
+
+    train = [
+        Item(item_key="set:t0", question="q0", ground_truth_response=leaked,
+             ground_truth_reasoning="r", ordinal=0),
+        Item(item_key="set:t1", question="q1", ground_truth_response="something else",
+             ground_truth_reasoning="r", ordinal=1),
+    ]
+    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
+                           train, make_items(2, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["n_answer_leaks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_edit_records_no_leak(monkeypatch):
+    """The number only means something if it is usually zero.
+
+    A check that fired on every step would make the warning noise, and the run
+    that actually memorised an answer would be the one nobody looked at.
+    """
+    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
+                           make_items(2), make_items(2, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch, edits_line="Quote the period as well.")
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["n_answer_leaks"] == 0
+
+
+# --- The agent that changed underneath the run -------------------------------
+
+
+class _SeamsWith(Seams):
+    """The shared stub plus a workspace seam, which only these tests need."""
+
+    def __init__(self, workspace):
+        self.workspace = workspace
+
+
+class _Workspace:
+    """A workspace seam that reports whatever version it is told to, in order."""
+
+    def __init__(self, *versions):
+        self.versions = list(versions)
+        self.calls = 0
+
+    async def get_version(self):
+        self.calls += 1
+        return self.versions[min(self.calls - 1, len(self.versions) - 1)]
+
+    async def get_workspace(self):  # pragma: no cover - not used by the loop
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_each_step_records_the_agent_version_it_actually_ran_against(monkeypatch):
+    """A run is a comparison, and a comparison needs the other side to hold still.
+
+    Every number on the chart is "this skill, on that agent". If somebody deploys
+    a config change to the agent server halfway through, the steps before and
+    after it are measuring different systems — and the gate will accept or reject
+    a candidate for a reason that has nothing to do with the edits. Nothing else
+    in the run would ever show it: the accuracy simply moves.
+
+    Recorded per step rather than as one run-level flag, because *which* steps
+    are comparable is the question a reader actually has.
+    """
+    store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=2, workspace_version="cfg-1"),
+                           make_items(4), make_items(4, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    await engine.run_optimization(
+        store.spec.id, store=store,
+        seams=_SeamsWith(_Workspace("cfg-1", "cfg-1", "cfg-2")),
+        publish=_collect([]), cancel_event=None,
+    )
+
+    # The baseline is probed too: every later step is compared against it, so a
+    # deploy before step 0 invalidates the whole chart rather than one point.
+    assert store.step(0)["workspace_version"] == "cfg-1"
+    assert store.step(1)["workspace_version"] == "cfg-1"
+    assert store.step(2)["workspace_version"] == "cfg-2"
+
+
+@pytest.mark.asyncio
+async def test_a_version_probe_that_fails_does_not_end_the_run(monkeypatch):
+    """The probe is an observation, not a dependency.
+
+    An hour of agent calls is already paid for by the time this runs. Letting a
+    flaky `GET /get_config_version` throw out of the step would discard the whole
+    run to report a fact that is, at worst, a caveat on the chart.
+    """
+
+    class Broken:
+        async def get_version(self):
+            raise RuntimeError("connection refused")
+
+        async def get_workspace(self):  # pragma: no cover
+            raise NotImplementedError
+
+    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1, workspace_version="cfg-1"),
+                           make_items(2), make_items(2, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    status, events = await engine.run_optimization(
+        store.spec.id, store=store, seams=_SeamsWith(Broken()),
+        publish=_collect([]), cancel_event=None,
+    ), None
+    assert status == "completed"
+    assert store.step(1)["workspace_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_workspace_seam_means_no_version_and_no_complaint(monkeypatch):
+    """`include_workspace` is opt-in, and a run must not depend on it being on.
+
+    Recording an empty string instead of nothing would make every step look like
+    it disagreed with the run's pinned version, and the overview would warn about
+    drift on every run that never probed.
+    """
+    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1, workspace_version="cfg-1"),
+                           make_items(2), make_items(2, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["workspace_version"] is None
+
+
+def _collect(sink):
+    async def publish(event):
+        sink.append(event)
+
+    return publish
+
+
+@pytest.mark.asyncio
+async def test_an_answer_already_in_the_skill_is_not_re_counted_every_step(monkeypatch):
+    """The count is what *this* step added, measured against the skill it started from.
+
+    A leaked line stays in the skill for the rest of the run. Searching the whole
+    candidate instead of the added lines would report it again on every later
+    step, so the overview would name six steps for one mistake and the reader
+    would have no way to find the one that made it. It also has to agree with
+    Part 2, which diffs against the parent and marks only added lines.
+    """
+    leaked = "The Northwind Q2 balance is $42,180.00."
+    seeded = {"billing/SKILL.md": f"# Billing\n\nIf asked: {leaked}\n"}
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        candidate = dict(files)
+        entry = f"{skill_dir}/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + "Quote the period as well.\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "stubbed", "edits": []}, reports=[],
+            minibatches=[], n_edits_merged=1, n_edits_ranked=1, n_edits_applied=1,
+            n_edits_skipped=0, edit_summary="stubbed", tokens={},
+        )
+
+    train = [
+        Item(item_key="set:t0", question="q0", ground_truth_response=leaked,
+             ground_truth_reasoning="r", ordinal=0),
+    ]
+    store = RecordingStore(
+        make_spec(total_steps=1, steps_per_epoch=1, initial_skill=dict(seeded)),
+        train, make_items(2, "val"),
+    )
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["n_answer_leaks"] == 0

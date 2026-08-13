@@ -8,6 +8,7 @@ import Skeleton from "../ui/Skeleton.jsx";
 import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
+import { runWarnings } from "../../optimize_warnings.js";
 import { STATUS_TONE } from "./RunList.jsx";
 import ProgressChart from "./ProgressChart.jsx";
 import StepCard from "./StepCard.jsx";
@@ -173,17 +174,15 @@ export default function RunPanel({ runId, subject }) {
             {run.error_message}
           </Banner>
         )}
-        {run.overlap_item_keys?.length > 0 && (
-          <Banner tone="warning" title="Validation is not fully held out">
-            {run.overlap_item_keys.length} question(s) are in both splits, so part
-            of what the gate measured is the skill being fitted to them.
+        {/* One list, computed in one place. These used to be two hand-written
+            banners here; the rest of the rules (activation, skill size,
+            memorised answers) need the steps as well as the run, and rules
+            spread across a render function cannot be tested at all. */}
+        {runWarnings(run, steps).map((warning) => (
+          <Banner key={warning.id} tone={warning.tone} title={warning.title}>
+            {warning.body}
           </Banner>
-        )}
-        {run.detector?.preflight && !run.detector.preflight.ok && (
-          <Banner tone="warning" title="The skill could not be seen in the trace">
-            {run.detector.preflight.message}
-          </Banner>
-        )}
+        ))}
       </Card>
 
       <Card>

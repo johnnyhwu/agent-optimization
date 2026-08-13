@@ -50,7 +50,12 @@ async def run_optimization_task(run_id: uuid.UUID) -> None:
             # run's seams: the model that writes skill edits is built only for
             # the one path that uses it, so a misconfigured optimizer endpoint
             # cannot break evaluation.
-            seams = build_seams(spec.config, spec.secrets, include_optimizer=True)
+            # `include_workspace` for the version probe only: a step records the
+            # agent config it ran against, so a deploy midway through a run is
+            # visible rather than merely moving the accuracy.
+            seams = build_seams(
+                spec.config, spec.secrets, include_optimizer=True, include_workspace=True,
+            )
             await run_optimization(
                 run_id, store=store, seams=seams,
                 cancel_event=cancellation.event_for(run_id),

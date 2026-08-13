@@ -500,6 +500,18 @@ class OptimizationStep(Base):
     lines_added: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lines_removed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     files_touched: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Training gold answers this step copied verbatim into the skill, measured
+    # against the parent snapshot — the same comparison Part 2 shows. Counted
+    # when the candidate is written rather than when the overview is read: the
+    # search is a diff per step, and that page reloads while the run streams.
+    n_answer_leaks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The agent's config version as it was when this step ran. A run is a
+    # comparison, and it only holds if the other side does: a deploy to the agent
+    # server halfway through makes the steps before and after it measurements of
+    # different systems, and nothing else about the run would ever show it.
+    # NULL when the workspace seam is off or the probe failed — not "", which
+    # would read as disagreeing with every pinned version.
+    workspace_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     skill_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # The optimizer's own account of what it changed — the tooltip's second half.
     edit_summary: Mapped[str | None] = mapped_column(Text, nullable=True)

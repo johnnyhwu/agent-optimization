@@ -12,6 +12,7 @@ import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
 import { canStart, counts, makeSplit } from "../../optimize_split.js";
+import { estimateRun } from "../../optimize_cost.js";
 
 // The new-run wizard: a whole page, at its own address, with a static horizontal
 // step bar.
@@ -536,14 +537,22 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
   const c = counts(split);
   const epochs = Number(hyper.num_epochs ?? defaults.defaults.num_epochs);
   const batch = Number(hyper.batch_size ?? defaults.defaults.batch_size);
-  const stepsPerEpoch = Math.max(1, Math.ceil(c.train / Math.max(batch, 1)));
-  const totalSteps = epochs * stepsPerEpoch;
   const set = (key) => (e) => onHyper({ ...hyper, [key]: e.target.value });
 
-  // Every step answers the training batch once and the validation split once,
-  // plus one baseline. Stated as agent calls rather than as money, because the
-  // price of a call is the developer's to know and the count is ours.
-  const agentCalls = c.val + totalSteps * (Math.min(batch, c.train) + c.val);
+  // Stated as calls rather than as money: the models are whatever base URL the
+  // developer pointed this at, so their rates are theirs to know and a number
+  // with a currency symbol would be trusted more than a guess deserves. Three
+  // counts, because the expensive one is not the biggest one — a run makes
+  // thousands of agent calls on a small model and a few dozen optimizer calls
+  // on the largest one available, each carrying a minibatch of traces.
+  const estimate = estimateRun({
+    nTrain: c.train,
+    nVal: c.val,
+    epochs,
+    batchSize: batch,
+    minibatchSize: hyper.minibatch_size ?? defaults.defaults.minibatch_size,
+  });
+  const { stepsPerEpoch, totalSteps } = estimate;
 
   return (
     <>
@@ -580,8 +589,21 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           <div><dt>Training</dt><dd>{c.train} questions</dd></div>
           <div><dt>Validation</dt><dd>{c.val} questions{c.overlap ? ` · ${c.overlap} shared` : ""}</dd></div>
           <div><dt>Steps</dt><dd>{stepsPerEpoch} per epoch · {totalSteps} in total</dd></div>
-          <div><dt>Agent calls</dt><dd>≈ {agentCalls.toLocaleString()}</dd></div>
+          <div><dt>Agent calls</dt><dd>≈ {estimate.agentCalls.toLocaleString()}</dd></div>
+          <div><dt>Judge calls</dt><dd>≈ {estimate.judgeCalls.toLocaleString()}</dd></div>
+          <div>
+            <dt>Optimizer calls</dt>
+            <dd title="Analyst calls per minibatch, plus one merge and one ranking per step. Each analyst prompt carries a whole minibatch of traces.">
+              up to {estimate.optimizerCallsMax.toLocaleString()}
+            </dd>
+          </div>
         </dl>
+        <p className="opt-hint">
+          Counts, not currency — this platform never sees the price of a call.
+          The optimizer calls are the small number and usually the large bill:
+          they run on the biggest model configured and each one carries a
+          minibatch of truncated traces.
+        </p>
         {impls.agent === "fake" && (
           <Banner tone="info" title="Nothing real will be called">
             The agent, judge and optimizer seams are set to fake where marked, so
