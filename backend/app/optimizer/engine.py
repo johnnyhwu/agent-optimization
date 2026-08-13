@@ -416,6 +416,10 @@ async def _run_step(
         await store.record_minibatch(
             step_id,
             minibatch_no=record.minibatch_no, source_type=record.source_type,
+            # Not a column: the store uses it to stamp `minibatch_no` onto the
+            # training results this analyst was shown, which is the only record
+            # of which failures were grouped together.
+            item_keys=record.item_keys,
             n_items=record.n_items, prompt_system=record.prompt_system,
             prompt_user=record.prompt_user, raw_output=record.raw_output,
             truncation=record.truncation, chars_before=record.chars_before,

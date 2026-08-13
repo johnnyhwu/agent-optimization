@@ -803,3 +803,47 @@
 .opt-stepcard-sub { grid-column: 2; font-size: var(--text-micro); color: var(--muted); }
 .opt-stepcard-summary { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--text); }
 .opt-metric-toggle { display: flex; gap: 2px; }
+.opt-stepcard-links { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* --- Part 1: one rollout ------------------------------------------------- */
+.opt-rollout { display: flex; flex-direction: column; gap: var(--space-3); }
+.opt-rollout-body { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: var(--space-3); align-items: start; }
+.opt-rollout-list { max-height: 72vh; overflow: auto; }
+.opt-rollout-pane { min-width: 0; }
+.opt-groups { display: flex; flex-direction: column; }
+.opt-group + .opt-group { border-top: 1px solid var(--border); }
+.opt-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); background: var(--panel-2); border: 0; text-align: left; font-size: var(--text-sm); color: var(--text); cursor: pointer; }
+.opt-group-head:hover { background: var(--panel-3); }
+.opt-group-head.selected { background: var(--accent-soft); }
+.opt-group-head.static { cursor: default; }
+.opt-qlist { list-style: none; margin: 0; padding: 0; }
+.opt-qrow { display: grid; grid-template-columns: 18px 1fr auto; gap: var(--space-2); align-items: center; width: 100%; padding: var(--space-1) var(--space-3); background: none; border: 0; text-align: left; font-size: var(--text-sm); color: var(--text); cursor: pointer; }
+.opt-qrow:hover { background: var(--panel-2); }
+.opt-qrow.selected { background: var(--accent-soft); }
+.opt-qrow .opt-qtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt-qscore { font-variant-numeric: tabular-nums; font-size: var(--text-micro); color: var(--muted); }
+.opt-mark { font-weight: var(--fw-bold); }
+.opt-mark.correct { color: var(--green); }
+.opt-mark.partial { color: var(--amber); }
+.opt-mark.incorrect { color: var(--red); }
+.opt-mark.error, .opt-mark.pending { color: var(--muted); }
+
+/* --- The analyst's input and output -------------------------------------- */
+.opt-reflector { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+.opt-reflector-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-reflector-summary { margin: 0; padding-left: var(--space-4); font-size: var(--text-sm); display: flex; flex-direction: column; gap: 4px; }
+.opt-reflector-reasoning { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--muted); }
+.opt-truncation { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); padding-bottom: var(--space-1); }
+.opt-section h5 { margin: 0 0 4px; font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.opt-section.compact .opt-pre { max-height: 160px; }
+.opt-pre { margin: 0; padding: var(--space-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-micro); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
+.opt-editlist { display: flex; flex-direction: column; gap: var(--space-3); }
+.opt-edit { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-2); }
+.opt-edit-head { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-question { display: flex; flex-direction: column; gap: var(--space-2); }
+.opt-question-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-question-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); align-items: start; }
+@media (max-width: 1100px) {
+  .opt-rollout-body, .opt-question-cols { grid-template-columns: 1fr; }
+}

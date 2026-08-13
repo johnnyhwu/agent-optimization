@@ -7,6 +7,7 @@ import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
+import { href, navigate } from "../../useHashRoute.js";
 import { STATUS_TONE } from "./RunList.jsx";
 import ProgressChart from "./ProgressChart.jsx";
 import StepCard from "./StepCard.jsx";
@@ -222,6 +223,9 @@ export default function RunPanel({ runId, subject }) {
             downloading={downloading}
             onClose={() => setPinned(null)}
             onDownload={downloadSkill}
+            onOpenRollout={(stepNo, split) =>
+              navigate(href.optimizeRollout(runId, stepNo, split))
+            }
           />
         )}
       </Card>

@@ -277,7 +277,8 @@ def _reflect(
             # is indistinguishable from "the model had nothing to say".
             error = call["error"]
 
-        chars_before, entries = _truncation_for(batch, truncation_by_item)
+        chars_cut, entries = _truncation_for(batch, truncation_by_item)
+        chars_after = _batch_chars(batch)
         record = MinibatchRecord(
             minibatch_no=index,
             source_type=source_type,
@@ -287,9 +288,11 @@ def _reflect(
             prompt_user=call.get("user", ""),
             raw_output=patch,
             truncation=entries,
-            chars_before=chars_before,
-            chars_after=sum(len(str(e.get("obs", ""))) + len(str(e.get("cmd", "")))
-                            for i in batch for e in i.get("conversation", [])),
+            # One arrow, one quantity: what this batch would have been, and what
+            # it actually was. Anything else and the two ends of "41,200 →
+            # 12,000" are measuring different things.
+            chars_before=chars_after + chars_cut,
+            chars_after=chars_after,
             error=error,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
@@ -323,23 +326,35 @@ def _analyst_prompt(source_type: str, mode: str) -> str:
     return load_prompt(name, mode)
 
 
+def _batch_chars(batch: Sequence[dict]) -> int:
+    """How much text this minibatch carries, as the analyst received it."""
+    return sum(
+        len(str(event.get("obs", ""))) + len(str(event.get("cmd", "")))
+        for item in batch for event in item.get("conversation", [])
+    )
+
+
 def _truncation_for(
     batch: Sequence[dict], truncation_by_item: Mapping[str, list[dict]]
 ) -> tuple[int, list[dict]]:
-    """This minibatch's slice of the run's truncation ledger, plus the size before.
+    """This minibatch's slice of the ledger, and how many characters it lost.
 
     The ledger is per item and the display is per minibatch, so the join happens
     here — otherwise Part 1 would warn about truncation on batches that had none.
+
+    The count returned is what was *cut*, not the original size of the cut
+    slots. A ledger entry describes one span field, so summing its `before`
+    gives the size of the touched parts alone — a number with no relationship to
+    the size of the batch, and one that comes out smaller than the batch's
+    current size whenever the untouched turns outweigh the trimmed ones.
     """
     entries: list[dict] = []
-    before = 0
+    cut = 0
     for item in batch:
         item_entries = truncation_by_item.get(str(item["id"]), [])
         entries.extend(item_entries)
-        before += sum(int(entry.get("before", 0)) for entry in item_entries)
-    if not before:
-        before = sum(
-            len(str(event.get("obs", ""))) + len(str(event.get("cmd", "")))
-            for item in batch for event in item.get("conversation", [])
+        cut += sum(
+            int(entry.get("before", 0)) - int(entry.get("after", 0))
+            for entry in item_entries
         )
-    return before, entries
+    return cut, entries

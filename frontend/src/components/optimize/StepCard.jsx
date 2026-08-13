@@ -1,7 +1,7 @@
 import React from "react";
 import Badge from "../ui/Badge.jsx";
 import Button from "../ui/Button.jsx";
-import { IconDownload, IconX } from "../icons.jsx";
+import { IconChevronRight, IconDownload, IconX } from "../icons.jsx";
 
 // One step, pinned by clicking it on the chart. This is the half of the chart
 // that carries actions — pinning rather than hovering exists so that the
@@ -16,7 +16,7 @@ import { IconDownload, IconX } from "../icons.jsx";
 //     that exclusion is the first thing that makes an accuracy suspicious.
 //   Part 2 — what the step did to the skill, and whether the gate kept it.
 
-export default function StepCard({ step, run, onClose, onDownload, downloading }) {
+export default function StepCard({ step, run, onClose, onDownload, downloading, onOpenRollout }) {
   const isBaseline = step.step_no === 0;
   const isBest = run.best_step === step.step_no;
   const errors = (step.val_n_agent_error || 0) + (step.val_n_judge_error || 0)
@@ -79,6 +79,23 @@ export default function StepCard({ step, run, onClose, onDownload, downloading }
             sub={errors ? "excluded from every figure above, not counted wrong" : null}
             tone={errors ? "warning" : null}
           />
+          {/* Only offered for a split that was actually rolled out. Step 0 has
+              no training rollout — there was no candidate to train on yet — and
+              a button leading to a 404 is worse than no button. */}
+          <div className="opt-stepcard-links">
+            {step.val_n_items != null && (
+              <Button variant="ghost" icon={<IconChevronRight size={14} />}
+                      onClick={() => onOpenRollout(step.step_no, "val")}>
+                Validation questions
+              </Button>
+            )}
+            {!isBaseline && step.train_n_items != null && (
+              <Button variant="ghost" icon={<IconChevronRight size={14} />}
+                      onClick={() => onOpenRollout(step.step_no, "train")}>
+                Training questions & analyst calls
+              </Button>
+            )}
+          </div>
         </section>
 
         <section>

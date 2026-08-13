@@ -32,6 +32,8 @@ export const href = {
   optimize: () => "#/optimize",
   optimizeNew: () => "#/optimize/new",
   optimizeRun: (runId) => `#/optimize/${runId}`,
+  optimizeRollout: (runId, stepNo, split) =>
+    `#/optimize/${runId}/steps/${stepNo}/${split}`,
 };
 
 export function navigate(to) {
@@ -57,6 +59,18 @@ export function parseHash(hash) {
     // `new` is a reserved id rather than a query flag: the wizard is a whole
     // page, and a page deserves an address someone can link to.
     if (parts[1] === "new") return { section: "optimize", tier: "new" };
+    // #/optimize/{runId}/steps/{n}/{split} — one rollout in detail. Deep, but
+    // it is a page a developer sends to a colleague ("look at what the analyst
+    // was shown here"), so every part of it belongs in the address.
+    if (parts[1] && parts[2] === "steps" && parts[3] != null) {
+      return {
+        section: "optimize",
+        tier: "rollout",
+        runId: parts[1],
+        stepNo: Number(parts[3]),
+        split: parts[4] === "val" ? "val" : "train",
+      };
+    }
     if (parts[1]) return { section: "optimize", tier: "run", runId: parts[1] };
     return { section: "optimize", tier: "runs" };
   }

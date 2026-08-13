@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -407,7 +407,37 @@ class DbOptimizationStore:
         return rollout.id
 
     async def record_minibatch(self, step_id: uuid.UUID, **fields: Any) -> None:
+        """The analyst call, and the number stamped on the questions it consumed.
+
+        `item_keys` is not a column — it is the link written back onto
+        `optimization_results.minibatch_no`, which cannot be set when the
+        rollout row is created because the split into minibatches does not exist
+        until the reflect stage has seen the results. Nothing else records which
+        failures an analyst was shown together, so without this the grouping on
+        Part 1 would have to be invented at read time.
+
+        Scoped to this step's *training* rollout. Not to the run: every step
+        holds the same item keys, so a run-wide update would renumber every
+        earlier step on each new one. Not to both splits: an overlapping
+        question has a row in each, and numbering the validation row would show
+        held-out data as evidence for an edit.
+        """
+        item_keys = fields.pop("item_keys", None)
         self.session.add(OptimizationMinibatch(step_id=step_id, **fields))
+        if item_keys:
+            await self.session.execute(
+                update(OptimizationResult)
+                .where(
+                    OptimizationResult.item_key.in_(item_keys),
+                    OptimizationResult.rollout_id.in_(
+                        select(OptimizationRollout.id).where(
+                            OptimizationRollout.step_id == step_id,
+                            OptimizationRollout.split == "train",
+                        )
+                    ),
+                )
+                .values(minibatch_no=fields.get("minibatch_no"))
+            )
         await self.session.commit()
 
     async def record_skill(

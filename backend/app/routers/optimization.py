@@ -37,6 +37,8 @@ from app.models import (
     EvalSet,
     EvalSetRole,
     OptimizationItem,
+    OptimizationMinibatch,
+    OptimizationResult,
     OptimizationRollout,
     OptimizationRun,
     OptimizationSkill,
@@ -54,6 +56,9 @@ from app.schemas import (
     ImportPreviewRequest,
     OptimizationConfig,
     OptimizationRunCreate,
+    OptimizationMinibatchOut,
+    OptimizationResultOut,
+    OptimizationRolloutDetail,
     OptimizationRunDetail,
     OptimizationRunOut,
     OptimizationRunPage,
@@ -62,8 +67,10 @@ from app.schemas import (
     PreviewSource,
     SkillCheck,
     SkillGroup,
+    TraceView,
 )
 from app.services import judge_prompt, run_config
+from app.services.trace_view import resolve_trace_spans, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
 router = APIRouter(prefix="/optimization", tags=["optimization"])
@@ -939,6 +946,267 @@ async def optimization_progress(
             hub.unsubscribe(run_id, queue)
 
     return EventSourceResponse(event_gen())
+
+
+SPLITS = ("train", "val")
+
+
+async def _load_rollout(
+    session: AsyncSession, run_id: uuid.UUID, step_no: int, split: str, subject: str
+):
+    """`(run, step, rollout)` for one split of one step, or the right refusal."""
+    if split not in SPLITS:
+        # A path segment can hold anything. 400 rather than 404: the run and the
+        # step may well exist, and "not found" would send a developer looking
+        # for the wrong mistake.
+        raise HTTPException(
+            status_code=400, detail=f"split must be one of {', '.join(SPLITS)}"
+        )
+    run = await _load_visible_run(session, run_id, subject)
+    step = await session.scalar(
+        select(OptimizationStep).where(
+            OptimizationStep.run_id == run_id, OptimizationStep.step_no == step_no
+        )
+    )
+    if step is None:
+        raise HTTPException(status_code=404, detail=f"this run has no step {step_no}")
+    rollout = await session.scalar(
+        select(OptimizationRollout).where(
+            OptimizationRollout.step_id == step.id, OptimizationRollout.split == split
+        )
+    )
+    # Step 0 has no training rollout — there is no candidate to train on yet — so
+    # this is a reachable state, not a corrupt one. An empty page with zeroed
+    # figures would read as "the baseline scored 0 on training".
+    if rollout is None:
+        raise HTTPException(
+            status_code=404, detail=f"step {step_no} has no {split} rollout"
+        )
+    return run, step, rollout
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_no}/rollouts/{split}",
+    response_model=OptimizationRolloutDetail,
+)
+async def get_rollout_detail(
+    run_id: uuid.UUID,
+    step_no: int,
+    split: str,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Part 1: what this rollout measured, and what the analysts made of it.
+
+    One payload, because the parts are meaningless apart — an accuracy without
+    its questions, a minibatch without the failures it was built from — and
+    three requests would each need their own loading state on one screen.
+
+    The questions come from `optimization_items`, the run's own snapshot, never
+    from `questions`. An eval set edited since the run would otherwise put
+    today's text beside a verdict about yesterday's.
+    """
+    run, step, rollout = await _load_rollout(session, run_id, step_no, split, subject)
+
+    results = (
+        await session.scalars(
+            select(OptimizationResult)
+            .where(OptimizationResult.rollout_id == rollout.id)
+            .order_by(OptimizationResult.minibatch_no, OptimizationResult.item_key)
+        )
+    ).all()
+    items = {
+        item.item_key: item
+        for item in (
+            await session.scalars(
+                select(OptimizationItem).where(
+                    OptimizationItem.run_id == run_id, OptimizationItem.split == split
+                )
+            )
+        ).all()
+    }
+    # Validation is measured, never reflected on. Returning the step's
+    # minibatches here regardless of split would show analyst calls built from
+    # training failures beside held-out questions, implying a connection the
+    # gate depends on not existing.
+    minibatches = (
+        (
+            await session.scalars(
+                select(OptimizationMinibatch)
+                .where(OptimizationMinibatch.step_id == step.id)
+                .order_by(OptimizationMinibatch.minibatch_no)
+            )
+        ).all()
+        if split == "train"
+        else []
+    )
+    by_batch: dict[int, list[str]] = {}
+    for row in results:
+        if row.minibatch_no is not None:
+            by_batch.setdefault(row.minibatch_no, []).append(row.item_key)
+
+    return OptimizationRolloutDetail(
+        run_id=run_id,
+        step_no=step_no,
+        split=split,
+        epoch_no=step.epoch_no,
+        step_in_epoch=step.step_in_epoch,
+        skill_step_no=rollout.skill_step_no,
+        parent_step_no=step.parent_step_no,
+        step_status=step.status,
+        gate_action=step.gate_action,
+        gate_reject_reason=step.gate_reject_reason,
+        edit_summary=step.edit_summary,
+        n_items=rollout.n_items,
+        n_scored=rollout.n_scored,
+        n_agent_error=rollout.n_agent_error,
+        n_judge_error=rollout.n_judge_error,
+        hard=_num(rollout.hard),
+        soft=_num(rollout.soft),
+        activation_rate=_num(rollout.activation_rate),
+        n_activated=rollout.n_activated,
+        latency_min_ms=rollout.latency_min_ms,
+        latency_p50_ms=rollout.latency_p50_ms,
+        latency_max_ms=rollout.latency_max_ms,
+        aborted=rollout.aborted,
+        abort_reason=rollout.abort_reason,
+        results=[_result_out(row, items.get(row.item_key)) for row in results],
+        minibatches=[
+            OptimizationMinibatchOut(
+                minibatch_no=batch.minibatch_no,
+                source_type=batch.source_type,
+                n_items=batch.n_items,
+                item_keys=sorted(by_batch.get(batch.minibatch_no, [])),
+                prompt_system=batch.prompt_system,
+                prompt_user=batch.prompt_user,
+                raw_output=batch.raw_output,
+                truncation=list(batch.truncation or []),
+                chars_before=batch.chars_before,
+                chars_after=batch.chars_after,
+                error=batch.error,
+                duration_ms=batch.duration_ms,
+            )
+            for batch in minibatches
+        ],
+    )
+
+
+def _result_out(row: OptimizationResult, item) -> OptimizationResultOut:
+    return OptimizationResultOut(
+        id=row.id,
+        item_key=row.item_key,
+        question=item.question if item else None,
+        ground_truth_response=item.ground_truth_response if item else None,
+        correlation_id=row.correlation_id,
+        agent_response=row.agent_response,
+        agent_latency_ms=row.agent_latency_ms,
+        verdict=row.verdict,
+        judge_score=_num(row.judge_score),
+        judge_comment=row.judge_comment,
+        status=row.status,
+        failure_kind=row.failure_kind,
+        error_message=row.error_message,
+        activated=row.activated,
+        skills_read=row.skills_read,
+        detector_hit=row.detector_hit,
+        trace_ready=row.trace_ready,
+        trace_error=row.trace_error,
+        minibatch_no=row.minibatch_no,
+    )
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_no}/rollouts/{split}/results/{result_id}/trace",
+    response_model=TraceView,
+)
+async def get_rollout_result_trace(
+    run_id: uuid.UUID,
+    step_no: int,
+    split: str,
+    result_id: uuid.UUID,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """One question's spans, in the shape the evaluation pages already render.
+
+    Reusing `TraceView` is the whole point: the span viewer, its five trace
+    states and the structured payload rendering all arrive unchanged, and a
+    trace looks the same here as it does in Evaluation — which is what makes the
+    two comparable at all.
+
+    There is no diagnosis for an optimization result. Diagnoses belong to
+    `question_results`, and inventing a second table for a view that already has
+    the analyst's own reasoning next to it would be a worse answer to the same
+    question.
+    """
+    run, step, rollout = await _load_rollout(session, run_id, step_no, split, subject)
+
+    # Scoped to this rollout, not looked up by id alone: the id is a uuid in a
+    # path that already names a run, a step and a split, and trusting it on its
+    # own would make every other segment decorative.
+    result = await session.scalar(
+        select(OptimizationResult).where(
+            OptimizationResult.id == result_id,
+            OptimizationResult.rollout_id == rollout.id,
+        )
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such result in this rollout")
+
+    item = await session.scalar(
+        select(OptimizationItem).where(
+            OptimizationItem.run_id == run_id,
+            OptimizationItem.split == split,
+            OptimizationItem.item_key == result.item_key,
+        )
+    )
+    traceable = result.status not in ("failed", "cancelled")
+    config, secrets = (run.config, run.secrets) if traceable else (None, None)
+
+    # Hand the connection back before touching the trace store: `resolve_trace_spans`
+    # polls, and each attempt can wait the full Langfuse timeout. Holding a
+    # pooled connection through that takes the backend down with a slow trace
+    # store rather than just this view (see app/db.py, and results.py which does
+    # the same thing for the same reason).
+    await session.commit()
+
+    spans: list = []
+    trace_error: str | None = None
+    if not traceable:
+        state = "no_trace"
+    else:
+        try:
+            seams = build_seams(config, secrets)
+        except Exception as exc:  # noqa: BLE001 — the developer needs the reason
+            state, trace_error = "error", f"{type(exc).__name__}: {exc}"
+        else:
+            trace, fetch_error, fatal = await resolve_trace_spans(
+                result.correlation_id, seams.trace
+            )
+            if trace is not None:
+                state = "ready"
+                spans = [span_to_out(s) for s in trace.spans]
+            elif fetch_error is not None and fatal:
+                state, trace_error = "error", fetch_error
+            else:
+                # Still ingesting. Surface whatever the run itself hit, so
+                # "waiting" does not hide an authentication failure from an hour
+                # ago.
+                state, trace_error = "generating", fetch_error or result.trace_error
+
+    return TraceView(
+        trace_state=state,
+        trace_error=trace_error,
+        spans=spans,
+        analysis=None,
+        verdict=result.verdict,
+        judge_comment=result.judge_comment,
+        agent_response=result.agent_response,
+        ground_truth_response=item.ground_truth_response if item else None,
+        ground_truth_reasoning=item.ground_truth_reasoning if item else None,
+        error_message=result.error_message,
+        failure_kind=result.failure_kind,
+    )
 
 
 @router.get("/runs/{run_id}/skill/download")

@@ -611,3 +611,89 @@ async def _all_runs():
     from sqlalchemy import select
 
     return select(OptimizationRun)
+
+
+# --- The chart's payload -----------------------------------------------------
+#
+# Added after mutation testing found that `_step_summary` could drop the gate
+# verdict entirely with the whole suite still green. The browser's chart tests
+# cover what it does with `gate_action`; nothing covered whether the server
+# sends it.
+
+
+async def test_the_step_summary_carries_the_gate_verdict(session, monkeypatch):
+    """Accepted or rejected is the one thing the chart cannot derive.
+
+    Every validation marker's shape comes from `gate_action` — filled for a
+    candidate that was kept, a grey cross for one that was not. Without it every
+    point renders identically, and a run that kept nothing looks exactly like
+    one that improved at every step.
+    """
+    from app.models import OptimizationRollout, OptimizationStep
+
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject="alice", session=session
+    )
+
+    for step_no, action, reason in [(0, None, None), (1, "accept_new_best", None),
+                                    (2, "reject", "accuracy")]:
+        step = OptimizationStep(
+            run_id=run.id, step_no=step_no, epoch_no=0 if not step_no else 1,
+            step_in_epoch=step_no, status="done",
+            gate_action=action, gate_reject_reason=reason,
+            best_score=0.75, current_score=0.75,
+        )
+        session.add(step)
+        await session.flush()
+        session.add(OptimizationRollout(
+            step_id=step.id, split="val", skill_step_no=step_no,
+            n_items=6, n_scored=6, hard=0.5 + step_no / 10, soft=0.6,
+        ))
+    await session.commit()
+
+    detail = await opt.get_optimization_run(run.id, subject="alice", session=session)
+    assert [s.gate_action for s in detail.steps] == [None, "accept_new_best", "reject"]
+    assert detail.steps[2].gate_reject_reason == "accuracy"
+
+
+async def test_the_step_summary_reports_the_two_rollouts_apart(session, monkeypatch):
+    """Train and validation are two different skills measured on two split sets.
+
+    They are named apart on the wire for that reason. A summary that filled both
+    from one rollout would draw the two series on top of each other, and the
+    gap between them — the only visible sign of overfitting — would vanish.
+    """
+    from app.models import OptimizationRollout, OptimizationStep
+
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject="alice", session=session
+    )
+    step = OptimizationStep(
+        run_id=run.id, step_no=1, epoch_no=1, step_in_epoch=1, status="done",
+        gate_action="reject", gate_reject_reason="accuracy",
+    )
+    session.add(step)
+    await session.flush()
+    session.add(OptimizationRollout(
+        step_id=step.id, split="train", skill_step_no=0,
+        n_items=6, n_scored=6, hard=0.9, soft=0.95, latency_p50_ms=1100,
+    ))
+    session.add(OptimizationRollout(
+        step_id=step.id, split="val", skill_step_no=1,
+        n_items=6, n_scored=5, n_agent_error=1, hard=0.2, soft=0.3, latency_p50_ms=2200,
+    ))
+    await session.commit()
+
+    summary = (
+        await opt.get_optimization_run(run.id, subject="alice", session=session)
+    ).steps[0]
+    assert (summary.train_hard, summary.val_hard) == (0.9, 0.2)
+    assert (summary.train_soft, summary.val_soft) == (0.95, 0.3)
+    assert (summary.train_latency_p50_ms, summary.val_latency_p50_ms) == (1100, 2200)
+    # The exclusion belongs to the split that suffered it.
+    assert (summary.train_n_agent_error, summary.val_n_agent_error) == (0, 1)
+    assert (summary.train_n_scored, summary.val_n_scored) == (6, 5)

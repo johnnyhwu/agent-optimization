@@ -469,3 +469,68 @@ def test_the_mode_chooses_the_analyst_prompt():
     routing_system = routing_client.calls[0]["system"]
     assert isolated_system != routing_system
     assert "description" in routing_system.lower()
+
+
+# --- What the truncation figures actually mean ------------------------------
+#
+# Added in Phase 6, when Part 1 started printing these two numbers side by side
+# as "41,200 → 12,000 chars" and a real run produced 24,165 → 130,972. They were
+# measuring different things: the "after" was the whole batch, the "before" was
+# only the slots that had been cut.
+
+
+def _spoken_items(n, *, chars=500):
+    """Items whose conversations carry `cmd`/`obs`, the keys the sizes are read from.
+
+    The fixture above uses `role`/`content`, which no size calculation looks at
+    — so a batch built from it measures zero characters however much is in it,
+    and any comparison between the two figures holds trivially.
+    """
+    return [
+        {
+            "id": f"q_{i}",
+            "hard": 0.0,
+            "soft": 0.0,
+            "task_description": f"question {i}",
+            "reference_text": "the gold answer",
+            "n_turns": 1,
+            "conversation": [{"cmd": "search: invoices", "obs": "x" * chars}],
+        }
+        for i in range(n)
+    ]
+
+
+def test_the_before_and_after_sizes_describe_the_same_batch():
+    """They are rendered as one arrow, so they have to measure one thing.
+
+    `chars_after` is the size of the batch as the analyst received it. The
+    matching "before" is therefore the size that batch *would* have been without
+    truncation — not the sum of the original sizes of the cut slots, which
+    counts only the parts that were touched and leaves out everything that was
+    not. Those two are unrelated quantities, and on a batch whose untouched
+    turns outweigh its cut ones the "before" comes out smaller than the "after":
+    an arrow pointing the wrong way, over a number that claims to show how much
+    evidence was lost.
+    """
+    ledger = {
+        "q_0": [{"item_key": "q_0", "span_index": 2, "field": "obs",
+                 "before": 900, "after": 400, "stage": 1}],
+    }
+    record = run(items=_spoken_items(2, chars=500), truncation_by_item=ledger).minibatches[0]
+
+    assert record.chars_before > record.chars_after
+    # Exactly the 500 characters the ledger says were cut, no more and no less.
+    assert record.chars_before - record.chars_after == 500
+
+
+def test_a_batch_that_was_not_truncated_reports_no_change(): 
+    """Equal, not zero and not absent.
+
+    "Nothing was truncated" is the reassuring case, and it is only reassuring if
+    it is distinguishable from "we did not measure". The page prints the pair
+    either way.
+    """
+    record = run(items=_spoken_items(2, chars=500), truncation_by_item={}).minibatches[0]
+    assert record.chars_before == record.chars_after
+    assert record.chars_after > 0
+    assert record.truncation == []

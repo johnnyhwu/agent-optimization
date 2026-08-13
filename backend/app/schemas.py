@@ -878,3 +878,103 @@ class OptimizationRunCreate(BaseModel):
     config: OptimizationConfig = Field(default_factory=OptimizationConfig)
     secrets: OptimizationSecrets = Field(default_factory=OptimizationSecrets)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
+
+
+# --- Optimize, Part 1: one rollout in detail --------------------------------
+
+
+class OptimizationResultOut(BaseModel):
+    """One question answered once, with the run's snapshot of what it asked.
+
+    `question` and `ground_truth_response` come from `optimization_items`, not
+    from `questions`: the run froze them at creation, and an eval set edited
+    since would otherwise put today's text beside a six-week-old verdict.
+    """
+
+    id: uuid.UUID
+    item_key: str
+    question: str | None = None
+    ground_truth_response: str | None = None
+    correlation_id: str
+    agent_response: str | None = None
+    agent_latency_ms: int | None = None
+    verdict: str | None = None
+    judge_score: float | None = None
+    judge_comment: str | None = None
+    status: str  # pending | done | failed
+    failure_kind: str | None = None
+    error_message: str | None = None
+    # NULL is a third answer, not a false: the detectors could not tell whether
+    # the agent read the skill. Reporting it as "no" would make an unobservable
+    # agent look like one that ignored its skill.
+    activated: bool | None = None
+    skills_read: list[str] | None = None
+    detector_hit: str | None = None
+    trace_ready: bool = False
+    trace_error: str | None = None
+    # Which analyst call this question was evidence for. NULL on validation,
+    # which is never reflected on, and on training questions the reflect stage
+    # did not use (a success, when the run is failure-only).
+    minibatch_no: int | None = None
+
+
+class OptimizationMinibatchOut(BaseModel):
+    """One analyst call: the prompt sent, the patch proposed, what was cut.
+
+    The prompt is stored rather than rebuilt because it is the evidence. It is
+    also already truncated, which is what makes it safe to keep verbatim — its
+    size is bounded by the reflect budget by construction.
+    """
+
+    minibatch_no: int
+    source_type: str  # failure | success
+    n_items: int
+    item_keys: list[str] = Field(default_factory=list)
+    prompt_system: str | None = None
+    prompt_user: str | None = None
+    raw_output: dict | None = None
+    # [{item_key, span_index, field, before, after, stage}] — the cascade's
+    # ledger. Shown in the UI, because a developer reading a proposal built on a
+    # trace that lost 70% of its tool output should be told so on the page.
+    truncation: list[dict] = Field(default_factory=list)
+    chars_before: int | None = None
+    chars_after: int | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+
+
+class OptimizationRolloutDetail(BaseModel):
+    """Part 1: one step, one split — the numbers, the questions, the analysts."""
+
+    run_id: uuid.UUID
+    step_no: int
+    split: str
+    epoch_no: int
+    step_in_epoch: int
+    # Which skill version was rolled out. On training this is the parent step's
+    # accepted skill, not this step's candidate — the header has to say so or
+    # the two rollouts of a step look like they measured the same thing.
+    skill_step_no: int
+    parent_step_no: int | None = None
+    step_status: str
+    gate_action: str | None = None
+    gate_reject_reason: str | None = None
+    edit_summary: str | None = None
+
+    n_items: int = 0
+    n_scored: int = 0
+    n_agent_error: int = 0
+    n_judge_error: int = 0
+    hard: float | None = None
+    soft: float | None = None
+    activation_rate: float | None = None
+    n_activated: int = 0
+    latency_min_ms: int | None = None
+    latency_p50_ms: int | None = None
+    latency_max_ms: int | None = None
+    aborted: bool = False
+    abort_reason: str | None = None
+
+    results: list[OptimizationResultOut] = Field(default_factory=list)
+    # Empty on validation, which is measured and never reflected on.
+    minibatches: list[OptimizationMinibatchOut] = Field(default_factory=list)

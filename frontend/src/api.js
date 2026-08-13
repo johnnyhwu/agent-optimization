@@ -271,6 +271,17 @@ export const api = {
   deleteOptimizationRun: (runId) => req("DELETE", `/optimization/runs/${runId}`),
   openOptimizationProgress: (runId) =>
     openStream(`/optimization/runs/${runId}/progress`),
+  // Part 1: one step, one split — the rollout's questions and the analyst calls
+  // they fed, in a single payload because the parts mean nothing apart.
+  getRolloutDetail: (runId, stepNo, split) =>
+    req("GET", `/optimization/runs/${runId}/steps/${stepNo}/rollouts/${split}`),
+  // One question's spans, in the same `TraceView` shape the evaluation pages
+  // render — which is what lets the span viewer be reused unchanged.
+  getRolloutResultTrace: (runId, stepNo, split, resultId) =>
+    req(
+      "GET",
+      `/optimization/runs/${runId}/steps/${stepNo}/rollouts/${split}/results/${resultId}/trace`,
+    ),
   // The run's one deliverable. `step` is "best" or a step number — any step is
   // fetchable, and the manifest inside says whether the gate kept it.
   downloadOptimizedSkill: (runId, step = "best", fallbackName) =>

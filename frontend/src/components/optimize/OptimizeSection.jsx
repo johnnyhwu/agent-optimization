@@ -1,5 +1,6 @@
 import React from "react";
 import { href, navigate } from "../../useHashRoute.js";
+import RolloutDetail from "./RolloutDetail.jsx";
 import RunList from "./RunList.jsx";
 import RunPanel from "./RunPanel.jsx";
 import Wizard from "./Wizard.jsx";
@@ -14,6 +15,21 @@ import Wizard from "./Wizard.jsx";
 
 export default function OptimizeSection({ route, subject }) {
   if (route.tier === "new") return <Wizard />;
+  // Part 1 takes the whole width too. It is two columns of its own — the
+  // grouped question list and the analyst pane, which itself opens into the
+  // two-column span viewer — and none of that survives being folded into the
+  // right half of a page that already has a run rail down its left.
+  if (route.tier === "rollout") {
+    return (
+      <RolloutDetail
+        key={`${route.runId}/${route.stepNo}/${route.split}`}
+        runId={route.runId}
+        stepNo={route.stepNo}
+        split={route.split}
+        onBack={() => navigate(href.optimizeRun(route.runId))}
+      />
+    );
+  }
 
   return (
     <div className="opt-section">
