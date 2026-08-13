@@ -228,6 +228,37 @@ class SynthesisClient(Protocol):
     async def synthesize(self, trace: Trace, question: str, agent_response: str) -> str: ...
 
 
+class OptimizerClient(Protocol):
+    """The model that turns scored rollouts into skill edits (Optimize, §Stage 3).
+
+    SkillOpt's "optimizer" role: it reflects on a minibatch of trajectories,
+    merges the resulting patches, and ranks them against a learning-rate budget.
+    Distinct from the judge (which scores one answer) and from the diagnosis
+    model (which localises one failure to a span) — this one reasons over a whole
+    batch and outputs edits.
+
+    **This seam is synchronous, and it is the only one that is.** The vendored
+    SkillOpt modules that call it are synchronous and parallelise themselves with
+    a thread pool, so the engine runs that whole stage inside `asyncio.to_thread`
+    (see `app/optimizer/VENDORED.md`). Making this `async` would mean re-entering
+    the event loop from a worker thread — the one thing that arrangement exists
+    to avoid. The signature matches upstream's `chat_optimizer` exactly, so the
+    vendored files differ from upstream by one import line each.
+    """
+
+    model_name: str
+
+    def chat_optimizer(
+        self,
+        system: str,
+        user: str,
+        max_completion_tokens: int = 16384,
+        retries: int = 3,
+        stage: str = "optimizer",
+        timeout: int | None = None,
+    ) -> tuple[str, dict[str, int]]: ...
+
+
 @runtime_checkable
 class WorkspaceClient(Protocol):
     """Read the agent's config and skill files, so the playground can edit from

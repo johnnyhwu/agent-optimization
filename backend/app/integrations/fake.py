@@ -456,3 +456,97 @@ class FakeWorkspaceClient:
             [_FAKE_CONFIG, _FAKE_SKILL_FILES], sort_keys=True
         ).encode()
         return f"fake.{hashlib.sha256(payload).hexdigest()[:7]}"
+
+
+class FakeOptimizerClient:
+    """A deterministic stand-in for the model that writes skill edits.
+
+    Without this the Optimize section could not be demonstrated on Docker alone,
+    and "the whole product runs on nothing but Docker" is a property the fake
+    layer exists to preserve — every other seam already has a fake.
+
+    Deterministic on the prompt rather than random, for two reasons. A demo that
+    produced different edits on every run would make the diff view impossible to
+    reason about; and the engine caches validation scores by skill hash
+    (upstream's `sel_cache`), so a fake that returned a fresh patch each time
+    would never exercise the cache-hit path.
+
+    It answers all three stages the vendored modules ask for — `analyst`,
+    `merge`, `ranking` — in their JSON contracts, and it deliberately produces a
+    mix of outcomes across steps: an edit to `SKILL.md`, an edit to a reference
+    file, and occasionally a patch whose target string does not exist, so the
+    "some edits were skipped" path in the diff view has something to show.
+    """
+
+    model_name = "fake-optimizer"
+
+    def chat_optimizer(
+        self,
+        system: str,
+        user: str,
+        max_completion_tokens: int = 16384,
+        retries: int = 3,
+        stage: str = "optimizer",
+        timeout: int | None = None,
+    ) -> tuple[str, dict[str, int]]:
+        seed = int(hashlib.sha256(user.encode()).hexdigest()[:8], 16)
+        usage = {"prompt_tokens": len(user) // 4, "completion_tokens": 120, "calls": 1}
+
+        if stage == "ranking":
+            # Keep the first few in the order they arrived; the real ranker
+            # reorders by relevance, which a fake cannot meaningfully imitate.
+            return json.dumps({"selected_indices": [0, 1, 2, 3]}), usage
+
+        if stage == "merge":
+            return json.dumps({
+                "reasoning": "fake merge: near-duplicate edits collapsed",
+                "edits": self._edits(seed),
+            }), usage
+
+        # The analyst stage, which also carries the failure summary Part 1 shows.
+        return json.dumps({
+            "batch_size": user.count("Question:") or 1,
+            "failure_summary": [
+                {
+                    "failure_type": "rule_missing",
+                    "count": 2,
+                    "description": "no rule about stating the period alongside the figure",
+                },
+                {
+                    "failure_type": "answer_format",
+                    "count": 1,
+                    "description": "the currency was omitted from the amount",
+                },
+            ],
+            "patch": {
+                "reasoning": "fake analyst: two common patterns across the minibatch",
+                "edits": self._edits(seed),
+            },
+        }), usage
+
+    @staticmethod
+    def _edits(seed: int) -> list[dict]:
+        rng = random.Random(seed)
+        rule = rng.randint(100, 999)
+        edits = [
+            {
+                "op": "append",
+                "path": "billing/SKILL.md",
+                "content": f"{rule}. State the period alongside every figure.",
+            },
+            {
+                "op": "append",
+                "path": "billing/references/refunds.md",
+                "content": f"- Rule {rule}: quote the currency with the amount.",
+            },
+        ]
+        if seed % 3 == 0:
+            # A target that will not be found, so the diff view's "proposed but
+            # not applied" section is reachable in the demo.
+            edits.append({
+                "op": "replace",
+                "path": "billing/SKILL.md",
+                "target": "a line this skill does not contain",
+                "content": "unreachable",
+            })
+        return edits

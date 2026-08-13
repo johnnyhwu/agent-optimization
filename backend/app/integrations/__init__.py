@@ -31,6 +31,7 @@ from app.integrations.base import (
     AgentClient,
     DiagnosisClient,
     JudgeClient,
+    OptimizerClient,
     SynthesisClient,
     TraceClient,
     WorkspaceClient,
@@ -39,6 +40,7 @@ from app.integrations.fake import (
     FakeAgentClient,
     FakeDiagnosisClient,
     FakeJudgeClient,
+    FakeOptimizerClient,
     FakeSynthesisClient,
     FakeTraceClient,
     FakeWorkspaceClient,
@@ -62,6 +64,10 @@ class Seams:
     diagnosis: DiagnosisClient
     synthesis: SynthesisClient | None = None
     workspace: WorkspaceClient | None = None
+    # Only an optimization run uses this one, and it is the only seam here that
+    # is synchronous — see `base.OptimizerClient`. Defaulted like the two above
+    # so every existing caller keeps working unchanged.
+    optimizer: OptimizerClient | None = None
 
 
 def _get(config: dict | None, key: str):
@@ -78,6 +84,7 @@ def build_seams(
     config: dict | None = None,
     secrets: dict | None = None,
     include_workspace: bool = False,
+    include_optimizer: bool = False,
 ) -> Seams:
     """Build the clients for one run. Blank config falls back to the environment.
 
@@ -168,9 +175,25 @@ def build_seams(
         else:
             workspace = FakeWorkspaceClient()
 
+    # Only an optimization run needs this, so like `include_workspace` it is
+    # opt-in: a deployment with OPTIMIZER_IMPL=real and no LLM base URL must not
+    # break the eval path, which never touches it.
+    optimizer: OptimizerClient | None = None
+    if include_optimizer:
+        if settings.optimizer_impl == "real":
+            from app.integrations.real.optimizer import LlmOptimizerClient
+
+            optimizer = LlmOptimizerClient(
+                model=_get(config, "optimizer_model"),
+                base_url=_get(config, "llm_base_url"),
+                api_key=_get(secrets, "llm_api_key"),
+            )
+        else:
+            optimizer = FakeOptimizerClient()
+
     return Seams(
         agent=agent, judge=judge, trace=trace, diagnosis=diagnosis,
-        synthesis=synthesis, workspace=workspace,
+        synthesis=synthesis, workspace=workspace, optimizer=optimizer,
     )
 
 

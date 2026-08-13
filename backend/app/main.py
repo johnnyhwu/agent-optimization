@@ -190,6 +190,10 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
             # Fake means what is shown is canned, which the editor says so
             # nobody edits a fake skill expecting the real agent to have it.
             "workspace": settings.workspace_impl,
+            # Writes the skill edits in an optimization run. Fake means the
+            # edits are canned, so the Optimize section is demonstrable on
+            # Docker alone like every other part of the product.
+            "optimizer": settings.optimizer_impl,
         },
     }
 

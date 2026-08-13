@@ -1,0 +1,340 @@
+"""Our half of SkillOpt's environment contract: rolling out and scoring.
+
+Upstream calls this an `EnvAdapter`: given a batch and a skill, run the tasks and
+return `{"id", "hard", "soft"}` per item. Its own environments do that locally —
+a prediction scored against a gold answer by exact match, F1 or ANLS. Ours is an
+HTTP agent and an LLM judge, which changes two things:
+
+**There is no local evaluator.** SkillOpt ships none that fits free-form answers
+("ACME owed $42,180.00." against "As of the end of Q2, ACME's outstanding balance
+was $42,180." scores ~0.3 on token F1), so `hard`/`soft` come from this
+platform's own judge. That is also what keeps the numbers comparable with the
+Evaluation section: the stated workflow is optimise, download the skill, put it
+on the agent, re-run a normal eval — and two different graders would break it.
+
+**Items fail for reasons the skill cannot fix.** An agent timeout is not the
+skill being wrong. `score_rollout` excludes those from every figure and counts
+them separately; past a threshold it refuses to score the batch at all. See its
+docstring for why refusing beats scoring a fraction.
+
+The skill under test reaches the agent as a per-request workspace override — the
+same mechanism the playground uses (`WorkspaceOverride`, spec §17.4), so nothing
+is written back to the agent server and a run cannot disturb the deployed agent.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import statistics
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Iterable, Mapping, Sequence
+
+from app.config import settings
+from app.integrations import Seams
+from app.integrations.base import LlmOutputError, WorkspaceOverride
+from app.optimizer.detector import DEFAULT_PATH_PATTERNS, detect_activation
+from app.optimizer.store import Item, ResultRow, RolloutSummary
+from app.pipeline import RunCancelled, call_agent, call_judge, clip, wait_for_trace
+from app.services.failure_text import describe_failure
+
+log = logging.getLogger(__name__)
+
+# Above this share of a batch failing, the step is not scored at all.
+DEFAULT_ERROR_THRESHOLD = 0.2
+
+
+def build_workspace_skills(
+    mode: str,
+    skill_files: Mapping[str, str],
+    workspace_baseline: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """The complete file set to send with one call.
+
+    `skills` in an override *replaces* the agent's directory for that call (only
+    replacement can express deleting a file), so this is always the whole set,
+    never a patch.
+
+    The two modes send different things, and that is the experiment:
+
+      * `isolated` sends **only** the skill under optimisation. The agent then
+        either uses it or does not — there is no second skill for it to pick
+        instead, so accuracy moves with the body and nothing else.
+      * `routing` sends the whole workspace with the candidate swapped in,
+        because a description exists to win a choice and there has to be a choice
+        to win. The other skills come from a snapshot pinned at run start: if
+        they moved mid-run, two steps would not be comparable.
+    """
+    if mode == "routing":
+        merged = dict(workspace_baseline or {})
+        merged.update(skill_files)
+        return merged
+    return dict(skill_files)
+
+
+async def run_rollout(
+    items: Sequence[Item],
+    *,
+    skill_files: Mapping[str, str],
+    mode: str,
+    skill_name: str,
+    seams: Seams,
+    config: Mapping,
+    workspace_baseline: Mapping[str, str] | None = None,
+    cancel_event: asyncio.Event | None = None,
+    concurrency: int = 4,
+    detectable: bool = False,
+    path_patterns: Iterable[str] = DEFAULT_PATH_PATTERNS,
+    on_progress=None,
+) -> list[ResultRow]:
+    """Answer and judge every item once, with `skill_files` in the agent's hands.
+
+    Structurally the same sequence as one eval question (`app/pipeline.py`,
+    shared with the orchestrator and the playground): agent → judge → wait for
+    the trace. The trace is not optional here the way it is for a passing eval
+    question — the reflect stage reads it, and the activation detector reads it —
+    but a trace that never lands still must not fail the item: the verdict is
+    the score, and a missing trace only costs this item its place in reflection.
+    """
+    cancel_event = cancel_event or asyncio.Event()
+    skills = build_workspace_skills(mode, skill_files, workspace_baseline)
+    # `config=None`, deliberately: the agent keeps its own configuration. We are
+    # measuring a skill, and quietly shipping a config overlay alongside it would
+    # put a second variable into every rollout.
+    override = WorkspaceOverride(config=None, skills=skills)
+    timeout_s = config.get("agent_timeout_s") or settings.agent_timeout_s
+    semaphore = asyncio.Semaphore(max(concurrency, 1))
+    rows: list[ResultRow] = [None] * len(items)  # type: ignore[list-item]
+
+    async def one(position: int, item: Item) -> None:
+        async with semaphore:
+            rows[position] = await _run_item(
+                item,
+                override=override,
+                skill_files=skill_files,
+                skill_name=skill_name,
+                seams=seams,
+                timeout_s=timeout_s,
+                cancel_event=cancel_event,
+                detectable=detectable,
+                path_patterns=path_patterns,
+            )
+        if on_progress is not None:
+            await on_progress(rows[position])
+
+    # return_exceptions=True: one unexpected per-item error must not cancel its
+    # siblings, exactly as the orchestrator does for a run's questions.
+    outcomes = await asyncio.gather(
+        *(one(i, item) for i, item in enumerate(items)), return_exceptions=True
+    )
+    for position, outcome in enumerate(outcomes):
+        if isinstance(outcome, BaseException):
+            log.exception("unexpected rollout error", exc_info=outcome)
+            if rows[position] is None:
+                rows[position] = ResultRow(
+                    item_key=items[position].item_key,
+                    correlation_id=uuid.uuid4().hex,
+                    status="failed",
+                    failure_kind="agent",
+                    error_message=clip(f"{type(outcome).__name__}: {outcome}"),
+                )
+    return [row for row in rows if row is not None]
+
+
+async def _run_item(
+    item: Item,
+    *,
+    override: WorkspaceOverride,
+    skill_files: Mapping[str, str],
+    skill_name: str,
+    seams: Seams,
+    timeout_s: float,
+    cancel_event: asyncio.Event,
+    detectable: bool,
+    path_patterns: Iterable[str],
+) -> ResultRow:
+    correlation_id = uuid.uuid4().hex
+    row = ResultRow(
+        item_key=item.item_key,
+        correlation_id=correlation_id,
+        status="pending",
+        question_pk=item.question_pk,
+        started_at=datetime.now(timezone.utc),
+    )
+
+    if cancel_event.is_set():
+        row.status = "failed"
+        row.failure_kind = "cancelled"
+        row.error_message = "Cancelled before this question started."
+        return row
+
+    # 1) agent. Measured rather than derived from the timeout: `call_agent`
+    #    retries, so the time actually spent is a multiple of the limit set.
+    started = time.monotonic()
+    try:
+        response = await call_agent(
+            seams, item.question, correlation_id, "optimizer",
+            ["optimize", f"skill_{skill_name}"], timeout_s, cancel_event,
+            workspace=override,
+        )
+    except RunCancelled:
+        row.status = "failed"
+        row.failure_kind = "cancelled"
+        row.error_message = "Cancelled while waiting for the agent."
+        return row
+    except Exception as exc:  # noqa: BLE001
+        message, kind = describe_failure(
+            "agent", exc, timeout_s=timeout_s,
+            attempts=settings.agent_max_retries + 1,
+            waited_s=time.monotonic() - started,
+        )
+        row.status = "failed"
+        row.failure_kind = kind
+        row.error_message = clip(message)
+        return row
+
+    row.agent_latency_ms = response.latency_ms
+    if response.failed:
+        row.agent_response = response.response or None
+        row.status = "failed"
+        row.failure_kind = "agent"
+        row.error_message = clip(response.error or "Agent reported a failure.")
+        return row
+    row.agent_response = response.response
+
+    # 2) judge. Unlike the playground, a failure here fails the *item*: an
+    #    unjudged answer has no score, and scoring it as wrong would be inventing
+    #    a gradient. It is excluded from the batch instead.
+    judge_started = time.monotonic()
+    try:
+        verdict = await call_judge(
+            seams, item.question, response.response,
+            item.ground_truth_response, cancel_event,
+        )
+    except RunCancelled:
+        row.status = "failed"
+        row.failure_kind = "cancelled"
+        row.error_message = "Cancelled while judging; the agent's answer was kept."
+        return row
+    except LlmOutputError as exc:
+        # The judge answered in the wrong shape. That usually indicts this run's
+        # judge prompt — the one item on the list a developer can go and fix — so
+        # it keeps its own kind instead of being buried among timeouts.
+        row.status = "failed"
+        row.failure_kind = "judge_invalid"
+        row.error_message = clip(f"Judge output could not be parsed: {exc!s}")
+        return row
+    except Exception as exc:  # noqa: BLE001
+        message, kind = describe_failure(
+            "judge", exc, timeout_s=settings.llm_timeout_s,
+            attempts=settings.llm_max_retries + 1,
+            waited_s=time.monotonic() - judge_started,
+        )
+        row.status = "failed"
+        row.failure_kind = kind
+        row.error_message = clip(message)
+        return row
+
+    row.verdict = verdict.verdict
+    row.judge_score = verdict.score
+    row.judge_comment = verdict.comment
+    row.status = "done"
+
+    # 3) the trace, for reflection and for activation. Best-effort by design: a
+    #    trace that never lands costs this item its place in the analyst's
+    #    minibatch, not its score.
+    if not cancel_event.is_set():
+        trace, trace_error = await wait_for_trace(correlation_id, seams.trace, cancel_event)
+        row.trace_ready = trace is not None
+        row.trace_error = trace_error
+        activation = detect_activation(
+            trace,
+            skill_name=skill_name,
+            skill_files=skill_files,
+            path_patterns=path_patterns,
+            detectable=detectable,
+        )
+        row.activated = activation.activated
+        row.skills_read = activation.skills_read
+        row.detector_hit = activation.hit
+
+    return row
+
+
+def score_rollout(
+    results: Sequence[ResultRow],
+    *,
+    split: str,
+    skill_step_no: int,
+    error_threshold: float = DEFAULT_ERROR_THRESHOLD,
+) -> RolloutSummary:
+    """Aggregate one split into the numbers behind a single point on the chart.
+
+    Two rules, and both are about what failure means.
+
+    **Failures are excluded, not scored zero.** An agent timeout is not the skill
+    being wrong. Counting it as a wrong answer hands the optimizer a gradient
+    pointing at a network problem, and the gate then accepts or rejects a skill
+    edit on the strength of how flaky the last two minutes were. Accuracy,
+    latency and activation all measure the items that actually produced an
+    answer, and the counts sit beside them so the exclusion is visible rather
+    than implied.
+
+    **Past a threshold, nothing is scored at all.** Excluding failures creates
+    the opposite hazard: a step scored on 60% of its batch is not a smaller
+    measurement, it is an unrepresentative one, and the gate has no way to tell.
+    Whatever it accepts on that basis contaminates every later step. So the batch
+    is abandoned instead — the same call `docs/spec.md` makes about the upload
+    path, where a set built from half the rows "looks normal but is wrong".
+    """
+    rows = list(results)
+    n_items = len(rows)
+    scored = [r for r in rows if r.status == "done"]
+    n_scored = len(scored)
+
+    summary = RolloutSummary(
+        split=split,
+        skill_step_no=skill_step_no,
+        n_items=n_items,
+        n_scored=n_scored,
+        n_agent_error=sum(
+            1 for r in rows if r.status != "done" and (r.failure_kind or "").startswith("agent")
+        ),
+        n_judge_error=sum(
+            1 for r in rows if r.status != "done" and (r.failure_kind or "").startswith("judge")
+        ),
+        results=rows,
+    )
+
+    if n_items:
+        failed_share = (n_items - n_scored) / n_items
+        if failed_share > error_threshold:
+            summary.aborted = True
+            summary.abort_reason = (
+                f"{failed_share:.0%} of the batch failed "
+                f"({n_items - n_scored} of {n_items}); "
+                f"a gradient from the remainder would not represent this split"
+            )
+
+    if not n_scored:
+        return summary
+
+    summary.hard = sum(1 for r in scored if r.verdict == "correct") / n_scored
+    summary.soft = sum(float(r.judge_score or 0.0) for r in scored) / n_scored
+
+    latencies = sorted(r.agent_latency_ms for r in scored if r.agent_latency_ms is not None)
+    if latencies:
+        summary.latency_min_ms = latencies[0]
+        summary.latency_max_ms = latencies[-1]
+        summary.latency_p50_ms = int(statistics.median(latencies))
+
+    # Unknown is not false. Averaging an unobservable item in as zero would
+    # invent a number; the rate describes what could actually be seen, and
+    # `n_activated` beside it says how much that was.
+    observed = [r for r in scored if r.activated is not None]
+    summary.n_activated = sum(1 for r in observed if r.activated)
+    summary.activation_rate = (
+        summary.n_activated / len(observed) if observed else None
+    )
+    return summary
