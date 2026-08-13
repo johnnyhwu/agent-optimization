@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import Base
 from app.main import reap_interrupted_runs
+from app.optimizer.runner import reap_interrupted_optimization_runs
 from app.models import (
     EvalSet,
     EvalSetRole,
@@ -442,3 +443,54 @@ async def test_the_existing_reaper_leaves_optimization_runs_alone(factory):
     assert closed == 1, "only the eval run should have been closed out"
     async with factory() as session:
         assert (await session.get(OptimizationRun, orun_id)).status == "running"
+
+
+@db_only
+async def test_the_optimization_reaper_marks_runs_interrupted_and_not_failed(factory):
+    """'interrupted' is what makes an hour of finished steps worth keeping.
+
+    A run caught by a deploy has every completed step on disk, a downloadable
+    best skill, and somewhere to continue from. Recording that as 'failed' — the
+    verdict an eval run gets, correctly, because it has nothing to resume —
+    would present all of it as a dead end, and the only way forward would be to
+    pay for it again. The status also has to be one `POST /resume` accepts,
+    which 'failed' deliberately is not.
+
+    The other half of the rule is that this reaper stays off `runs`, the same
+    way the existing one stays off optimization runs.
+    """
+    async with factory() as session:
+        es = EvalSet(name="reaper-set", source_format="jsonl", meta={})
+        session.add(es)
+        await session.flush()
+        eval_run = Run(eval_set_id=es.id, triggered_by="alice", status="running",
+                       config={}, secrets={})
+        session.add(eval_run)
+        orun = OptimizationRun(
+            name="opt", created_by="alice", status="running", mode="isolated",
+            skill_name="billing", config={}, secrets={},
+            initial_skill={"billing/SKILL.md": "# Billing\n"},
+            num_epochs=1, batch_size=1, steps_per_epoch=1, total_steps=1,
+        )
+        done = OptimizationRun(
+            name="finished", created_by="alice", status="completed", mode="isolated",
+            skill_name="billing", config={}, secrets={},
+            initial_skill={"billing/SKILL.md": "# Billing\n"},
+            num_epochs=1, batch_size=1, steps_per_epoch=1, total_steps=1,
+        )
+        session.add_all([orun, done])
+        await session.commit()
+        orun_id, done_id, eval_run_id = orun.id, done.id, eval_run.id
+
+    closed = await reap_interrupted_optimization_runs(session_factory=factory)
+
+    assert closed == 1, "only the running optimization run should have been touched"
+    async with factory() as session:
+        reaped = await session.get(OptimizationRun, orun_id)
+        assert reaped.status == "interrupted"
+        assert reaped.error_message and "resumed" in reaped.error_message
+        assert reaped.completed_at is None, "an interrupted run has not completed"
+        # A run that had already finished keeps its verdict.
+        assert (await session.get(OptimizationRun, done_id)).status == "completed"
+        # And the eval run is none of this reaper's business.
+        assert (await session.get(Run, eval_run_id)).status == "running"

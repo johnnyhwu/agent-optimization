@@ -80,6 +80,26 @@ def build_protection(
     raise ValueError(f"unknown optimization mode {mode!r}; expected 'isolated' or 'routing'")
 
 
+def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
+    """The whole directory as the one document every vendored stage expects.
+
+    SkillOpt's parameter is a single markdown file, and its analyst, merge and
+    ranking prompts all open with "## Current Skill" followed by that file. Ours
+    is a directory, so this is the projection between the two — and it is not
+    only formatting: the analyst is told to name a `path` on every edit, and the
+    only way it can name one correctly is by having seen the list.
+
+    `SKILL.md` comes first because it is the file the agent reads first, and a
+    model reading top-down should meet the entry point before its references.
+    """
+    entry = entry_point_for(skill_dir)
+    ordered = [entry] if entry in files else []
+    ordered += sorted(path for path in files if path != entry)
+    return "\n\n".join(
+        f"### File: {path}\n```markdown\n{files[path]}\n```" for path in ordered
+    )
+
+
 def _line_opcodes(before: str, after: str):
     before_lines = before.splitlines(keepends=True)
     after_lines = after.splitlines(keepends=True)

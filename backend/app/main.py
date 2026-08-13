@@ -15,6 +15,7 @@ from app.auth import current_subject
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
+from app.optimizer.runner import reap_interrupted_optimization_runs
 from app.routers import (
     diagnosis,
     eval_set_scripts,
@@ -85,6 +86,10 @@ async def reap_interrupted_runs(session_factory=None) -> int:
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     await reap_interrupted_runs()
+    # Its own reaper, and a different verdict: an optimization run is
+    # checkpointed per step, so a restart leaves something resumable rather than
+    # something to write off. See `app/optimizer/runner.py`.
+    await reap_interrupted_optimization_runs()
     yield
 
 

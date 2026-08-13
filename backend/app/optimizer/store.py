@@ -89,6 +89,13 @@ class ResultRow:
     trace_error: str | None = None
     minibatch_no: int | None = None
     started_at: Any = None
+    # The trace itself, in memory only — never persisted, and deliberately not
+    # among the columns `DbOptimizationStore.record_rollout` writes. The reflect
+    # stage needs the spans of the rollout it is reflecting on, and re-fetching
+    # them from Langfuse a minute later would be a second round of network calls
+    # for data we already have. Detail views read the trace live, the same way
+    # the evaluation pages do, so nothing depends on this outliving the step.
+    trace: Any = None
 
 
 @dataclass
@@ -118,6 +125,30 @@ class RolloutSummary:
     results: list[ResultRow] = field(default_factory=list)
 
 
+@dataclass
+class ResumeState:
+    """Where a restarted run picks up, rebuilt from what is already on disk.
+
+    A run is checkpointed per step, so resuming is not a matter of "carry on" —
+    the loop's whole working state has to be reconstructed: which skill was in
+    force, what it scored, which step holds the best one, and which candidates
+    have already been measured. Nothing here is stored as a blob; it is derived
+    from the steps and skills that were written as the run went, so a resumed
+    run cannot disagree with the chart the developer is looking at.
+    """
+
+    last_step_no: int | None
+    current_files: dict[str, str]
+    current_score: float
+    best_files: dict[str, str]
+    best_score: float
+    best_step: int
+    parent_step_no: int | None
+    # skill hash → (hard, soft, activation), so a candidate already measured
+    # before the restart does not cost a second validation split.
+    score_cache: dict[str, tuple[float, float, float | None]] = field(default_factory=dict)
+
+
 class OptimizationStore(Protocol):
     """What the engine needs from storage. Implemented below, stubbed in tests."""
 
@@ -127,7 +158,11 @@ class OptimizationStore(Protocol):
 
     async def last_completed_step(self, run_id: uuid.UUID) -> int | None: ...
 
+    async def load_resume_state(self, run_id: uuid.UUID) -> ResumeState | None: ...
+
     async def cancel_requested(self, run_id: uuid.UUID) -> bool: ...
+
+    async def set_status(self, run_id: uuid.UUID, status: str, **fields: Any) -> None: ...
 
     async def start_step(
         self, run_id: uuid.UUID, *, step_no: int, epoch_no: int,
@@ -216,6 +251,84 @@ class DbOptimizationStore:
                 OptimizationStep.run_id == run_id, OptimizationStep.status == "done"
             )
         )
+
+    async def load_resume_state(self, run_id: uuid.UUID) -> ResumeState | None:
+        """Rebuild the loop's working state from the steps already on disk.
+
+        Walks the completed steps in order and replays their gate decisions —
+        which is how `current` ends up being the last *accepted* candidate
+        rather than the last one produced. Deriving it beats storing it: a
+        stored pointer can disagree with the steps around it after a crash
+        between two writes, and then a resumed run would continue from a skill
+        the chart never shows.
+
+        The validation scores come from the rollouts rather than from
+        `steps.current_score`, because a rejected step's own score is not on the
+        step row — the gate leaves `current_score` at the value that survived.
+        """
+        steps = (
+            await self.session.scalars(
+                select(OptimizationStep)
+                .where(OptimizationStep.run_id == run_id, OptimizationStep.status == "done")
+                .order_by(OptimizationStep.step_no)
+            )
+        ).all()
+        if not steps:
+            return None
+
+        skills = (
+            await self.session.scalars(
+                select(OptimizationSkill).where(OptimizationSkill.run_id == run_id)
+            )
+        ).all()
+        files_by_step = {(s.step_no, s.kind): dict(s.files or {}) for s in skills}
+
+        val_scores: dict[uuid.UUID, OptimizationRollout] = {
+            row.step_id: row
+            for row in (
+                await self.session.scalars(
+                    select(OptimizationRollout)
+                    .join(OptimizationStep, OptimizationStep.id == OptimizationRollout.step_id)
+                    .where(
+                        OptimizationStep.run_id == run_id,
+                        OptimizationRollout.split == "val",
+                    )
+                )
+            ).all()
+        }
+
+        initial = files_by_step.get((0, "initial"), {})
+        state = ResumeState(
+            last_step_no=steps[-1].step_no,
+            current_files=dict(initial), current_score=0.0,
+            best_files=dict(initial), best_score=0.0, best_step=0,
+            parent_step_no=None, score_cache={},
+        )
+
+        for step in steps:
+            candidate = files_by_step.get((step.step_no, "candidate"))
+            rollout = val_scores.get(step.id)
+            if step.candidate_hash and rollout is not None:
+                state.score_cache[step.candidate_hash] = (
+                    float(rollout.hard or 0.0), float(rollout.soft or 0.0),
+                    None if rollout.activation_rate is None else float(rollout.activation_rate),
+                )
+            if step.step_no == 0:
+                state.current_score = float(step.current_score or 0.0)
+                state.best_score = float(step.best_score or 0.0)
+                continue
+            state.current_score = float(step.current_score or state.current_score)
+            state.best_score = float(step.best_score or state.best_score)
+            if step.gate_action in ("accept", "accept_new_best") and candidate is not None:
+                state.current_files = candidate
+                state.parent_step_no = step.step_no
+            if step.gate_action == "accept_new_best" and candidate is not None:
+                state.best_files = candidate
+                state.best_step = step.step_no
+        return state
+
+    async def set_status(self, run_id: uuid.UUID, status: str, **fields: Any) -> None:
+        await self.finish_run(run_id, status=status, **fields)
 
     async def cancel_requested(self, run_id: uuid.UUID) -> bool:
         """The durable half of cancellation, re-read each step.

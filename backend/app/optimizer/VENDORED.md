@@ -24,10 +24,26 @@ runtime or is the multi-file fork, and each one has a reason written next to it.
 ```sh
 git clone --depth 1 https://github.com/microsoft/SkillOpt /tmp/skillopt
 cd /tmp/skillopt && git checkout 0f76ab4
-diff /tmp/skillopt/skillopt/evaluation/gate.py       backend/app/optimizer/vendor/gate.py
-diff /tmp/skillopt/skillopt/optimizer/scheduler.py   backend/app/optimizer/vendor/scheduler.py
+diff /tmp/skillopt/skillopt/evaluation/gate.py        backend/app/optimizer/vendor/gate.py
+diff /tmp/skillopt/skillopt/optimizer/scheduler.py    backend/app/optimizer/vendor/scheduler.py
 diff /tmp/skillopt/skillopt/optimizer/update_modes.py backend/app/optimizer/vendor/update_modes.py
+diff /tmp/skillopt/skillopt/optimizer/skill_aware.py  backend/app/optimizer/vendor/skill_aware.py
+diff /tmp/skillopt/skillopt/utils/json_utils.py       backend/app/optimizer/vendor/json_utils.py
+# the import-only forks: the diff should be the import block and nothing else
+diff /tmp/skillopt/skillopt/gradient/aggregate.py     backend/app/optimizer/vendor/aggregate.py
+diff /tmp/skillopt/skillopt/optimizer/clip.py         backend/app/optimizer/vendor/clip.py
+diff /tmp/skillopt/skillopt/optimizer/slow_update.py  backend/app/optimizer/vendor/slow_update.py
+diff /tmp/skillopt/skillopt/optimizer/meta_skill.py   backend/app/optimizer/vendor/meta_skill.py
+# reflect.py is the one file upstream ships with CRLF endings; the copy is LF,
+# so compare it with --strip-trailing-cr or every line reads as changed.
+diff --strip-trailing-cr \
+     /tmp/skillopt/skillopt/gradient/reflect.py       backend/app/optimizer/vendor/reflect.py
+diff /tmp/skillopt/skillopt/prompts/__init__.py       backend/app/optimizer/vendor/prompts/__init__.py
 ```
+
+As of this commit those produce: nothing for the four byte-identical files, the
+import block for the five import-only forks, and ~60 lines for `reflect.py` —
+all of them in the two regions described below.
 
 ## File by file
 
@@ -36,10 +52,26 @@ diff /tmp/skillopt/skillopt/optimizer/update_modes.py backend/app/optimizer/vend
 | `gate.py` | `skillopt/evaluation/gate.py` | **byte-identical** |
 | `scheduler.py` | `skillopt/optimizer/scheduler.py` | **byte-identical** |
 | `update_modes.py` | `skillopt/optimizer/update_modes.py` | **byte-identical** |
+| `skill_aware.py` | `skillopt/optimizer/skill_aware.py` | one import line (a lazy `extract_json`) |
+| `json_utils.py` | `skillopt/utils/json_utils.py` | **byte-identical** |
+| `aggregate.py` | `skillopt/gradient/aggregate.py` | import block only |
+| `clip.py` | `skillopt/optimizer/clip.py` | import block only |
+| `slow_update.py` | `skillopt/optimizer/slow_update.py` | import block only |
+| `meta_skill.py` | `skillopt/optimizer/meta_skill.py` | import block only |
+| `reflect.py` | `skillopt/gradient/reflect.py` | import block + where a trajectory comes from |
+| `prompts/__init__.py` | `skillopt/prompts/__init__.py` | the override directory — see below |
 | `skill.py` | `skillopt/optimizer/skill.py` | **forked** — see below |
+| `_model.py` | — | ours; the `chat_optimizer` seam |
 
-The three byte-identical files import nothing from `skillopt`, which is why they
-copy cleanly.
+The byte-identical files import nothing from `skillopt`, which is why they copy
+cleanly. `import block only` means literally that: the module's own code is
+untouched, and the diff is the five lines that redirect
+`from skillopt.…` to `from app.optimizer.vendor.…`.
+
+`skill_aware.py` is vendored although the feature it implements
+(EmbodiSkill appendix notes) is off by default — `reflect.py` imports it at
+module scope, and a stub would be a bigger and less honest difference than the
+file itself.
 
 ### `skill.py` — the one deliberate fork
 
@@ -79,22 +111,78 @@ and nothing else about the update stage differs:
 `app/optimizer/skillio.py` builds the `Protection` for a mode; the fork itself
 knows nothing about modes.
 
-## Not vendored yet
+### `reflect.py` — where a trajectory comes from
 
-These call the model through a single upstream import
-(`from skillopt.model import chat_optimizer`), so they arrive with the shim that
-replaces it (`vendor/_model.py`) rather than as broken imports:
+Upstream's trajectories are files a local rollout wrote:
+`fmt_minibatch_trajectories(items, prediction_dir)` reads
+`{prediction_dir}/{task_id}/conversation.json` per item. Ours are Langfuse
+traces held in memory, and they must be **truncated before they are formatted**
+— otherwise the analyst prompt for a step is not a fixed cost but whatever the
+chattiest trajectory in the batch happened to do, times the minibatch size.
 
-| File | Upstream path | Planned difference |
-|---|---|---|
-| `reflect.py` | `skillopt/gradient/reflect.py` | one import line |
-| `aggregate.py` | `skillopt/gradient/aggregate.py` | one import line |
-| `clip.py` | `skillopt/optimizer/clip.py` | one import line |
-| `slow_update.py` | `skillopt/optimizer/slow_update.py` | one import line |
-| `meta_skill.py` | `skillopt/optimizer/meta_skill.py` | one import line |
+So an item may carry its conversation inline under `"conversation"`, and the
+file path is the fallback:
 
-`chat_optimizer(system, user, max_completion_tokens, retries, stage, timeout)
--> (text, usage)` is the whole seam — four files, one line each.
+```python
+conversation = item.get("conversation")
+if conversation is None:
+    ...upstream's file read, unchanged...
+```
+
+`prediction_dir` becomes optional on that function and on the two analyst entry
+points, and the four optional per-item context reads (`target_system_prompt`,
+`target_user_prompt`, the codex trace summary, the spreadsheet preview) are
+guarded with `and prediction_dir` so they are skipped rather than joining a path
+to `None`. `run_minibatch_reflect`'s signature is untouched.
+
+Everything else — the header assembly, the two conversation formats, the budget
+wording, the JSON contract — is upstream's.
+
+**`run_minibatch_reflect` is vendored but not called.** Most of it is
+resume-by-checkpoint-file, and our checkpoint is a database row; the parts we do
+want (`_split_minibatches`, `_shuffle_for_minibatch`, and the two analyst
+functions) are called directly from `app/optimizer/update.py`. It stays in the
+file so the diff against upstream stays honest.
+
+### `prompts/__init__.py` — the override directory
+
+Upstream keys the prompt override on the *environment* (alfworld, searchqa, …)
+and looks under `skillopt/envs/{env}/prompts/{name}.md`. There is one
+environment here — an HTTP agent — and what varies instead is the optimization
+**mode**: `isolated` rewrites a skill's body, `routing` rewrites its
+description, and the two ask an analyst for entirely different things. The
+mechanism is kept and the directory moves to `vendor/prompts/{mode}/{name}.md`.
+
+`vendor/prompts/*.md` are upstream's, for the `patch` update mode only:
+`analyst_error`, `analyst_success`, `merge_failure`, `merge_success`,
+`merge_final`, `ranking`, `meta_skill`, `slow_update`. The `_rewrite` and
+`_full_rewrite` variants are **not** vendored — those update modes are out of
+scope (`docs/spec.md`, Optimize §11) and copying prompts for a path that cannot
+be reached would only make the next person wonder which of them is live.
+
+`vendor/prompts/isolated/` and `vendor/prompts/routing/` are ours. They say the
+things upstream's generic prompts have no reason to: that an edit must name a
+`path` in a directory, which half of `SKILL.md` this mode may touch, and that
+copying a gold answer into the skill will be caught.
+
+### `_model.py` — the whole LLM seam
+
+Upstream reaches a model through exactly one import, in five files:
+
+```
+from skillopt.model import chat_optimizer
+chat_optimizer(system, user, max_completion_tokens, retries, stage, timeout)
+    -> (text, usage)
+```
+
+`vendor/_model.py` reimplements that signature over `Seams.optimizer`. It holds
+the client in module-level state rather than passing it through, because
+`reflect` and `aggregate` fan out over their own `ThreadPoolExecutor` and a
+`ThreadPoolExecutor` does not propagate `contextvars` — a worker thread has no
+way to ask which run it is serving. Upstream solves the same problem the same
+way (`configure_azure_openai`). `use_optimizer()` holds a lock for the duration
+of a stage, so two runs reflecting at once take turns rather than one silently
+answering with the other's model.
 
 ## Sync inside async
 

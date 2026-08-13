@@ -248,6 +248,9 @@ async def _run_item(
         trace, trace_error = await wait_for_trace(correlation_id, seams.trace, cancel_event)
         row.trace_ready = trace is not None
         row.trace_error = trace_error
+        # Kept in memory for the reflect stage, which runs minutes later in the
+        # same step and would otherwise re-fetch what we are holding.
+        row.trace = trace
         activation = detect_activation(
             trace,
             skill_name=skill_name,

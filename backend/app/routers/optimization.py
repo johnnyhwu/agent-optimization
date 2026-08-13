@@ -17,14 +17,19 @@ new role vocabulary for a second kind of run.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
+from app import cancellation
 from app.auth import current_subject
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.models import (
     EvalSetRole,
     OptimizationItem,
@@ -32,12 +37,14 @@ from app.models import (
     OptimizationRun,
     OptimizationStep,
 )
+from app.optimizer import runner
 from app.schemas import (
     OptimizationRunDetail,
     OptimizationRunOut,
     OptimizationRunPage,
     OptimizationStepSummary,
 )
+from app.sse import hub, resync_if_dropped, resync_or_ping
 
 router = APIRouter(prefix="/optimization", tags=["optimization"])
 
@@ -216,24 +223,7 @@ async def get_optimization_run(
     """
     run = await _load_visible_run(session, run_id, subject)
     splits, sources, steps_done = await _counts(session, [run_id])
-
-    step_rows = (
-        await session.scalars(
-            select(OptimizationStep)
-            .where(OptimizationStep.run_id == run_id)
-            .order_by(OptimizationStep.step_no)
-        )
-    ).all()
-    rollouts = (
-        await session.scalars(
-            select(OptimizationRollout).where(
-                OptimizationRollout.step_id.in_([s.id for s in step_rows] or [None])
-            )
-        )
-    ).all()
-    by_step: dict[uuid.UUID, dict[str, OptimizationRollout]] = {}
-    for rollout in rollouts:
-        by_step.setdefault(rollout.step_id, {})[rollout.split] = rollout
+    step_summaries = await _step_summaries(session, run_id)
 
     # The same question in both splits: allowed, warned about, never silent.
     overlap = (
@@ -254,7 +244,43 @@ async def get_optimization_run(
         detector=run.detector or {},
         workspace_version=run.workspace_version,
         overlap_item_keys=sorted(overlap),
-        steps=[_step_summary(s, by_step.get(s.id, {})) for s in step_rows],
+        steps=step_summaries,
+    )
+
+
+async def _step_summaries(
+    session: AsyncSession, run_id: uuid.UUID
+) -> list[OptimizationStepSummary]:
+    """Every step of one run, with its two rollouts attached — the chart's data.
+
+    Two queries, not one per step: the detail page and the progress snapshot
+    both read this, and the snapshot is built while a stream is being set up.
+    """
+    step_rows = (
+        await session.scalars(
+            select(OptimizationStep)
+            .where(OptimizationStep.run_id == run_id)
+            .order_by(OptimizationStep.step_no)
+        )
+    ).all()
+    rollouts = (
+        await session.scalars(
+            select(OptimizationRollout).where(
+                OptimizationRollout.step_id.in_([s.id for s in step_rows] or [None])
+            )
+        )
+    ).all()
+    by_step: dict[uuid.UUID, dict[str, OptimizationRollout]] = {}
+    for rollout in rollouts:
+        by_step.setdefault(rollout.step_id, {})[rollout.split] = rollout
+    return [_step_summary(s, by_step.get(s.id, {})) for s in step_rows]
+
+
+async def _one_run_out(session: AsyncSession, run: OptimizationRun) -> OptimizationRunOut:
+    """The list-shaped view of a single run, for the endpoints that mutate one."""
+    splits, sources, steps_done = await _counts(session, [run.id])
+    return _run_out(
+        run, splits.get(run.id, {}), sources.get(run.id, []), steps_done.get(run.id, 0)
     )
 
 
@@ -308,6 +334,146 @@ def _step_summary(step: OptimizationStep, rollouts: dict) -> OptimizationStepSum
         started_at=step.started_at,
         completed_at=step.completed_at,
     )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=OptimizationRunOut)
+async def cancel_optimization_run(
+    run_id: uuid.UUID,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Stop a running optimization. Creator only.
+
+    Narrower than an eval run's cancel, which any reader may call: an eval run
+    belongs to an eval set several people share, while an optimization run is
+    one developer's experiment against their own agent endpoint. Its steps are
+    kept — the loop finishes nothing further, but every completed step and its
+    best skill remain downloadable.
+    """
+    run = await _load_visible_run(session, run_id, subject)
+    if run.created_by != subject:
+        raise HTTPException(
+            status_code=403, detail="only the developer who started this run can cancel it"
+        )
+    if run.status not in ("pending", "running"):
+        raise HTTPException(
+            status_code=409, detail=f"this run is already {run.status}; nothing to cancel"
+        )
+    run.cancel_requested = True
+    await session.commit()
+    # The flag is the durable record and survives a restart; the event is what
+    # interrupts the agent call already in flight (app/cancellation.py).
+    cancellation.signal(run_id)
+    return await _one_run_out(session, run)
+
+
+@router.post("/runs/{run_id}/resume", response_model=OptimizationRunOut)
+async def resume_optimization_run(
+    run_id: uuid.UUID,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Continue a run the backend restart left `interrupted`. Creator only.
+
+    Only `interrupted` — not `cancelled` and not `failed`. A cancelled run was
+    stopped deliberately and restarting it under the same id would erase that
+    decision from the record; a failed one stopped because continuing would
+    produce a misleading result, which resuming does not fix. Both remain
+    available as the starting point for a new run.
+
+    The engine re-derives everything it needs from the completed steps, so there
+    is nothing to pass here: it picks up at the step after the last one that
+    finished.
+    """
+    run = await _load_visible_run(session, run_id, subject)
+    if run.created_by != subject:
+        raise HTTPException(
+            status_code=403, detail="only the developer who started this run can resume it"
+        )
+    if run.status != "interrupted":
+        raise HTTPException(
+            status_code=409,
+            detail=f"only an interrupted run can be resumed; this one is {run.status}",
+        )
+    run.status = "running"
+    run.error_message = None
+    run.cancel_requested = False
+    await session.commit()
+    cancellation.clear(run_id)
+    runner.start(run_id)
+    return await _one_run_out(session, run)
+
+
+@router.get("/runs/{run_id}/progress")
+async def optimization_progress(
+    run_id: uuid.UUID,
+    request: Request,
+    # `current_subject` rather than a session-consuming dependency, for the
+    # reason spelled out in `routers/runs.py:run_progress`: a stream that lasts
+    # as long as the run would hold a pooled connection for that whole time.
+    subject: str = Depends(current_subject),
+):
+    """SSE stream of one run's progress: a snapshot, then live step events.
+
+    Same shape and same ordering rules as the eval run stream — authorize,
+    subscribe, then read — because the hazards are identical and one of them is
+    specific to how long these run: subscribing after the read would let a
+    `run_completed` published in between fall on the floor, leaving the page
+    pinging every fifteen seconds against a run that finished an hour ago.
+
+    The steps come along in the snapshot rather than being fetched separately.
+    A late subscriber — someone opening the page mid-run, or after a laptop woke
+    up — needs the whole chart, and an SSE stream that only carries the future
+    would leave them with a blank one until the next step landed. That can be
+    several minutes.
+    """
+    async with SessionLocal() as session:
+        queue = hub.subscribe(run_id)
+        try:
+            run = await _load_visible_run(session, run_id, subject)
+            status = run.status
+            steps = await _step_summaries(session, run_id)
+            snapshot = {
+                "status": status,
+                "step_no": max((s.step_no for s in steps), default=0),
+                "total_steps": run.total_steps,
+                "best_step": run.best_step,
+                "best_score": _num(run.best_score),
+                "server_time": datetime.now(timezone.utc).isoformat(),
+                "steps": [s.model_dump(mode="json") for s in steps],
+            }
+            # `commit`, not `rollback`: rollback expires every loaded object and
+            # the values read above would go stale before the generator starts.
+            await session.commit()
+        except BaseException:
+            hub.unsubscribe(run_id, queue)
+            raise
+
+    async def event_gen():
+        try:
+            yield {"event": "snapshot", "data": json.dumps(snapshot)}
+            if status not in ("running", "pending"):
+                yield {"event": "run_completed", "data": json.dumps({"status": status})}
+                return
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield resync_or_ping(queue)
+                    continue
+                dropped = resync_if_dropped(queue)
+                if dropped:
+                    yield dropped
+                yield {"event": event.get("type", "message"), "data": json.dumps(event)}
+                if event.get("type") == "run_completed":
+                    break
+        finally:
+            hub.unsubscribe(run_id, queue)
+
+    return EventSourceResponse(event_gen())
 
 
 @router.delete("/runs/{run_id}", status_code=204)
