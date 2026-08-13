@@ -1,0 +1,613 @@
+"""The four endpoints the wizard is built on.
+
+These need a real database, like `test_pagination.py` and for the same reason:
+what is being protected is partly *what SQL gets issued*, and a stub session
+cannot answer that. They skip unless `TEST_DATABASE_URL` is set.
+
+Three themes run through them.
+
+**Permission is derived and has to hold at every entrance.** A run is readable
+by whoever can read every eval set it drew from; the preview and the create
+endpoint are where questions from those sets are first exposed, so a missing
+check here leaks the thing the visibility rule exists to protect — and it leaks
+question text, not just a count.
+
+**Credentials go in and never come out.** `secrets` is a separate column for
+exactly this reason, and the test is written against the serialized response
+rather than against the model, because a field added to the wrong schema is how
+that stops being true.
+
+**The preview must not be an N+1.** `docs/spec.md` §10.2③ records what that did
+to `GET /eval-sets`: 180 queries to render one page, growing with history. A
+per-question accuracy lookup is the same shape of mistake, and a query count is
+the only assertion that stays honest as the data grows.
+"""
+from __future__ import annotations
+
+import os
+import uuid
+
+import pytest
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from fastapi import HTTPException
+
+from app.db import Base
+from app.models import (
+    EvalSet,
+    EvalSetRole,
+    OptimizationItem,
+    OptimizationRun,
+    Question,
+    QuestionResult,
+    QuestionSkill,
+    Run,
+)
+from app.optimizer import dataset
+from app.routers import optimization as opt
+from app.schemas import ImportPreviewRequest, OptimizationRunCreate
+
+TEST_DB = os.environ.get("TEST_DATABASE_URL")
+pytestmark = pytest.mark.skipif(
+    not TEST_DB, reason="set TEST_DATABASE_URL to run the database-backed wizard tests"
+)
+
+
+class QueryCounter:
+    def __init__(self, engine):
+        self.engine = engine
+        self.count = 0
+
+    def _bump(self, *args, **kwargs):
+        self.count += 1
+
+    def __enter__(self):
+        event.listen(self.engine.sync_engine, "before_cursor_execute", self._bump)
+        return self
+
+    def __exit__(self, *exc):
+        event.remove(self.engine.sync_engine, "before_cursor_execute", self._bump)
+
+
+@pytest.fixture
+async def engine():
+    eng = create_async_engine(TEST_DB)
+    async with eng.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+        await conn.run_sync(Base.metadata.create_all)
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+async def session(engine):
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        yield s
+        await s.rollback()
+    # Leave the schema clean for the next test in the same database.
+    async with engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(text(f'TRUNCATE TABLE "{table.name}" CASCADE'))
+
+
+async def make_set(session, name, subject="alice", *, questions, role="owner"):
+    """An eval set with questions, their skills, and a role for `subject`."""
+    eval_set = EvalSet(name=name, source_format="jsonl", meta={})
+    session.add(eval_set)
+    await session.flush()
+    session.add(EvalSetRole(eval_set_id=eval_set.id, user_subject=subject, role=role))
+    rows = []
+    for qid, skills in questions:
+        question = Question(
+            eval_set_id=eval_set.id, question_id=qid, question=f"text of {qid}",
+            ground_truth_response=f"gold {qid}", ground_truth_reasoning="because",
+        )
+        session.add(question)
+        await session.flush()
+        for ordinal, skill in enumerate(skills):
+            session.add(QuestionSkill(
+                question_pk=question.id, skill_name=skill, ordinal=ordinal
+            ))
+        rows.append(question)
+    await session.commit()
+    return eval_set, rows
+
+
+async def add_eval_run(session, eval_set, results, *, status="completed"):
+    """A finished eval run with one result per (question, verdict) pair given."""
+    run = Run(eval_set_id=eval_set.id, triggered_by="alice", status=status,
+              config={}, secrets={})
+    session.add(run)
+    await session.flush()
+    for question, verdict in results:
+        session.add(QuestionResult(
+            run_id=run.id, question_pk=question.id,
+            correlation_id=uuid.uuid4().hex,
+            status="done" if verdict else "failed",
+            verdict=verdict,
+        ))
+    await session.commit()
+    return run
+
+
+# --- GET /optimization/defaults ---------------------------------------------
+
+
+async def test_defaults_never_carry_a_credential():
+    """The form starts its secret fields blank, and this is why it can.
+
+    Every other prefill on that screen comes from the environment. If an API key
+    came with them, it would be rendered into a page, sent to every developer
+    who opens the wizard, and sit in their browser's memory — and nobody would
+    notice, because the field would simply look conveniently filled in.
+    """
+    payload = await opt.optimization_defaults(subject="alice")
+    flat = str(payload).lower()
+    for forbidden in ("api_key", "secret_key", "password", "token"):
+        assert forbidden not in flat
+
+
+async def test_defaults_report_which_seams_are_real():
+    """A wizard that hides this asks people to configure things with no effect.
+
+    With `OPTIMIZER_IMPL=fake` the optimizer model field changes nothing at all,
+    and someone will otherwise spend an afternoon wondering why their edits look
+    canned.
+    """
+    payload = await opt.optimization_defaults(subject="alice")
+    assert set(payload["impls"]) >= {"agent", "judge", "trace", "optimizer"}
+
+
+async def test_defaults_include_the_split_limits_the_wizard_enforces():
+    """One source for a rule the browser and the server both apply.
+
+    The split editor greys out its Start button below the minimum; the create
+    endpoint refuses below the minimum. If the browser carried its own copy of
+    the number, the two would drift and the button would be enabled on a request
+    the server rejects.
+    """
+    payload = await opt.optimization_defaults(subject="alice")
+    assert payload["limits"]["min_train"] == dataset.MIN_TRAIN
+    assert payload["limits"]["min_val"] == dataset.MIN_VAL
+
+
+# --- GET /optimization/skill-check ------------------------------------------
+
+
+async def test_skill_check_lists_the_files_of_a_skill_that_exists():
+    """Step 4 confirms the tag and the agent's directory are the same name.
+
+    Decision 6 treats them as equal, which is only safe if the wizard proves it
+    before the run starts rather than discovering it at step 0 — after a run
+    row, an item snapshot and a batch of agent calls have already been spent.
+    """
+    check = await opt.skill_check(skill_name="billing", subject="alice")
+    assert check.exists is True
+    assert any(path.endswith("SKILL.md") for path in check.files)
+    assert len(check.files) > 1, "the fake skill has a reference file; the tree needs it"
+
+
+async def test_skill_check_names_the_skills_that_do_exist_when_one_is_missing():
+    """'Not found' with no list is a dead end; with a list it is a typo.
+
+    The developer picked the name from a question tag, so a mismatch is usually
+    one character — and the answer is on the agent server they just connected to.
+    """
+    check = await opt.skill_check(skill_name="billling", subject="alice")
+    assert check.exists is False
+    assert "billing" in check.available_skills
+
+
+async def test_skill_check_reports_whether_routing_mode_is_possible():
+    """Routing edits the frontmatter description. No frontmatter, no routing.
+
+    The mode picker on step 4 reads this to disable the option with a reason,
+    which is the difference between an informed choice and a run that rejects
+    every candidate for an hour.
+    """
+    check = await opt.skill_check(skill_name="billing", subject="alice")
+    assert check.has_frontmatter is False  # the fake workspace's skills carry none
+    assert check.routing_blocked_reason
+
+
+# --- POST /optimization/import-preview --------------------------------------
+
+
+async def test_the_preview_groups_questions_by_skill(session):
+    eval_set, _ = await make_set(session, "set", questions=[
+        ("q1", ["billing"]), ("q2", ["billing"]), ("q3", ["reporting"]),
+        ("q4", []), ("q5", ["billing", "reporting"]),
+    ])
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="alice", session=session
+    )
+    by_name = {g.skill_name: g for g in preview.groups}
+    assert sorted(by_name) == ["billing", "reporting"]
+    assert len(by_name["billing"].questions) == 2
+    assert {q.question_id for q in preview.ambiguous} == {"q4", "q5"}
+
+
+async def test_a_source_the_caller_cannot_read_is_refused(session):
+    """The preview is the first place another set's question text is exposed.
+
+    Visibility for the run itself is derived from "reader on every source", and
+    that rule is worth nothing if the screen that *builds* the run will happily
+    read a set the caller has no role on. It refuses the whole request rather
+    than silently dropping the set: a preview quietly missing half its questions
+    is how someone builds a run they think covers something it does not.
+    """
+    mine, _ = await make_set(session, "mine", "alice", questions=[("q1", ["billing"])])
+    theirs, _ = await make_set(session, "theirs", "bob", questions=[("q2", ["billing"])])
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.import_preview(
+            ImportPreviewRequest(eval_set_ids=[mine.id, theirs.id]),
+            subject="alice", session=session,
+        )
+    assert exc.value.status_code in (403, 404)
+
+
+async def test_a_viewer_may_preview_a_set_they_can_read(session):
+    """Building a run is not an owner-only act, the same way running an eval is not."""
+    eval_set, _ = await make_set(
+        session, "shared", "carol", questions=[("q1", ["billing"])], role="viewer"
+    )
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="carol", session=session
+    )
+    assert preview.groups[0].questions[0].question_id == "q1"
+
+
+async def test_prior_accuracy_reports_a_fraction_and_not_a_bare_percentage(session):
+    """`60%` from five runs and `60%` from one are different claims.
+
+    The picker is where a developer decides which questions are worth training
+    on. A percentage with no denominator invites them to trust a number derived
+    from a single run, and the questions most worth optimising are exactly the
+    ones with the least history.
+    """
+    eval_set, questions = await make_set(session, "set", questions=[("q1", ["billing"])])
+    await add_eval_run(session, eval_set, [(questions[0], "correct")])
+    await add_eval_run(session, eval_set, [(questions[0], "incorrect")])
+
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="alice", session=session
+    )
+    question = preview.groups[0].questions[0]
+    assert question.prior_accuracy == pytest.approx(0.5)
+    assert question.prior_runs == 2
+
+
+async def test_a_question_that_has_never_been_run_reports_none_not_zero(session):
+    """Zero means 'always wrong'. Unknown means nobody has asked yet.
+
+    Shown as 0% it looks like the hardest question in the set — the first one a
+    developer would reach for — when in fact there is no evidence about it at
+    all. It also decides which side of the stratified split it lands on.
+    """
+    eval_set, _ = await make_set(session, "set", questions=[("q1", ["billing"])])
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="alice", session=session
+    )
+    question = preview.groups[0].questions[0]
+    assert question.prior_accuracy is None
+    assert question.prior_runs == 0
+
+
+async def test_unfinished_runs_do_not_count_towards_prior_accuracy(session):
+    """A cancelled run's questions are a sample of whatever ran before the stop.
+
+    Counting them makes the figure depend on when somebody pressed a button.
+    """
+    eval_set, questions = await make_set(session, "set", questions=[("q1", ["billing"])])
+    await add_eval_run(session, eval_set, [(questions[0], "correct")])
+    await add_eval_run(session, eval_set, [(questions[0], "incorrect")], status="cancelled")
+
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="alice", session=session
+    )
+    assert preview.groups[0].questions[0].prior_accuracy == pytest.approx(1.0)
+    assert preview.groups[0].questions[0].prior_runs == 1
+
+
+async def test_a_failed_question_is_excluded_rather_than_counted_wrong(session):
+    """An agent timeout is not the question being hard.
+
+    Scoring it as incorrect makes flaky infrastructure look like a difficult
+    question, and sends it to the training split for a problem no skill edit can
+    fix.
+    """
+    eval_set, questions = await make_set(session, "set", questions=[("q1", ["billing"])])
+    await add_eval_run(session, eval_set, [(questions[0], "correct")])
+    await add_eval_run(session, eval_set, [(questions[0], None)])  # status='failed'
+
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="alice", session=session
+    )
+    assert preview.groups[0].questions[0].prior_accuracy == pytest.approx(1.0)
+
+
+async def test_the_preview_query_count_does_not_grow_with_the_question_count(
+    session, engine
+):
+    """The guard that keeps this from becoming `GET /eval-sets` before its fix.
+
+    A per-question accuracy lookup is the most natural way to write this and the
+    most expensive: it is invisible on the seeded demo and quadratic on a real
+    set, and by the time anyone notices, the wizard is the slowest screen in the
+    product. A constant query count is what stops it coming back; a wall-clock
+    assertion would only be flaky.
+    """
+    small, small_qs = await make_set(session, "small", questions=[
+        (f"q{i}", ["billing"]) for i in range(3)
+    ])
+    await add_eval_run(session, small, [(q, "correct") for q in small_qs])
+
+    with QueryCounter(engine) as counter:
+        await opt.import_preview(
+            ImportPreviewRequest(eval_set_ids=[small.id]), subject="alice", session=session
+        )
+    small_count = counter.count
+
+    big, big_qs = await make_set(session, "big", questions=[
+        (f"b{i}", ["billing"]) for i in range(40)
+    ])
+    await add_eval_run(session, big, [(q, "correct") for q in big_qs])
+
+    with QueryCounter(engine) as counter:
+        await opt.import_preview(
+            ImportPreviewRequest(eval_set_ids=[big.id]), subject="alice", session=session
+        )
+    assert counter.count == small_count, (
+        f"{counter.count} queries for 40 questions vs {small_count} for 3 — "
+        "the accuracy lookup is per-question"
+    )
+
+
+# --- POST /optimization/runs ------------------------------------------------
+
+
+def create_body(train, val, **overrides):
+    body = dict(
+        name="tune billing",
+        mode="isolated",
+        skill_name="billing",
+        train=train,
+        val=val,
+        num_epochs=1,
+        batch_size=4,
+        config={},
+        secrets={},
+        detector={},
+    )
+    body.update(overrides)
+    return OptimizationRunCreate(**body)
+
+
+async def make_runnable_set(session, n=20):
+    eval_set, questions = await make_set(session, "set", questions=[
+        (f"q{i}", ["billing"]) for i in range(n)
+    ])
+    keys = [f"{eval_set.id}:{q.question_id}" for q in questions]
+    return eval_set, questions, keys
+
+
+async def test_creating_a_run_snapshots_the_questions(session, monkeypatch):
+    """A question edited tomorrow must not change what this run measured.
+
+    The same rule `runs` already follows. Without it, a developer looking at a
+    six-week-old chart sees the accuracy the run recorded beside question text
+    that has since been rewritten — and the two no longer describe the same
+    experiment.
+    """
+    _stub_start(monkeypatch)
+    eval_set, questions, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject="alice", session=session
+    )
+
+    questions[0].question = "edited afterwards"
+    await session.commit()
+
+    items = (await session.scalars(
+        (await _items_of(run.id))
+    )).all()
+    snapshot = next(i for i in items if i.item_key == keys[0])
+    assert snapshot.question == "text of q0"
+    assert snapshot.ground_truth_response == "gold q0"
+
+
+async def test_creating_a_run_computes_the_step_counts_the_engine_reads(
+    session, monkeypatch
+):
+    """The engine reads `steps_per_epoch` and `total_steps` off the row.
+
+    It does not derive them. If they were left at whatever the request sent, a
+    run would train for a number of steps unrelated to its own batch size —
+    silently short, so it would simply appear to stop improving early.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session, n=30)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:21], keys[21:], batch_size=5, num_epochs=2),
+        subject="alice", session=session,
+    )
+    # 21 training questions in batches of 5 -> 5 steps per epoch (the last is short).
+    assert run.steps_per_epoch == 5
+    assert run.total_steps == 10
+
+
+async def test_a_split_below_the_minimum_is_refused_at_the_endpoint(
+    session, monkeypatch
+):
+    """The browser's check is a convenience; this one is the rule.
+
+    Anything else means the limit is enforced only for people using the UI as
+    intended.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.create_optimization_run(
+            create_body(keys[:3], keys[3:5]), subject="alice", session=session
+        )
+    assert exc.value.status_code == 400
+    assert "training" in str(exc.value.detail).lower()
+
+
+async def test_an_item_key_from_a_set_the_caller_cannot_read_is_refused(
+    session, monkeypatch
+):
+    """Otherwise the run is a way to read questions through the back door.
+
+    The preview checks the sets it was asked for; this checks the keys that
+    actually arrived, which is the check that matters — the two lists are sent
+    separately and a caller writes both.
+    """
+    _stub_start(monkeypatch)
+    mine, _, mine_keys = await make_runnable_set(session)
+    theirs, their_qs = await make_set(
+        session, "theirs", "bob", questions=[(f"t{i}", ["billing"]) for i in range(10)]
+    )
+    stolen = [f"{theirs.id}:{q.question_id}" for q in their_qs]
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.create_optimization_run(
+            create_body(mine_keys[:10] + stolen, mine_keys[10:]),
+            subject="alice", session=session,
+        )
+    assert exc.value.status_code in (400, 403, 404)
+
+
+async def test_routing_mode_is_refused_for_a_skill_with_no_frontmatter(
+    session, monkeypatch
+):
+    """Routing optimises the description. A skill without one has nothing to edit.
+
+    Every proposed edit would be discarded at application time, the gate would
+    reject every tied candidate, and the run would spend an hour producing a
+    chart of flat rejections with no indication of the cause.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.create_optimization_run(
+            create_body(keys[:14], keys[14:], mode="routing"),
+            subject="alice", session=session,
+        )
+    assert exc.value.status_code == 400
+    assert "frontmatter" in str(exc.value.detail).lower()
+
+
+async def test_an_unknown_skill_is_refused_before_anything_is_created(
+    session, monkeypatch
+):
+    """The skill tag and the agent's directory name are the same name (decision 6).
+
+    Discovering the mismatch at step 0 instead would mean a run row, an item
+    snapshot and a failed rollout for a typo.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.create_optimization_run(
+            create_body(keys[:14], keys[14:], skill_name="nonexistent"),
+            subject="alice", session=session,
+        )
+    assert exc.value.status_code == 400
+    assert not (await session.scalars(await _all_runs())).all()
+
+
+async def test_the_created_run_never_serializes_its_secrets(session, monkeypatch):
+    """`secrets` is a separate column so this can be structural rather than a habit.
+
+    Asserted against the serialized response, not the model: the way this stops
+    being true is someone adding a convenient field to the wrong schema, and
+    only the serialized form catches that.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:],
+                    secrets={"llm_api_key": "sk-must-never-appear"}),
+        subject="alice", session=session,
+    )
+    assert "sk-must-never-appear" not in run.model_dump_json()
+
+    detail = await opt.get_optimization_run(run.id, subject="alice", session=session)
+    assert "sk-must-never-appear" not in detail.model_dump_json()
+
+
+async def test_the_run_starts_only_after_it_has_been_committed(session, monkeypatch):
+    """The background task opens its own session and reads the run by id.
+
+    Spawned before the commit, it would race the transaction and find nothing —
+    intermittently, under load, which is the worst way to find out.
+    """
+    _, _, keys = await make_runnable_set(session)
+
+    # Recorded as a sequence, not as two independent facts: "the row exists" is
+    # true from the session's identity map whether or not anything was
+    # committed, so only the ordering distinguishes the bug from the fix.
+    order: list[str] = []
+    real_commit = session.commit
+
+    async def tracking_commit():
+        await real_commit()
+        order.append("commit")
+
+    monkeypatch.setattr(session, "commit", tracking_commit)
+    monkeypatch.setattr(opt.runner, "start", lambda run_id: order.append("start"))
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject="alice", session=session
+    )
+
+    assert "start" in order, "the run was never spawned"
+    assert order.index("commit") < order.index("start")
+    persisted = await session.get(OptimizationRun, run.id)
+    assert persisted is not None and persisted.status in ("pending", "running")
+
+
+async def test_a_question_duplicated_into_both_splits_becomes_two_items(
+    session, monkeypatch
+):
+    """The wizard offers it deliberately, so the schema has to allow it.
+
+    One row per (split, question) is what lets the run answer 'was this question
+    trained on *and* validated?' — which is the question the overlap warning on
+    the overview page is answering.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+    shared = keys[0]
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:] + [shared]), subject="alice", session=session
+    )
+    items = (await session.scalars(await _items_of(run.id))).all()
+    both = [i for i in items if i.item_key == shared]
+    assert sorted(i.split for i in both) == ["train", "val"]
+
+
+def _stub_start(monkeypatch):
+    monkeypatch.setattr(opt.runner, "start", lambda run_id: None)
+
+
+async def _items_of(run_id):
+    from sqlalchemy import select
+
+    return select(OptimizationItem).where(OptimizationItem.run_id == run_id)
+
+
+async def _all_runs():
+    from sqlalchemy import select
+
+    return select(OptimizationRun)

@@ -240,6 +240,37 @@ export const api = {
   // back into that stale state, silently and for the rest of the session.
   openPlaygroundProgress: () =>
     openStream("/playground/progress", { persistent: true }),
+
+  // --- Optimize (Stage 3) ---------------------------------------------------
+  //
+  // The wizard's four calls, then the run's own.
+  //
+  // `optimizationDefaults` carries the split-size limits as well as the
+  // prefills, so the browser enforces the same numbers the create endpoint
+  // does. A copy in the bundle would drift, and Start would be enabled on a
+  // request that 400s.
+  optimizationDefaults: () => req("GET", "/optimization/defaults"),
+  importPreview: (evalSetIds) =>
+    req("POST", "/optimization/import-preview", { eval_set_ids: evalSetIds }),
+  // Proves the skill tag and the agent's directory are the same name before a
+  // run exists, rather than at step 0 after a batch of agent calls.
+  skillCheck: (skillName) =>
+    req("GET", `/optimization/skill-check${qs({ skill_name: skillName })}`),
+  createOptimizationRun: (payload) => req("POST", "/optimization/runs", payload),
+
+  listOptimizationRuns: (params = {}) =>
+    req("GET", `/optimization/runs${qs(params)}`),
+  getOptimizationRun: (runId) => req("GET", `/optimization/runs/${runId}`),
+  cancelOptimizationRun: (runId) =>
+    req("POST", `/optimization/runs/${runId}/cancel`),
+  // Only an interrupted run — one a backend restart caught mid-loop. A
+  // cancelled or failed run is a decision or a dead end, not something to
+  // continue under the same id.
+  resumeOptimizationRun: (runId) =>
+    req("POST", `/optimization/runs/${runId}/resume`),
+  deleteOptimizationRun: (runId) => req("DELETE", `/optimization/runs/${runId}`),
+  openOptimizationProgress: (runId) =>
+    openStream(`/optimization/runs/${runId}/progress`),
 };
 
 // --- Server-sent events over fetch ------------------------------------------

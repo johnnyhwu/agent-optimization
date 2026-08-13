@@ -728,3 +728,153 @@ class OptimizationRunDetail(OptimizationRunOut):
 
 class OptimizationRunPage(Page):
     items: list[OptimizationRunOut]
+
+
+# --- The wizard -------------------------------------------------------------
+
+
+class ImportPreviewRequest(BaseModel):
+    """Which eval sets to draw questions from (wizard step 1)."""
+
+    eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class PreviewQuestion(BaseModel):
+    """One question the picker is offering, with what is known about it.
+
+    `prior_accuracy` is `None` for a question nobody has run — never 0.0, which
+    would read as "always wrong" and make it the first thing a developer reaches
+    for. `prior_runs` is the denominator: 60% from five runs and 60% from one are
+    different claims, and the questions most worth optimising are exactly the
+    ones with the least history.
+    """
+
+    item_key: str
+    question_id: str
+    question: str
+    ground_truth_response: str
+    eval_set_id: uuid.UUID
+    eval_set_name: str
+    skills: list[str] = Field(default_factory=list)
+    prior_accuracy: float | None = None
+    prior_runs: int = 0
+
+
+class SkillGroup(BaseModel):
+    skill_name: str
+    questions: list[PreviewQuestion] = Field(default_factory=list)
+
+
+class PreviewSource(BaseModel):
+    """One source set, with the fingerprint of the prompt it grades by.
+
+    Two sets whose fingerprints differ were graded by different words, so their
+    prior accuracies are not comparable — and the run about to be built will
+    grade every question by a single prompt of its own. The wizard says so
+    rather than letting the numbers imply otherwise.
+    """
+
+    id: uuid.UUID
+    name: str
+    n_questions: int
+    judge_prompt_fingerprint: str
+
+
+class ImportPreview(BaseModel):
+    groups: list[SkillGroup] = Field(default_factory=list)
+    # Questions with no skill tag, or with more than one. Shown, disabled, with
+    # the tags they do carry — the fix is in the eval set, not here.
+    ambiguous: list[PreviewQuestion] = Field(default_factory=list)
+    sources: list[PreviewSource] = Field(default_factory=list)
+
+
+class SkillCheck(BaseModel):
+    """Whether the agent has the skill the questions are tagged with."""
+
+    skill_name: str
+    exists: bool
+    files: list[str] = Field(default_factory=list)
+    n_chars: int = 0
+    has_frontmatter: bool = False
+    # Set when routing mode cannot be offered, with the reason to show instead.
+    routing_blocked_reason: str | None = None
+    available_skills: list[str] = Field(default_factory=list)
+    workspace_version: str | None = None
+
+
+class OptimizationConfig(BaseModel):
+    """The non-secret settings one optimization run executes with.
+
+    Every field is optional and blank means "use the environment", the same rule
+    `RunConfig` follows — so the fake demo is runnable from an untouched form.
+
+    The judge prompt is here rather than on an eval set, which is the opposite of
+    how an eval run works, and deliberately. An eval run grades a set the whole
+    team shares, so the criteria belong to the set. An optimization run draws
+    from several sets at once — whose prompts may differ — and it is one
+    developer's experiment, so the run owns one prompt and says which.
+    """
+
+    # Connections
+    agent_base_url: str = ""
+    agent_timeout_s: float | None = None
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_timeout_s: float | None = None
+    llm_base_url: str = ""
+    judge_model: str = ""
+    optimizer_model: str = ""
+    concurrency: int | None = Field(default=None, ge=1)
+
+    # Grading
+    judge_system_prompt: str = ""
+    judge_user_prompt: str = ""
+    judge_prompt_fingerprint: str = ""
+
+    # The algorithm
+    minibatch_size: int | None = Field(default=None, ge=1)
+    learning_rate: int | None = Field(default=None, ge=1)
+    min_learning_rate: int | None = Field(default=None, ge=1)
+    scheduler: str = ""
+    gate_metric: str = ""
+    mixed_weight: float | None = Field(default=None, ge=0, le=1)
+    failure_only: bool = False
+    analyst_workers: int | None = Field(default=None, ge=1)
+    merge_batch_size: int | None = Field(default=None, ge=2)
+    reflect_budget_chars: int | None = Field(default=None, ge=1000)
+    error_threshold: float | None = Field(default=None, ge=0, le=1)
+    seed: int | None = None
+
+
+class OptimizationSecrets(BaseModel):
+    """Write-only. No response model reads this — see `optimization_runs.secrets`."""
+
+    llm_api_key: str = ""
+    langfuse_secret_key: str = ""
+
+
+class DetectorConfig(BaseModel):
+    """How a run decides whether the agent actually used the skill.
+
+    `path_patterns` are regexes matched against tool-call arguments; blank means
+    the shipped default. `detectable` says the agent's traces are known to name
+    skill file paths, which turns the content-matching fallback off.
+    """
+
+    path_patterns: list[str] = Field(default_factory=list)
+    detectable: bool = False
+
+
+class OptimizationRunCreate(BaseModel):
+    name: str | None = None
+    mode: str = "isolated"
+    skill_name: str
+    # `item_key`s, as the split editor produced them. A key may appear in both:
+    # the wizard offers "also add to validation" deliberately.
+    train: list[str] = Field(default_factory=list)
+    val: list[str] = Field(default_factory=list)
+    num_epochs: int = Field(default=1, ge=1, le=20)
+    batch_size: int = Field(default=8, ge=1)
+    config: OptimizationConfig = Field(default_factory=OptimizationConfig)
+    secrets: OptimizationSecrets = Field(default_factory=OptimizationSecrets)
+    detector: DetectorConfig = Field(default_factory=DetectorConfig)

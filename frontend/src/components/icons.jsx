@@ -58,6 +58,33 @@ export const IconArrowLeft = (p) => (
     <polyline points="12 19 5 12 12 5" />
   </S>
 );
+// Arrow abutting a wall — "send this across to the other column". Mirrored by
+// direction so the gesture matches the layout rather than contradicting it.
+// Deliberately not a plain arrow: the wall is what says the question *leaves*
+// here, which is the difference between move and duplicate.
+export const IconMoveRight = (p) => (
+  <S {...p}>
+    <line x1="4" y1="12" x2="15" y2="12" />
+    <polyline points="11 8 15 12 11 16" />
+    <line x1="19" y1="5" x2="19" y2="19" />
+  </S>
+);
+export const IconMoveLeft = (p) => (
+  <S {...p}>
+    <line x1="20" y1="12" x2="9" y2="12" />
+    <polyline points="13 8 9 12 13 16" />
+    <line x1="5" y1="5" x2="5" y2="19" />
+  </S>
+);
+// Copy with a plus: keep it here *and* put one there.
+export const IconCopyPlus = (p) => (
+  <S {...p}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    <line x1="14.5" y1="12" x2="14.5" y2="17" />
+    <line x1="12" y1="14.5" x2="17" y2="14.5" />
+  </S>
+);
 export const IconX = (p) => (
   <S {...p}>
     <line x1="18" y1="6" x2="6" y2="18" />

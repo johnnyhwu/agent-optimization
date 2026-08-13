@@ -19,31 +19,50 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app import cancellation
 from app.auth import current_subject
+from app.config import settings
 from app.db import SessionLocal, get_session
+from app.integrations import build_seams
 from app.models import (
+    EvalSet,
     EvalSetRole,
     OptimizationItem,
     OptimizationRollout,
     OptimizationRun,
     OptimizationStep,
+    Question,
+    QuestionResult,
+    QuestionSkill,
+    Run,
 )
-from app.optimizer import runner
+from app.optimizer import dataset, runner, skillio
+from app.optimizer.adapter import DEFAULT_ERROR_THRESHOLD
+from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS
 from app.schemas import (
+    ImportPreview,
+    ImportPreviewRequest,
+    OptimizationConfig,
+    OptimizationRunCreate,
     OptimizationRunDetail,
     OptimizationRunOut,
     OptimizationRunPage,
     OptimizationStepSummary,
+    PreviewQuestion,
+    PreviewSource,
+    SkillCheck,
+    SkillGroup,
 )
+from app.services import judge_prompt, run_config
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
 router = APIRouter(prefix="/optimization", tags=["optimization"])
@@ -172,6 +191,451 @@ def _run_out(run: OptimizationRun, splits, sources, steps_done) -> OptimizationR
         n_train=splits.get("train", 0),
         n_val=splits.get("val", 0),
     )
+
+
+# --- The wizard -------------------------------------------------------------
+
+# How many recent runs the prior-accuracy figure is drawn from. Enough to smooth
+# a single flaky run, few enough that a question fixed six months ago is not
+# still dragging its own history around.
+PRIOR_RUNS_WINDOW = 10
+
+
+@router.get("/defaults")
+async def optimization_defaults(subject: str = Depends(current_subject)):
+    """Prefill values for the wizard, plus the rules it has to enforce.
+
+    The limits come from here rather than being written into the browser bundle
+    so that the split editor's disabled Start button and the create endpoint's
+    400 can never disagree — a button enabled on a request the server rejects is
+    worse than no button.
+
+    Nothing here is a credential. Every other field is environment-derived and
+    safe to render into a page; a secret among them would be sent to everyone who
+    opens the wizard, and would look like a conveniently prefilled field.
+    """
+    return {
+        "defaults": {
+            **run_config.defaults(),
+            "optimizer_model": settings.optimizer_model,
+            # Hyperparameters, matching the engine's own fallbacks so the form
+            # shows what an untouched run would actually do.
+            "num_epochs": 1,
+            "batch_size": 8,
+            "minibatch_size": 8,
+            "learning_rate": 8,
+            "min_learning_rate": 2,
+            "scheduler": "constant",
+            "gate_metric": "hard",
+            "mixed_weight": 0.5,
+            "failure_only": False,
+            "analyst_workers": 4,
+            "merge_batch_size": 8,
+            "reflect_budget_chars": DEFAULT_REFLECT_BUDGET_CHARS,
+            "error_threshold": DEFAULT_ERROR_THRESHOLD,
+            "train_share": dataset.DEFAULT_TRAIN_SHARE,
+        },
+        "judge_prompt": dict(zip(
+            ("system", "user"), judge_prompt.effective(None, None)
+        )),
+        "judge_score_threshold": settings.judge_score_threshold,
+        "limits": {
+            "min_train": dataset.MIN_TRAIN,
+            "min_val": dataset.MIN_VAL,
+            "warn_train": dataset.WARN_TRAIN,
+            "warn_val": dataset.WARN_VAL,
+        },
+        "impls": {
+            "agent": settings.agent_impl,
+            "judge": settings.judge_impl,
+            "trace": settings.trace_impl,
+            "workspace": settings.workspace_impl,
+            # Fake means the skill edits are canned. Worth saying plainly: the
+            # optimizer model field below it would otherwise look like it does
+            # something.
+            "optimizer": settings.optimizer_impl,
+        },
+    }
+
+
+@router.post("/import-preview", response_model=ImportPreview)
+async def import_preview(
+    body: ImportPreviewRequest,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """The questions of one or more eval sets, grouped by skill (wizard step 2).
+
+    Refuses the whole request if any source is unreadable, rather than dropping
+    that set quietly: a preview missing half its questions is how someone builds
+    a run they believe covers something it does not.
+    """
+    if not body.eval_set_ids:
+        return ImportPreview()
+    await _require_reader_on_all(session, body.eval_set_ids, subject)
+
+    sets = (
+        await session.scalars(
+            select(EvalSet).where(EvalSet.id.in_(body.eval_set_ids))
+        )
+    ).all()
+    names = {es.id: es.name for es in sets}
+
+    questions = (
+        await session.scalars(
+            select(Question)
+            .where(Question.eval_set_id.in_(body.eval_set_ids))
+            .order_by(Question.eval_set_id, Question.question_id)
+        )
+    ).all()
+    skills = await _skills_of(session, [q.id for q in questions])
+    accuracy = await _prior_accuracy(session, body.eval_set_ids)
+
+    candidates = [
+        dataset.Candidate(
+            item_key=dataset.item_key(q.eval_set_id, q.question_id),
+            question_id=q.question_id,
+            question=q.question,
+            ground_truth_response=q.ground_truth_response,
+            ground_truth_reasoning=q.ground_truth_reasoning,
+            eval_set_id=q.eval_set_id,
+            eval_set_name=names.get(q.eval_set_id, ""),
+            skills=tuple(skills.get(q.id, ())),
+            prior_accuracy=accuracy.get(q.id, (None, 0))[0],
+            prior_runs=accuracy.get(q.id, (None, 0))[1],
+            question_pk=q.id,
+        )
+        for q in questions
+    ]
+    groups, ambiguous = dataset.group_by_skill(candidates)
+
+    per_set: dict[uuid.UUID, int] = {}
+    for candidate in candidates:
+        per_set[candidate.eval_set_id] = per_set.get(candidate.eval_set_id, 0) + 1
+
+    return ImportPreview(
+        groups=[
+            SkillGroup(skill_name=name, questions=[_preview(c) for c in group])
+            for name, group in groups.items()
+        ],
+        ambiguous=[_preview(c) for c in ambiguous],
+        sources=[
+            PreviewSource(
+                id=es.id, name=es.name, n_questions=per_set.get(es.id, 0),
+                judge_prompt_fingerprint=judge_prompt.fingerprint(
+                    es.judge_system_prompt, es.judge_user_prompt
+                ),
+            )
+            for es in sorted(sets, key=lambda s: s.name)
+        ],
+    )
+
+
+@router.get("/skill-check", response_model=SkillCheck)
+async def skill_check(
+    skill_name: str = Query(..., min_length=1),
+    subject: str = Depends(current_subject),
+):
+    """Does the agent actually have this skill directory? (wizard step 4)
+
+    Decision 6 treats a question's skill tag and the agent's directory name as
+    the same name. That is only safe if it is checked before the run starts —
+    otherwise a one-character typo costs a run row, an item snapshot and a batch
+    of agent calls before anyone finds out.
+
+    No session dependency: this reads the agent server, not the database.
+    """
+    seams = build_seams(include_workspace=True)
+    workspace = await seams.workspace.get_workspace()
+    files = {
+        path: text for path, text in workspace.skills.items()
+        if path == skill_name or path.startswith(f"{skill_name}/")
+    }
+    available = sorted({path.split("/", 1)[0] for path in workspace.skills})
+
+    if not files:
+        return SkillCheck(
+            skill_name=skill_name, exists=False, available_skills=available,
+            workspace_version=workspace.version,
+            routing_blocked_reason="this skill was not found on the agent",
+        )
+
+    has_frontmatter = skillio.has_frontmatter(files, skill_name)
+    return SkillCheck(
+        skill_name=skill_name,
+        exists=True,
+        files=sorted(files),
+        n_chars=sum(len(text) for text in files.values()),
+        has_frontmatter=has_frontmatter,
+        routing_blocked_reason=None if has_frontmatter else (
+            f"{skillio.entry_point_for(skill_name)} has no YAML frontmatter, so "
+            "there is no description for routing mode to optimise"
+        ),
+        available_skills=available,
+        workspace_version=workspace.version,
+    )
+
+
+@router.post("/runs", response_model=OptimizationRunOut, status_code=201)
+async def create_optimization_run(
+    body: OptimizationRunCreate,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Snapshot the dataset and the skill, then start the run (wizard step 6).
+
+    Everything that can be refused is refused here, before a row exists: an
+    unreadable source, a skill the agent does not have, a mode the skill cannot
+    support, a split too small to measure anything. The alternative is a run
+    that fails at step 0 having already spent a batch of agent calls, and a list
+    accumulating dead rows for typos.
+    """
+    if body.mode not in ("isolated", "routing"):
+        raise HTTPException(status_code=400, detail=f"unknown mode {body.mode!r}")
+
+    # 1. The split, on its own terms.
+    issues = dataset.split_issues(body.train, body.val)
+    errors = [i for i in issues if i["level"] == "error"]
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(i["message"] for i in errors))
+
+    # 2. The questions behind the keys, and permission on every set they name.
+    wanted = list(dict.fromkeys(body.train + body.val))
+    set_ids = {uuid.UUID(dataset.split_item_key(key)[0]) for key in wanted}
+    await _require_reader_on_all(session, sorted(set_ids), subject)
+
+    questions = (
+        await session.scalars(
+            select(Question).where(Question.eval_set_id.in_(set_ids))
+        )
+    ).all()
+    by_key = {dataset.item_key(q.eval_set_id, q.question_id): q for q in questions}
+    missing = [key for key in wanted if key not in by_key]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(missing)} question(s) no longer exist: {', '.join(missing[:3])}",
+        )
+
+    # 3. The skill, read from the agent and pinned. A run optimises a snapshot;
+    #    if the agent moves underneath it the numbers still describe the snapshot.
+    seams = build_seams(body.config.model_dump(), body.secrets.model_dump(),
+                        include_workspace=True)
+    workspace = await seams.workspace.get_workspace()
+    initial = {
+        path: text for path, text in workspace.skills.items()
+        if path == body.skill_name or path.startswith(f"{body.skill_name}/")
+    }
+    if not initial:
+        available = sorted({p.split("/", 1)[0] for p in workspace.skills})
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"the agent has no skill directory named {body.skill_name!r}"
+                + (f" — it has: {', '.join(available)}" if available else "")
+            ),
+        )
+    if body.mode == "routing" and not skillio.has_frontmatter(initial, body.skill_name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"routing mode optimises the description in "
+                f"{skillio.entry_point_for(body.skill_name)}'s YAML frontmatter, "
+                "and this skill has none"
+            ),
+        )
+
+    # 4. Materialise the config, the same way `run_config.resolve` does for an
+    #    eval run: a field left blank is stored with the environment's value, so
+    #    the record is readable after the environment has moved on.
+    config = _resolve_optimization_config(body.config)
+
+    n_train = len(body.train)
+    steps_per_epoch = max(1, math.ceil(n_train / max(body.batch_size, 1)))
+    run = OptimizationRun(
+        name=(body.name or "").strip() or None,
+        created_by=subject,
+        status="pending",
+        mode=body.mode,
+        skill_name=body.skill_name,
+        config=config,
+        secrets={k: v for k, v in body.secrets.model_dump().items() if v},
+        workspace_version=workspace.version,
+        initial_skill=initial,
+        # Routing sends the whole workspace, so the *other* skills are part of
+        # the experiment and must not shift mid-run.
+        workspace_baseline=(
+            {p: t for p, t in workspace.skills.items() if p not in initial}
+            if body.mode == "routing" else None
+        ),
+        detector=body.detector.model_dump(),
+        num_epochs=body.num_epochs,
+        batch_size=body.batch_size,
+        steps_per_epoch=steps_per_epoch,
+        total_steps=body.num_epochs * steps_per_epoch,
+    )
+    session.add(run)
+    await session.flush()
+
+    accuracy = await _prior_accuracy(session, sorted(set_ids))
+    for split, keys in (("train", body.train), ("val", body.val)):
+        for ordinal, key in enumerate(dict.fromkeys(keys)):
+            question = by_key[key]
+            prior, runs = accuracy.get(question.id, (None, 0))
+            session.add(OptimizationItem(
+                run_id=run.id, split=split, item_key=key,
+                question_pk=question.id, source_eval_set_id=question.eval_set_id,
+                # Snapshotted, like `runs` does: a question edited tomorrow must
+                # not change what this run was measuring.
+                question=question.question,
+                ground_truth_response=question.ground_truth_response,
+                ground_truth_reasoning=question.ground_truth_reasoning,
+                ordinal=ordinal, prior_accuracy=prior, prior_runs=runs,
+            ))
+    await session.commit()
+
+    # Only now. The background task opens its own session and reads the run by
+    # id, so spawning it before the commit would race the transaction.
+    runner.start(run.id)
+    return await _one_run_out(session, run)
+
+
+def _preview(candidate: dataset.Candidate) -> PreviewQuestion:
+    return PreviewQuestion(
+        item_key=candidate.item_key,
+        question_id=candidate.question_id,
+        question=candidate.question,
+        ground_truth_response=candidate.ground_truth_response,
+        eval_set_id=candidate.eval_set_id,
+        eval_set_name=candidate.eval_set_name,
+        skills=list(candidate.skills),
+        prior_accuracy=candidate.prior_accuracy,
+        prior_runs=candidate.prior_runs,
+    )
+
+
+def _resolve_optimization_config(config: OptimizationConfig) -> dict:
+    """Blank fields filled from the environment, and a judge prompt of our own.
+
+    Materialised rather than stored blank for the reason `run_config.resolve`
+    gives: a blank in a stored config is unreadable afterwards ("was that the
+    environment's value, or nothing at all?"), and today's environment is no
+    witness to what it held when the run started.
+    """
+    effective = dict(run_config.defaults())
+    effective["optimizer_model"] = settings.optimizer_model
+    for key, value in config.model_dump().items():
+        if isinstance(value, str) and not value.strip():
+            continue
+        if value is None:
+            continue
+        effective[key] = value
+
+    system, user = judge_prompt.effective(
+        config.judge_system_prompt, config.judge_user_prompt
+    )
+    effective["judge_system_prompt"] = system
+    effective["judge_user_prompt"] = user
+    effective["judge_prompt_fingerprint"] = judge_prompt.fingerprint(system, user)
+    return effective
+
+
+async def _require_reader_on_all(
+    session: AsyncSession, eval_set_ids, subject: str
+) -> None:
+    """Every named set must be readable, or the request is refused entirely."""
+    if not eval_set_ids:
+        return
+    readable = set(
+        (await session.scalars(
+            select(EvalSetRole.eval_set_id).where(
+                EvalSetRole.user_subject == subject,
+                EvalSetRole.eval_set_id.in_(eval_set_ids),
+            )
+        )).all()
+    )
+    missing = [str(i) for i in eval_set_ids if i not in readable]
+    if missing:
+        # 404, not 403: whether a set exists at a given id is not theirs to
+        # learn, the same choice `_load_visible_run` makes.
+        raise HTTPException(
+            status_code=404,
+            detail=f"{len(missing)} eval set(s) not found: {', '.join(missing[:3])}",
+        )
+
+
+async def _skills_of(session: AsyncSession, question_pks) -> dict[uuid.UUID, list[str]]:
+    if not question_pks:
+        return {}
+    rows = (
+        await session.execute(
+            select(QuestionSkill.question_pk, QuestionSkill.skill_name)
+            .where(QuestionSkill.question_pk.in_(question_pks))
+            .order_by(QuestionSkill.question_pk, QuestionSkill.ordinal)
+        )
+    ).all()
+    out: dict[uuid.UUID, list[str]] = {}
+    for pk, name in rows:
+        out.setdefault(pk, []).append(name)
+    return out
+
+
+async def _prior_accuracy(
+    session: AsyncSession, eval_set_ids
+) -> dict[uuid.UUID, tuple[float | None, int]]:
+    """`{question_pk: (accuracy, n_runs)}` over the recent completed runs.
+
+    **One query, not one per question.** `docs/spec.md` §10.2③ records what the
+    per-row version did to `GET /eval-sets` — 180 queries for one page, growing
+    with history — and a picker listing every question of several sets is the
+    same shape of surface.
+
+    Three rules about what counts, each of which changes the number a developer
+    is choosing on:
+
+      * only `completed` runs, because a cancelled run's questions are a sample
+        of whatever happened to finish before somebody pressed stop;
+      * only `done` results, because an agent timeout is not the question being
+        hard, and scoring it wrong sends it to the training split for a problem
+        no skill edit can fix;
+      * only the most recent `PRIOR_RUNS_WINDOW`, so a question fixed months ago
+        is not still dragging its own history around.
+    """
+    if not eval_set_ids:
+        return {}
+    ranked = (
+        select(
+            Run.id,
+            func.row_number()
+            .over(partition_by=Run.eval_set_id, order_by=Run.started_at.desc())
+            .label("rn"),
+        )
+        .where(Run.eval_set_id.in_(eval_set_ids), Run.status == "completed")
+        .subquery()
+    )
+    recent = select(ranked.c.id).where(ranked.c.rn <= PRIOR_RUNS_WINDOW)
+
+    rows = (
+        await session.execute(
+            select(
+                QuestionResult.question_pk,
+                func.count(func.distinct(QuestionResult.run_id)).label("runs"),
+                func.count().label("n"),
+                func.sum(
+                    case((QuestionResult.verdict == "correct", 1), else_=0)
+                ).label("n_correct"),
+            )
+            .where(
+                QuestionResult.run_id.in_(recent),
+                QuestionResult.status == "done",
+            )
+            .group_by(QuestionResult.question_pk)
+        )
+    ).all()
+    return {
+        row.question_pk: ((row.n_correct / row.n) if row.n else None, row.runs)
+        for row in rows
+    }
 
 
 @router.get("/runs", response_model=OptimizationRunPage)

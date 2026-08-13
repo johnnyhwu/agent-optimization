@@ -7,14 +7,12 @@ import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
 import Playground from "./components/Playground.jsx";
+import OptimizeSection from "./components/optimize/OptimizeSection.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
 import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
 import UserMenu from "./components/UserMenu.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
-import Button from "./components/ui/Button.jsx";
-import EmptyState from "./components/ui/EmptyState.jsx";
 import Skeleton from "./components/ui/Skeleton.jsx";
-import { IconBeaker, IconSparkles } from "./components/icons.jsx";
 
 // The whole view state lives in the URL (see useHashRoute): which section, which
 // eval set, which runs, which incorrect mode. The three tiers of §6.13 are the
@@ -178,7 +176,9 @@ export default function App() {
               />
             )}
 
-            {route.section === "optimize" && <OptimizePlaceholder />}
+            {route.section === "optimize" && (
+              <OptimizeSection route={route} subject={subject} />
+            )}
           </div>
         </div>
       </div>
@@ -203,24 +203,3 @@ function useDocumentTitle(route, evalSet) {
   }, [route.section, route.tier, evalSet?.name]);
 }
 
-// Reachable only by typing the URL — the rail doesn't link here yet. Says what
-// the section will do and where the work happens today, rather than "coming
-// soon" with no direction.
-function OptimizePlaceholder() {
-  return (
-    <EmptyState
-      icon={<IconSparkles size={22} />}
-      title="Optimize is coming"
-      size="lg"
-      action={
-        <Button variant="primary" icon={<IconBeaker size={15} />} onClick={() => navigate(href.playground())}>
-          Open the playground
-        </Button>
-      }
-    >
-      This is where eval results will be grouped by skill and fed to the optimizer
-      to produce an improved one. Until then, edit a skill by hand in the
-      playground and see what it changes.
-    </EmptyState>
-  );
-}

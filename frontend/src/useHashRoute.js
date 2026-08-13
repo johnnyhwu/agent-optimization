@@ -30,6 +30,8 @@ export const href = {
   },
   playground: () => "#/playground",
   optimize: () => "#/optimize",
+  optimizeNew: () => "#/optimize/new",
+  optimizeRun: (runId) => `#/optimize/${runId}`,
 };
 
 export function navigate(to) {
@@ -51,7 +53,13 @@ export function parseHash(hash) {
   const q = new URLSearchParams(search || "");
 
   if (parts[0] === "playground") return { section: "playground" };
-  if (parts[0] === "optimize") return { section: "optimize" };
+  if (parts[0] === "optimize") {
+    // `new` is a reserved id rather than a query flag: the wizard is a whole
+    // page, and a page deserves an address someone can link to.
+    if (parts[1] === "new") return { section: "optimize", tier: "new" };
+    if (parts[1]) return { section: "optimize", tier: "run", runId: parts[1] };
+    return { section: "optimize", tier: "runs" };
+  }
 
   // Everything else is the evaluation section, including an empty hash — it is
   // the app's home.
