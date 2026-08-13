@@ -29,6 +29,7 @@ import json
 import pytest
 
 from app.integrations.base import Span, Trace
+from app.integrations.real.diagnosis import truncate_spans
 from app.services.truncation import (
     allocate_budget,
     trace_chars,
@@ -329,11 +330,12 @@ def test_allocation_handles_no_traces():
 
 
 def test_truncate_body_still_behaves_exactly_as_the_diagnosis_path_expects():
-    """`truncate_body` is shared with diagnosis and its behaviour is frozen.
+    """`truncate_body` is frozen, and it is now the cutter both paths run on.
 
-    Restated here rather than left implicit: this module gained a function, it
-    did not change one. The diagnosis prompt's elision marker is the same string
-    a reflect prompt shows, which is why the two paths can share a reader.
+    It stopped being diagnosis's entry point when that path moved onto the
+    cascade, but it did not change: every cut either path makes still goes
+    through this function, which is why one elision marker appears in a reflect
+    prompt and a diagnosis prompt alike.
     """
     short = "abc"
     assert truncate_body(short, 100) == (short, False)
@@ -342,3 +344,111 @@ def test_truncate_body_still_behaves_exactly_as_the_diagnosis_path_expects():
     assert cut is True
     assert len(text) < 500
     assert "truncated" in text
+
+
+# --- Diagnosis now shares the cascade ---------------------------------------
+#
+# It used to cap each span body independently. The two callers now differ in
+# exactly one thing — whether the final answer may be cut — and everything else
+# is the same code, so a developer who has read one prompt has read both.
+
+
+def _plain(n, body):
+    return [
+        Span(index=i, tool_name=f"tool{i}", status="success", input=body, output=body)
+        for i in range(n)
+    ]
+
+
+def test_a_trace_where_everything_is_oversized_is_cut_exactly_as_before(configure):
+    """The switch must not move the behaviour anyone had already tuned around.
+
+    `span_body_max_chars` is an operator-facing knob with a value someone chose.
+    Feeding the cascade a budget of that value per body per side, and the same
+    number as `min_keep`, makes the saturated case — every body over the limit —
+    come out byte for byte as per-body capping did. The change is only supposed
+    to help the traces that were *not* saturated.
+    """
+    body = "x" * 5000
+    with configure(span_body_max_chars=200):
+        out = truncate_spans(_plain(4, body))
+        expected, _ = truncate_body(body, 200)
+
+    assert len(out) == 4
+    assert all(s.input == expected and s.output == expected for s in out)
+
+
+def test_one_huge_body_among_small_ones_is_no_longer_cut_to_the_same_stub(configure):
+    """The reason for sharing the cascade at all.
+
+    Per-body capping treated a 40 KB tool result and a ten-character one as the
+    same problem: the big one lost everything past the limit while the small ones
+    left almost all of their allowance unspent. The evidence went and the padding
+    stayed. A shared budget hands the unused share back, and this trace now fits
+    without a single cut.
+    """
+    spans = [Span(index=0, tool_name="big", status="success", input="y" * 40000, output="ok")]
+    spans += [
+        Span(index=i, tool_name=f"t{i}", status="success", input="tiny", output="tiny")
+        for i in range(1, 40)
+    ]
+    with configure(span_body_max_chars=800):
+        out = truncate_spans(spans)
+
+    assert out[0].input == "y" * 40000
+    assert "truncated" not in out[0].input
+
+
+def test_a_trace_that_fits_is_returned_untouched(configure):
+    """Measure first. Elision markers in a prompt that never needed them make a
+    developer reading it distrust evidence that was in fact complete."""
+    with configure(span_body_max_chars=800):
+        out = truncate_spans(_plain(3, "short body"))
+    assert all(s.input == "short body" and s.output == "short body" for s in out)
+
+
+def test_diagnosis_may_cut_the_final_answer_and_reflection_may_not(configure):
+    """The single difference between the two callers, stated as a test.
+
+    Reflection protects the last span's output because the analyst is explaining
+    a verdict *about* that answer, and it has a better last resort: drop a whole
+    item from the minibatch and record it. Diagnosis has no such move — one
+    trace, and it has to fit — so for it a cut answer beats a request that
+    overflows the context window and returns nothing at all.
+    """
+    body = "x" * 5000
+    with configure(span_body_max_chars=200):
+        cut_by_diagnosis = truncate_spans(_plain(3, body))
+    kept_by_reflection, _ = truncate_trace(
+        Trace(correlation_id="c", spans=_plain(3, body)), budget_chars=1200, min_keep=200
+    )
+
+    assert "truncated" in cut_by_diagnosis[-1].output
+    assert kept_by_reflection.spans[-1].output == body
+
+
+def test_the_diagnosis_path_still_never_cuts_a_tool_call(configure):
+    """Inherited from the cascade, and the reason sharing it is an upgrade.
+
+    Per-body capping had no idea what it was cutting. A tool call's arguments are
+    the agent's decision and the only place "it queried the wrong table" is
+    visible; the final answer looks identical either way. Cutting them turned a
+    diagnosable failure into an undiagnosable one, on the prompt whose entire
+    job is to diagnose it.
+    """
+    call = {"tool_calls": [{"function": {"name": "sql", "arguments": "SELECT " + "c" * 9000}}]}
+    spans = [
+        Span(index=0, tool_name="sql", status="success", input="ask", output=_dumps(call),
+             output_json=call),
+        Span(index=1, tool_name="answer", status="success", input="x" * 9000, output="done"),
+    ]
+    with configure(span_body_max_chars=100):
+        out = truncate_spans(spans)
+
+    assert "c" * 9000 in out[0].output
+    assert "truncated" in out[1].input
+
+
+def _dumps(payload):
+    import json
+    return json.dumps(payload, ensure_ascii=False)

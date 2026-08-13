@@ -46,6 +46,7 @@ from app.optimizer.gating import decide_gate
 from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS, build_analyst_items
 from app.optimizer.skillio import find_answer_leaks, per_file_stats, total_line_changes
 from app.optimizer.store import Item, OptimizationStore, ResumeState, RunSpec
+from app.optimizer.longitudinal import run_epoch_boundary
 from app.optimizer.update import run_update_stage
 from app.optimizer.vendor.gate import select_gate_score
 from app.optimizer.vendor.scheduler import build_scheduler
@@ -81,6 +82,17 @@ class _State:
     # measured, and re-running a whole validation split to rediscover its score
     # is the most expensive no-op in the loop.
     score_cache: dict[str, tuple[float, float, float | None]] = field(default_factory=dict)
+    # epoch_no → the step whose validation rollout measured the skill in force at
+    # the end of that epoch. The slow update compares two of these. Epoch 0 is the
+    # baseline; an epoch that accepted nothing inherits the previous mark, which
+    # is how "the skill did not change" is detected without comparing hashes.
+    epoch_mark: dict[int, int] = field(default_factory=lambda: {0: 0})
+    # Upstream's two longitudinal memories, carried across epoch boundaries.
+    slow_update_text: str = ""
+    meta_skill_text: str = ""
+    # The skill as each epoch ended, so a boundary can show the optimizer what
+    # the previous epoch's version actually said.
+    epoch_files: dict[int, dict[str, str]] = field(default_factory=dict)
 
 
 # --- Entry point ------------------------------------------------------------
@@ -173,6 +185,7 @@ async def _execute(
             start_step = 1
 
         scheduler = _build_scheduler(spec)
+        steps_per_epoch = max(spec.steps_per_epoch, 1)
         for step_no in range(start_step, spec.total_steps + 1):
             await _check_cancel(run_id, store, cancel_event)
             await _step(
@@ -180,6 +193,13 @@ async def _execute(
                 store=store, seams=seams, publish=publish, cancel_event=cancel_event,
                 state=state, edit_budget=scheduler.get_lr(step_no),
             )
+            # The epoch boundary, and the only place anything looks across steps.
+            if step_no % steps_per_epoch == 0:
+                await _epoch_boundary(
+                    run_id, epoch_no=(step_no - 1) // steps_per_epoch + 1,
+                    step_no=step_no, spec=spec, val=val, store=store, seams=seams,
+                    publish=publish, state=state,
+                )
     except _Cancelled:
         return "cancelled", None
     except RunAborted:
@@ -200,6 +220,7 @@ def _seed_state(state: _State, spec: RunSpec, resume: ResumeState | None) -> Non
         return
     state.current_files = dict(spec.initial_skill)
     state.best_files = dict(spec.initial_skill)
+    state.epoch_files[0] = dict(spec.initial_skill)
 
 
 # --- Pre-flight -------------------------------------------------------------
@@ -365,6 +386,70 @@ async def _step(
         raise
 
 
+async def _epoch_boundary(
+    run_id, *, epoch_no: int, step_no: int, spec: RunSpec, val, store: OptimizationStore,
+    seams: Seams, publish: Publisher, state: _State,
+) -> None:
+    """Upstream's slow update, at the end of an epoch. Off unless asked for.
+
+    The comparison is the validation split under the skill that ended the
+    previous epoch versus the one that ends this one — see `longitudinal.py` for
+    why that split and not the training batch. Both marks are step numbers, and
+    `parent_step_no` already tracks the last accepted step, so "which skill was
+    in force" needs nothing new to be recorded.
+
+    An epoch that accepted no candidate ends on the skill it began with. There
+    is nothing longitudinal about comparing a skill with itself, and asking the
+    largest model configured to write guidance about a change that did not
+    happen is worse than not asking.
+    """
+    previous = state.epoch_mark.get(epoch_no - 1, 0)
+    current = state.parent_step_no if state.parent_step_no is not None else 0
+    state.epoch_mark[epoch_no] = current
+
+    config = spec.config
+    wants = bool(config.get("slow_update")) or bool(config.get("meta_skill"))
+    if not wants or current == previous or seams.optimizer is None:
+        return
+
+    outcome = await asyncio.to_thread(
+        run_epoch_boundary,
+        files=state.current_files,
+        prev_files=state.epoch_files.get(epoch_no - 1, {}),
+        skill_dir=spec.skill_name,
+        items=[{"id": item.item_key, "question": item.question} for item in val],
+        results_prev=await store.load_val_results(run_id, previous),
+        results_curr=await store.load_val_results(run_id, current),
+        client=seams.optimizer,
+        prev_slow_update_text=state.slow_update_text,
+        prev_meta_skill_text=state.meta_skill_text,
+        slow_update=bool(config.get("slow_update")),
+        meta_skill=bool(config.get("meta_skill")),
+    )
+
+    state.meta_skill_text = outcome.meta_skill_text or state.meta_skill_text
+    state.epoch_files[epoch_no] = dict(outcome.files)
+    if not outcome.changed:
+        return
+
+    # The skill changed outside a step, so it needs a snapshot of its own or the
+    # next step's diff would show the guidance block as that step's own edit —
+    # attributing one model's writing to another, on the page whose job is to
+    # say who changed what. `skill_diff` resolves a base to this kind first.
+    state.current_files = dict(outcome.files)
+    state.slow_update_text = outcome.slow_update_text
+    await store.record_skill(
+        run_id, step_no=current, kind="slow_update", files=dict(outcome.files),
+        content_hash=skill_hash(outcome.files),
+        per_file_stats=per_file_stats(state.epoch_files.get(epoch_no - 1, {}), outcome.files),
+    )
+    await publish({
+        "type": "slow_update_done", "step_no": step_no, "epoch_no": epoch_no,
+        "improved": outcome.n_improved, "regressed": outcome.n_regressed,
+        "persistent_fail": outcome.n_persistent_fail,
+    })
+
+
 async def _agent_version(seams: Seams) -> str | None:
     """The agent's config version right now, or None if it cannot be had.
 
@@ -445,6 +530,7 @@ async def _run_step(
         failure_only=bool(config.get("failure_only")),
         seed=config.get("seed"),
         truncation_by_item=ledger,
+        meta_skill_context=state.meta_skill_text,
     )
     for record in outcome.minibatches:
         await store.record_minibatch(

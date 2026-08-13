@@ -110,7 +110,7 @@ def _has_tool_calls(message: Any) -> bool:
     return isinstance(message, dict) and bool(message.get("tool_calls"))
 
 
-def _slots(trace: Trace) -> list[dict]:
+def _slots(trace: Trace, *, cut_final_answer: bool = False) -> list[dict]:
     """Every piece of text that may be cut, with the stage it belongs to.
 
     What is deliberately absent is the point of the whole module:
@@ -121,9 +121,17 @@ def _slots(trace: Trace) -> list[dict]:
         it would also read as "the agent never loaded the skill",
       * the last span's output — the answer the judge's verdict is about,
       * the span skeleton itself; every span stays in the list (§6.7).
+
+    `cut_final_answer` releases exactly one of those, and only one caller sets
+    it. Reflection protects the final answer because it has a better last resort:
+    when a minibatch will not fit, it drops a whole item and says so in the
+    ledger. Diagnosis has no such move — there is one trace and it has to fit —
+    so for it a mangled final answer beats a request that overflows the context
+    window and fails. Naming the single genuine difference and defaulting it to
+    the safer side is the alternative to keeping two cascades that drift apart.
     """
     slots: list[dict] = []
-    last_index = len(trace.spans) - 1
+    last_index = -1 if cut_final_answer else len(trace.spans) - 1
 
     for position, span in enumerate(trace.spans):
         messages = _messages_of(span.input_json)
@@ -211,7 +219,8 @@ def _apply(spans: list[Span], slot: dict, min_keep: int) -> int:
 
 
 def truncate_trace(
-    trace: Trace, budget_chars: int, *, min_keep: int = DEFAULT_MIN_KEEP
+    trace: Trace, budget_chars: int, *, min_keep: int = DEFAULT_MIN_KEEP,
+    cut_final_answer: bool = False,
 ) -> tuple[Trace, list[dict]]:
     """Fit one trace into `budget_chars`, cutting as little as possible.
 
@@ -236,7 +245,10 @@ def truncate_trace(
     ledger: list[dict] = []
     # Stage ascending, then biggest first: cutting the largest slot frees the
     # most room per cut, so fewer slots are touched overall.
-    pending = sorted(_slots(trace), key=lambda s: (s["stage"], -s["size"]))
+    pending = sorted(
+        _slots(trace, cut_final_answer=cut_final_answer),
+        key=lambda s: (s["stage"], -s["size"]),
+    )
 
     for slot in pending:
         if trace_chars(Trace(trace.correlation_id, spans)) <= budget_chars:

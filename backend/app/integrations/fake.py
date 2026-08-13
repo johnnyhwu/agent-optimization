@@ -497,6 +497,29 @@ class FakeOptimizerClient:
             # reorders by relevance, which a fake cannot meaningfully imitate.
             return json.dumps({"selected_indices": [0, 1, 2, 3]}), usage
 
+        if stage == "slow_update":
+            # The epoch-boundary pass. Deterministic like the rest, and phrased
+            # as guidance rather than as an edit, because that is what it is:
+            # free-form advice written into a protected block that step-level
+            # analysts may read but not change.
+            return json.dumps({
+                "reasoning": "fake slow update: regressions clustered on refunds",
+                "slow_update_content": (
+                    "Across this epoch, answers improved when the period was "
+                    "stated before the figure. Prefer tightening an existing "
+                    "rule over adding a new one."
+                ),
+            }), usage
+
+        if stage == "meta_skill":
+            return json.dumps({
+                "reasoning": "fake meta skill: narrower edits landed more often",
+                "meta_skill_content": (
+                    "Edit one rule at a time; batched rewrites were rejected "
+                    "more often than they were accepted."
+                ),
+            }), usage
+
         if stage == "merge":
             return json.dumps({
                 "reasoning": "fake merge: near-duplicate edits collapsed",

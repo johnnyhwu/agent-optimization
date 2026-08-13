@@ -845,6 +845,13 @@ class OptimizationConfig(BaseModel):
     gate_metric: str = ""
     mixed_weight: float | None = Field(default=None, ge=0, le=1)
     failure_only: bool = False
+    # Upstream's two longitudinal passes, both off by default. They run once per
+    # epoch boundary, not per step, and both cost a call on the optimizer model.
+    # `slow_update` writes guidance into a protected block of SKILL.md that
+    # step-level analysts cannot edit; `meta_skill` is optimizer-side memory
+    # shown to later analysts and never written into the skill at all.
+    slow_update: bool = False
+    meta_skill: bool = False
     analyst_workers: int | None = Field(default=None, ge=1)
     merge_batch_size: int | None = Field(default=None, ge=2)
     reflect_budget_chars: int | None = Field(default=None, ge=1000)

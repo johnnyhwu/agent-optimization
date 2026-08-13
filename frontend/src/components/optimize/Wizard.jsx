@@ -582,6 +582,49 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
         </Field>
       </FormSection>
 
+      {/* Upstream's two longitudinal passes. Off by default and stated as what
+          they cost, because they are the only settings on this page that add
+          calls on the *optimizer* model — the expensive one — and they do it
+          per epoch, so a one-epoch run gets nothing out of either. */}
+      <FormSection
+        title="Longitudinal passes"
+        description="Extra work at each epoch boundary, comparing the validation split under the previous epoch's skill and this one's. Both are off unless you turn them on."
+      >
+        <Field
+          label="Slow update"
+          help="Writes free-form guidance into a protected block of SKILL.md that step-level edits cannot touch. Needs at least two epochs to have anything to compare."
+        >
+          <label className="opt-switch">
+            <input
+              type="checkbox"
+              checked={Boolean(hyper.slow_update)}
+              onChange={(e) => onHyper({ ...hyper, slow_update: e.target.checked })}
+            />
+            <span>Write epoch guidance into the skill</span>
+          </label>
+        </Field>
+        <Field
+          label="Meta skill"
+          help="Optimizer-side memory: what the last epoch taught it about its own editing, shown to the analyst on later steps. Never written into the skill itself."
+        >
+          <label className="opt-switch">
+            <input
+              type="checkbox"
+              checked={Boolean(hyper.meta_skill)}
+              onChange={(e) => onHyper({ ...hyper, meta_skill: e.target.checked })}
+            />
+            <span>Carry the optimizer's own notes between epochs</span>
+          </label>
+        </Field>
+        {epochs < 2 && (hyper.slow_update || hyper.meta_skill) && (
+          <Banner tone="warning" title="One epoch has no boundary to compare across">
+            Both passes compare one epoch with the previous one. With a single
+            epoch there is no previous, so neither will run and neither will cost
+            anything. Raise the epoch count above, or leave them off.
+          </Banner>
+        )}
+      </FormSection>
+
       <Card className="opt-review">
         <CardHeader title="What this will do" />
         <dl className="opt-review-grid">

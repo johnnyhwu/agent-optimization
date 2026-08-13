@@ -191,7 +191,7 @@ Stage 4 補的是「手動驗證一個假設」，Stage 3 補的是**把那個�
 | 產出 | zip（skill 目錄 + `manifest.json`，含 warnings），**人工放回 agent server** |
 
 **刻意不做**（見 §15.1）：skill 自動寫回 agent server、test split、整份重寫模式、
-slow update / meta skill 預設關閉、多次取樣壓抑溫度雜訊。
+多次取樣壓抑溫度雜訊。slow update / meta skill 已接線但預設關閉。
 
 > **答案硬編是這一段的主要風險，防線有三層**：analyst prompt 明文禁止（沿用上游）、
 > held-out validation split（結構性防線）、以及 diff 上的逐字比對告警——後者的計數在候選寫入時
@@ -1899,7 +1899,7 @@ per-span 機率 / 熱點著色、人工重標 span、多租戶隔離
 | skill 自動寫回 agent server | 寫回牽涉版本控制與 rollback，是另一個系統。產出 zip、人工放回，換來的是「這份 skill 是誰在什麼時候放上去的」仍然由人負責 |
 | test split | 第三個 split 會讓每一份數字都要再解釋一次它是哪個 split 的。**用本系統既有的 evaluation 功能對 optimized skill 重跑一次**，就是無偏驗證，而且那條路本來就存在 |
 | `rewrite_from_suggestions` / 整份重寫 | v1 只做 `patch`。整份重寫的 diff 沒有人讀得動，而 diff 是這個系統的安全機制之一 |
-| slow update / meta skill | 實作並接線，但**預設關閉** |
+| slow update / meta skill 預設關閉 | 兩者都已接線（`optimizer/longitudinal.py`），由 run config 的 `slow_update` / `meta_skill` 開啟，**預設關閉**。它們在 epoch 邊界跑，不是每個 step——單一 epoch 的 run 沒有邊界可比，兩者都不會執行 |
 | 多次取樣壓抑溫度雜訊 | 成本翻倍。改為在 UI 上誠實說明單次取樣的限制 |
 | 金鑰加密 | 沿用 `runs.secrets` 的既有明文模式，不新增例外，也不假裝解決了 §15.2 |
 

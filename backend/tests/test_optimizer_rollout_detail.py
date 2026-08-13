@@ -556,3 +556,67 @@ async def test_a_question_that_failed_has_no_trace_to_fetch(session):
     )
     assert view.trace_state == "no_trace"
     assert view.spans == []
+
+
+# --- What the epoch boundary reads back -------------------------------------
+
+
+async def test_validation_results_are_read_back_in_the_shape_the_slow_update_wants(session):
+    """The epoch boundary compares two steps it may not have executed itself.
+
+    A resumed run has to be able to compare across a boundary whose first half
+    ran in a process that is gone, so the comparison reads from storage rather
+    than from anything the loop kept in memory. `hard` is the field upstream
+    branches on to classify a sample as improved, regressed or a persistent
+    failure, and it is derived from the verdict — a soft score of 0.9 is not a
+    pass, and treating it as one would report improvements that never happened.
+    """
+    run, step, keys = await make_run(session)
+    store = DbOptimizationStore(session)
+    await store.record_rollout(step.id, summary("val", [
+        result_row(keys["q4"], verdict="correct", score=1.0),
+        result_row(keys["q5"], verdict="incorrect", score=0.9),
+    ]))
+
+    rows = {r["id"]: r for r in await store.load_val_results(run.id, 1)}
+    assert rows[keys["q4"]]["hard"] == 1
+    assert rows[keys["q5"]]["hard"] == 0
+    assert rows[keys["q5"]]["soft"] == 0.9
+    assert rows[keys["q4"]]["predicted_answer"] == f"answer for {keys['q4']}"
+
+
+async def test_the_training_split_is_not_returned_as_a_comparison_set(session):
+    """Training questions are a different draw every step.
+
+    Feeding them to a longitudinal comparison would attribute the difference
+    between two *sets of questions* to the difference between two skills, which
+    is the one thing the pass exists to measure. The split filter is the whole
+    reason the validation set was chosen as the comparison set.
+    """
+    run, step, keys = await make_run(session)
+    store = DbOptimizationStore(session)
+    await store.record_rollout(step.id, summary("train", [result_row(keys["q0"])]))
+    await store.record_rollout(step.id, summary("val", [result_row(keys["q4"])]))
+
+    assert [r["id"] for r in await store.load_val_results(run.id, 1)] == [keys["q4"]]
+
+
+async def test_another_step_of_the_same_run_is_not_mixed_in(session):
+    """Both sides of the comparison are one step each, and they are adjacent.
+
+    A read scoped to the run rather than the step would hand the boundary every
+    validation result the run ever produced, and every sample would appear
+    several times with different outcomes.
+    """
+    run, step, keys = await make_run(session)
+    later = OptimizationStep(
+        run_id=run.id, step_no=2, epoch_no=1, step_in_epoch=2, status="done",
+    )
+    session.add(later)
+    await session.commit()
+
+    store = DbOptimizationStore(session)
+    await store.record_rollout(step.id, summary("val", [result_row(keys["q4"])]))
+    await store.record_rollout(later.id, summary("val", [result_row(keys["q5"])]))
+
+    assert [r["id"] for r in await store.load_val_results(run.id, 2)] == [keys["q5"]]

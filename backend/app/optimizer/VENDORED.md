@@ -68,54 +68,51 @@ cleanly. `import block only` means literally that: the module's own code is
 untouched, and the diff is the five lines that redirect
 `from skillopt.…` to `from app.optimizer.vendor.…`.
 
-### Two files are vendored and deliberately not reachable
+### The two epoch-boundary files, and the decision this port had to make
 
-`slow_update.py` and `meta_skill.py` are here, redirected and diffable, and
-**nothing calls them.** There is no config key that turns either on, so the
-state is "not a feature", not "a feature that silently does nothing".
+`slow_update.py` and `meta_skill.py` are reachable, off by default, and driven
+from `app/optimizer/longitudinal.py` — the `slow_update` and `meta_skill` keys
+in a run's config turn them on. They run once per epoch boundary, never per step.
 
-That is a smaller claim than the plan's ("implemented and wired, default off")
-and it is the honest one. What is actually left is this, in order of difficulty:
+**The comparison set is the validation split, and that was ours to choose.**
+Upstream re-rolls a fixed sample of twenty tasks under each epoch's skill; this
+loop cannot, because a training minibatch is a different draw of questions every
+step, and comparing two different sets of questions would attribute the
+difference between the *questions* to the difference between the *skills* —
+which is the one thing the pass exists to measure. The validation split is the
+only set answered under every skill a run produces, and it is already rolled out
+at every step, so the comparison costs no extra agent calls. Which two rollouts
+to compare falls out of `parent_step_no`: the last accepted step of each epoch is
+the step whose validation rollout measured the skill that epoch ended on. An
+epoch that accepted nothing ends on the skill it began with, and the boundary is
+skipped rather than asking the optimizer to explain a change that did not happen.
 
-1. **The comparison set does not exist in our data model.** A slow update
-   compares *the same samples* rolled out under the previous epoch's skill and
-   under the current one (`results_prev` / `results_curr`, Markov — adjacent
-   epochs only). This loop never produces that pairing: the training minibatch
-   is a different draw of questions every step. The validation split *is* a
-   fixed set rolled out every step, so it is the obvious candidate — but
-   deciding that, and deciding which two step rows are "the epoch boundary",
-   is a design choice nobody has made. It is not a wiring task.
-2. **No epoch-boundary hook.** `engine.py` knows `epoch_no` but has nowhere to
-   run anything when one ends.
-3. **No config key**, in `OptimizationConfig` or anywhere else.
-4. `inject_empty_slow_update_field` is never called, so the protected block does
-   not exist on any skill this system produces.
-5. Trajectories would be degraded. `build_comparison_pairs` takes
-   `prev_rollout_dir` / `curr_rollout_dir` and reads `conversation.json` from
-   them — upstream's checkpoint world, which this port replaced with database
-   rows. Both arguments default to `""`, in which case the trajectory fields are
-   simply empty strings, so this degrades rather than breaking: the comparison
-   pairs still carry the item, both results and the change category.
-   Feeding real trajectories means a fork like `reflect.py`'s. Worth being
-   precise about — this is the *smallest* of the five, not the blocker.
+Two consequences worth knowing when reading the diff:
 
-`meta_skill.py` is further from reachable, not closer. `format_meta_skill_context`
-is called by the vendored `reflect.py`, but `update.py` never passes a
-`meta_skill_context`, so it is always `""` and always a no-op; `run_meta_skill`
-is never called at all, and optimizer-side memory would need somewhere to live
-across epochs — arguably across *runs*, which is a table that does not exist.
+* **The skill changes between steps**, so the boundary records a second snapshot
+  against the last accepted step, `kind="slow_update"`. `GET .../steps/{n}/skill`
+  resolves a `parent` base to that kind first — otherwise the next step's diff
+  would show the guidance block as its own edit, which is the misattribution
+  `parent_step_no` exists to prevent, arriving by another route.
+* **Trajectories are not fed in.** `build_comparison_pairs` can read them from a
+  `rollout_dir` of `conversation.json` files — upstream's checkpoint world, which
+  this port replaced with database rows. Both directory arguments are left at
+  `""`, so the trajectory fields are empty and the pairs carry the item, both
+  results and the change category. Feeding real ones means a fork like
+  `reflect.py`'s, and the pass works without it.
 
-None of it would ship on, so all of it would be a code path nobody exercises. A
-default-off path that has never run is not a feature in reserve; it is a
-liability that looks like one.
+The protected block is defended from both directions.
+`_strip_slow_update_markers` stops a step-level analyst forging the block by
+writing `<!-- SLOW_UPDATE_START -->` into its own `content`, and `_marker_spans`
+— which `_protected_spans` includes for every mode — makes an edit whose target
+falls inside the block fail with `skipped_protected_region`. Both are tested in
+`test_optimizer_skill_ops.py`.
 
-What *is* in place is the half that would otherwise be dangerous. `skill.py`
-carries `_strip_slow_update_markers`, so a step-level analyst cannot forge the
-block by writing `<!-- SLOW_UPDATE_START -->` into its own `content`; and
-`_marker_spans` — which `_protected_spans` includes for every mode — means that
-if the block ever does exist, an edit targeting text inside it is refused with
-`skipped_protected_region`. Both are tested in `test_optimizer_skill_ops.py` and
-are worth having whether or not the feature ever arrives.
+`meta_skill` is the quieter of the two and is **never written into the skill**:
+it is optimizer-side memory about how editing has been going, threaded into the
+analyst prompt on later steps through `run_update_stage(meta_skill_context=…)`.
+It lives for the length of a run. Carrying it across runs would need a table, and
+there is not one.
 
 `skill_aware.py` is vendored although the feature it implements
 (EmbodiSkill appendix notes) is off by default — `reflect.py` imports it at

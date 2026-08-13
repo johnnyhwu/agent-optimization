@@ -241,6 +241,8 @@ async def optimization_defaults(subject: str = Depends(current_subject)):
             "gate_metric": "hard",
             "mixed_weight": 0.5,
             "failure_only": False,
+            "slow_update": False,
+            "meta_skill": False,
             "analyst_workers": 4,
             "merge_batch_size": 8,
             "reflect_budget_chars": DEFAULT_REFLECT_BUDGET_CHARS,
@@ -1218,6 +1220,22 @@ async def get_rollout_result_trace(
 BASES = ("parent", "initial")
 
 
+def _pick_snapshot(by_kind: dict | None, order: tuple[str, ...]) -> dict | None:
+    """The first snapshot kind present, in the caller's order of preference.
+
+    A step number is no longer unique in `optimization_skills`: an epoch boundary
+    that runs the slow update records a second row against the last accepted step.
+    Taking whichever row the database returned first would make the diff and the
+    download nondeterministic between two skills that differ by a whole block of
+    guidance.
+    """
+    for kind in order:
+        files = (by_kind or {}).get(kind)
+        if files is not None:
+            return files
+    return None
+
+
 @router.get(
     "/runs/{run_id}/steps/{step_no}/skill", response_model=OptimizationSkillDiff
 )
@@ -1265,18 +1283,26 @@ async def get_step_skill_diff(
     base_step_no = 0 if wanted is None else wanted
     fallback = base == "parent" and step.parent_step_no is None
 
-    snapshots = {
-        row.step_no: dict(row.files)
-        for row in (
-            await session.scalars(
-                select(OptimizationSkill).where(
-                    OptimizationSkill.run_id == run_id,
-                    OptimizationSkill.step_no.in_({step_no, base_step_no}),
-                )
+    snapshots: dict[int, dict[str, dict[str, str]]] = {}
+    for row in (
+        await session.scalars(
+            select(OptimizationSkill).where(
+                OptimizationSkill.run_id == run_id,
+                OptimizationSkill.step_no.in_({step_no, base_step_no}),
             )
-        ).all()
-    }
-    after = snapshots.get(step_no)
+        )
+    ).all():
+        snapshots.setdefault(row.step_no, {})[row.kind] = dict(row.files)
+
+    # A step can hold two snapshots: the candidate its own edits produced, and —
+    # if the slow update ran at the epoch boundary after it — the skill the
+    # *next* step actually started from. Which one is wanted depends on the side.
+    #   after:  the candidate, always. This page is about what this step's edits
+    #           did, and the boundary's guidance was written by a different pass.
+    #   before: the slow-update version if there is one, because that is what the
+    #           step being displayed was derived from. Reading the candidate here
+    #           would show the guidance block as an addition made by this step.
+    after = _pick_snapshot(snapshots.get(step_no), ("candidate", "initial"))
     # A step row exists from the moment the step starts; the candidate only
     # exists once the update stage finishes. An empty diff for the gap between
     # them would read as "this step changed nothing" — a claim about the skill,
@@ -1285,7 +1311,11 @@ async def get_step_skill_diff(
         raise HTTPException(
             status_code=404, detail=f"no skill was recorded for step {step_no}"
         )
-    before = snapshots.get(base_step_no, dict(run.initial_skill or {}))
+    before = _pick_snapshot(
+        snapshots.get(base_step_no), ("slow_update", "candidate", "initial")
+    )
+    if before is None:
+        before = dict(run.initial_skill or {})
 
     stats = skillio.per_file_stats(before, after)
     files = [
@@ -1376,10 +1406,24 @@ async def download_optimized_skill(
                 status_code=400, detail="step must be 'best' or a step number"
             )
 
-    snapshot = await session.scalar(
-        select(OptimizationSkill).where(
-            OptimizationSkill.run_id == run_id, OptimizationSkill.step_no == step_no
-        )
+    # Ordered, because a step that ended an epoch may have two snapshots. The
+    # slow-update one wins: it is the skill this run actually carried forward,
+    # and it is the one a download is meant to reproduce. The manifest names the
+    # kind, so which one arrived is never a guess on the far side.
+    rows = {
+        row.kind: row
+        for row in (
+            await session.scalars(
+                select(OptimizationSkill).where(
+                    OptimizationSkill.run_id == run_id,
+                    OptimizationSkill.step_no == step_no,
+                )
+            )
+        ).all()
+    }
+    snapshot = next(
+        (rows[kind] for kind in ("slow_update", "candidate", "initial") if kind in rows),
+        None,
     )
     # An empty archive would be the worst possible answer: it unzips cleanly,
     # changes nothing on the agent, and reads as a successful download.

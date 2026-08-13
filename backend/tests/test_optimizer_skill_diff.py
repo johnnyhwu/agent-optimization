@@ -425,3 +425,70 @@ async def test_a_step_that_was_interrupted_before_it_produced_a_candidate_is_a_4
             run.id, 1, base="parent", subject="alice", session=session
         )
     assert excinfo.value.status_code == 404
+
+
+# --- When an epoch boundary wrote into the skill -----------------------------
+
+
+async def add_slow_update(session, run, step_no, files):
+    """The skill as an epoch boundary left it, recorded against the step it followed."""
+    session.add(OptimizationSkill(
+        run_id=run.id, step_no=step_no, kind="slow_update", files=dict(files),
+        content_hash=f"slow-{step_no}", per_file_stats={},
+    ))
+    await session.commit()
+
+
+async def test_the_base_is_the_skill_the_step_actually_started_from(session):
+    """A step's diff must not include a block written by the epoch boundary.
+
+    The slow update edits the skill *between* steps: it runs after the last step
+    of an epoch and writes guidance into a protected block. The next step is
+    derived from that version, so diffing it against the parent's *candidate*
+    would show a paragraph the next step's analyst never wrote, attributed to it
+    — the same misattribution `parent_step_no` exists to prevent, arriving by a
+    different route.
+    """
+    run = await make_run(session)
+    one = {**INITIAL, "billing/SKILL.md": INITIAL["billing/SKILL.md"] + "Refunds are 4 days.\n"}
+    after_boundary = {
+        **one,
+        "billing/SKILL.md": one["billing/SKILL.md"] + "<!-- SLOW_UPDATE_START -->\nguidance\n<!-- SLOW_UPDATE_END -->\n",
+    }
+    two = {**after_boundary,
+           "billing/SKILL.md": after_boundary["billing/SKILL.md"] + "Ask for the order id.\n"}
+
+    await add_step(session, run, 1, one, parent_step_no=None, gate_action="accept_new_best")
+    await add_slow_update(session, run, 1, after_boundary)
+    await add_step(session, run, 2, two, parent_step_no=1, gate_action="accept")
+
+    view = await opt.get_step_skill_diff(
+        run.id, 2, base="parent", subject="alice", session=session
+    )
+    entry = changed(view)["billing/SKILL.md"]
+    assert "guidance" in (entry.before or "")
+    assert entry.added == 1 and entry.removed == 0
+
+
+async def test_a_step_is_still_shown_by_its_own_candidate_not_the_boundary_that_followed(session):
+    """The other side of the same rule.
+
+    Step 1's page is about step 1's edits. Reading the slow-update snapshot as
+    *its* result would credit the analyst with a block written afterwards by a
+    different pass, on a different prompt, about a different question.
+    """
+    run = await make_run(session)
+    one = {**INITIAL, "billing/SKILL.md": INITIAL["billing/SKILL.md"] + "Refunds are 4 days.\n"}
+    after_boundary = {
+        **one,
+        "billing/SKILL.md": one["billing/SKILL.md"] + "<!-- SLOW_UPDATE_START -->\nguidance\n<!-- SLOW_UPDATE_END -->\n",
+    }
+    await add_step(session, run, 1, one, parent_step_no=None, gate_action="accept_new_best")
+    await add_slow_update(session, run, 1, after_boundary)
+
+    view = await opt.get_step_skill_diff(
+        run.id, 1, base="parent", subject="alice", session=session
+    )
+    entry = changed(view)["billing/SKILL.md"]
+    assert "guidance" not in (entry.after or "")
+    assert entry.added == 1

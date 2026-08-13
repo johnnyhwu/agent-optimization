@@ -21,6 +21,7 @@ whose parts all work individually can still be wired up wrong.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 import pytest
@@ -28,6 +29,7 @@ import pytest
 from app.optimizer import engine
 from app.optimizer.store import Item, ResultRow, RolloutSummary, RunSpec
 from app.optimizer.update import MinibatchRecord, UpdateOutcome
+from app.optimizer.vendor.slow_update import SLOW_UPDATE_END, SLOW_UPDATE_START
 
 SKILL = {"billing/SKILL.md": "# Billing\n\n1. Quote the currency.\n"}
 
@@ -64,6 +66,26 @@ class RecordingStore:
 
     async def cancel_requested(self, run_id):
         return self.cancel
+
+    async def load_val_results(self, run_id, step_no):
+        """Per-item validation results for one step, as the slow update needs them.
+
+        Read back from storage rather than kept in memory so that a resumed run
+        can still compare across an epoch boundary it did not itself execute.
+        """
+        for recorded_step, summary in self.rollouts:
+            if recorded_step == step_no and summary.split == "val":
+                return [
+                    {
+                        "id": row.item_key,
+                        "hard": 1 if row.verdict == "correct" else 0,
+                        "soft": float(row.judge_score or 0.0),
+                        "predicted_answer": row.agent_response or "",
+                        "fail_reason": row.judge_comment or "",
+                    }
+                    for row in summary.results
+                ]
+        return []
 
     # writes
     async def start_step(self, run_id, *, step_no, epoch_no, step_in_epoch, parent_step_no):
@@ -951,10 +973,12 @@ async def test_an_ordinary_edit_records_no_leak(monkeypatch):
 
 
 class _SeamsWith(Seams):
-    """The shared stub plus a workspace seam, which only these tests need."""
+    """The shared stub plus the seams only a few tests need to be real."""
 
-    def __init__(self, workspace):
+    def __init__(self, workspace=None, optimizer=None):
         self.workspace = workspace
+        if optimizer is not None:
+            self.optimizer = optimizer
 
 
 class _Workspace:
@@ -1098,3 +1122,425 @@ async def test_an_answer_already_in_the_skill_is_not_re_counted_every_step(monke
     await run(store, monkeypatch)
 
     assert store.step(1)["n_answer_leaks"] == 0
+
+
+# --- The slow update, at the epoch boundary ---------------------------------
+#
+# Upstream's longitudinal pass: at the end of an epoch, compare the *same*
+# samples under the previous epoch's skill and this one's, and write free-form
+# guidance into a protected block that step-level edits may not touch. It is
+# off unless the run asks for it.
+
+
+class _RecordingOptimizer:
+    """A fake optimizer that answers the slow-update contract and counts calls."""
+
+    model_name = "fake"
+
+    def __init__(self, content="Prefer stating the period before the figure."):
+        self.content = content
+        self.stages: list[str] = []
+        self.prompts: list[str] = []
+
+    def chat_optimizer(self, system, user, max_completion_tokens=0, retries=0,
+                       stage="optimizer", timeout=None):
+        self.stages.append(stage)
+        self.prompts.append(user)
+        if stage == "slow_update":
+            return json.dumps({
+                "reasoning": "regressions clustered on refunds",
+                "slow_update_content": self.content,
+            }), {"calls": 1}
+        if stage == "meta_skill":
+            return json.dumps({"meta_skill_content": "Edit one rule at a time."}), {"calls": 1}
+        return json.dumps({"selected_indices": [0]}), {"calls": 1}
+
+
+def _slow_spec(**over):
+    config = {"seed": 3, "slow_update": True}
+    config.update(over.pop("config", {}))
+    return make_spec(config=config, **over)
+
+
+async def _run_with_optimizer(store, monkeypatch, optimizer):
+    return await engine.run_optimization(
+        store.spec.id, store=store, seams=_SeamsWith(None, optimizer=optimizer),
+        publish=_collect([]), cancel_event=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_slow_update_is_off_unless_the_run_asks_for_it(monkeypatch):
+    """Default off means the code path is provably not entered.
+
+    A feature that ships disabled has to cost nothing when disabled — no extra
+    optimizer call, no change to the skill, nothing on the step rows. "Off" that
+    still runs the comparison and throws the answer away is the expensive kind
+    of off.
+    """
+    store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+                           make_items(2), make_items(2, "val"))
+    Scores({}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    optimizer = _RecordingOptimizer()
+
+    await _run_with_optimizer(store, monkeypatch, optimizer)
+
+    assert "slow_update" not in optimizer.stages
+    assert not [s for s in store.skills if s["kind"] == "slow_update"]
+
+
+@pytest.mark.asyncio
+async def test_an_epoch_boundary_writes_guidance_into_the_protected_block(monkeypatch):
+    """The whole feature, end to end, on the smallest run that has a boundary.
+
+    Two epochs of one step each. The first epoch's accepted candidate and the
+    second's are two different skills measured on the *same* validation split,
+    which is exactly the comparison upstream wants and the only fixed sample set
+    this loop produces.
+    """
+    store = RecordingStore(
+        _slow_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 0),      # baseline 0.0
+        (1, "train"): (2, 1),
+        (1, "val"): (2, 1),      # accepted, 0.5
+        (2, "train"): (2, 1),
+        (2, "val"): (2, 2),      # accepted, 1.0
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    optimizer = _RecordingOptimizer()
+
+    await _run_with_optimizer(store, monkeypatch, optimizer)
+
+    assert "slow_update" in optimizer.stages
+    snapshot = next(s for s in store.skills if s["kind"] == "slow_update")
+    entry = snapshot["files"]["billing/SKILL.md"]
+    assert SLOW_UPDATE_START in entry and SLOW_UPDATE_END in entry
+    assert "Prefer stating the period before the figure." in entry
+
+
+@pytest.mark.asyncio
+async def test_an_epoch_that_changed_nothing_is_not_compared_against_itself(monkeypatch):
+    """Two identical skills produce a comparison with nothing in it.
+
+    If every candidate in an epoch was rejected, the skill at the end of it is
+    the skill it started with. Running the slow update anyway spends a call on
+    the largest model configured to be told that nothing moved, and invites it
+    to write guidance about a change that did not happen.
+    """
+    store = RecordingStore(
+        _slow_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 2),      # baseline 1.0 — nothing can beat it
+        (1, "train"): (2, 1),
+        (1, "val"): (2, 1),      # rejected
+        (2, "train"): (2, 1),
+        (2, "val"): (2, 1),      # rejected
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    optimizer = _RecordingOptimizer()
+
+    await _run_with_optimizer(store, monkeypatch, optimizer)
+
+    assert "slow_update" not in optimizer.stages
+
+
+@pytest.mark.asyncio
+async def test_the_comparison_is_the_validation_split_measured_twice(monkeypatch):
+    """Not the training minibatch, which is a different draw of questions.
+
+    A longitudinal comparison needs the *same* samples on both sides. Training
+    batches are reshuffled every epoch, so comparing them would attribute the
+    difference between two sets of questions to the difference between two
+    skills — which is the one thing this pass exists to measure.
+    """
+    store = RecordingStore(
+        _slow_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+        make_items(4), make_items(3, "val"),
+    )
+    Scores({
+        (0, "val"): (3, 0),
+        (1, "train"): (4, 2), (1, "val"): (3, 1),
+        (2, "train"): (4, 2), (2, "val"): (3, 3),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    optimizer = _RecordingOptimizer()
+
+    await _run_with_optimizer(store, monkeypatch, optimizer)
+
+    prompt = optimizer.prompts[optimizer.stages.index("slow_update")]
+    for item in store._items["val"]:
+        assert item.item_key in prompt
+    assert not any(item.item_key in prompt for item in store._items["train"])
+
+
+@pytest.mark.asyncio
+async def test_a_slow_update_that_fails_leaves_the_run_and_the_skill_alone(monkeypatch):
+    """It is an enrichment, not a step. An hour of agent calls is already spent.
+
+    Ending the run because a single optional optimizer call raised would discard
+    every measurement taken so far to report the failure of something that is
+    off by default.
+    """
+
+    class Broken(_RecordingOptimizer):
+        def chat_optimizer(self, system, user, stage="optimizer", **kwargs):
+            self.stages.append(stage)
+            if stage == "slow_update":
+                raise RuntimeError("the optimizer endpoint is down")
+            return json.dumps({"selected_indices": [0]}), {"calls": 1}
+
+    store = RecordingStore(
+        _slow_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 0),
+        (1, "train"): (2, 1), (1, "val"): (2, 1),
+        (2, "train"): (2, 1), (2, "val"): (2, 2),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    status = await _run_with_optimizer(store, monkeypatch, Broken())
+
+    assert status == "completed"
+    assert not [s for s in store.skills if s["kind"] == "slow_update"]
+
+
+@pytest.mark.asyncio
+async def test_the_guidance_survives_into_the_next_epoch_and_is_offered_back(monkeypatch):
+    """The pass is longitudinal in both directions.
+
+    Upstream shows the previous guidance to the next slow update and asks it to
+    judge whether that guidance worked before writing the replacement. Dropping
+    it turns a running memory into a series of unrelated one-shot opinions.
+    """
+    store = RecordingStore(
+        _slow_spec(total_steps=3, steps_per_epoch=1, num_epochs=3),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 0),
+        (1, "train"): (2, 1), (1, "val"): (2, 1),
+        (2, "train"): (2, 1), (2, "val"): (2, 2),
+        (3, "train"): (2, 2), (3, "val"): (2, 2),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    optimizer = _RecordingOptimizer()
+
+    await _run_with_optimizer(store, monkeypatch, optimizer)
+
+    slow_prompts = [
+        p for p, s in zip(optimizer.prompts, optimizer.stages) if s == "slow_update"
+    ]
+    assert len(slow_prompts) >= 2
+    # Asserting on the text alone would prove nothing: by the second boundary the
+    # guidance is *also* inside the skill, which the same prompt quotes in full.
+    # The sentinel upstream writes when it has no previous guidance is the only
+    # thing that distinguishes "carried forward" from "visible by accident".
+    first_time = "(No previous guidance — this is the first slow update.)"
+    assert first_time in slow_prompts[0]
+    assert first_time not in slow_prompts[1]
+    assert "Prefer stating the period before the figure." in slow_prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_the_meta_skill_reaches_the_analyst_on_later_steps(monkeypatch):
+    """Optimizer-side memory that nothing reads is memory that does not exist.
+
+    The meta skill is never written into the skill — it is advice to the *editor*
+    about how to edit, carried from one epoch into the next and shown to the
+    analyst alongside the failures. It is produced at a boundary and consumed by
+    `run_update_stage`, and those are two different modules: exactly the shape of
+    gap where a value gets computed, stored on the state object, and then never
+    passed on.
+    """
+    seen: list[str] = []
+
+    def fake_update(*, files, skill_dir, meta_skill_context="", **kwargs):
+        seen.append(meta_skill_context)
+        candidate = dict(files)
+        entry = f"{skill_dir}/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + f"rule {len(seen)}\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "stubbed", "edits": []}, reports=[],
+            minibatches=[], n_edits_merged=1, n_edits_ranked=1, n_edits_applied=1,
+            n_edits_skipped=0, edit_summary="stubbed", tokens={},
+        )
+
+    store = RecordingStore(
+        make_spec(total_steps=2, steps_per_epoch=1, num_epochs=2,
+                  config={"seed": 3, "meta_skill": True}),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 0),
+        (1, "train"): (2, 1), (1, "val"): (2, 1),
+        (2, "train"): (2, 1), (2, "val"): (2, 2),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await _run_with_optimizer(store, monkeypatch, _RecordingOptimizer())
+
+    # Step 1 runs before any boundary, so it has nothing to be told.
+    assert seen[0] == ""
+    assert "Edit one rule at a time." in seen[1]
+
+
+@pytest.mark.asyncio
+async def test_the_meta_skill_alone_never_edits_the_skill(monkeypatch):
+    """It is advice to the optimizer, not content for the agent.
+
+    Writing it into `SKILL.md` would put the optimizer's notes about its own
+    editing habits in front of the agent at answer time, and ship them inside
+    the downloaded zip.
+    """
+    store = RecordingStore(
+        make_spec(total_steps=2, steps_per_epoch=1, num_epochs=2,
+                  config={"seed": 3, "meta_skill": True}),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 0),
+        (1, "train"): (2, 1), (1, "val"): (2, 1),
+        (2, "train"): (2, 1), (2, "val"): (2, 2),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    await _run_with_optimizer(store, monkeypatch, _RecordingOptimizer())
+
+    assert not [s for s in store.skills if s["kind"] == "slow_update"]
+    assert all(
+        "Edit one rule at a time." not in "".join(s["files"].values())
+        for s in store.skills
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_boundary_compares_the_two_epochs_either_side_of_it(monkeypatch):
+    """Not "this epoch versus the baseline", which is a different question.
+
+    The pass is Markov: adjacent epochs only. Comparing epoch 3 against step 0
+    would fold three epochs of change into one comparison and ask the optimizer
+    to write guidance about a journey rather than about the step it just took —
+    and it would say the same thing about improvements it had already commented
+    on twice.
+    """
+    seen: list[tuple[int, int]] = []
+    real = engine.run_epoch_boundary
+
+    def spy(*, results_prev, results_curr, **kwargs):
+        seen.append((len(results_prev), len(results_curr)))
+        # Tag each side so the assertion can tell which step it came from.
+        return real(results_prev=results_prev, results_curr=results_curr, **kwargs)
+
+    store = RecordingStore(
+        _slow_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+        make_items(2), make_items(4, "val"),
+    )
+    Scores({
+        (0, "val"): (4, 0),
+        (1, "train"): (2, 1), (1, "val"): (4, 1),
+        (2, "train"): (2, 1), (2, "val"): (4, 2),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    monkeypatch.setattr(engine, "run_epoch_boundary", spy)
+
+    calls: list[tuple] = []
+    original_load = store.load_val_results
+
+    async def watched(run_id, step_no):
+        calls.append(step_no)
+        return await original_load(run_id, step_no)
+
+    store.load_val_results = watched
+    await _run_with_optimizer(store, monkeypatch, _RecordingOptimizer())
+
+    # Epoch 1 compares the baseline with step 1; epoch 2 compares step 1 with 2.
+    assert calls == [0, 1, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_the_skill_the_boundary_wrote_is_what_the_next_step_edits(monkeypatch):
+    """The guidance has to be *in* the skill the run carries, not only in a row.
+
+    Recording the snapshot and then continuing from the pre-boundary skill would
+    leave a snapshot nothing produced: the block would appear in the download and
+    in Part 2's base, and vanish from every later candidate — so the next
+    accepted step would read as having deleted it.
+    """
+    seen: list[dict] = []
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        seen.append(dict(files))
+        candidate = dict(files)
+        entry = f"{skill_dir}/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + f"rule {len(seen)}\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "s", "edits": []}, reports=[],
+            minibatches=[], n_edits_merged=1, n_edits_ranked=1, n_edits_applied=1,
+            n_edits_skipped=0, edit_summary="s", tokens={},
+        )
+
+    store = RecordingStore(
+        _slow_spec(total_steps=2, steps_per_epoch=1, num_epochs=2),
+        make_items(2), make_items(2, "val"),
+    )
+    Scores({
+        (0, "val"): (2, 0),
+        (1, "train"): (2, 1), (1, "val"): (2, 1),
+        (2, "train"): (2, 1), (2, "val"): (2, 2),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await _run_with_optimizer(store, monkeypatch, _RecordingOptimizer())
+
+    assert SLOW_UPDATE_START not in seen[0]["billing/SKILL.md"]
+    assert SLOW_UPDATE_START in seen[1]["billing/SKILL.md"]
+
+
+@pytest.mark.asyncio
+async def test_the_boundary_waits_for_the_end_of_the_epoch(monkeypatch):
+    """Four steps, two per epoch: two boundaries, not four.
+
+    Running it after every step would spend a call on the largest model
+    configured four times instead of twice, and would compare a skill against
+    itself halfway through an epoch — the mid-epoch mark is the same step as the
+    one before it whenever the middle step was rejected.
+    """
+    store = RecordingStore(
+        _slow_spec(total_steps=4, steps_per_epoch=2, num_epochs=2),
+        make_items(4), make_items(4, "val"),
+    )
+    # Four validation questions so every step can beat the last: with two, the
+    # score saturates at 1.0 by step 2 and the second epoch accepts nothing —
+    # which correctly produces *one* boundary and would hide the bug this is for.
+    Scores({
+        (0, "val"): (4, 0),
+        (1, "train"): (2, 1), (1, "val"): (4, 1),
+        (2, "train"): (2, 1), (2, "val"): (4, 2),
+        (3, "train"): (2, 1), (3, "val"): (4, 3),
+        (4, "train"): (2, 1), (4, "val"): (4, 4),
+    }).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+    optimizer = _RecordingOptimizer()
+
+    await _run_with_optimizer(store, monkeypatch, optimizer)
+
+    assert optimizer.stages.count("slow_update") == 2

@@ -165,6 +165,8 @@ class OptimizationStore(Protocol):
 
     async def cancel_requested(self, run_id: uuid.UUID) -> bool: ...
 
+    async def load_val_results(self, run_id: uuid.UUID, step_no: int) -> list[dict]: ...
+
     async def set_status(self, run_id: uuid.UUID, status: str, **fields: Any) -> None: ...
 
     async def start_step(
@@ -443,6 +445,45 @@ class DbOptimizationStore:
                 .values(minibatch_no=fields.get("minibatch_no"))
             )
         await self.session.commit()
+
+    async def load_val_results(self, run_id: uuid.UUID, step_no: int) -> list[dict]:
+        """One step's validation results, shaped as the slow update expects them.
+
+        Read back from storage rather than carried in memory: a resumed run has
+        to be able to compare across an epoch boundary whose first half it never
+        executed, and the rows are already on disk.
+        """
+        rows = (
+            await self.session.execute(
+                select(
+                    OptimizationResult.item_key,
+                    OptimizationResult.verdict,
+                    OptimizationResult.judge_score,
+                    OptimizationResult.agent_response,
+                    OptimizationResult.judge_comment,
+                )
+                .join(
+                    OptimizationRollout,
+                    OptimizationRollout.id == OptimizationResult.rollout_id,
+                )
+                .join(OptimizationStep, OptimizationStep.id == OptimizationRollout.step_id)
+                .where(
+                    OptimizationStep.run_id == run_id,
+                    OptimizationStep.step_no == step_no,
+                    OptimizationRollout.split == "val",
+                )
+            )
+        ).all()
+        return [
+            {
+                "id": item_key,
+                "hard": 1 if verdict == "correct" else 0,
+                "soft": float(score) if score is not None else 0.0,
+                "predicted_answer": response or "",
+                "fail_reason": comment or "",
+            }
+            for item_key, verdict, score, response, comment in rows
+        ]
 
     async def record_skill(
         self, run_id: uuid.UUID, *, step_no: int, kind: str,

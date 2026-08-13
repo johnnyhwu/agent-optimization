@@ -162,6 +162,10 @@ def run_update_stage(
     seed: int | None = None,
     update_mode: str = "patch",
     truncation_by_item: Mapping[str, list[dict]] | None = None,
+    # Optimizer-side memory from the last epoch boundary. Empty unless the run
+    # turned `meta_skill` on, in which case the analyst is shown what the
+    # previous epoch taught the optimizer about its own editing.
+    meta_skill_context: str = "",
 ) -> UpdateOutcome:
     """Everything between a scored training batch and a candidate skill."""
     files = dict(files)
@@ -188,6 +192,7 @@ def run_update_stage(
             edit_budget=edit_budget, minibatch_size=minibatch_size,
             analyst_workers=analyst_workers, failure_only=failure_only, seed=seed,
             update_mode=update_mode, truncation_by_item=truncation_by_item,
+            meta_skill_context=meta_skill_context,
         )
         recorder.reset()
 
@@ -231,6 +236,7 @@ def run_update_stage(
 def _reflect(
     *, skill_content, mode, items, recorder, edit_budget, minibatch_size,
     analyst_workers, failure_only, seed, update_mode, truncation_by_item,
+    meta_skill_context="",
 ) -> tuple[list[MinibatchRecord], list[dict]]:
     """Split into minibatches and run one analyst call per group, in parallel.
 
@@ -265,6 +271,7 @@ def _reflect(
                 edit_budget=edit_budget,
                 system_prompt=_analyst_prompt(source_type, mode),
                 update_mode=update_mode,
+                meta_skill_context=meta_skill_context,
             )
         except Exception as exc:  # noqa: BLE001 - one batch must not end the step
             error = f"{type(exc).__name__}: {exc}"

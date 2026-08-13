@@ -13,7 +13,6 @@ Two things here are load-bearing beyond "call an LLM":
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
@@ -22,7 +21,7 @@ from app.config import settings
 from app.integrations.base import Span, Trace, Verdict
 from app.integrations.real.llm import complete_json
 from app.integrations.real.prompts import build_diagnosis_messages
-from app.services.truncation import truncate_body
+from app.services.truncation import truncate_trace
 
 log = logging.getLogger(__name__)
 
@@ -51,13 +50,33 @@ class DiagnosisOutput(BaseModel):
 
 
 def truncate_spans(spans: list[Span]) -> list[Span]:
-    """§6.7 applied to the LLM input: every span kept, long bodies shortened."""
-    out = []
-    for span in spans:
-        input_body, _ = truncate_body(span.input)
-        output_body, _ = truncate_body(span.output)
-        out.append(replace(span, input=input_body, output=output_body))
-    return out
+    """§6.7 applied to the LLM input: every span kept, long bodies shortened.
+
+    One cascade, shared with the reflect stage. This used to cap each body
+    independently, which was simple and wasteful: a trace with one 50 KB tool
+    result and forty short spans had the big one cut to the same limit as the
+    rest, while the rest left almost all of their allowance unspent — so the
+    prompt lost the evidence and kept the padding.
+
+    The budget is the same total that per-body capping allowed at worst
+    (`span_body_max_chars` for each side of each span), and `min_keep` is that
+    same number, so a trace where *everything* is oversized comes out exactly as
+    it did before. What changes is every other trace: unused allowance is handed
+    back and the big bodies keep more of themselves. It also inherits the rest of
+    the cascade — tool-call arguments are never cut, tool results go before
+    conversation, and a trace that already fits is not touched at all.
+    """
+    limit = settings.span_body_max_chars
+    trimmed, _ = truncate_trace(
+        Trace(correlation_id="", spans=list(spans)),
+        budget_chars=limit * 2 * max(len(spans), 1),
+        min_keep=limit,
+        # Diagnosis has no "drop an item" move the way reflection does: there is
+        # one trace and it has to fit. A cut final answer beats a request that
+        # overflows the context window.
+        cut_final_answer=True,
+    )
+    return list(trimmed.spans)
 
 
 def sanitize_suspects(suspects: list[SuspectOutput], valid_indices: set[int]) -> list[dict]:
