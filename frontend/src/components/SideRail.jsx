@@ -17,7 +17,7 @@ import {
 export const SECTIONS = [
   { id: "evaluation", label: "Evaluation", icon: IconTarget, to: href.evaluation() },
   { id: "playground", label: "Playground", icon: IconBeaker, to: href.playground() },
-  { id: "optimize", label: "Optimize", icon: IconSparkles, to: href.optimize(), soon: true },
+  { id: "optimize", label: "Optimize", icon: IconSparkles, to: href.optimize() },
 ];
 
 const KEY = "rail-collapsed";

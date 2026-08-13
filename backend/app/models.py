@@ -286,3 +286,443 @@ class EvalSetRole(Base):
     role: Mapped[str] = mapped_column(Text, nullable=False)  # owner | viewer
 
     eval_set: Mapped["EvalSet"] = relationship(back_populates="roles")
+
+
+# --- Optimize (Stage 3) -----------------------------------------------------
+#
+# Seven tables, all new, none of them touching the seven above. That separation
+# is the point: an optimization run performs epochs × steps × (train + val)
+# agent calls and records a verdict for each, which is the same *shape* as eval
+# data and would wreck an eval set's card, sparkline and regression summary if it
+# reached them. The eval side is deliberately tuned to touch a bounded number of
+# rows (docs/spec.md §10.2③); a join from here would undo that.
+#
+# So Optimize points *at* the existing tables by id and they never point back —
+# there is no relationship, no back_populates, and no foreign key that cascades
+# from an eval set into an optimization run. `tests/test_optimizer_isolation.py`
+# is the guard.
+#
+# The links that do exist are `ondelete="SET NULL"`, not CASCADE, and every row
+# that needs a question carries its own snapshot of the text. A run is a
+# historical record: deleting a source eval set next month must leave last
+# month's optimization readable, and unlike `runs` an optimization run belongs to
+# no single set — it can source questions from several.
+
+
+class OptimizationRun(Base):
+    __tablename__ = "optimization_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    # pending | running | completed | failed | cancelled | interrupted.
+    # 'interrupted' is the one an eval run has no equivalent of: optimization is
+    # checkpointed per step, so a backend restart leaves something resumable
+    # rather than something to write off.
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    # isolated | routing. Decides what is sent to the agent (one skill or all of
+    # them), which analyst prompts run, what the gate additionally guards, and
+    # which half of SKILL.md the optimizer may edit.
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    skill_name: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Same split as `runs`: no response model reads `secrets`, which is what
+    # makes "credentials never leave the server" structural rather than a habit.
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    secrets: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    # What the agent server reported when the run started. A run is optimising a
+    # snapshot; if the agent moves underneath it, the numbers still describe the
+    # snapshot and the UI says the workspace has since changed.
+    workspace_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # {relative path: text} for the skill being optimised, pinned at run start.
+    initial_skill: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Every *other* skill, for routing mode only — it sends the whole directory,
+    # so those files are part of the experiment and must not shift mid-run.
+    workspace_baseline: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Activation-detector configuration and what the pre-flight rollout saw.
+    detector: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    num_epochs: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    steps_per_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_steps: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    best_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    best_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    items: Mapped[list["OptimizationItem"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    steps: Mapped[list["OptimizationStep"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="OptimizationStep.step_no"
+    )
+    skills: Mapped[list["OptimizationSkill"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class OptimizationItem(Base):
+    """One question, in one split, as it was when the run started.
+
+    The snapshot columns are not denormalisation for speed — they are the same
+    rule `runs` follows (orchestrator.py snapshots the question set at run
+    start): editing a question tomorrow must not change what an optimization
+    that finished today was measuring.
+
+    A question can legitimately appear in **both** splits: the wizard offers
+    "duplicate to validation" deliberately. That weakens the gate, which the UI
+    warns about — it is the developer's call, not the schema's.
+    """
+
+    __tablename__ = "optimization_items"
+    __table_args__ = (UniqueConstraint("run_id", "split", "item_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    split: Mapped[str] = mapped_column(Text, nullable=False)  # train | val
+    # `question_id` is unique per eval set, not globally (see the UniqueConstraint
+    # on `questions`), and a run can import from several sets — so the id handed
+    # to the algorithm is composite. Two sets holding "q_1" is routine after a
+    # download-edit-re-upload cycle, and collapsing them would silently merge two
+    # different questions into one training item.
+    item_key: Mapped[str] = mapped_column(Text, nullable=False)
+    question_pk: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
+    )
+    source_eval_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_sets.id", ondelete="SET NULL"), nullable=True
+    )
+
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    ground_truth_response: Mapped[str] = mapped_column(Text, nullable=False)
+    ground_truth_reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    # What the picker showed when this run was configured, frozen. The live
+    # figure moves with every later eval run, so without this nobody can answer
+    # "why did I put this question in the training split?" a week later.
+    prior_accuracy: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    prior_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    run: Mapped["OptimizationRun"] = relationship(back_populates="items")
+
+
+class OptimizationStep(Base):
+    """One turn of the loop: rollout → reflect → aggregate → select → update → gate.
+
+    `step_no = 0` is the baseline — the initial skill measured on the validation
+    split before anything is edited. Without it the chart cannot answer whether
+    the run helped at all.
+    """
+
+    __tablename__ = "optimization_steps"
+    __table_args__ = (UniqueConstraint("run_id", "step_no"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    step_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    epoch_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_in_epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # The last step whose candidate was *accepted* — the diff's baseline. Not
+    # `step_no - 1`: a rejected step rolls the skill back, so the parent of step 4
+    # may well be step 2.
+    parent_step_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # running|done|aborted
+    # Set when the step was re-run after too many agent/judge failures. One retry
+    # absorbs a transient outage; a second failure ends the run.
+    retried: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    abort_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    edit_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # accept_new_best | accept | reject | force_accept | skip
+    gate_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # accuracy | activation — which guard refused it. Routing mode adds the
+    # second, and "rejected" alone would not say which.
+    gate_reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Upstream caches validation scores by skill hash: a step whose edits were all
+    # skipped produces a candidate identical to the current skill, and re-running
+    # the whole validation split to learn that would be pure waste.
+    candidate_from_cache: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+    n_edits_merged: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_edits_ranked: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_edits_applied: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_edits_skipped: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Upstream's per-edit apply report: `{op, path, target, content_preview,
+    # status}` for every edit that was proposed. The count above cannot say
+    # whether an edit was skipped because it named a protected region, a path
+    # outside the skill, or a target string that did not exist — three different
+    # problems — and the status is decided inside `apply_patch_with_report`, so
+    # it cannot be recomputed later from the snapshots. Bounded by construction:
+    # the edit budget is single digits and both text fields are clipped to 200.
+    edit_reports: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    lines_added: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lines_removed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    files_touched: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Training gold answers this step copied verbatim into the skill, measured
+    # against the parent snapshot — the same comparison Part 2 shows. Counted
+    # when the candidate is written rather than when the overview is read: the
+    # search is a diff per step, and that page reloads while the run streams.
+    n_answer_leaks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The agent's config version as it was when this step ran. A run is a
+    # comparison, and it only holds if the other side does: a deploy to the agent
+    # server halfway through makes the steps before and after it measurements of
+    # different systems, and nothing else about the run would ever show it.
+    # NULL when the workspace seam is off or the probe failed — not "", which
+    # would read as disagreeing with every pinned version.
+    workspace_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skill_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The optimizer's own account of what it changed — the tooltip's second half.
+    edit_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    current_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    best_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    timings: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    tokens: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    run: Mapped["OptimizationRun"] = relationship(back_populates="steps")
+    rollouts: Mapped[list["OptimizationRollout"]] = relationship(
+        back_populates="step", cascade="all, delete-orphan"
+    )
+    minibatches: Mapped[list["OptimizationMinibatch"]] = relationship(
+        back_populates="step", cascade="all, delete-orphan",
+        order_by="OptimizationMinibatch.minibatch_no",
+    )
+
+
+class OptimizationRollout(Base):
+    """One split measured once — the aggregate behind a single point on the chart.
+
+    Every figure here excludes the items that failed for infrastructure reasons.
+    An agent timeout is not the skill being wrong, and counting it as a wrong
+    answer would feed the optimizer a gradient pointing at a network problem.
+    The counts are kept beside the scores so the exclusion is visible rather than
+    implied.
+    """
+
+    __tablename__ = "optimization_rollouts"
+    __table_args__ = (UniqueConstraint("step_id", "split"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_steps.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    split: Mapped[str] = mapped_column(Text, nullable=False)  # train | val
+    # Which step's skill was in the agent's hands for this rollout. On the train
+    # side that is the *parent* step's skill, because train is measured before
+    # this step's edit and validation after it.
+    skill_step_no: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    n_items: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    n_scored: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    n_agent_error: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    n_judge_error: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    hard: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    soft: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    activation_rate: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    n_activated: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    latency_min_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_p50_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_max_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    aborted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    abort_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    step: Mapped["OptimizationStep"] = relationship(back_populates="rollouts")
+    results: Mapped[list["OptimizationResult"]] = relationship(
+        back_populates="rollout", cascade="all, delete-orphan"
+    )
+
+
+class OptimizationResult(Base):
+    """One question answered once. The optimization twin of `question_results`.
+
+    Same vocabulary on purpose — `status`, `failure_kind`, `correlation_id`,
+    `trace_ready` mean exactly what they mean there, so the trace endpoint can
+    return the same `TraceView` shape and the browser can reuse the span viewer
+    unchanged.
+    """
+
+    __tablename__ = "optimization_results"
+    __table_args__ = (UniqueConstraint("rollout_id", "item_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    rollout_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_rollouts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_key: Mapped[str] = mapped_column(Text, nullable=False)
+    question_pk: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+    agent_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    judge_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # pending|done|failed
+    failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Did the agent actually load this skill? NULL means the detectors could not
+    # tell — which is a third answer, not a false, and the run says so rather
+    # than reporting 0% activation as if the agent had ignored the skill.
+    activated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Every skill the trace shows being read, not just the target one. In routing
+    # mode "it read `reporting` instead of you" is a far stronger signal for the
+    # analyst than "it did not read you".
+    skills_read: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    detector_hit: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    trace_ready: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    trace_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Which reflect minibatch this item fed, so Part 1 can group the list the way
+    # the algorithm actually consumed it. NULL on the validation split, which is
+    # never reflected on.
+    minibatch_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+    rollout: Mapped["OptimizationRollout"] = relationship(back_populates="results")
+
+
+class OptimizationMinibatch(Base):
+    """One analyst call: the gradient, and the evidence it was computed from.
+
+    This table exists because "why did the optimizer propose that?" is otherwise
+    unanswerable. It holds the prompt that was actually sent — *after* truncation,
+    which is what makes it safe to store verbatim: its size is bounded by the
+    budget by construction. The original is not kept; the ledger below records
+    what was cut and from where, which is the part worth auditing.
+    """
+
+    __tablename__ = "optimization_minibatches"
+    __table_args__ = (UniqueConstraint("step_id", "minibatch_no"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_steps.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    minibatch_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_type: Mapped[str] = mapped_column(Text, nullable=False)  # failure | success
+    n_items: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    prompt_system: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_user: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # [{item_key, span_index, field, before, after, stage}] — what the cascade cut.
+    truncation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    chars_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chars_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    step: Mapped["OptimizationStep"] = relationship(back_populates="minibatches")
+
+
+class OptimizationSkill(Base):
+    """A full snapshot of the skill directory at one step.
+
+    Whole copies rather than stored diffs: a skill is a few kilobytes, a run is a
+    handful of steps, and the diff shown on screen has to be computed against an
+    arbitrary base anyway ("vs the previous accepted step" or "vs the initial
+    skill"). Reconstructing a snapshot by replaying patches would also make the
+    displayed diff depend on every earlier step being correct.
+    """
+
+    __tablename__ = "optimization_skills"
+    __table_args__ = (UniqueConstraint("run_id", "step_no", "kind"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    step_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # initial | candidate
+    files: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # {path: {added, removed}} against this step's parent. Computed once here so
+    # the file tree, the step row and the chart tooltip cannot disagree about the
+    # same edit.
+    per_file_stats: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    run: Mapped["OptimizationRun"] = relationship(back_populates="skills")

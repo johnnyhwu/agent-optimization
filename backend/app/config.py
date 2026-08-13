@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     # promoted out of the playground (§10.8). Shares the LLM endpoint with the
     # judge and the diagnosis.
     synthesis_impl: Impl = "fake"
+    # The model that turns scored rollouts into skill edits — SkillOpt's
+    # "optimizer" role (reflect, aggregate, rank/select). Its own seam because it
+    # is the one call in the loop that is neither the agent nor the judge, and
+    # because without a fake for it the Optimize section could not be
+    # demonstrated on Docker alone, which is the property the whole fake layer
+    # exists to preserve.
+    optimizer_impl: Impl = "fake"
+
     # The playground's view of the agent's config + skill files (§10.2).
     # Read-only against the agent server, so it is the cheapest seam to switch
     # on first.
@@ -154,6 +162,10 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     judge_model: str = "Qwen3.6-27B"
     diagnosis_model: str = "Qwen3.6-27B"
+    # Deliberately the same default as the other two, and deliberately separate:
+    # this is the call that has to reason about a whole minibatch of traces at
+    # once, so it is the one people will want to point at a stronger model.
+    optimizer_model: str = "Qwen3.6-27B"
     synthesis_model: str = "Qwen3.6-27B"
     # Optional override: when set, the verdict is derived from the judge's
     # continuous score (score >= threshold -> correct) instead of trusting the

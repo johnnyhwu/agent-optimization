@@ -129,6 +129,20 @@ def test_every_child_table_is_covered():
         EvalSetRole.__tablename__,
         EvalSetScript.__tablename__,
         EvalSet.__tablename__,
+        # Optimize's tables are not children of an eval set and deliberately have
+        # no line in deletion.py: they reference `questions` and `eval_sets` with
+        # ON DELETE SET NULL, and every row that needs a question carries its own
+        # snapshot of the text. An optimization run outlives the sets it drew
+        # from — it belongs to no single set, and deleting one next month must
+        # leave last month's run readable rather than delete it.
+        # `test_optimizer_isolation.py` proves the delete path over real tables.
+        "optimization_runs",
+        "optimization_items",
+        "optimization_steps",
+        "optimization_rollouts",
+        "optimization_results",
+        "optimization_minibatches",
+        "optimization_skills",
     }
     from app.db import Base
 

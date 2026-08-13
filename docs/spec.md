@@ -34,7 +34,7 @@
 |---|---|
 | [1](#1-背景與問題) | 背景與問題（為什麼要有這個系統） |
 | [2](#2-產品願景與分階段策略) | 產品願景與分階段策略（現在在哪一階段） |
-| [3](#3-系統架構) | 系統架構、六個 seam、correlation 機制 |
+| [3](#3-系統架構) | 系統架構、七個 seam、correlation 機制 |
 | [4](#4-關鍵設計決策) | 關鍵設計決策與理由 |
 | [5](#5-資料模型) | 資料模型（7 張表 + 記憶體 store） |
 | [6](#6-一次-eval-run-的生命週期) | 一次 eval run 的生命週期與失敗策略 |
@@ -157,7 +157,7 @@
 |---|---|---|
 | **Stage 1** | 錯題自動抓 trace → LLM 白話診斷可疑 span → 跳轉該 span 顯示 input/output/token。**不做**機率、熱點、人工重標、SkillOpt | **✅ 已實作**（POC 完整可跑）|
 | **Stage 2** | per-span 出錯機率熱點、reasoning ↔ span 的 step 拆解軟對齊、可編輯標註 / 重標 span（並寫回 Langfuse Score）| ❌ 未開始 |
-| **Stage 3** | SkillOpt 自動優化、整份 eval set 用候選 skill 重跑驗證改善、skill 寫回 agent server（含版本控制 / rollback）| ❌ 未開始 |
+| **Stage 3** | **Optimize**：SkillOpt 自動優化——把 skill 文件當可訓練參數，用 epoch / step / learning rate / validation gate 訓練它，產出可下載的 optimized skill 目錄 | **✅ 已實作**（見 §2.3a）|
 | **Stage 4** | **Playground**：單題即時試打 + per-request **workspace override**（agent 的 config 與 skill 檔）的迭代沙盒，加上把試出來的題目**升級成新 eval set** 的 shortlist | **✅ 已實作** |
 
 **Stage 4 不在原本的三階段藍圖裡**，是後來新增的。它補的是 Stage 1 動線末端的缺口：
@@ -170,6 +170,33 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 
 > **Stage 1 的價值主張**：它解決 §1.2 痛點的約 80%，而且不需要機率、熱點或 SkillOpt。
 > Stage 1 的診斷準確度在真實資料上跑起來之後的觀察，**是決定要不要投入 Stage 2 的關鍵依據**。
+
+#### 2.3a Stage 3（Optimize）實際做到哪裡
+
+Stage 4 補的是「手動驗證一個假設」，Stage 3 補的是**把那個迴圈自動化**：改 → 量 → 再改，
+原本每一輪都要人手動跑。演算法沿用 [microsoft/SkillOpt](https://github.com/microsoft/SkillOpt)
+（vendored，見 `backend/app/optimizer/VENDORED.md`），**只有兩件事沿用本系統**：打 target agent
+取得 final response，以及 LLM judge 評分。反向傳播（reflect）、gradient 聚合、learning rate
+裁切、skill 更新、validation gate 全部來自 SkillOpt。
+
+**已實作**
+
+| 部分 | 內容 |
+|---|---|
+| 資料 | 七張 `optimization_*` 表（migration `0009`）。**不動任何既有資料表**，Optimize 指向 eval 資料，eval 資料從不指回來 |
+| 兩種模式 | `isolated`（只送目標 skill、優化 body、保護 frontmatter）與 `routing`（送全部 skill、優化 frontmatter description、保護 body）。gate 在 routing 模式多一道 activation 守門 |
+| 迴圈 | step 0 baseline → 每個 step：訓練 minibatch rollout → reflect → aggregate → clip 到 learning rate → apply → 驗證 rollout → gate。可取消、可續跑（backend 重啟後是 `interrupted` 而非 `failed`）|
+| activation 偵測 | 兩個策略（tool call 路徑 + skill 內容逐字比對），**不注入任何 token**；`activation = A OR B`，兩者都測不出來時回報「未知」而不是「否」|
+| 觀測 | 六步 wizard、逐 step 圖表、Part 1（rollout + 送給 analyst 的 prompt 與截斷帳本）、Part 2（並排 diff + 未套用的 edit + 答案硬編告警）|
+| 產出 | zip（skill 目錄 + `manifest.json`，含 warnings），**人工放回 agent server** |
+
+**刻意不做**（見 §15.1）：skill 自動寫回 agent server、test split、整份重寫模式、
+多次取樣壓抑溫度雜訊。slow update / meta skill 已接線但預設關閉。
+
+> **答案硬編是這一段的主要風險，防線有三層**：analyst prompt 明文禁止（沿用上游）、
+> held-out validation split（結構性防線）、以及 diff 上的逐字比對告警——後者的計數在候選寫入時
+> 就算好並存在 step 列上，因為 run 總覽頁在跑的時候會反覆重載，讀取時才算等於每次重載都做一輪
+> 全 run 的 diff。
 
 ---
 
@@ -195,13 +222,14 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 │    側邊欄三個 section（Evaluation / Playground / Optimize）      │
 │    ├── Evaluation：三層下鑽（卡片 → run 歷史 → 三欄詳情）        │
 │    ├── Playground：單題試打 + agent workspace 編輯 + shortlist   │
-│    └── Optimize：SkillOpt 的位置，尚未實作（見 §10.1）           │
+│    └── Optimize：SkillOpt 訓練迴圈 + 圖表 + rollout/diff（§2.3a）│
 │                                                              │
 │  Backend (FastAPI async)                                     │
 │    ├── Orchestrator：讀 eval set → 逐題打 agent → judge →      │
 │    │                 等 trace → 診斷 → 落庫 → SSE 推進度        │
 │    ├── Playground：單題版本，狀態只在記憶體                      │
-│    └── 六個 seam（fake / real 各一套）+ 身分 seam（§11.2）        │
+│    ├── Optimizer：rollout → reflect → gate 的訓練迴圈，背景執行   │
+│    └── 七個 seam（fake / real 各一套）+ 身分 seam（§11.2）        │
 │                                                              │
 │  App DB (PostgreSQL)：Langfuse 沒有的概念 + 指回 Langfuse 的索引  │
 └───┬───────────────┬─────────────────┬────────────────────────┘
@@ -233,10 +261,10 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
   由 `docker-compose.yml` 加一份疊加檔編排（開發 / 部署兩套，見 §13.3）。
   host 端唯一需求是 docker（含 compose）——不需要 host 的 Python venv 或 node_modules。
 
-### 3.2 六個 seam（最重要的一節）
+### 3.2 七個 seam（最重要的一節）
 
 每個外部依賴各藏在一個 **Python Protocol** 後面，**fake 與 real 兩套實作都已存在**，
-由六個環境變數逐一切換（`*_IMPL=fake|real`）。**預設六個都是 `fake`**，所以不接任何外部服務
+由七個環境變數逐一切換（`*_IMPL=fake|real`）。**預設七個都是 `fake`**，所以不接任何外部服務
 也能跑完整 demo；要接真的可以一個一個開，不必一次全換。
 
 | Seam | 介面 | 假實作 | 真實實作 |
@@ -247,6 +275,7 @@ Stage 4 就是那條便宜的路。它刻意**不碰** Stage 3 的難題（不�
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, judge_verdict \| None) -> dict` | 睡 2–4s，回 §8.2 的 JSON | §8.2 四段式 prompt + 輸出驗證 + span_index 越界剔除 |
 | `SynthesisClient` | `synthesize(trace, question, agent_response) -> str` | 依假 trace 生出編號步驟 | §8.3 的 prompt，**與 judge/diagnosis 共用同一個 LLM client** |
 | `WorkspaceClient` | `get_workspace()`、`get_version()` | 罐頭 config + 四個 skill 檔 | `GET {base}/get_workspace`、`GET {base}/get_config_version` |
+| `OptimizerClient` | `chat(system, user, ...) -> (text, usage)` | 依 `failure_summary` 生出確定性的 patch，走得到 accept / reject / 多檔 diff 三條路徑 | OpenAI 相容端點；vendored 的 reflect / aggregate / clip 全部只透過這一支呼叫模型 |
 
 > **為什麼是 `WorkspaceClient` 而不是 `SkillClient`**：skill 在 agent server 上**是一個目錄**
 > （`SKILL.md` 加上它的 `references/`），而且決定 agent 行為的另一半住在旁邊的 `config.json`。
@@ -1117,7 +1146,7 @@ Verify **不強制**（`JUDGE_IMPL=fake` 時根本無從驗起，會回 409）�
 2. **不寫回 attempt。** 端點只回傳文字。寫上去等於把一次觀察到的執行，變成下一次執行被評分的標準
    ——而沒有人同意過這件事。
 
-**它不是第六個外部依賴**：`SynthesisClient` 與 judge / diagnosis 共用同一個 LLM client 與同一套
+**它不是另一個外部依賴**：`SynthesisClient` 與 judge / diagnosis 共用同一個 LLM client 與同一套
 JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 
 ---
@@ -1140,7 +1169,7 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /users` | — | `fake` 模式回可切換的假身分名單；`keycloak` 模式回空陣列（前端據此隱藏切換器）+ 目前身分 |
 | `GET /users/lookup?username=` | — | 分享前對員工目錄查核（§11.3）。查無此人 → **404**；目錄連不上 → **200 但 `verified:false`**，前端警告卻放行 |
 | `GET /me` | — | 目前 subject 與其在各 eval set 的角色。**UI 不用它 gate 權限**（§11.4）——每個 eval set 的 payload 自己就帶 `my_role` |
-| `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **六個 `*_IMPL` 現況** |
+| `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **`*_IMPL` 現況** |
 | `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares`；`source_format='python'` 時可帶 `script`（provenance，**無 password 欄位**，多帶會被拒）|
 | `POST /eval-sets/script/validate` | — | 上傳 `.py` 的**靜態**檢查（有無 `main`、參數）；不執行、不連 DB、不需憑證 |
 | `POST /eval-sets/script/run` | — | 在 sandbox 中執行 script，回傳預覽 row + warning + 上限告知 + stdout/stderr。**script 失敗回 200 帶 `error`**，不是 4xx——traceback 與 print 輸出正是呼叫它的目的。憑證用完即忘 |
@@ -1221,19 +1250,24 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 側邊欄（可收合成圖示）
 ├─ Evaluation ← 目前所在
 ├─ Playground
-└─ Optimize [Soon]   ← Stage 3 的位置，尚未實作
+└─ Optimize          ← Stage 3（§2.3a）
 
-Evaluation（三層下鑽）                        Playground
-├─ 首頁：eval set 卡片                        ├─ 編輯區（問題 + 四個面板，見下）
-│   run 數、最近通過率、趨勢小折線、            ├─ phase stepper（Agent→Judge→Trace→Diagnosis）
-│   regression 摘要數、成員數、               ├─ 三欄：attempt 清單 │ trace+診斷 │ span 細節
-│   下載、齒輪
-│                                          └─ Shortlist 對話框（§7.6）
-├─ 中層：某 set 的 run 歷史
-│   多選 run + union / intersection / last-N
+Evaluation（三層下鑽）              Playground                        Optimize
+├─ 首頁：eval set 卡片              ├─ 編輯區（問題 + 四個面板）        ├─ 左欄：run 清單
+│   run 數、最近通過率、趨勢小折線、  ├─ phase stepper                  ├─ 新 run：六步 wizard（整頁）
+│   regression 摘要數、成員數、      │  （Agent→Judge→Trace→Diagnosis） ├─ 總覽：逐 step 圖表 +
+│   下載、齒輪                      ├─ 三欄：attempt 清單 │            │   釘住的 step 卡 + 下載
+│                                  │        trace+診斷 │ span 細節    ├─ Part 1：一個 step 一個 split
+├─ 中層：某 set 的 run 歷史         └─ Shortlist 對話框（§7.6）        │   （依 analyst 呼叫分組）
+│   多選 run + union/intersection                                    └─ Part 2：skill 並排 diff
 └─ 底層：三欄詳情
     題目清單 │ trace + 診斷 │ span 細節
 ```
+
+**Optimize 的兩層深頁刻意占滿寬度**，不塞進 run 清單旁邊的右半邊：Part 1 自己就是兩欄
+（分組題目清單 + analyst 面板，面板裡還開得出兩欄 span 檢視），Part 2 是三欄文字
+（檔案樹 + 並排 diff）。擠在半頁裡，並排 diff 的每一行都會 wrap，而它存在的唯一理由
+就是把兩邊對齊。
 
 **Playground 先連線，才開始工作（connection bar）**
 
@@ -1295,8 +1329,9 @@ bar 之後，剩下的就只是這個平台的下游服務，名字也就照實�
 側邊欄把兩者分開：**持續可見的目的地**用側邊列，**這一頁的篩選**才用藥丸。
 side rail 由一份 section registry（`SideRail.jsx` 的 `SECTIONS`）驅動——
 **加一個 section 是加一筆資料，不是在 `App.jsx` 多長一層條件分支**。
-Stage 3 的 **SkillOpt 就是第三個 section**（`Optimize`），目前掛著 `Soon`、不可點，
-只說明它將來做什麼；接上時把 registry 那筆的 `soon` 拿掉即可。
+Stage 3 的 **SkillOpt 就是第三個 section**（`Optimize`）。它原本掛著 `soon: true`、不可點，
+接上時就是把 registry 那筆的 `soon` 拿掉——**加一個 section 真的只是加一筆資料**，
+`App.jsx` 沒有為它長出第二層條件分支，這一節的說法在實作時被驗證過了。
 
 **導航狀態在 URL 裡**（hash，因為前端是靜態 bundle、沒有 server-side rewrite，
 深層 path 重整會 404，深層 hash 不會）：
@@ -1528,7 +1563,7 @@ Playground 則乾脆放棄視窗推導、固定 `62vh`，因為它的編輯區�
 
 ### 11.2 登入的兩種模式（`AUTH_MODE`）
 
-身分是**第七個 seam**，形狀與 §3.2 的六個一致：`AUTH_MODE=fake | keycloak`，預設 `fake`。
+身分是**再一個 seam**，形狀與 §3.2 的七個一致：`AUTH_MODE=fake | keycloak`，預設 `fake`。
 
 | 模式 | 身分從哪來 | 用在哪 |
 |---|---|---|
@@ -1852,15 +1887,21 @@ shortlist：加入 → `Draft from trace` → 勾一個既有 set → 建立 →
 
 ## 15. 明確尚未做的
 
-### 15.1 維持 Stage 2 / 3 邊界（刻意不做）
+### 15.1 維持 Stage 2 邊界（刻意不做）
 
-per-span 機率 / 熱點著色、人工重標 span、SkillOpt 自動優化、
-整份 eval set 用候選 skill 重跑並驗證改善、skill 寫回 agent server、多租戶隔離
+per-span 機率 / 熱點著色、人工重標 span、多租戶隔離
 （多 agent server / 多 Langfuse project）、編輯的即時讀同步。
 
-> 側邊欄上的 **`Optimize` 只是一個位置**：它不可點、標著 `Soon`，
-> 存在的用意是讓資訊架構容得下 Stage 3，而不是暗示它做好了（§10.1）。
-> 直接打 `#/optimize` 會拿到一頁說明「這裡將來會做什麼、現在該去哪裡」的佔位頁。
+**Stage 3 已經實作**（§2.3a），但它自己也有一條刻意不做的線：
+
+| 不做 | 為什麼 |
+|---|---|
+| skill 自動寫回 agent server | 寫回牽涉版本控制與 rollback，是另一個系統。產出 zip、人工放回，換來的是「這份 skill 是誰在什麼時候放上去的」仍然由人負責 |
+| test split | 第三個 split 會讓每一份數字都要再解釋一次它是哪個 split 的。**用本系統既有的 evaluation 功能對 optimized skill 重跑一次**，就是無偏驗證，而且那條路本來就存在 |
+| `rewrite_from_suggestions` / 整份重寫 | v1 只做 `patch`。整份重寫的 diff 沒有人讀得動，而 diff 是這個系統的安全機制之一 |
+| slow update / meta skill 預設關閉 | 兩者都已接線（`optimizer/longitudinal.py`），由 run config 的 `slow_update` / `meta_skill` 開啟，**預設關閉**。它們在 epoch 邊界跑，不是每個 step——單一 epoch 的 run 沒有邊界可比，兩者都不會執行 |
+| 多次取樣壓抑溫度雜訊 | 成本翻倍。改為在 UI 上誠實說明單次取樣的限制 |
+| 金鑰加密 | 沿用 `runs.secrets` 的既有明文模式，不新增例外，也不假裝解決了 §15.2 |
 
 ### 15.2 Stage 1 / 4 範圍內但確實還缺的
 

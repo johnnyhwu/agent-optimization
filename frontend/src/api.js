@@ -240,6 +240,59 @@ export const api = {
   // back into that stale state, silently and for the rest of the session.
   openPlaygroundProgress: () =>
     openStream("/playground/progress", { persistent: true }),
+
+  // --- Optimize (Stage 3) ---------------------------------------------------
+  //
+  // The wizard's four calls, then the run's own.
+  //
+  // `optimizationDefaults` carries the split-size limits as well as the
+  // prefills, so the browser enforces the same numbers the create endpoint
+  // does. A copy in the bundle would drift, and Start would be enabled on a
+  // request that 400s.
+  optimizationDefaults: () => req("GET", "/optimization/defaults"),
+  importPreview: (evalSetIds) =>
+    req("POST", "/optimization/import-preview", { eval_set_ids: evalSetIds }),
+  // Proves the skill tag and the agent's directory are the same name before a
+  // run exists, rather than at step 0 after a batch of agent calls.
+  skillCheck: (skillName) =>
+    req("GET", `/optimization/skill-check${qs({ skill_name: skillName })}`),
+  createOptimizationRun: (payload) => req("POST", "/optimization/runs", payload),
+
+  listOptimizationRuns: (params = {}) =>
+    req("GET", `/optimization/runs${qs(params)}`),
+  getOptimizationRun: (runId) => req("GET", `/optimization/runs/${runId}`),
+  cancelOptimizationRun: (runId) =>
+    req("POST", `/optimization/runs/${runId}/cancel`),
+  // Only an interrupted run — one a backend restart caught mid-loop. A
+  // cancelled or failed run is a decision or a dead end, not something to
+  // continue under the same id.
+  resumeOptimizationRun: (runId) =>
+    req("POST", `/optimization/runs/${runId}/resume`),
+  deleteOptimizationRun: (runId) => req("DELETE", `/optimization/runs/${runId}`),
+  openOptimizationProgress: (runId) =>
+    openStream(`/optimization/runs/${runId}/progress`),
+  // Part 1: one step, one split — the rollout's questions and the analyst calls
+  // they fed, in a single payload because the parts mean nothing apart.
+  getRolloutDetail: (runId, stepNo, split) =>
+    req("GET", `/optimization/runs/${runId}/steps/${stepNo}/rollouts/${split}`),
+  // One question's spans, in the same `TraceView` shape the evaluation pages
+  // render — which is what lets the span viewer be reused unchanged.
+  getRolloutResultTrace: (runId, stepNo, split, resultId) =>
+    req(
+      "GET",
+      `/optimization/runs/${runId}/steps/${stepNo}/rollouts/${split}/results/${resultId}/trace`,
+    ),
+  // Part 2. `base` is "parent" (the last accepted step, which is usually not
+  // the previous one) or "initial".
+  getStepSkillDiff: (runId, stepNo, base = "parent") =>
+    req("GET", `/optimization/runs/${runId}/steps/${stepNo}/skill${qs({ base })}`),
+  // The run's one deliverable. `step` is "best" or a step number — any step is
+  // fetchable, and the manifest inside says whether the gate kept it.
+  downloadOptimizedSkill: (runId, step = "best", fallbackName) =>
+    download(
+      `/optimization/runs/${runId}/skill/download${qs({ step })}`,
+      fallbackName || "skill.zip",
+    ),
 };
 
 // --- Server-sent events over fetch ------------------------------------------

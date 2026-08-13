@@ -15,11 +15,13 @@ from app.auth import current_subject
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
+from app.optimizer.runner import reap_interrupted_optimization_runs
 from app.routers import (
     diagnosis,
     eval_set_scripts,
     eval_sets,
     export,
+    optimization,
     playground,
     questions,
     results,
@@ -84,6 +86,10 @@ async def reap_interrupted_runs(session_factory=None) -> int:
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     await reap_interrupted_runs()
+    # Its own reaper, and a different verdict: an optimization run is
+    # checkpointed per step, so a restart leaves something resumable rather than
+    # something to write off. See `app/optimizer/runner.py`.
+    await reap_interrupted_optimization_runs()
     yield
 
 
@@ -127,6 +133,7 @@ app.include_router(results.router)
 app.include_router(export.router)
 app.include_router(diagnosis.router)
 app.include_router(playground.router)
+app.include_router(optimization.router)
 
 
 @app.get("/health")
@@ -188,6 +195,10 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
             # Fake means what is shown is canned, which the editor says so
             # nobody edits a fake skill expecting the real agent to have it.
             "workspace": settings.workspace_impl,
+            # Writes the skill edits in an optimization run. Fake means the
+            # edits are canned, so the Optimize section is demonstrable on
+            # Docker alone like every other part of the product.
+            "optimizer": settings.optimizer_impl,
         },
     }
 

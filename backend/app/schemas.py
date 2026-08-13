@@ -620,3 +620,453 @@ class PlaygroundAttemptDetail(PlaygroundAttemptOut):
     # worthless.
     workspace: WorkspaceOverrideIn | None = None
     trace: TraceView
+
+
+# --- Optimize (Stage 3) -----------------------------------------------------
+#
+# No model here has a field that could carry a credential outward, exactly as
+# `RunOut` has none: `optimization_runs.secrets` is a separate column and
+# nothing below reads it. That is what makes "keys never leave the server"
+# structural rather than a habit somebody has to remember.
+
+
+class OptimizationStepSummary(BaseModel):
+    """One row of the chart. The overview fetches every step in one payload.
+
+    `train_*` is measured with the skill as it *entered* the step; `val_*` with
+    the candidate the step produced. They are two different skills, which is why
+    the chart draws train half a step to the left — and why they are named apart
+    rather than sharing a `hard`.
+    """
+
+    step_no: int
+    epoch_no: int
+    step_in_epoch: int
+    parent_step_no: int | None = None
+    status: str
+    gate_action: str | None = None
+    gate_reject_reason: str | None = None
+    retried: bool = False
+    abort_reason: str | None = None
+
+    train_hard: float | None = None
+    train_soft: float | None = None
+    train_activation_rate: float | None = None
+    train_n_scored: int | None = None
+    train_n_items: int | None = None
+    train_n_agent_error: int | None = None
+    train_n_judge_error: int | None = None
+    train_latency_min_ms: int | None = None
+    train_latency_p50_ms: int | None = None
+    train_latency_max_ms: int | None = None
+
+    val_hard: float | None = None
+    val_soft: float | None = None
+    val_activation_rate: float | None = None
+    val_n_scored: int | None = None
+    val_n_items: int | None = None
+    val_n_agent_error: int | None = None
+    val_n_judge_error: int | None = None
+    val_latency_min_ms: int | None = None
+    val_latency_p50_ms: int | None = None
+    val_latency_max_ms: int | None = None
+
+    # The second half of the hover card: what this step did to the skill.
+    lines_added: int | None = None
+    lines_removed: int | None = None
+    files_touched: int | None = None
+    # Training gold answers this step copied in verbatim, against its parent.
+    # Zero on a well-behaved step; the overview raises it as a warning.
+    n_answer_leaks: int | None = None
+    # The agent's config version while this step ran; None if never probed.
+    # Compared against the run's pinned version to spot a mid-run deploy.
+    workspace_version: str | None = None
+    n_edits_applied: int | None = None
+    n_edits_skipped: int | None = None
+    edit_summary: str | None = None
+    skill_len: int | None = None
+    candidate_from_cache: bool = False
+
+    current_score: float | None = None
+    best_score: float | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+
+
+class OptimizationRunOut(BaseModel):
+    """One optimization run, as the left rail lists it."""
+
+    id: uuid.UUID
+    name: str | None
+    created_by: str
+    status: str
+    mode: str
+    skill_name: str
+    num_epochs: int
+    batch_size: int
+    steps_per_epoch: int
+    total_steps: int
+    steps_done: int = 0
+    best_step: int | None = None
+    best_score: float | None = None
+    cancel_requested: bool = False
+    error_message: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+    # Which eval sets this run drew questions from, for the list row's subtitle.
+    source_eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+    n_train: int = 0
+    n_val: int = 0
+
+
+class OptimizationRunDetail(OptimizationRunOut):
+    """The overview page: the run, its settings, and every step of the chart."""
+
+    # Non-secret settings only, by construction — `secrets` is a different column.
+    config: dict = Field(default_factory=dict)
+    detector: dict = Field(default_factory=dict)
+    workspace_version: str | None = None
+    steps: list[OptimizationStepSummary] = Field(default_factory=list)
+    # Questions that landed in both splits. Not an error — the wizard offers it —
+    # but validation is not held out for those, so the page says so.
+    overlap_item_keys: list[str] = Field(default_factory=list)
+
+
+class OptimizationRunPage(Page):
+    items: list[OptimizationRunOut]
+
+
+# --- The wizard -------------------------------------------------------------
+
+
+class ImportPreviewRequest(BaseModel):
+    """Which eval sets to draw questions from (wizard step 1)."""
+
+    eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class PreviewQuestion(BaseModel):
+    """One question the picker is offering, with what is known about it.
+
+    `prior_accuracy` is `None` for a question nobody has run — never 0.0, which
+    would read as "always wrong" and make it the first thing a developer reaches
+    for. `prior_runs` is the denominator: 60% from five runs and 60% from one are
+    different claims, and the questions most worth optimising are exactly the
+    ones with the least history.
+    """
+
+    item_key: str
+    question_id: str
+    question: str
+    ground_truth_response: str
+    eval_set_id: uuid.UUID
+    eval_set_name: str
+    skills: list[str] = Field(default_factory=list)
+    prior_accuracy: float | None = None
+    prior_runs: int = 0
+
+
+class SkillGroup(BaseModel):
+    skill_name: str
+    questions: list[PreviewQuestion] = Field(default_factory=list)
+
+
+class PreviewSource(BaseModel):
+    """One source set, with the fingerprint of the prompt it grades by.
+
+    Two sets whose fingerprints differ were graded by different words, so their
+    prior accuracies are not comparable — and the run about to be built will
+    grade every question by a single prompt of its own. The wizard says so
+    rather than letting the numbers imply otherwise.
+    """
+
+    id: uuid.UUID
+    name: str
+    n_questions: int
+    judge_prompt_fingerprint: str
+
+
+class ImportPreview(BaseModel):
+    groups: list[SkillGroup] = Field(default_factory=list)
+    # Questions with no skill tag, or with more than one. Shown, disabled, with
+    # the tags they do carry — the fix is in the eval set, not here.
+    ambiguous: list[PreviewQuestion] = Field(default_factory=list)
+    sources: list[PreviewSource] = Field(default_factory=list)
+
+
+class SkillCheck(BaseModel):
+    """Whether the agent has the skill the questions are tagged with."""
+
+    skill_name: str
+    exists: bool
+    files: list[str] = Field(default_factory=list)
+    n_chars: int = 0
+    has_frontmatter: bool = False
+    # Set when routing mode cannot be offered, with the reason to show instead.
+    routing_blocked_reason: str | None = None
+    available_skills: list[str] = Field(default_factory=list)
+    workspace_version: str | None = None
+
+
+class OptimizationConfig(BaseModel):
+    """The non-secret settings one optimization run executes with.
+
+    Every field is optional and blank means "use the environment", the same rule
+    `RunConfig` follows — so the fake demo is runnable from an untouched form.
+
+    The judge prompt is here rather than on an eval set, which is the opposite of
+    how an eval run works, and deliberately. An eval run grades a set the whole
+    team shares, so the criteria belong to the set. An optimization run draws
+    from several sets at once — whose prompts may differ — and it is one
+    developer's experiment, so the run owns one prompt and says which.
+    """
+
+    # Connections
+    agent_base_url: str = ""
+    agent_timeout_s: float | None = None
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_timeout_s: float | None = None
+    llm_base_url: str = ""
+    judge_model: str = ""
+    optimizer_model: str = ""
+    concurrency: int | None = Field(default=None, ge=1)
+
+    # Grading
+    judge_system_prompt: str = ""
+    judge_user_prompt: str = ""
+    judge_prompt_fingerprint: str = ""
+
+    # The algorithm
+    minibatch_size: int | None = Field(default=None, ge=1)
+    learning_rate: int | None = Field(default=None, ge=1)
+    min_learning_rate: int | None = Field(default=None, ge=1)
+    scheduler: str = ""
+    gate_metric: str = ""
+    mixed_weight: float | None = Field(default=None, ge=0, le=1)
+    failure_only: bool = False
+    # Upstream's two longitudinal passes, both off by default. They run once per
+    # epoch boundary, not per step, and both cost a call on the optimizer model.
+    # `slow_update` writes guidance into a protected block of SKILL.md that
+    # step-level analysts cannot edit; `meta_skill` is optimizer-side memory
+    # shown to later analysts and never written into the skill at all.
+    slow_update: bool = False
+    meta_skill: bool = False
+    analyst_workers: int | None = Field(default=None, ge=1)
+    merge_batch_size: int | None = Field(default=None, ge=2)
+    reflect_budget_chars: int | None = Field(default=None, ge=1000)
+    error_threshold: float | None = Field(default=None, ge=0, le=1)
+    seed: int | None = None
+
+
+class OptimizationSecrets(BaseModel):
+    """Write-only. No response model reads this — see `optimization_runs.secrets`."""
+
+    llm_api_key: str = ""
+    langfuse_secret_key: str = ""
+
+
+class DetectorConfig(BaseModel):
+    """How a run decides whether the agent actually used the skill.
+
+    `path_patterns` are regexes matched against tool-call arguments; blank means
+    the shipped default. `detectable` says the agent's traces are known to name
+    skill file paths, which turns the content-matching fallback off.
+    """
+
+    path_patterns: list[str] = Field(default_factory=list)
+    detectable: bool = False
+
+
+class OptimizationRunCreate(BaseModel):
+    name: str | None = None
+    mode: str = "isolated"
+    skill_name: str
+    # `item_key`s, as the split editor produced them. A key may appear in both:
+    # the wizard offers "also add to validation" deliberately.
+    train: list[str] = Field(default_factory=list)
+    val: list[str] = Field(default_factory=list)
+    num_epochs: int = Field(default=1, ge=1, le=20)
+    batch_size: int = Field(default=8, ge=1)
+    config: OptimizationConfig = Field(default_factory=OptimizationConfig)
+    secrets: OptimizationSecrets = Field(default_factory=OptimizationSecrets)
+    detector: DetectorConfig = Field(default_factory=DetectorConfig)
+
+
+# --- Optimize, Part 1: one rollout in detail --------------------------------
+
+
+class OptimizationResultOut(BaseModel):
+    """One question answered once, with the run's snapshot of what it asked.
+
+    `question` and `ground_truth_response` come from `optimization_items`, not
+    from `questions`: the run froze them at creation, and an eval set edited
+    since would otherwise put today's text beside a six-week-old verdict.
+    """
+
+    id: uuid.UUID
+    item_key: str
+    question: str | None = None
+    ground_truth_response: str | None = None
+    correlation_id: str
+    agent_response: str | None = None
+    agent_latency_ms: int | None = None
+    verdict: str | None = None
+    judge_score: float | None = None
+    judge_comment: str | None = None
+    status: str  # pending | done | failed
+    failure_kind: str | None = None
+    error_message: str | None = None
+    # NULL is a third answer, not a false: the detectors could not tell whether
+    # the agent read the skill. Reporting it as "no" would make an unobservable
+    # agent look like one that ignored its skill.
+    activated: bool | None = None
+    skills_read: list[str] | None = None
+    detector_hit: str | None = None
+    trace_ready: bool = False
+    trace_error: str | None = None
+    # Which analyst call this question was evidence for. NULL on validation,
+    # which is never reflected on, and on training questions the reflect stage
+    # did not use (a success, when the run is failure-only).
+    minibatch_no: int | None = None
+
+
+class OptimizationMinibatchOut(BaseModel):
+    """One analyst call: the prompt sent, the patch proposed, what was cut.
+
+    The prompt is stored rather than rebuilt because it is the evidence. It is
+    also already truncated, which is what makes it safe to keep verbatim — its
+    size is bounded by the reflect budget by construction.
+    """
+
+    minibatch_no: int
+    source_type: str  # failure | success
+    n_items: int
+    item_keys: list[str] = Field(default_factory=list)
+    prompt_system: str | None = None
+    prompt_user: str | None = None
+    raw_output: dict | None = None
+    # [{item_key, span_index, field, before, after, stage}] — the cascade's
+    # ledger. Shown in the UI, because a developer reading a proposal built on a
+    # trace that lost 70% of its tool output should be told so on the page.
+    truncation: list[dict] = Field(default_factory=list)
+    chars_before: int | None = None
+    chars_after: int | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+
+
+class OptimizationRolloutDetail(BaseModel):
+    """Part 1: one step, one split — the numbers, the questions, the analysts."""
+
+    run_id: uuid.UUID
+    step_no: int
+    split: str
+    epoch_no: int
+    step_in_epoch: int
+    # Which skill version was rolled out. On training this is the parent step's
+    # accepted skill, not this step's candidate — the header has to say so or
+    # the two rollouts of a step look like they measured the same thing.
+    skill_step_no: int
+    parent_step_no: int | None = None
+    step_status: str
+    gate_action: str | None = None
+    gate_reject_reason: str | None = None
+    edit_summary: str | None = None
+
+    n_items: int = 0
+    n_scored: int = 0
+    n_agent_error: int = 0
+    n_judge_error: int = 0
+    hard: float | None = None
+    soft: float | None = None
+    activation_rate: float | None = None
+    n_activated: int = 0
+    latency_min_ms: int | None = None
+    latency_p50_ms: int | None = None
+    latency_max_ms: int | None = None
+    aborted: bool = False
+    abort_reason: str | None = None
+
+    results: list[OptimizationResultOut] = Field(default_factory=list)
+    # Empty on validation, which is measured and never reflected on.
+    minibatches: list[OptimizationMinibatchOut] = Field(default_factory=list)
+
+
+class SkillDiffFile(BaseModel):
+    """One file's two sides, for a diff the browser lays out itself.
+
+    `before` and `after` are `None` — not `""` — when the file did not exist on
+    that side. A created file and an emptied one produce the same line counts,
+    and only this distinguishes them; the tree labels one "new" and the other
+    "removed", and a reader deciding whether the agent can still reach a
+    reference document needs the difference.
+    """
+
+    path: str
+    before: str | None = None
+    after: str | None = None
+    # From `skillio.per_file_stats`, never recounted downstream: two answers to
+    # "how many lines changed" eventually disagree on screen about one edit.
+    added: int = 0
+    removed: int = 0
+
+
+class AnswerLeak(BaseModel):
+    """A gold answer this step copied verbatim into the skill."""
+
+    path: str
+    answer: str
+    line: str
+
+
+class EditReportOut(BaseModel):
+    """What became of one proposed edit.
+
+    Every field has a default because this comes from the vendored apply stage:
+    a shape change upstream should show up as a thinner row on the page, not as
+    a 500 on a run that has already finished.
+    """
+
+    index: int | None = None
+    op: str = ""
+    path: str = ""
+    path_defaulted: bool = False
+    target: str = ""
+    content_preview: str = ""
+    status: str = ""
+    error: str | None = None
+
+
+class OptimizationSkillDiff(BaseModel):
+    """Part 2: one step's edits, against the snapshot they were derived from."""
+
+    run_id: uuid.UUID
+    skill_name: str
+    mode: str
+    step_no: int
+    # What was asked for, and what it resolved to. `parent` is the last step the
+    # gate *accepted* — usually not `step_no - 1`, because a rejected step rolls
+    # the skill back — and it is NULL until the first acceptance, which is what
+    # `base_is_fallback` reports rather than hiding.
+    base: str
+    base_step_no: int
+    base_is_fallback: bool = False
+
+    gate_action: str | None = None
+    gate_reject_reason: str | None = None
+    is_best: bool = False
+    step_status: str
+    edit_summary: str | None = None
+    n_edits_applied: int | None = None
+    n_edits_skipped: int | None = None
+
+    files: list[SkillDiffFile] = Field(default_factory=list)
+    # Named, not carried. The tree is a picture of the whole skill, but sending
+    # every file's text on every request grows the payload with the skill rather
+    # than with the edit.
+    unchanged_paths: list[str] = Field(default_factory=list)
+    lines_added: int = 0
+    lines_removed: int = 0
+    answer_leaks: list[AnswerLeak] = Field(default_factory=list)
+    edit_reports: list[EditReportOut] = Field(default_factory=list)

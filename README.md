@@ -115,7 +115,7 @@ Two ideas carry most of the design:
 **1. Six swappable seams.** Each external dependency is a Python `Protocol`
 with two implementations — a fake one with realistic latency, and a real one.
 `AGENT_IMPL` / `JUDGE_IMPL` / `TRACE_IMPL` / `DIAGNOSIS_IMPL` / `SYNTHESIS_IMPL` /
-`WORKSPACE_IMPL` pick
+`WORKSPACE_IMPL` / `OPTIMIZER_IMPL` pick
 between them **independently**, all defaulting to fake. So the whole product runs
 on nothing but Docker, and you can bring up one real service at a time.
 
@@ -479,7 +479,7 @@ Events must trickle out one at a time. All at once at the end means
 
 ## Going from fake to real
 Out of the box every external dependency is faked, so the demo runs with nothing
-but Docker. The six seams (spec §3.2) each have their own switch, so you can
+but Docker. The seven seams (spec §3.2) each have their own switch, so you can
 bring them up **one at a time** — a real agent while the judge is still fake, and
 so on.
 
@@ -491,6 +491,7 @@ so on.
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
 | `SYNTHESIS_IMPL` | `SynthesisClient` | draft an expected reasoning process from a trace, for a question being promoted out of the playground. Shares the LLM endpoint with the judge and the diagnosis; `SYNTHESIS_MODEL` picks the model |
 | `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's config + skill files for the playground: `GET {AGENT_BASE_URL}/get_workspace` and `/get_config_version` (spec §3.2). Read-only, so it is the cheapest one to switch on first |
+| `OPTIMIZER_IMPL` | `OptimizerClient` | the model that edits the skill in Optimize — reflect, merge and rank all call it and nothing else (`LLM_BASE_URL`, `OPTIMIZER_MODEL`). The fake one returns deterministic patches, which is enough to exercise accept, reject and multi-file diffs end to end |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
@@ -587,10 +588,19 @@ Notes:
   "Re-diagnose" controls disappear and write APIs return 403; runs are still
   allowed. (Backend default identity is `FAKE_USER_SUBJECT`, default `alice`.)
 - **Getting around (spec §10.1):** the left rail holds the three sections —
-  **Evaluation**, **Playground**, and **Optimize**, which is disabled and marked
-  *Soon* because SkillOpt is Stage 3. Collapse the rail to icons with the button
-  at its foot; the choice sticks. Inside Evaluation it's three tiers — cards →
-  run history → 3-column detail — with a breadcrumb for one-click back.
+  **Evaluation**, **Playground**, and **Optimize**. Collapse the rail to icons
+  with the button at its foot; the choice sticks. Inside Evaluation it's three
+  tiers — cards → run history → 3-column detail — with a breadcrumb for one-click
+  back.
+- **Optimize (spec §2.3a):** train a skill against your eval questions the way
+  you would train a model — epochs, steps, a learning rate that caps how many
+  edits one step may apply, and a validation gate that throws away the ones that
+  did not help. Six-step wizard, then a chart that grows a point per step while
+  it runs. Click a step to see what it measured, which failures the analyst was
+  shown together, and a side-by-side diff of what it did to the skill. The
+  output is a zip you put back on the agent server yourself; re-run it through
+  Evaluation for an unbiased number. All seven seams are fake by default, so the
+  whole loop runs on `SEED=1 ./scripts/dev.sh` with nothing external attached.
 - **The URL is the view.** Drill into a run and the address bar reads
   `#/evaluation/1/runs/11,10?mode=intersection`. Back walks the tiers, reload
   keeps your place, and a failing run's detail view is a link you can paste to

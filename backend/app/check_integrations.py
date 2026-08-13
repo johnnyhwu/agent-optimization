@@ -145,7 +145,8 @@ async def main() -> int:
         f"  modes: agent={settings.agent_impl} judge={settings.judge_impl} "
         f"trace={settings.trace_impl} diagnosis={settings.diagnosis_impl} "
         f"synthesis={settings.synthesis_impl} "
-        f"workspace={settings.workspace_impl}"
+        f"workspace={settings.workspace_impl} "
+        f"optimizer={settings.optimizer_impl}"
     )
     print()
     results = [
