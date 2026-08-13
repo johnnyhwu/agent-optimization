@@ -5,9 +5,11 @@ import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
-import { IconPlay, IconRefresh, IconStop } from "../icons.jsx";
+import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import { STATUS_TONE } from "./RunList.jsx";
+import ProgressChart from "./ProgressChart.jsx";
+import StepCard from "./StepCard.jsx";
 
 // One run's overview. This is the header and the live state; the chart, the
 // step table and the two detail views land on top of it in the next phases.
@@ -24,6 +26,9 @@ export default function RunPanel({ runId, subject }) {
   const [error, setError] = useState(null);
   const [live, setLive] = useState({ steps: [], phase: null });
   const [busy, setBusy] = useState(false);
+  const [pinned, setPinned] = useState(null);
+  const [metric, setMetric] = useState("hard");
+  const [downloading, setDownloading] = useState(false);
 
   async function reload() {
     try {
@@ -75,11 +80,27 @@ export default function RunPanel({ runId, subject }) {
     }
   }
 
+  // `step` is "best" or a step number. The manifest inside the zip says which
+  // one it turned out to be, so a download is never anonymous once it is on
+  // disk — but the toast should say so too, while the page is still open.
+  async function downloadSkill(step) {
+    setDownloading(true);
+    try {
+      const filename = await api.downloadOptimizedSkill(runId, step);
+      toast.success(`Saved ${filename}`);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (error) return <Banner tone="error" title="Could not load this run">{error}</Banner>;
   if (!run) return <Skeleton variant="row" count={5} />;
 
   const isMine = run.created_by === subject;
   const steps = live.steps.length ? live.steps : run.steps || [];
+  const pinnedStep = pinned == null ? null : steps.find((s) => s.step_no === pinned);
 
   return (
     <div className="opt-run">
@@ -88,6 +109,21 @@ export default function RunPanel({ runId, subject }) {
           title={run.name || `Optimizing ${run.skill_name}`}
           actions={
             <>
+              {/* The run's only output. Offered whenever there is a scored step,
+                  including on a cancelled or interrupted run — the steps that
+                  finished are real, and their skill is the reason to have run
+                  it at all. */}
+              {run.best_step != null && (
+                <Button
+                  variant="secondary"
+                  icon={<IconDownload size={15} />}
+                  loading={downloading}
+                  onClick={() => downloadSkill("best")}
+                  title={`Step ${run.best_step}, the best this run scored on validation`}
+                >
+                  Download best skill
+                </Button>
+              )}
               {run.status === "running" && isMine && (
                 <Button variant="danger" icon={<IconStop size={15} />} loading={busy}
                         onClick={() => act(api.cancelOptimizationRun, "Stopping — finished steps are kept.")}>
@@ -150,18 +186,58 @@ export default function RunPanel({ runId, subject }) {
       </Card>
 
       <Card>
+        <CardHeader
+          title="Accuracy by step"
+          actions={
+            <div className="opt-metric-toggle" role="group" aria-label="Scoring metric">
+              {["hard", "soft"].map((name) => (
+                <Button
+                  key={name}
+                  variant={metric === name ? "secondary" : "ghost"}
+                  onClick={() => setMetric(name)}
+                  title={
+                    name === "hard"
+                      ? "Strictly correct answers only"
+                      : "Partial credit, as the judge scored each answer 0–1"
+                  }
+                >
+                  {name}
+                </Button>
+              ))}
+            </div>
+          }
+        />
+        <ProgressChart
+          steps={steps}
+          totalSteps={run.total_steps}
+          bestStep={run.best_step}
+          metric={metric}
+          pinned={pinned}
+          onPick={(stepNo) => setPinned((current) => (current === stepNo ? null : stepNo))}
+        />
+        {pinnedStep && (
+          <StepCard
+            step={pinnedStep}
+            run={run}
+            downloading={downloading}
+            onClose={() => setPinned(null)}
+            onDownload={downloadSkill}
+          />
+        )}
+      </Card>
+
+      <Card>
         <CardHeader title="Steps" count={steps.length} />
-        <StepTable steps={steps} />
+        <StepTable steps={steps} pinned={pinned} onPick={setPinned} />
       </Card>
     </div>
   );
 }
 
-// The chart's accessible equivalent, and for now the only view of the steps.
-// Building the table first is deliberate: the chart in the next phase renders
-// the same numbers, and having them on screen in a form that cannot lie about
-// them makes the chart checkable.
-function StepTable({ steps }) {
+// The chart's accessible equivalent, carrying the same numbers in a form that
+// cannot distort them — and the keyboard's way to pin a step, since clicking a
+// point on an SVG is a pointer-only gesture.
+function StepTable({ steps, pinned, onPick }) {
   if (!steps.length) return <p className="opt-hint">No steps yet.</p>;
   return (
     <table className="opt-steptable">
@@ -177,7 +253,20 @@ function StepTable({ steps }) {
       </thead>
       <tbody>
         {steps.map((s) => (
-          <tr key={s.step_no}>
+          <tr
+            key={s.step_no}
+            className={pinned === s.step_no ? "pinned" : undefined}
+            tabIndex={0}
+            role="button"
+            aria-pressed={pinned === s.step_no}
+            onClick={() => onPick(pinned === s.step_no ? null : s.step_no)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onPick(pinned === s.step_no ? null : s.step_no);
+              }
+            }}
+          >
             <td className="num">{s.step_no === 0 ? "baseline" : s.step_no}</td>
             <td className="num">{pct(s.train_hard)}</td>
             <td className="num">{pct(s.val_hard)}</td>

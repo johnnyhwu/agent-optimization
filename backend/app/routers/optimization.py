@@ -23,7 +23,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -39,6 +39,7 @@ from app.models import (
     OptimizationItem,
     OptimizationRollout,
     OptimizationRun,
+    OptimizationSkill,
     OptimizationStep,
     Question,
     QuestionResult,
@@ -938,6 +939,162 @@ async def optimization_progress(
             hub.unsubscribe(run_id, queue)
 
     return EventSourceResponse(event_gen())
+
+
+@router.get("/runs/{run_id}/skill/download")
+async def download_optimized_skill(
+    run_id: uuid.UUID,
+    step: str = Query("best", description="`best`, or a step number"),
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """The run's actual output: one step's skill directory, as a zip.
+
+    Any step is fetchable, not only the winner. Reading the edits the gate
+    turned down is a legitimate reason to download one, and refusing would send
+    people to the database for it.
+
+    That generosity is exactly why the manifest matters. The zip outlives the
+    page that explained it — it is opened days later, in a downloads folder,
+    with no chart on screen — so everything that qualifies the skill inside it
+    has to travel in the file: which run and step, what it scored against what
+    baseline, whether the gate kept it, and whether validation was held out at
+    all. `warnings` is the part that has to be read before deploying.
+    """
+    run = await _load_visible_run(session, run_id, subject)
+
+    if step == "best":
+        step_no = run.best_step
+        if step_no is None:
+            raise HTTPException(
+                status_code=404,
+                detail="this run has not finished a step yet, so it has no best skill",
+            )
+    else:
+        try:
+            step_no = int(step)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="step must be 'best' or a step number"
+            )
+
+    snapshot = await session.scalar(
+        select(OptimizationSkill).where(
+            OptimizationSkill.run_id == run_id, OptimizationSkill.step_no == step_no
+        )
+    )
+    # An empty archive would be the worst possible answer: it unzips cleanly,
+    # changes nothing on the agent, and reads as a successful download.
+    if snapshot is None or not snapshot.files:
+        raise HTTPException(
+            status_code=404, detail=f"no skill was recorded for step {step_no}"
+        )
+
+    step_row = await session.scalar(
+        select(OptimizationStep).where(
+            OptimizationStep.run_id == run_id, OptimizationStep.step_no == step_no
+        )
+    )
+    scores = await _val_scores(session, run_id, (step_no, 0))
+    splits, sources, _ = await _counts(session, [run_id])
+    overlap = (
+        await session.scalars(
+            select(OptimizationItem.item_key)
+            .where(OptimizationItem.run_id == run_id)
+            .group_by(OptimizationItem.item_key)
+            .having(func.count(func.distinct(OptimizationItem.split)) > 1)
+        )
+    ).all()
+
+    is_best = run.best_step is not None and step_no == run.best_step
+    warnings: list[str] = []
+    if step_row is not None and step_row.gate_action == "reject":
+        warnings.append(
+            "The validation gate rejected these edits: this candidate scored worse "
+            f"({step_row.gate_reject_reason or 'accuracy'}) than the skill it was "
+            "derived from, and the run did not keep it."
+        )
+    if not is_best and run.best_step is not None:
+        warnings.append(
+            f"This is not the run's best skill. Step {run.best_step} scored "
+            f"{_num(run.best_score)} on validation; download `step=best` for that one."
+        )
+    if overlap:
+        warnings.append(
+            f"{len(overlap)} question(s) were in both the training and validation "
+            "splits, so validation was not fully held out: part of the score "
+            "below is the skill being measured on questions it was edited for."
+        )
+
+    manifest = {
+        "run_id": str(run_id),
+        "run_name": run.name,
+        "run_status": run.status,
+        "skill_name": run.skill_name,
+        "mode": run.mode,
+        "step_no": step_no,
+        "snapshot": snapshot.kind,
+        "content_hash": snapshot.content_hash,
+        "is_best_by_validation": is_best,
+        "gate": (
+            {"action": step_row.gate_action, "reject_reason": step_row.gate_reject_reason}
+            if step_row is not None
+            else None
+        ),
+        "validation": scores.get(step_no),
+        "baseline_validation": scores.get(0),
+        "best_step": run.best_step,
+        "best_score": _num(run.best_score),
+        "warnings": warnings,
+        "hyperparameters": {
+            "num_epochs": run.num_epochs,
+            "batch_size": run.batch_size,
+            "steps_per_epoch": run.steps_per_epoch,
+            "total_steps": run.total_steps,
+        },
+        "n_train": splits.get(run_id, {}).get("train", 0),
+        "n_val": splits.get(run_id, {}).get("val", 0),
+        "source_eval_set_ids": [str(s) for s in sources.get(run_id, [])],
+        "workspace_version": run.workspace_version,
+        # `config` only. `secrets` is a separate column precisely so that it
+        # cannot be swept into a payload by a `**run.__dict__`, and a zip is the
+        # easiest artifact here to forward to somebody else.
+        "config": run.config or {},
+        "exported_by": subject,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Always the step number, never just "best": the file is identified in a
+    # downloads folder weeks later, and two zips from the same run both called
+    # `billing-best.zip` are indistinguishable — which is the situation where
+    # someone deploys the wrong one.
+    stem = run.skill_name.replace("/", "-")
+    filename = f"{stem}-step-{step_no}{'-best' if is_best else ''}.zip"
+    return Response(
+        content=skillio.skill_zip(dict(snapshot.files), manifest),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+async def _val_scores(
+    session: AsyncSession, run_id: uuid.UUID, step_nos
+) -> dict[int, dict]:
+    """`{step_no: {hard, soft}}` from the validation rollouts of those steps."""
+    rows = (
+        await session.execute(
+            select(OptimizationStep.step_no, OptimizationRollout.hard, OptimizationRollout.soft)
+            .join(OptimizationRollout, OptimizationRollout.step_id == OptimizationStep.id)
+            .where(
+                OptimizationStep.run_id == run_id,
+                OptimizationStep.step_no.in_(set(step_nos)),
+                OptimizationRollout.split == "val",
+            )
+        )
+    ).all()
+    return {
+        step_no: {"hard": _num(hard), "soft": _num(soft)} for step_no, hard, soft in rows
+    }
 
 
 @router.delete("/runs/{run_id}", status_code=204)

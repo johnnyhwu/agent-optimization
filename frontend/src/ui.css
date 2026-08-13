@@ -758,3 +758,48 @@
 .opt-steptable { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .opt-steptable th { text-align: left; font-weight: var(--fw-medium); color: var(--muted); font-size: var(--text-micro); padding: var(--space-1) var(--space-2); }
 .opt-steptable td { padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); }
+.opt-steptable tbody tr { cursor: pointer; }
+.opt-steptable tbody tr:hover { background: var(--panel-2); }
+.opt-steptable tbody tr:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.opt-steptable tbody tr.pinned { background: var(--accent-soft); }
+
+/* --- The run chart ------------------------------------------------------- */
+.opt-chart { margin-top: var(--space-2); }
+.opt-chart-svg { width: 100%; height: auto; display: block; cursor: pointer; }
+.opt-chart-band { fill: var(--panel-2); }
+.opt-chart-band.alt { fill: var(--panel-3); }
+.opt-chart-epoch { fill: var(--muted); font-size: 9px; letter-spacing: .04em; }
+.opt-chart-grid { stroke: var(--border); stroke-width: 1; }
+.opt-chart-tick { fill: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.opt-chart-line { fill: none; stroke-width: 1.5; }
+.opt-chart-line.train { stroke: var(--muted); stroke-dasharray: 4 3; }
+.opt-chart-line.val { stroke: var(--accent); }
+/* The gate's threshold: a staircase, drawn under the series it judges. */
+.opt-chart-best { fill: none; stroke: var(--green); stroke-width: 1.5; opacity: .55; }
+.opt-chart-dot.train { fill: var(--muted); }
+.opt-chart-dot.val circle { fill: var(--accent); }
+.opt-chart-dot.val.baseline circle { fill: var(--muted); }
+.opt-chart-dot.val.rejected line { stroke: var(--muted); stroke-width: 2; }
+.opt-chart-ring { fill: none; stroke: var(--green); stroke-width: 2; }
+.opt-chart-dot.pinned circle { stroke: var(--text); stroke-width: 2; }
+.opt-chart-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-micro); color: var(--muted); padding: var(--space-1) 0; }
+.opt-chart-legend .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.opt-chart-legend .swatch.train { background: var(--muted); }
+.opt-chart-legend .swatch.val { background: var(--accent); }
+.opt-chart-legend .swatch.best { background: var(--green); }
+.opt-chart-legend .swatch.rejected { background: var(--muted); opacity: .5; }
+.opt-chart-readout { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-sm); font-variant-numeric: tabular-nums; padding: var(--space-1) 0; }
+
+/* --- The pinned step ----------------------------------------------------- */
+.opt-stepcard { border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--panel-2); margin-top: var(--space-3); }
+.opt-stepcard-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); }
+.opt-stepcard-spacer { flex: 1; }
+.opt-stepcard-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); padding: var(--space-3); }
+.opt-stepcard-body h4 { margin: 0 0 var(--space-2); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.opt-stepcard-row { display: grid; grid-template-columns: 96px 1fr; gap: var(--space-2); padding: 3px 0; font-size: var(--text-sm); }
+.opt-stepcard-row.warning .opt-stepcard-value { color: var(--amber); }
+.opt-stepcard-label { color: var(--muted); }
+.opt-stepcard-value { font-variant-numeric: tabular-nums; }
+.opt-stepcard-sub { grid-column: 2; font-size: var(--text-micro); color: var(--muted); }
+.opt-stepcard-summary { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--text); }
+.opt-metric-toggle { display: flex; gap: 2px; }

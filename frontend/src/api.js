@@ -271,6 +271,13 @@ export const api = {
   deleteOptimizationRun: (runId) => req("DELETE", `/optimization/runs/${runId}`),
   openOptimizationProgress: (runId) =>
     openStream(`/optimization/runs/${runId}/progress`),
+  // The run's one deliverable. `step` is "best" or a step number — any step is
+  // fetchable, and the manifest inside says whether the gate kept it.
+  downloadOptimizedSkill: (runId, step = "best", fallbackName) =>
+    download(
+      `/optimization/runs/${runId}/skill/download${qs({ step })}`,
+      fallbackName || "skill.zip",
+    ),
 };
 
 // --- Server-sent events over fetch ------------------------------------------
