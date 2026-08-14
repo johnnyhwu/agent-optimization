@@ -7,6 +7,7 @@ import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { IconArrowLeft, IconDownload } from "../icons.jsx";
+import { plural } from "../../plural.js";
 import { useToast } from "../Toast.jsx";
 import { diffRows } from "../../diff.js";
 import DiffFileTree from "./DiffFileTree.jsx";
@@ -133,11 +134,11 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
           <span>
             <span className="added">+{view.lines_added}</span>{" "}
             <span className="removed">−{view.lines_removed}</span> across{" "}
-            {view.files.length} file(s)
+            {plural(view.files.length, "file")}
           </span>
           {view.n_edits_applied != null && (
             <span>
-              {view.n_edits_applied} edit(s) applied
+              {plural(view.n_edits_applied, "edit")} applied
               {view.n_edits_skipped ? `, ${view.n_edits_skipped} skipped` : ""}
             </span>
           )}
@@ -172,7 +173,7 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
         )}
         {view.answer_leaks.length > 0 && (
           <Banner tone="error" title="This step may have memorised an answer">
-            {view.answer_leaks.length} added line(s) contain a training question's
+            {plural(view.answer_leaks.length, "added line")} contain a training question’s
             gold answer word for word. That raises training accuracy without
             teaching the agent anything, and validation only catches it if the
             question is genuinely held out. The lines are marked below.

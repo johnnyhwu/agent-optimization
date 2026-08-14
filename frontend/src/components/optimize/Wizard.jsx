@@ -8,6 +8,7 @@ import Card, { CardHeader } from "../ui/Card.jsx";
 import Field, { FormSection } from "../ui/Field.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconAlert, IconCheck, IconPlay, IconRefresh } from "../icons.jsx";
+import { plural } from "../../plural.js";
 import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
@@ -755,7 +756,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
         )}
         {c.overlap > 0 && (
           <Banner tone="warning" title="Validation is not fully held out">
-            {c.overlap} question(s) are in both splits, so part of what the gate
+            {plural(c.overlap, "question")} are in both splits, so part of what the gate
             measures is the skill being fitted to them.
           </Banner>
         )}

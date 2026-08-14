@@ -25,6 +25,13 @@ shipped this way (`--chrome-h`, `--text-sm`, `Badge tone="info"`,
 
 ### Design tokens — `src/css_contract.test.js`
 
+- The two dark blocks — `:root[data-theme="dark"]` and the `prefers-color-scheme`
+  one — must be identical in name and value. Plain CSS cannot share a declaration
+  list between a selector and a media query, so the test is the only thing
+  keeping them equal. The system-dark block once carried 7 of 17 tokens, which
+  put near-white code blocks under near-white text for anyone who never opened
+  the toggle.
+- A font size that has a token in the scale must use the token.
 - Every `var(--x)` without a fallback must resolve. An unresolvable `var()` is
   *invalid at computed-value time*: the declaration falls back to the property's
   inherited value rather than being ignored, so the page renders wrong and

@@ -78,6 +78,47 @@ test("every custom property used without a fallback is defined somewhere", () =>
   );
 });
 
+test("both ways of asking for dark mode produce the same palette", () => {
+  // A theme is picked two ways — the toggle writes `data-theme`, and a user who
+  // has never touched it gets `prefers-color-scheme`. Both must land on the
+  // same seventeen tokens, and plain CSS cannot share one declaration list
+  // between a selector and a media query, so the only thing keeping them equal
+  // is this test.
+  //
+  // The block used to carry seven of the seventeen. What a system-dark user
+  // actually got: `--code-bg` still #f6f7fb under `--text` #e7ecf5, which is
+  // near-white on near-white in every payload, judge comment and trace on the
+  // site; a pale lavender `--bg-grad` over a near-black page; and light-mode
+  // shadows, invisible on #0b0e16, so no card had any elevation.
+  const styles = stripped["styles.css"];
+  const declarations = (body) =>
+    Object.fromEntries(
+      [...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [
+        m[1],
+        m[2].replace(/\s+/g, " ").trim(),
+      ]),
+    );
+
+  const explicit = styles.match(/:root\[data-theme="dark"\]\s*\{([^}]*)\}/);
+  const system = styles.match(
+    /@media \(prefers-color-scheme: dark\)[^{]*\{\s*:root[^{]*\{([^}]*)\}/,
+  );
+  assert.ok(explicit, "no :root[data-theme=\"dark\"] block found");
+  assert.ok(system, "no prefers-color-scheme: dark block found");
+
+  const a = declarations(explicit[1]);
+  const b = declarations(system[1]);
+  const onlyExplicit = Object.keys(a).filter((k) => !(k in b));
+  const onlySystem = Object.keys(b).filter((k) => !(k in a));
+  const differing = Object.keys(a).filter((k) => k in b && a[k] !== b[k]);
+
+  assert.deepEqual(
+    { onlyExplicit, onlySystem, differing },
+    { onlyExplicit: [], onlySystem: [], differing: [] },
+    "the toggle's dark palette and the system's have drifted apart",
+  );
+});
+
 test("a token is not defined only inside a media query", () => {
   // The `prefers-color-scheme` block redefines a subset of the dark tokens. A
   // token that exists *only* there is undefined for everyone whose system is
@@ -90,6 +131,27 @@ test("a token is not defined only inside a media query", () => {
 
   const missing = [...new Set(requiredTokens(allCss))].filter((t) => !definedOutside.has(t));
   assert.deepEqual(missing, [], `defined only inside @media: ${missing.join(", ")}`);
+});
+
+test("a font size with a token in the scale uses the token", () => {
+  // 56 sizes were written as raw pixels alongside a scale that already named
+  // most of them, so "make the dense text one step smaller" meant finding
+  // 24 separate `12px`s. Sizes the scale does not cover — 9px and 10px in the
+  // chart's SVG labels, and three one-off headings — stay literal rather than
+  // growing the vocabulary by five for thirteen uses.
+  const scale = new Map();
+  for (const m of stripped["styles.css"].matchAll(/(--text-[\w-]+)\s*:\s*(\d+)px/g)) {
+    scale.set(Number(m[2]), m[1]);
+  }
+
+  const offenders = [];
+  for (const [name, css] of Object.entries(stripped)) {
+    for (const m of css.matchAll(/font-size:\s*(\d+)px/g)) {
+      const px = Number(m[1]);
+      if (scale.has(px)) offenders.push(`${name}: font-size: ${px}px → var(${scale.get(px)})`);
+    }
+  }
+  assert.deepEqual(offenders, [], `\n  ${offenders.join("\n  ")}`);
 });
 
 // --- Selector collisions ----------------------------------------------------

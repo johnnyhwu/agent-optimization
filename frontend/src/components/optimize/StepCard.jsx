@@ -2,6 +2,7 @@ import React from "react";
 import Badge from "../ui/Badge.jsx";
 import Button from "../ui/Button.jsx";
 import { IconChevronRight, IconDownload, IconX } from "../icons.jsx";
+import { plural } from "../../plural.js";
 
 // One step, pinned by clicking it on the chart. This is the half of the chart
 // that carries actions — pinning rather than hovering exists so that the
@@ -112,7 +113,7 @@ export default function StepCard({
               <Row
                 label="Lines"
                 value={step.lines_added == null ? "—" : `+${step.lines_added} / −${step.lines_removed}`}
-                sub={step.files_touched ? `across ${step.files_touched} file(s)` : null}
+                sub={step.files_touched ? `across ${plural(step.files_touched, "file")}` : null}
               />
               <Row
                 label="Edits"

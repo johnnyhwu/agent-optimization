@@ -535,13 +535,73 @@ one vocabulary would mean churn across ~30 call sites to make two components
 worse. What actually mattered was that each vocabulary be *complete and
 enforced*, which is what shipped.
 
-### Phase 6 — Design-system polish (optional, ~1 day)
+### Phase 6 — Design-system polish — **DONE**
 
-22. Complete the `prefers-color-scheme` token set (S6).
-23. `prefers-reduced-motion` block (S7).
-24. Sweep the 56 hardcoded pixel font-sizes onto the scale; decide `--text-sm`'s
-    permanent name and delete the Phase-0 alias (S4, S5).
-25. 404 route, remaining empty/loading states, copy nits (S8, S9).
+26. ✅ The system-dark palette is complete — all 17 tokens, not 7 (S6). This was
+    the worst remaining bug in the product. See below.
+27. ✅ Reduced motion actually stops the infinite animations, and keeps the
+    spinner (S7).
+28. ✅ 43 of the 56 hardcoded pixel font-sizes moved onto the scale; the
+    Phase-0 `--text-sm` alias is gone (S4, S5).
+29. ✅ `plural()` helper; the Optimize section's eight `question(s)` sites now
+    read as sentences.
+
+**S6 was severe and I under-described it.** A user whose system is set to dark
+and who has never opened the theme toggle got dark surfaces with the light
+theme's everything-else — 10 of 17 tokens. Measured:
+
+| Token | System dark, before | After |
+|---|---|---|
+| `--code-bg` | `#f6f7fb` | `#0f1420` |
+| `--shadow-1` | `rgba(16,24,40,0.06)` | `rgba(0,0,0,0.3)` |
+| `--border-strong` | `#d4d9e6` | `#384155` |
+| `--accent-soft` | `rgba(99,102,241,0.12)` | `rgba(99,102,241,0.18)` |
+
+`--code-bg` at `#f6f7fb` under `--text` at `#e7ecf5` is **near-white text on a
+near-white background, in every answer payload, judge comment and trace** — the
+content this product exists to show. `--bg-grad` painted a pale lavender wash
+over a near-black page, and the light shadows are invisible on `#0b0e16`, so no
+card had elevation. All six combinations of system preference × `data-theme` are
+now verified in Chromium, and `css_contract.test.js` asserts the two dark blocks
+are identical in name and value — plain CSS cannot share a declaration list
+between a selector and a media query, so a test is the only thing that can keep
+them equal.
+
+**Correction: S7 was wrong.** The audit said there was no
+`prefers-reduced-motion` block anywhere. There was, on `main`, all along — I
+asserted it without grepping. What is true is narrower: the block set
+`animation-duration` without `animation-iteration-count`, so the three
+`infinite` animations kept looping at a microsecond per cycle — no visible
+motion, a compositor busy forever on any page with a spinner or skeleton. And it
+took the loading spinner with it, which undoes the reason `Button` has a loading
+state at all. Now: iteration capped, spinner exempted and slowed to 1.6s,
+skeleton given a static background.
+
+**Not done, with reasons:**
+
+- **The remaining 13 hardcoded sizes stay.** 9px and 10px are the chart's SVG
+  labels; 15/17/18px are three one-off headings. Adding five tokens to the scale
+  for thirteen uses would make the vocabulary worse, not better. A guard now
+  fails any hardcoded size that *does* have a token.
+- **No 404 route.** The audit flagged this from the skill's checklist, but the
+  router's fallback to the eval-set list is deliberate and documented, and bad
+  IDs already produce a proper error banner (`#/optimize/{badId}` → API 404 →
+  "Could not load this run"). The skill's item is written for multi-page sites
+  with server routing, not a hash-routed SPA with four sections.
+- **`RunList`'s `toLocaleString()` name fallback stays.** The audit called it
+  unreadable at rail width. It is the established pattern in `RunHistory`,
+  `RunPicker` and `RunConfigView`; changing one of four run lists would trade a
+  small clipping problem for an inconsistency.
+- **`--text-sm` was not promoted to a real token.** The Phase-0 note argued that
+  28 sites reaching for a size-shaped name was evidence against the job-shaped
+  scale. On inspection all 28 are in one section, written by whoever wrote it —
+  one author's habit, not a vocabulary problem. The scale's job-naming is
+  deliberate and documented; the alias is gone and the uses now say
+  `--text-body`.
+
+Verified: 141 classes carrying a font size measured before and after the whole
+of Phase 6 — **zero** computed changes, which is what makes the sweep a
+refactor rather than a redesign.
 
 ### Explicitly out of scope
 
