@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { href, navigate } from "../../useHashRoute.js";
 import RolloutDetail from "./RolloutDetail.jsx";
 import RunList from "./RunList.jsx";
@@ -15,6 +15,11 @@ import Wizard from "./Wizard.jsx";
 // while a new one is being configured there is nothing to return to.
 
 export default function OptimizeSection({ route, subject }) {
+  // The rail has no stream of its own — one per visible run would be a
+  // connection each — so the open run's panel tells it when something moved.
+  // Held here because the rail and the panel are siblings.
+  const [railRevision, setRailRevision] = useState(0);
+
   if (route.tier === "new") return <Wizard />;
   // Part 1 takes the whole width too. It is two columns of its own — the
   // grouped question list and the analyst pane, which itself opens into the
@@ -49,13 +54,19 @@ export default function OptimizeSection({ route, subject }) {
     <div className="opt-section">
       <RunList
         subject={subject}
+        revision={railRevision}
         activeId={route.tier === "run" ? route.runId : null}
         onOpen={(run) => navigate(href.optimizeRun(run.id))}
         onNew={() => navigate(href.optimizeNew())}
       />
       <div className="opt-pane">
         {route.tier === "run" ? (
-          <RunPanel key={route.runId} runId={route.runId} subject={subject} />
+          <RunPanel
+            key={route.runId}
+            runId={route.runId}
+            subject={subject}
+            onRunChanged={() => setRailRevision((n) => n + 1)}
+          />
         ) : (
           <RunList.Intro onNew={() => navigate(href.optimizeNew())} />
         )}

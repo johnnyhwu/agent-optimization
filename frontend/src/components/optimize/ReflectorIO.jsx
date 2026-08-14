@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import Badge from "../ui/Badge.jsx";
+import { plural, pluralise } from "../../plural.js";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import { editsProposed, truncationSummary } from "../../optimize_rollout.js";
@@ -31,7 +32,7 @@ export default function ReflectorIO({ minibatch }) {
           {minibatch.source_type}
         </Badge>
         <span className="muted">{minibatch.n_items} questions</span>
-        <span className="muted">{edits} edit(s) proposed</span>
+        <span className="muted">{plural(edits, "edit")} proposed</span>
         {minibatch.duration_ms != null && (
           <span className="muted">{(minibatch.duration_ms / 1000).toFixed(1)}s</span>
         )}
@@ -114,13 +115,13 @@ function TruncationNote({ cut }) {
   return (
     <div className="opt-truncation">
       <span>
-        {cut.nItems} questions · <strong>{cut.itemsTruncated} trace(s) truncated</strong>
+        {cut.nItems} questions · <strong>{plural(cut.itemsTruncated, "trace")} truncated</strong>
         {cut.before != null && cut.after != null && (
           <> · {cut.before.toLocaleString()} → {cut.after.toLocaleString()} chars</>
         )}
       </span>
       {cut.dropped.length > 0 && (
-        <Banner tone="warning" title={`${cut.dropped.length} question(s) were not shown at all`}>
+        <Banner tone="warning" title={`${plural(cut.dropped.length, "question")} ${pluralise(cut.dropped.length, "was", "were")} not shown at all`}>
           The batch still did not fit after trimming, so these were dropped
           before the analyst saw them — nothing it proposed can rest on them:{" "}
           <code>{cut.dropped.join(", ")}</code>
@@ -155,7 +156,7 @@ function PatchList({ patch }) {
 function Section({ title, children, compact }) {
   if (!children) return null;
   return (
-    <div className={compact ? "opt-section compact" : "opt-section"}>
+    <div className={compact ? "opt-io-block compact" : "opt-io-block"}>
       <h5>{title}</h5>
       <pre className="opt-pre">{children}</pre>
     </div>

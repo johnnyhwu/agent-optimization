@@ -200,13 +200,20 @@
 .ui-badge-danger  { background: var(--red-soft);   color: var(--red); }
 .ui-badge-warning { background: var(--amber-soft); color: var(--amber); }
 .ui-badge-accent  { background: var(--accent-soft); color: var(--accent); }
+/* `info` is what Banner already calls the quiet, non-judging tone, and Banner
+   renders it exactly as Badge renders `neutral`. Three call sites asked Badge
+   for it and got an untoned pill, because the class did not exist. An alias
+   rather than a sixth colour: the palette commits to one accent, and a new hue
+   whose only job is "not a judgement" is what `neutral` already means. */
+.ui-badge-info    { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
 
 .ui-badge.is-outline { background: transparent; }
 .ui-badge-success.is-outline { border-color: var(--green); }
 .ui-badge-danger.is-outline  { border-color: var(--red); }
 .ui-badge-warning.is-outline { border-color: var(--amber); }
 .ui-badge-accent.is-outline  { border-color: var(--accent); }
-.ui-badge-neutral.is-outline { border-color: var(--border-strong); }
+.ui-badge-neutral.is-outline,
+.ui-badge-info.is-outline { border-color: var(--border-strong); }
 
 .ui-badge-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
@@ -332,6 +339,11 @@
 .ui-banner-error .ui-banner-mark, .ui-banner-error .ui-banner-title { color: var(--red); }
 .ui-banner-warning { background: var(--amber-soft); border-color: var(--amber); }
 .ui-banner-warning .ui-banner-mark, .ui-banner-warning .ui-banner-title { color: var(--amber); }
+/* Banner could report every way a thing goes wrong and no way it goes right.
+   The rollout page has been asking for this tone since it was written — "the
+   gate accepted this candidate" — and getting an unstyled box. */
+.ui-banner-success { background: var(--green-soft); border-color: var(--green); }
+.ui-banner-success .ui-banner-mark, .ui-banner-success .ui-banner-title { color: var(--green); }
 .ui-banner-pending { background: var(--accent-soft); border-color: var(--accent); }
 .ui-banner-pending .ui-banner-mark, .ui-banner-pending .ui-banner-title { color: var(--accent); }
 
@@ -648,8 +660,7 @@
 
 .opt-runlist { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .opt-runlist-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.opt-runlist-head h3 { margin: 0; font-size: var(--text-sm); font-weight: var(--fw-semibold); }
-.opt-runlist-empty { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.opt-runlist-head h3 { margin: 0; font-size: var(--text-body); font-weight: var(--fw-semibold); }
 .opt-runlist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .opt-runitem {
   display: flex; flex-direction: column; gap: 3px; width: 100%;
@@ -661,12 +672,12 @@
 .opt-runitem.is-active { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .opt-runitem:focus-visible { outline: none; box-shadow: var(--ring); }
 .opt-runitem-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.opt-runitem-name { font-size: var(--text-sm); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt-runitem-name { font-size: var(--text-body); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-runitem-meta { display: flex; gap: var(--space-2); font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .opt-pane { min-width: 0; }
 .opt-run { display: flex; flex-direction: column; gap: var(--space-4); }
-.opt-run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); font-size: var(--text-sm); color: var(--muted); }
+.opt-run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); font-size: var(--text-body); color: var(--muted); }
 .opt-run-phase { color: var(--accent); font-variant-numeric: tabular-nums; }
 
 /* The step bar: all six, always, in order. */
@@ -691,12 +702,12 @@
 .opt-step.is-current .opt-step-no { background: var(--accent); color: var(--accent-fg); }
 .opt-step.is-done .opt-step-no { background: var(--green-soft); color: var(--green); }
 .opt-step-text { display: flex; flex-direction: column; min-width: 0; }
-.opt-step-label { font-size: var(--text-sm); font-weight: var(--fw-medium); }
+.opt-step-label { font-size: var(--text-body); font-weight: var(--fw-medium); }
 .opt-step-hint { font-size: var(--text-micro); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .opt-wizard-body { display: flex; flex-direction: column; gap: var(--space-5); min-height: 240px; }
 .opt-wizard-foot { display: flex; align-items: center; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
-.opt-wizard-blocked { flex: 1; font-size: var(--text-sm); color: var(--muted); }
+.opt-wizard-blocked { flex: 1; font-size: var(--text-body); color: var(--muted); }
 
 .opt-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .opt-sources label { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-sm); cursor: pointer; }
@@ -705,11 +716,13 @@
 .opt-source-meta { margin-left: auto; font-size: var(--text-micro); color: var(--muted); }
 
 .opt-groups { display: flex; flex-direction: column; gap: var(--space-4); }
-.opt-group.is-selected { box-shadow: inset 0 0 0 1px var(--accent); }
+/* The ring is additive: a bare `inset` shadow replaces the whole property, so
+   the selected card used to be the one card on the step sitting flat. */
+.opt-group.is-selected { box-shadow: inset 0 0 0 1px var(--accent), var(--shadow-1); }
 .opt-group.is-disabled { opacity: 0.85; }
-.opt-group-note, .opt-group-more, .opt-hint, .opt-col-hint { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.opt-group-note, .opt-group-more, .opt-hint, .opt-col-hint { margin: 0; font-size: var(--text-body); color: var(--muted); }
 
-.opt-qtable { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.opt-qtable { width: 100%; border-collapse: collapse; font-size: var(--text-body); }
 .opt-qtable th { text-align: left; font-weight: var(--fw-medium); color: var(--muted); font-size: var(--text-micro); padding: var(--space-1) var(--space-2); }
 .opt-qtable td { padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); vertical-align: top; }
 .opt-qtable .num, .opt-steptable .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -720,7 +733,7 @@
 .opt-split { display: flex; flex-direction: column; gap: var(--space-4); }
 .opt-split-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
 .opt-split-counts { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.opt-sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--muted); }
+.opt-sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-body); color: var(--muted); }
 .opt-split-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
 @media (max-width: 900px) { .opt-split-cols { grid-template-columns: minmax(0, 1fr); } }
 .opt-col-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -731,14 +744,14 @@
 
 .opt-excluded-toggle {
   display: flex; align-items: center; gap: var(--space-2);
-  background: none; border: none; cursor: pointer; color: var(--muted); font-size: var(--text-sm);
+  background: none; border: none; cursor: pointer; color: var(--muted); font-size: var(--text-body);
 }
 .opt-excluded-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .opt-excluded-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 
 .opt-check { display: flex; flex-direction: column; gap: var(--space-2); }
 .opt-check-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.opt-files { list-style: none; margin: 0; padding: 0; font-size: var(--text-sm); }
+.opt-files { list-style: none; margin: 0; padding: 0; font-size: var(--text-body); }
 .opt-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 @media (max-width: 760px) { .opt-modes { grid-template-columns: minmax(0, 1fr); } }
 .opt-mode {
@@ -748,19 +761,23 @@
 .opt-mode.is-selected { border-color: var(--accent); background: var(--accent-soft); }
 .opt-mode.is-disabled { cursor: not-allowed; opacity: 0.6; }
 .opt-mode-title { font-weight: var(--fw-medium); }
-.opt-mode-desc { font-size: var(--text-sm); color: var(--muted); }
+.opt-mode-desc { font-size: var(--text-body); color: var(--muted); }
 .opt-mode-reason { display: flex; align-items: center; gap: 6px; font-size: var(--text-micro); color: var(--amber); }
 
 .opt-review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); margin: 0; }
 .opt-review-grid dt { font-size: var(--text-micro); color: var(--muted); }
-.opt-review-grid dd { margin: 2px 0 0; font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.opt-review-grid dd { margin: 2px 0 0; font-size: var(--text-body); font-variant-numeric: tabular-nums; }
 
-.opt-steptable { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.opt-steptable { width: 100%; border-collapse: collapse; font-size: var(--text-body); }
 .opt-steptable th { text-align: left; font-weight: var(--fw-medium); color: var(--muted); font-size: var(--text-micro); padding: var(--space-1) var(--space-2); }
 .opt-steptable td { padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); }
 .opt-steptable tbody tr { cursor: pointer; }
 .opt-steptable tbody tr:hover { background: var(--panel-2); }
-.opt-steptable tbody tr:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+/* `--ring` is a box-shadow value, not a colour — passing it to `outline` made
+   the whole declaration invalid, which left the one keyboard route into a step
+   with no visible focus at all. Every other focus style in this file already
+   does it this way. */
+.opt-steptable tbody tr:focus-visible { outline: none; box-shadow: inset var(--ring); }
 .opt-steptable tbody tr.pinned { background: var(--accent-soft); }
 
 /* --- The run chart ------------------------------------------------------- */
@@ -788,7 +805,7 @@
 .opt-chart-legend .swatch.val { background: var(--accent); }
 .opt-chart-legend .swatch.best { background: var(--green); }
 .opt-chart-legend .swatch.rejected { background: var(--muted); opacity: .5; }
-.opt-chart-readout { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-sm); font-variant-numeric: tabular-nums; padding: var(--space-1) 0; }
+.opt-chart-readout { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-body); font-variant-numeric: tabular-nums; padding: var(--space-1) 0; }
 
 /* --- The pinned step ----------------------------------------------------- */
 .opt-stepcard { border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--panel-2); margin-top: var(--space-3); }
@@ -796,13 +813,12 @@
 .opt-stepcard-spacer { flex: 1; }
 .opt-stepcard-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); padding: var(--space-3); }
 .opt-stepcard-body h4 { margin: 0 0 var(--space-2); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.opt-stepcard-row { display: grid; grid-template-columns: 96px 1fr; gap: var(--space-2); padding: 3px 0; font-size: var(--text-sm); }
+.opt-stepcard-row { display: grid; grid-template-columns: 96px 1fr; gap: var(--space-2); padding: 3px 0; font-size: var(--text-body); }
 .opt-stepcard-row.warning .opt-stepcard-value { color: var(--amber); }
 .opt-stepcard-label { color: var(--muted); }
 .opt-stepcard-value { font-variant-numeric: tabular-nums; }
 .opt-stepcard-sub { grid-column: 2; font-size: var(--text-micro); color: var(--muted); }
-.opt-stepcard-summary { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--text); }
-.opt-metric-toggle { display: flex; gap: 2px; }
+.opt-stepcard-summary { margin: var(--space-2) 0 0; font-size: var(--text-body); color: var(--text); }
 .opt-stepcard-links { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
 /* --- Part 1: one rollout ------------------------------------------------- */
@@ -810,14 +826,20 @@
 .opt-rollout-body { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: var(--space-3); align-items: start; }
 .opt-rollout-list { max-height: 72vh; overflow: auto; }
 .opt-rollout-pane { min-width: 0; }
-.opt-groups { display: flex; flex-direction: column; }
-.opt-group + .opt-group { border-top: 1px solid var(--border); }
-.opt-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); background: var(--panel-2); border: 0; text-align: left; font-size: var(--text-sm); color: var(--text); cursor: pointer; }
-.opt-group-head:hover { background: var(--panel-3); }
-.opt-group-head.selected { background: var(--accent-soft); }
-.opt-group-head.static { cursor: default; }
+/* The rollout's minibatch groups. Prefixed for this component rather than
+   sharing `.opt-group*` with the wizard's skill cards: these are flush rows in
+   a scrolling rail and those are elevated Cards in a stack, so the two wanted
+   opposite things from the same names. Because both lived in this one file, the
+   adjacency rule below drew a divider between the wizard's cards as well —
+   between elevated surfaces that already had a gap. */
+.opt-rollout-groups { display: flex; flex-direction: column; }
+.opt-rollout-group + .opt-rollout-group { border-top: 1px solid var(--border); }
+.opt-rollout-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); background: var(--panel-2); border: 0; text-align: left; font-size: var(--text-body); color: var(--text); cursor: pointer; }
+.opt-rollout-group-head:hover { background: var(--panel-3); }
+.opt-rollout-group-head.selected { background: var(--accent-soft); }
+.opt-rollout-group-head.static { cursor: default; }
 .opt-qlist { list-style: none; margin: 0; padding: 0; }
-.opt-qrow { display: grid; grid-template-columns: 18px 1fr auto; gap: var(--space-2); align-items: center; width: 100%; padding: var(--space-1) var(--space-3); background: none; border: 0; text-align: left; font-size: var(--text-sm); color: var(--text); cursor: pointer; }
+.opt-qrow { display: grid; grid-template-columns: 18px 1fr auto; gap: var(--space-2); align-items: center; width: 100%; padding: var(--space-1) var(--space-3); background: none; border: 0; text-align: left; font-size: var(--text-body); color: var(--text); cursor: pointer; }
 .opt-qrow:hover { background: var(--panel-2); }
 .opt-qrow.selected { background: var(--accent-soft); }
 .opt-qrow .opt-qtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -830,19 +852,24 @@
 
 /* --- The analyst's input and output -------------------------------------- */
 .opt-reflector { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
-.opt-reflector-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
-.opt-reflector-summary { margin: 0; padding-left: var(--space-4); font-size: var(--text-sm); display: flex; flex-direction: column; gap: 4px; }
-.opt-reflector-reasoning { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--muted); }
-.opt-truncation { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-reflector-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-body); }
+.opt-reflector-summary { margin: 0; padding-left: var(--space-4); font-size: var(--text-body); display: flex; flex-direction: column; gap: 4px; }
+.opt-reflector-reasoning { margin: 0 0 var(--space-2); font-size: var(--text-body); color: var(--muted); }
+.opt-truncation { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-body); }
 .opt-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); padding-bottom: var(--space-1); }
-.opt-section h5 { margin: 0 0 4px; font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.opt-section.compact .opt-pre { max-height: 160px; }
+/* One labelled block of the analyst's input or output. Named for the component
+   rather than for "a section": this was `.opt-section`, which is also the
+   Optimize page shell — a 260px + 1fr grid — so every block on this page was
+   being laid out as two columns, stranding the label in a 260px gutter inside
+   what is already the narrow half of the page. */
+.opt-io-block h5 { margin: 0 0 4px; font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.opt-io-block.compact .opt-pre { max-height: 160px; }
 .opt-pre { margin: 0; padding: var(--space-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-micro); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
 .opt-editlist { display: flex; flex-direction: column; gap: var(--space-3); }
 .opt-edit { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-2); }
-.opt-edit-head { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-edit-head { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-body); }
 .opt-question { display: flex; flex-direction: column; gap: var(--space-2); }
-.opt-question-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.opt-question-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-body); }
 .opt-question-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); align-items: start; }
 @media (max-width: 1100px) {
   .opt-rollout-body, .opt-question-cols { grid-template-columns: 1fr; }
@@ -856,13 +883,20 @@
 .opt-difftree ul { list-style: none; margin: 0; padding: 0; }
 .opt-difftree li { padding: 0 var(--space-3) var(--space-1); }
 .opt-difftree li + li { border-top: 1px solid var(--border); padding-top: var(--space-1); }
-.opt-difffile { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-1) 0; background: none; border: 0; text-align: left; font-size: var(--text-sm); color: var(--text); cursor: pointer; }
+.opt-difffile { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-1) 0; background: none; border: 0; text-align: left; font-size: var(--text-body); color: var(--text); cursor: pointer; }
 .opt-difffile-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .opt-difffile-stat { font-variant-numeric: tabular-nums; font-size: var(--text-micro); white-space: nowrap; }
 .opt-difffile-dir { display: block; font-size: var(--text-micro); color: var(--muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.opt-difffile.selected { color: var(--accent-fg); font-weight: var(--fw-semibold); }
+/* `--accent-fg` is the foreground for use *on* the accent fill — white. This row
+   has no accent fill, so the selected file was white on a white panel. The
+   selected states elsewhere in this section pair the accent with its soft tint;
+   this now matches them. */
+.opt-difffile.selected {
+  color: var(--accent); background: var(--accent-soft);
+  border-radius: var(--radius-sm); font-weight: var(--fw-semibold);
+}
 .opt-difffile:hover .opt-difffile-name { text-decoration: underline; }
-.opt-difffile-quiet { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); padding-top: var(--space-1); color: var(--muted); font-size: var(--text-sm); }
+.opt-difffile-quiet { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); padding-top: var(--space-1); color: var(--muted); font-size: var(--text-body); }
 .added { color: var(--green); }
 .removed { color: var(--red); }
 
@@ -884,5 +918,5 @@
 @media (max-width: 1100px) {
   .opt-skilldiff-body { grid-template-columns: 1fr; }
 }
-.opt-switch { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
+.opt-switch { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-body); cursor: pointer; }
 .opt-switch input { margin: 0; }

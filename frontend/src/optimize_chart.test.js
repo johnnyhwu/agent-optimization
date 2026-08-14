@@ -382,3 +382,31 @@ test("clicking near a point picks that step", () => {
   assert.equal(model.stepAt(model.plot.left - 50), 0);
   assert.equal(model.stepAt(model.plot.left + model.plot.width + 50), 2);
 });
+
+test("a point outside the plot area picks no step at all", () => {
+  // `stepAt` clamps by design, which is right for the column and wrong for the
+  // margins. The svg is the full canvas: a 38px gutter of accuracy labels down
+  // the left and a strip of step numbers along the bottom. Clicking either
+  // pinned a step, and sweeping the pointer across the axis labels showed a
+  // readout for a step nowhere near the cursor.
+  const model = chartModel(
+    [baseline(0.4), step(1, { train: 0.5, val: 0.6, best: 0.6 }), step(2, { train: 0.6, val: 0.7, best: 0.7 })],
+    { width: 400, height: 200, totalSteps: 2 },
+  );
+  const { left, top, width, height } = model.plot;
+  const midX = left + width / 2;
+  const midY = top + height / 2;
+
+  assert.equal(model.stepAtPoint(left - 10, midY), null, "left gutter");
+  assert.equal(model.stepAtPoint(left + width + 10, midY), null, "right margin");
+  assert.equal(model.stepAtPoint(midX, top - 5), null, "above the plot");
+  assert.equal(model.stepAtPoint(midX, top + height + 10), null, "the x-axis labels");
+
+  // Inside, it still answers with the column, exactly as stepAt does.
+  const target = model.val.find((p) => p.stepNo === 1);
+  assert.equal(model.stepAtPoint(target.x + 3, midY), 1);
+  assert.equal(model.stepAtPoint(target.x - 3, midY), 1);
+  // The edges of the plot belong to the plot.
+  assert.equal(model.stepAtPoint(left, top), 0);
+  assert.equal(model.stepAtPoint(left + width, top + height), 2);
+});

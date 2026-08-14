@@ -155,7 +155,7 @@ export default function RolloutDetail({ runId, stepNo, split, onBack }) {
             title={split === "train" ? "By analyst call" : "Questions"}
             count={detail.results.length}
           />
-          <div className="opt-groups">
+          <div className="opt-rollout-groups">
             {groups.map((group) => (
               <Group
                 key={group.minibatch_no ?? "none"}
@@ -195,11 +195,11 @@ function Group({ group, split, selection, onSelect }) {
   const selected =
     selection?.kind === "minibatch" && selection.no === group.minibatch_no;
   return (
-    <div className="opt-group">
+    <div className="opt-rollout-group">
       {minibatch ? (
         <button
           type="button"
-          className={selected ? "opt-group-head selected" : "opt-group-head"}
+          className={selected ? "opt-rollout-group-head selected" : "opt-rollout-group-head"}
           onClick={() => onSelect({ kind: "minibatch", no: minibatch.minibatch_no })}
         >
           <strong>Minibatch {minibatch.minibatch_no}</strong>
@@ -210,7 +210,7 @@ function Group({ group, split, selection, onSelect }) {
         </button>
       ) : (
         split === "train" && (
-          <div className="opt-group-head static">
+          <div className="opt-rollout-group-head static">
             <strong>Not reflected on</strong>
             <span className="muted">no analyst saw these</span>
           </div>

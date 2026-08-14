@@ -1,5 +1,5 @@
 import React from "react";
-import { IconAlert, IconClock, IconInfo, IconX } from "../icons.jsx";
+import { IconAlert, IconCheck, IconClock, IconInfo, IconX } from "../icons.jsx";
 
 // An inline message about the thing next to it — a failed trace, a diagnosis
 // that couldn't be generated, a caveat on one that could.
@@ -14,11 +14,15 @@ import { IconAlert, IconClock, IconInfo, IconX } from "../icons.jsx";
 //
 // So the mark is part of the component, chosen from `tone`, and callers pass
 // words only.
+// The tone vocabulary. `src/ui_vocabulary.test.js` checks that every word here
+// has a `.ui-banner-*` rule behind it and that no call site invents one — both
+// of which had already gone wrong by the time it was written.
 const MARK = {
   info: IconInfo,
   error: IconX,
   warning: IconAlert,
   pending: IconClock,
+  success: IconCheck,
 };
 
 export default function Banner({

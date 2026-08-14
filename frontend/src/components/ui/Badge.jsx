@@ -12,6 +12,11 @@ import React from "react";
 // has opinions about:
 //
 //   neutral   a fact — a metadata key, a count, a name
+//   info      an alias of neutral, for call sites thinking in Banner's
+//             vocabulary. Banner names this tone `info` and renders it the same
+//             quiet way, and a badge should not need to know which of the two
+//             components it is standing next to. Not a sixth colour: this
+//             palette has one accent on purpose.
 //   success   it passed / it is current
 //   danger    it failed / it broke
 //   warning   it needs a human's attention but nothing is broken

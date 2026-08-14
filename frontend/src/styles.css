@@ -105,10 +105,43 @@
   --red-soft: rgba(225, 29, 72, 0.18);
   --amber-soft: rgba(217, 119, 6, 0.20);
 }
+/* The same palette, for someone whose system says dark and who has never opened
+   the toggle. It has to be the *same* palette, all seventeen tokens: this block
+   used to carry seven of them, so a system-dark user got dark surfaces with the
+   light theme's everything-else. The worst of it was `--code-bg`, which stayed
+   at #f6f7fb while `--text` went to #e7ecf5 — near-white on near-white, in every
+   answer payload, judge comment and trace on the site. Those are the primary
+   content here. `--bg-grad` painted a pale lavender wash over a near-black page
+   and `--shadow-1` kept its light-mode navy at 6%, which is invisible on #0b0e16,
+   so every card lost its elevation.
+
+   Duplicated rather than shared because plain CSS has no way to apply one
+   declaration list to both a selector and a media query. `css_contract.test.js`
+   asserts the two blocks are identical, name and value, which is the part that
+   actually failed — nobody forgets on purpose, they forget one at a time.
+
+   (`light-dark()` would collapse this to a single block, but it needs Chrome 123
+   / Safari 17.5, and raising the browser floor is not this change's call.) */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    --bg: #0b0e16; --panel: #141926; --panel-2: #1b2130; --panel-3: #222a3b;
-    --border: #29303f; --text: #e7ecf5; --muted: #93a0b7;
+  :root:not([data-theme="light"]) {
+    --bg: #0b0e16;
+    --bg-grad: radial-gradient(1200px 600px at 100% -10%, #1a1f3a 0%, transparent 60%),
+               radial-gradient(1000px 500px at -10% 0%, #0e2230 0%, transparent 55%);
+    --panel: #141926;
+    --panel-2: #1b2130;
+    --panel-3: #222a3b;
+    --border: #29303f;
+    --border-strong: #384155;
+    --text: #e7ecf5;
+    --muted: #93a0b7;
+    --accent-soft: rgba(99, 102, 241, 0.18);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --shadow-pop: 0 24px 70px rgba(0, 0, 0, 0.6);
+    --code-bg: #0f1420;
+    --green-soft: rgba(22, 163, 74, 0.20);
+    --red-soft: rgba(225, 29, 72, 0.18);
+    --amber-soft: rgba(217, 119, 6, 0.20);
   }
 }
 
@@ -264,7 +297,7 @@ select { cursor: pointer; }
 .userbox { display: flex; align-items: center; gap: var(--space-1); }
 .avatar {
   width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; flex: none;
+  font-size: var(--text-micro); font-weight: 700; color: #fff; text-transform: uppercase; flex: none;
 }
 .usermenu-trigger {
   display: flex; align-items: center; gap: var(--space-2);
@@ -411,7 +444,7 @@ select { cursor: pointer; }
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-1);
 }
 .runstatus-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
-.runstatus-nums { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13px; }
+.runstatus-nums { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: var(--text-body); }
 .runstatus-nums .sep { color: var(--border-strong); }
 .runstatus-nums strong { font-variant-numeric: tabular-nums; }
 .runstatus-nums .failedcount { color: var(--red); }
@@ -477,7 +510,7 @@ select { cursor: pointer; }
 /* Answered, awaiting the judge: a hollow dot — something happened, nothing has
    been decided. */
 .dot.answered { background: transparent; border: 2px solid var(--accent); }
-.qitem .qid { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.qitem .qid { font-size: var(--text-micro); color: var(--muted); margin-top: 1px; }
 /* How long the agent has been on this question, or took.
 
    `tabular-nums` is the whole rule's reason for existing: proportional digits
@@ -493,7 +526,7 @@ select { cursor: pointer; }
 .qphase.pending { color: var(--muted); }
 .qphase.answered { color: var(--accent); }
 .qphase.failed, .qphase.cancelled { color: var(--red); }
-.qitem .qerror { font-size: 11px; color: var(--red); margin-top: 2px; line-height: 1.35; }
+.qitem .qerror { font-size: var(--text-micro); color: var(--red); margin-top: 2px; line-height: 1.35; }
 /* Two words and a clock instead of 80 truncated characters. A timeout has one
    cause and the middle column explains it in full; here the row only has to be
    countable. Same red as any other failure — it is one — with the clock as the
@@ -524,7 +557,7 @@ select { cursor: pointer; }
 .section + .section { border-top: 1px solid var(--border-strong); }
 .section-head {
   display: flex; align-items: baseline; gap: 8px;
-  padding: 10px 16px 0; font-size: 11px; text-transform: uppercase;
+  padding: 10px 16px 0; font-size: var(--text-micro); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--muted);
 }
 .section-title { font-weight: 700; color: var(--text); opacity: 0.75; }
@@ -547,13 +580,13 @@ select { cursor: pointer; }
 
 /* Agent answer vs expected answer, above the diagnosis in the middle column. */
 .answers { padding: 10px 16px 14px; }
-.answers .judge-comment { font-size: 12px; line-height: 1.5; color: var(--muted); }
-.answers .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 5px; }
+.answers .judge-comment { font-size: var(--text-caption); line-height: 1.5; color: var(--muted); }
+.answers .label { font-size: var(--text-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 5px; }
 .answers .label + pre { margin-bottom: 12px; }
 .answers pre {
   white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px; margin: 0;
-  font-family: var(--font-mono); font-size: 12px; max-height: 180px; overflow: auto;
+  font-family: var(--font-mono); font-size: var(--text-caption); max-height: 180px; overflow: auto;
 }
 .answers .verdict { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; letter-spacing: 0.5px; }
 .answers .verdict.correct { background: var(--green); color: #fff; }
@@ -572,11 +605,11 @@ select { cursor: pointer; }
 .spanrow-status { font-size: var(--text-caption); color: var(--muted); margin-top: 3px; }
 
 .kv { padding: 14px 16px; }
-.kv .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 5px; }
+.kv .label { font-size: var(--text-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 5px; }
 .kv pre {
   white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px; margin: 0;
-  font-family: var(--font-mono); font-size: 12px; max-height: 260px; overflow: auto;
+  font-family: var(--font-mono); font-size: var(--text-caption); max-height: 260px; overflow: auto;
 }
 /* ---- span payload (right column) ----
    An LLM call's request/response, rendered as the conversation it is rather than
@@ -590,15 +623,15 @@ select { cursor: pointer; }
 }
 .payload-head .label { margin: 0; }
 .payload-meta {
-  font-size: 11px; color: var(--muted); margin-bottom: 6px;
+  font-size: var(--text-micro); color: var(--muted); margin-bottom: 6px;
   font-family: var(--font-mono);
 }
-.payload-empty { color: var(--muted); font-style: italic; font-size: 12px; }
+.payload-empty { color: var(--muted); font-style: italic; font-size: var(--text-caption); }
 .kv .payload pre.body {
   white-space: pre-wrap; word-break: break-word; background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;
   margin: 0; font-family: var(--font-mono);
-  font-size: 12px; max-height: 320px; overflow: auto;
+  font-size: var(--text-caption); max-height: 320px; overflow: auto;
 }
 .kv .payload pre.payload-json { max-height: 460px; }
 
@@ -620,7 +653,7 @@ select { cursor: pointer; }
 .collapse > summary:hover { background: var(--panel-2); }
 .collapse-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .collapse-meta {
-  font-size: 11px; color: var(--muted); flex: none;
+  font-size: var(--text-micro); color: var(--muted); flex: none;
   font-family: var(--font-mono);
 }
 .collapse-body { padding: 0 10px 10px; }
@@ -639,14 +672,14 @@ select { cursor: pointer; }
 .role.other { color: var(--muted); background: var(--panel-2); }
 
 .msg-preview {
-  font-size: 12px; color: var(--muted); overflow: hidden;
+  font-size: var(--text-caption); color: var(--muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 .msglist .msg[open] > summary .msg-preview { opacity: 0.55; }
 
-.collapse.tools > summary .collapse-title { font-size: 12px; font-weight: 600; }
-.tooldesc { font-size: 12px; color: var(--muted); margin: 0 0 6px; line-height: 1.45; }
-.toolname { font-size: 12px; font-family: var(--font-mono); }
+.collapse.tools > summary .collapse-title { font-size: var(--text-caption); font-weight: 600; }
+.tooldesc { font-size: var(--text-caption); color: var(--muted); margin: 0 0 6px; line-height: 1.45; }
+.toolname { font-size: var(--text-caption); font-family: var(--font-mono); }
 
 /* A tool call is the actionable part of an assistant turn: name it, then show
    the arguments re-indented (OpenAI ships them as a JSON string). */
@@ -656,12 +689,12 @@ select { cursor: pointer; }
 }
 .toolcall-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .toolcall-name {
-  font-size: 12px; font-weight: 600; color: var(--amber);
+  font-size: var(--text-caption); font-weight: 600; color: var(--amber);
   font-family: var(--font-mono);
 }
 
 .tokens { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
-.tokens .t { font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+.tokens .t { font-size: var(--text-caption); background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
 
 /* ---- progress ---- */
 .progress { margin: 14px 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-1); }
@@ -685,17 +718,17 @@ select { cursor: pointer; }
 }
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 18px 20px 12px; border-bottom: 1px solid var(--border); }
 .dialog-head h3 { margin: 0; font-size: 17px; }
-.dialog-sub { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.dialog-sub { margin: 3px 0 0; color: var(--muted); font-size: var(--text-caption); }
 .dialog-body { padding: 16px 20px; overflow: auto; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
 .field { margin-bottom: 14px; }
-.field > label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
-.field textarea { min-height: 120px; font-family: var(--font-mono); font-size: 12px; }
-.hint { font-size: 12px; color: var(--muted); }
+.field > label { display: block; font-size: var(--text-caption); font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+.field textarea { min-height: 120px; font-family: var(--font-mono); font-size: var(--text-caption); }
+.hint { font-size: var(--text-caption); color: var(--muted); }
 /* Group heading inside the run-config dialog (Agent / Langfuse / LLM). */
 .cfg-section {
   margin: 20px 0 10px; padding-top: 14px; border-top: 1px solid var(--border);
-  font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  font-size: var(--text-caption); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
   color: var(--muted); display: flex; align-items: baseline; gap: 8px;
 }
 .cfg-section .hint { text-transform: none; letter-spacing: 0; font-weight: 500; }
@@ -706,14 +739,14 @@ select { cursor: pointer; }
 .cfg-view { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .cfg-row {
   display: flex; align-items: baseline; gap: 12px;
-  padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: var(--text-body);
 }
 .cfg-row:last-child { border-bottom: none; }
 .cfg-row:nth-child(odd) { background: var(--panel-2); }
-.cfg-label { flex: 0 0 40%; color: var(--muted); font-size: 12px; font-weight: 600; }
+.cfg-label { flex: 0 0 40%; color: var(--muted); font-size: var(--text-caption); font-weight: 600; }
 .cfg-value {
   flex: 1; min-width: 0; word-break: break-all;
-  font-family: var(--font-mono); font-size: 12px;
+  font-family: var(--font-mono); font-size: var(--text-caption);
 }
 .cfg-value.empty { color: var(--muted); font-style: italic; font-family: inherit; }
 
@@ -757,10 +790,10 @@ select { cursor: pointer; }
 .upload-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .upload-empty {
   border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 18px;
-  text-align: center; color: var(--muted); font-size: 13px; background: var(--panel-2);
+  text-align: center; color: var(--muted); font-size: var(--text-body); background: var(--panel-2);
 }
 .upload-table-wrap { overflow: auto; max-height: 340px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.upload-table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 12px; }
+.upload-table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: var(--text-caption); }
 .upload-table th {
   position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 600; color: var(--muted);
   background: var(--panel-2); padding: 8px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
@@ -770,15 +803,15 @@ select { cursor: pointer; }
 .upload-table td.rownum, .upload-table th.rownum { width: 34px; color: var(--muted); text-align: right; }
 .upload-table th.skillcol, .upload-table td.skillcol { width: 130px; }
 .upload-table th.qidcol, .upload-table td.qidcol { width: 110px; }
-.upload-table textarea { min-height: 0; width: 100%; font-family: inherit; font-size: 12px; resize: vertical; }
-.upload-table td input { width: 100%; font-size: 12px; }
+.upload-table textarea { min-height: 0; width: 100%; font-family: inherit; font-size: var(--text-caption); resize: vertical; }
+.upload-table td input { width: 100%; font-size: var(--text-caption); }
 
 /* ---- toast ---- */
 .toast-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: flex; flex-direction: column; gap: 10px; }
 .toast {
   min-width: 220px; max-width: 360px; padding: 12px 14px; border-radius: var(--radius-sm);
   background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow-2);
-  font-size: 13px; font-weight: 500; animation: slideInRight 0.28s var(--ease) both;
+  font-size: var(--text-body); font-weight: 500; animation: slideInRight 0.28s var(--ease) both;
   border-left: 4px solid var(--accent);
 }
 .toast.success { border-left-color: var(--green); }
@@ -793,7 +826,7 @@ select { cursor: pointer; }
    whether there are two more or two hundred. */
 .list-footer {
   display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 18px 0 8px; font-size: 13px;
+  padding: 18px 0 8px; font-size: var(--text-body);
 }
 
 /* ---- run picker (Use config from) ---- */
@@ -802,7 +835,7 @@ select { cursor: pointer; }
   width: 100%; display: flex; align-items: center; justify-content: space-between;
   gap: 8px; text-align: left; font-weight: 400;
 }
-.runpicker-trigger .chev { color: var(--muted); font-size: 11px; }
+.runpicker-trigger .chev { color: var(--muted); font-size: var(--text-micro); }
 .runpicker-pop {
   position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0;
   background: var(--panel); border: 1px solid var(--border-strong);
@@ -825,14 +858,14 @@ select { cursor: pointer; }
 .runpicker-option.cursor { background: var(--panel-2); }
 .runpicker-option.sel { box-shadow: inset 3px 0 0 var(--accent); }
 .runpicker-option .rp-name {
-  font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  font-size: var(--text-body); font-weight: 600; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis;
 }
-.runpicker-option .rp-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.runpicker-option .rp-meta { font-size: var(--text-micro); color: var(--muted); margin-top: 2px; }
 .runpicker-option .rp-keys { color: var(--accent); }
-.runpicker-empty { padding: 18px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+.runpicker-empty { padding: 18px 12px; color: var(--muted); font-size: var(--text-body); text-align: center; }
 .runpicker-foot {
-  padding: 7px 12px; font-size: 11px; color: var(--muted);
+  padding: 7px 12px; font-size: var(--text-micro); color: var(--muted);
   border-top: 1px solid var(--border); background: var(--panel-2);
 }
 
@@ -930,7 +963,7 @@ select { cursor: pointer; }
   display: block; width: 100%;
   max-height: 200px; overflow-y: auto; resize: none;
   margin-bottom: var(--space-3);
-  font-family: var(--font); font-size: 14px;
+  font-family: var(--font); font-size: var(--text-ui);
 }
 .composer-toggles {
   display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
@@ -1192,7 +1225,7 @@ select { cursor: pointer; }
 
 /* Per-question progress. A stacked bar over a total of one says nothing; which of
    the four calls is outstanding says everything. */
-.phasesteps { display: flex; align-items: center; gap: 14px; font-size: 12px; }
+.phasesteps { display: flex; align-items: center; gap: 14px; font-size: var(--text-caption); }
 .phasestep { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .phasestep .dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--panel-3);
@@ -1222,7 +1255,7 @@ select { cursor: pointer; }
 .attempt-actions button:focus-visible { outline: none; box-shadow: var(--ring); }
 .attempt-actions button:last-child:hover:not(:disabled) { background: var(--red-soft); color: var(--red); }
 .attempt-footnote {
-  padding: 12px 14px; font-size: 11px; color: var(--muted); line-height: 1.5;
+  padding: 12px 14px; font-size: var(--text-micro); color: var(--muted); line-height: 1.5;
   border-top: 1px solid var(--border);
 }
 /* The composer above these columns triples in height when the expected-answer
@@ -1267,7 +1300,7 @@ select { cursor: pointer; }
    the labels of the fields either side of it. Same treatment, stated again. */
 .field-head label {
   margin: 0; display: block;
-  font-size: 12px; font-weight: 600; color: var(--muted);
+  font-size: var(--text-caption); font-weight: 600; color: var(--muted);
 }
 .field-head .grow { flex: 1; }
 .field-head .ui-btn-link { gap: var(--space-1); }
@@ -1379,8 +1412,41 @@ select { cursor: pointer; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .spin { animation: spin 0.9s linear infinite; }
 
+/* Reduced motion.
+ *
+ * The duration collapse alone was not enough: without an iteration count, the
+ * three `infinite` animations here — spin, shimmer, pulse — kept looping, at a
+ * microsecond a cycle. Nothing visible, and a compositor kept busy forever on
+ * every page with a spinner or a skeleton on it. Capping the count is what
+ * actually stops them.
+ *
+ * `both` fill-mode is why 0.001ms rather than `none`: every entrance animation
+ * here ends at the visible state, so a near-zero duration lands the element
+ * where it was going instead of leaving it at `opacity: 0`.
+ */
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* The one exemption. This preference is about motion that can trigger
+     vestibular symptoms — large translation, parallax, zoom — and a 15px icon
+     turning on its own axis is not that. Taking it out costs the answer to
+     "did my click register", which is the entire reason `Button` has a loading
+     state (see the note in Button.jsx). Slower, not gone. */
+  .ui-spinner, .spin {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  /* The skeleton's sweep stops, so it needs to read as a placeholder standing
+     still rather than as a panel that failed to paint. */
+  .skeleton, .ui-skeleton {
+    animation: none !important;
+    background: var(--panel-2) !important;
+  }
 }
 
 /* ---- judging: the eval set's grading criteria ----
@@ -1408,7 +1474,7 @@ select { cursor: pointer; }
    reflow, for the same reason span bodies do. */
 pre.prompt-text {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-caption);
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--panel-2);

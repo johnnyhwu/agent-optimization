@@ -1,14 +1,22 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 import Badge from "../ui/Badge.jsx";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
+import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
+import {
+  applyEvent,
+  emptySteps,
+  replaceSteps,
+  stepList,
+  stepProgress,
+} from "../../optimize_steps.js";
 import { STATUS_TONE } from "./RunList.jsx";
 import ProgressChart from "./ProgressChart.jsx";
 import StepCard from "./StepCard.jsx";
@@ -22,19 +30,32 @@ import StepCard from "./StepCard.jsx";
 // halfway through gets the steps that already happened rather than a blank
 // screen until the next one lands.
 
-export default function RunPanel({ runId, subject }) {
+export default function RunPanel({ runId, subject, onRunChanged }) {
   const toast = useToast();
+  // Through a ref because the stream effect is keyed on `runId` alone — it must
+  // not tear down and resubscribe because a parent re-rendered and handed over
+  // a new arrow function.
+  const notify = useRef(onRunChanged);
+  notify.current = onRunChanged;
   const [run, setRun] = useState(null);
   const [error, setError] = useState(null);
-  const [live, setLive] = useState({ steps: [], phase: null });
+  const [live, setLive] = useState(emptySteps);
   const [busy, setBusy] = useState(false);
   const [pinned, setPinned] = useState(null);
   const [metric, setMetric] = useState("hard");
-  const [downloading, setDownloading] = useState(false);
+  // Which download is in flight — "best", a step number, or null. One boolean
+  // put both this header's button and the pinned card's into a spinner
+  // whichever was pressed, so the page reported work it was not doing.
+  const [downloading, setDownloading] = useState(null);
 
+  // The run row *and* its steps: `getOptimizationRun` carries both, and the
+  // steps it carries are authoritative — that is what makes this the recovery
+  // for every case the stream cannot patch its way out of.
   async function reload() {
     try {
-      setRun(await api.getOptimizationRun(runId));
+      const fresh = await api.getOptimizationRun(runId);
+      setRun(fresh);
+      setLive((l) => replaceSteps(l, fresh.steps || []));
     } catch (e) {
       setError(e.message);
     }
@@ -44,24 +65,70 @@ export default function RunPanel({ runId, subject }) {
     reload();
   }, [runId]);
 
+  // A pin outlives the step it points at if a refetch no longer carries it — a
+  // resumed run reopening an aborted step, say. The card then simply stopped
+  // rendering, leaving a pin nothing on the page could explain or undo.
+  useEffect(() => {
+    if (pinned != null && !live.byNo.has(pinned)) setPinned(null);
+  }, [pinned, live]);
+
   useEffect(() => {
     const stream = api.openOptimizationProgress(runId);
-    const onSnapshot = (data) => setLive((l) => ({ ...l, steps: data.steps || [] }));
-    const onStep = (data) =>
-      setLive((l) => ({ ...l, phase: `step ${data.step_no} · ${data.phase}` }));
-    const onGate = (data) =>
-      setLive((l) => ({ ...l, phase: `step ${data.step_no} · ${data.action}` }));
+
+    // A stream handler is handed the SSE frame, whose `data` is the raw JSON
+    // text — every other stream in this app parses it, and this one did not. It
+    // read `e.steps` and `e.step_no` straight off the frame, where both are
+    // undefined, which is why the snapshot never landed a single step and why
+    // the caption above the chart read "step undefined · undefined" for the
+    // entire run. Parsing in one place so there is no second call site to
+    // forget; a malformed frame is dropped rather than thrown, because throwing
+    // here would take the read loop down with it.
+    const parse = (fn) => (e) => {
+      let payload;
+      try {
+        payload = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      fn(payload);
+    };
+
+    // The snapshot is the stream's own opening statement of the same thing a
+    // refetch gives, so it replaces rather than merges.
+    const onSnapshot = parse((d) => setLive((l) => replaceSteps(l, d.steps || [])));
+    // Everything else is a slice of a step row, and the reducer knows which.
+    // These were the events the page was already being sent and throwing away:
+    // a step is assembled from `step_started`, two `rollout_done`s minutes
+    // apart, `update_done` and `gate_done`, and subscribing to only the first
+    // and last of those is why the chart never moved.
+    const events = [
+      "step_started",
+      "rollout_done",
+      "rollout_retry",
+      "reflect_done",
+      "update_done",
+      "gate_done",
+      "slow_update_done",
+    ];
+    for (const name of events) {
+      stream.addEventListener(name, parse((d) => setLive((l) => applyEvent(l, name, d))));
+    }
+    // The rail counts *finished* steps, and `gate_done` is what finishes one.
+    // Told at that cadence — minutes apart — rather than on every event, which
+    // would refetch the whole list several times per step to show the same
+    // number.
+    stream.addEventListener("gate_done", () => notify.current?.());
+
     // A terminal event has to refetch rather than patch: the run row carries the
     // final status, the best step and the error message, and none of those are
     // reconstructable from the events alone.
-    const onDone = () => {
-      setLive((l) => ({ ...l, phase: null }));
+    const onDone = parse((d) => {
+      setLive((l) => applyEvent(l, "run_completed", d));
       reload();
-    };
-
+      // The status in the rail is now wrong by definition.
+      notify.current?.();
+    });
     stream.addEventListener("snapshot", onSnapshot);
-    stream.addEventListener("step_started", onStep);
-    stream.addEventListener("gate_done", onGate);
     stream.addEventListener("run_completed", onDone);
     // The hub drops the oldest event rather than growing a queue behind a
     // subscriber that stopped reading, and says so. Refetching is the recovery.
@@ -75,6 +142,8 @@ export default function RunPanel({ runId, subject }) {
       await fn(runId);
       toast.success(message);
       await reload();
+      // Stop and Resume both change the status the rail is showing.
+      notify.current?.();
     } catch (e) {
       toast.error(e.message);
     } finally {
@@ -86,14 +155,14 @@ export default function RunPanel({ runId, subject }) {
   // one it turned out to be, so a download is never anonymous once it is on
   // disk — but the toast should say so too, while the page is still open.
   async function downloadSkill(step) {
-    setDownloading(true);
+    setDownloading(step);
     try {
       const filename = await api.downloadOptimizedSkill(runId, step);
       toast.success(`Saved ${filename}`);
     } catch (e) {
       toast.error(e.message);
     } finally {
-      setDownloading(false);
+      setDownloading(null);
     }
   }
 
@@ -101,7 +170,8 @@ export default function RunPanel({ runId, subject }) {
   if (!run) return <Skeleton variant="row" count={5} />;
 
   const isMine = run.created_by === subject;
-  const steps = live.steps.length ? live.steps : run.steps || [];
+  const steps = stepList(live);
+  const progress = stepProgress(run, steps);
   const pinnedStep = pinned == null ? null : steps.find((s) => s.step_no === pinned);
 
   return (
@@ -119,7 +189,7 @@ export default function RunPanel({ runId, subject }) {
                 <Button
                   variant="secondary"
                   icon={<IconDownload size={15} />}
-                  loading={downloading}
+                  loading={downloading === "best"}
                   onClick={() => downloadSkill("best")}
                   title={`Step ${run.best_step}, the best this run scored on validation`}
                 >
@@ -153,8 +223,11 @@ export default function RunPanel({ runId, subject }) {
           <span><code>{run.skill_name}</code></span>
           <span>{run.mode}</span>
           <span>{run.n_train} train · {run.n_val} validation</span>
-          <span>{steps.length}/{run.total_steps + 1} steps</span>
-          {run.best_step != null && (
+          <span>{progress.label} steps</span>
+          {/* Both halves guarded: a run can carry a best step before its score
+              has been written back, and `(null * 100).toFixed(0)` is the string
+              "NaN" sitting in the middle of the run header. */}
+          {run.best_step != null && run.best_score != null && (
             <Badge tone="success" mono>
               best: step {run.best_step} · {(run.best_score * 100).toFixed(0)}%
             </Badge>
@@ -189,22 +262,24 @@ export default function RunPanel({ runId, subject }) {
         <CardHeader
           title="Accuracy by step"
           actions={
-            <div className="opt-metric-toggle" role="group" aria-label="Scoring metric">
-              {["hard", "soft"].map((name) => (
-                <Button
-                  key={name}
-                  variant={metric === name ? "secondary" : "ghost"}
-                  onClick={() => setMetric(name)}
-                  title={
-                    name === "hard"
-                      ? "Strictly correct answers only"
-                      : "Partial credit, as the judge scored each answer 0–1"
-                  }
-                >
-                  {name}
-                </Button>
-              ))}
-            </div>
+            // Two ghost-vs-secondary buttons in a `role="group"` announced as
+            // two unrelated buttons with no indication which was on. This is
+            // the primitive the rest of the app already uses to say "one of
+            // these".
+            <SegmentedControl
+              value={metric}
+              onChange={setMetric}
+              ariaLabel="Scoring metric"
+              size="sm"
+              options={[
+                { value: "hard", label: "hard", title: "Strictly correct answers only" },
+                {
+                  value: "soft",
+                  label: "soft",
+                  title: "Partial credit, as the judge scored each answer 0–1",
+                },
+              ]}
+            />
           }
         />
         <ProgressChart
@@ -219,7 +294,7 @@ export default function RunPanel({ runId, subject }) {
           <StepCard
             step={pinnedStep}
             run={run}
-            downloading={downloading}
+            downloading={downloading === pinnedStep.step_no}
             onClose={() => setPinned(null)}
             onDownload={downloadSkill}
             onOpenRollout={(stepNo, split) =>
@@ -232,7 +307,10 @@ export default function RunPanel({ runId, subject }) {
 
       <Card>
         <CardHeader title="Steps" count={steps.length} />
-        <StepTable steps={steps} pinned={pinned} onPick={setPinned} />
+        {/* The same metric the chart is drawing. The table always read the hard
+            columns, so switching to soft changed the picture and left the
+            numbers under it saying something else. */}
+        <StepTable steps={steps} pinned={pinned} onPick={setPinned} metric={metric} />
       </Card>
     </div>
   );
@@ -241,15 +319,19 @@ export default function RunPanel({ runId, subject }) {
 // The chart's accessible equivalent, carrying the same numbers in a form that
 // cannot distort them — and the keyboard's way to pin a step, since clicking a
 // point on an SVG is a pointer-only gesture.
-function StepTable({ steps, pinned, onPick }) {
+function StepTable({ steps, pinned, onPick, metric }) {
   if (!steps.length) return <p className="opt-hint">No steps yet.</p>;
+  const suffix = metric === "soft" ? "soft" : "hard";
   return (
     <table className="opt-steptable">
       <thead>
         <tr>
           <th className="num">Step</th>
-          <th className="num">Train</th>
-          <th className="num">Validation</th>
+          {/* Named, not implied. Two columns of percentages that silently
+              change meaning with a control elsewhere on the page are worse
+              than two that never changed at all. */}
+          <th className="num">Train ({suffix})</th>
+          <th className="num">Validation ({suffix})</th>
           <th>Gate</th>
           <th className="num">Edits</th>
           <th>What changed</th>
@@ -272,8 +354,8 @@ function StepTable({ steps, pinned, onPick }) {
             }}
           >
             <td className="num">{s.step_no === 0 ? "baseline" : s.step_no}</td>
-            <td className="num">{pct(s.train_hard)}</td>
-            <td className="num">{pct(s.val_hard)}</td>
+            <td className="num">{pct(s[`train_${suffix}`])}</td>
+            <td className="num">{pct(s[`val_${suffix}`])}</td>
             <td>
               {s.gate_action ? (
                 <Badge tone={s.gate_action === "reject" ? "neutral" : "success"} size="sm">

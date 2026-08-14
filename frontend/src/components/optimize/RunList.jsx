@@ -5,6 +5,7 @@ import Button from "../ui/Button.jsx";
 import EmptyState from "../ui/EmptyState.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconPlus, IconSparkles } from "../icons.jsx";
+import { stepProgress } from "../../optimize_steps.js";
 
 // The left rail of the Optimize section: every run this person can see, newest
 // first. One run is one complete optimization — a dataset, a skill, and the
@@ -21,10 +22,15 @@ export const STATUS_TONE = {
   interrupted: "warning",
 };
 
-export default function RunList({ subject, activeId, onOpen, onNew }) {
+export default function RunList({ subject, activeId, onOpen, onNew, revision = 0 }) {
   const [runs, setRuns] = useState(null);
   const [error, setError] = useState(null);
 
+  // `revision` is bumped by whoever knows a run's state changed — the panel
+  // beside this, when its stream reports a step or a terminal event. The rail
+  // used to fetch once and never again, so starting a run from the wizard and
+  // landing on its page left "pending" sitting in the rail for the rest of the
+  // hour, next to a panel showing it running.
   useEffect(() => {
     let cancelled = false;
     api
@@ -34,7 +40,7 @@ export default function RunList({ subject, activeId, onOpen, onNew }) {
     return () => {
       cancelled = true;
     };
-  }, [subject]);
+  }, [subject, revision]);
 
   return (
     <aside className="opt-runlist" aria-label="Optimization runs">
@@ -48,8 +54,13 @@ export default function RunList({ subject, activeId, onOpen, onNew }) {
       {error && <p className="error">{error}</p>}
       {!runs && !error && <Skeleton variant="row" count={4} />}
 
+      {/* The composed empty state, not a bare sentence. `RunList.Intro` below
+          has said the useful thing all along; the rail said "No runs yet." and
+          left the New button above as the only clue what to do with that. */}
       {runs && runs.length === 0 && (
-        <p className="opt-runlist-empty">No runs yet.</p>
+        <EmptyState size="sm" icon={<IconSparkles size={18} />} title="No runs yet">
+          A run trains one skill against your eval sets.
+        </EmptyState>
       )}
 
       {runs && runs.length > 0 && (
@@ -75,10 +86,13 @@ export default function RunList({ subject, activeId, onOpen, onNew }) {
                   <span>{run.mode}</span>
                   {/* Progress as steps rather than a percentage: a run that was
                       cancelled at step 3 of 12 did three steps' worth of real
-                      work, and "25%" says the opposite. */}
-                  <span>
-                    {run.steps_done}/{run.total_steps} steps
-                  </span>
+                      work, and "25%" says the opposite.
+
+                      Through the shared helper, because this rail and the panel
+                      beside it used to disagree about the same run: the rail
+                      left the baseline out of the denominator and the panel put
+                      it in, so one read 4/12 while the other read 5/13. */}
+                  <span>{stepProgress(run, null).label} steps</span>
                 </span>
               </button>
             </li>
