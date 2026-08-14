@@ -635,8 +635,10 @@ Notes:
   "load sample"); it is parsed into an **editable preview table** where you can
   fix any cell and add/remove rows before saving. `backend/sample_eval_set.jsonl`
   and `backend/sample_eval_set.csv` are equivalent test files. The set is
-  **locked** after creation (edit only, no add/delete). Editing keeps
-  `question_id` and bumps `version`; a stale version returns **409**.
+  **locked** after creation (edit only, no add/delete). "Edit questions" edits
+  all four per-question columns — the three texts and the **skill** tags, typed
+  comma-separated as in the upload table. Editing keeps `question_id` and bumps
+  `version`; a stale version returns **409**.
 - **Live run + partial completion:** "▶ Run eval" opens the config dialog
   (prefilled from the environment; seams still set to `fake` are greyed out) and
   then drops you straight into the run's detail view. Every question is listed
