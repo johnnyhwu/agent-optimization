@@ -339,6 +339,11 @@
 .ui-banner-error .ui-banner-mark, .ui-banner-error .ui-banner-title { color: var(--red); }
 .ui-banner-warning { background: var(--amber-soft); border-color: var(--amber); }
 .ui-banner-warning .ui-banner-mark, .ui-banner-warning .ui-banner-title { color: var(--amber); }
+/* Banner could report every way a thing goes wrong and no way it goes right.
+   The rollout page has been asking for this tone since it was written — "the
+   gate accepted this candidate" — and getting an unstyled box. */
+.ui-banner-success { background: var(--green-soft); border-color: var(--green); }
+.ui-banner-success .ui-banner-mark, .ui-banner-success .ui-banner-title { color: var(--green); }
 .ui-banner-pending { background: var(--accent-soft); border-color: var(--accent); }
 .ui-banner-pending .ui-banner-mark, .ui-banner-pending .ui-banner-title { color: var(--accent); }
 

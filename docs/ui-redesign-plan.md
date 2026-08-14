@@ -470,12 +470,50 @@ codebase puts logic it wants covered.
 17. Chart hit-testing confined to the plot rect (§1.13).
 18. `RunList` empty case → `EmptyState`.
 
-### Phase 5 — System guards, so none of this recurs (~half a day)
+### Phase 5 — System guards — **DONE**
 
-19. Undefined-token test (S1).
-20. Tone-vocabulary test; unify `Banner`'s `error` onto `danger` with an alias (S2).
-21. Duplicate-selector lint; adopt the component-prefixed naming rule and write
-    it into `CLAUDE.md` (S3).
+17. ✅ `css_contract.test.js` — undefined `var()`, tokens defined only inside
+    `@media`, and two rules fighting over one property (S1, S3).
+18. ✅ `ui_vocabulary.test.js` — both directions of the tone/variant contract
+    (S2), plus a test of the scanner itself.
+19. ✅ `frontend/CLAUDE.md` — the component-prefix naming rule, where logic
+    goes, the stream contract, and how to verify UI changes here.
+
+**Found by writing the guards:** `Banner tone="success"` had no
+`.ui-banner-success` — the third instance of this exact bug class, and one the
+audit missed. `RolloutDetail.jsx:140` has been rendering the gate's *acceptance*
+as an unstyled box since it was written. Banner could report every way a thing
+goes wrong and no way it goes right; it now has the tone.
+
+**Two bugs in the guards themselves, caught by regression-testing them.** Both
+would have shipped as tests that pass and check nothing:
+
+- The duplicate-selector parser anchored each match on the previous rule's `}`,
+  which `matchAll` had already consumed — so it only ever examined the first
+  rule in a file. Reintroducing the known `.opt-groups` collision and watching
+  the test pass is what surfaced it.
+- The vocabulary check asked whether the word appeared in *any* selector.
+  Deleting the real `.ui-badge-info` rule left `.ui-badge-info.is-outline`
+  behind and the test kept passing. It now requires a bare class rule that sets
+  a colour — a modifier that adjusts a tone is not the tone.
+
+Every guard is now verified by reintroducing the bug it exists to catch:
+
+| Guard | Reintroduced | Result |
+|---|---|---|
+| undefined token | delete `--text-sm` | fails, `--text-sm — 28 use(s)` |
+| property collision | rename `.opt-rollout-groups` back | fails, `redeclares display, flex-direction` |
+| tone has a style | delete `.ui-badge-info` | fails, `sets no colour` |
+| tone has a style | delete `.ui-banner-success` | fails, `sets no colour` |
+
+**Changed from the plan:** it proposed unifying `Banner`'s `error` onto
+`danger` with an alias. Having read both components, that is the wrong trade.
+Banner's tones (`info`, `error`, `warning`, `pending`, `success`) and Badge's
+(`neutral`, `info`, `success`, `danger`, `warning`, `accent`) describe different
+objects — `pending` is meaningless on a badge and `accent` on a banner. Forcing
+one vocabulary would mean churn across ~30 call sites to make two components
+worse. What actually mattered was that each vocabulary be *complete and
+enforced*, which is what shipped.
 
 ### Phase 6 — Design-system polish (optional, ~1 day)
 
