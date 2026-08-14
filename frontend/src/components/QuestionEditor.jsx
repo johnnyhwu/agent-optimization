@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
 import { useToast } from "./Toast.jsx";
+import Badge, { BadgeRow } from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
 
 // Owner-only question editing (§6.11 locked set: edit only). Demonstrates the
@@ -43,6 +44,11 @@ export default function QuestionEditor({ evalSet, onClose }) {
     setDraft({ ...q });
     setError(null);
   }
+
+  // Read from `active` rather than from `draft`: the tags are server state this
+  // dialog displays, not text it is holding an unsaved copy of. `PATCH` returns
+  // them, so a save keeps them current without a reload.
+  const skills = active?.skills || [];
 
   async function save() {
     setError(null);
@@ -145,6 +151,33 @@ export default function QuestionEditor({ evalSet, onClose }) {
                     value={draft.ground_truth_reasoning}
                     onChange={(e) => setDraft({ ...draft, ground_truth_reasoning: e.target.value })}
                   />
+                </div>
+                {/* The upload's fourth column, and the only one of the four this
+                    dialog cannot change: PATCH /questions takes the three texts
+                    and the tags come from the file. Shown anyway, because it is
+                    the field that decides which skill group a question is
+                    optimized under — and because a question that reads as
+                    obviously "billing" while carrying no tag at all is a thing
+                    the owner can only notice if the tag is on screen. */}
+                <div className="field">
+                  <label>
+                    Skills <span className="hint">· from the upload, not editable here</span>
+                  </label>
+                  {skills.length > 0 ? (
+                    <BadgeRow>
+                      {skills.map((s) => (
+                        <Badge key={s} tone="neutral">{s}</Badge>
+                      ))}
+                    </BadgeRow>
+                  ) : (
+                    // Not "—". An untagged question is not neutral: the
+                    // optimizer files it under `ambiguous` and never edits a
+                    // skill for it, which is worth a sentence rather than a dash.
+                    <p className="hint">
+                      No skill tag. Questions without exactly one tag are left out
+                      of the skill groups an optimization run works from.
+                    </p>
+                  )}
                 </div>
               </>
             )}
