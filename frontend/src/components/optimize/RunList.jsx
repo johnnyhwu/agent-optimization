@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 import Badge from "../ui/Badge.jsx";
 import Button from "../ui/Button.jsx";
@@ -22,9 +22,13 @@ export const STATUS_TONE = {
   interrupted: "warning",
 };
 
-export default function RunList({ subject, activeId, onOpen, onNew, revision = 0 }) {
+export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, revision = 0 }) {
   const [runs, setRuns] = useState(null);
   const [error, setError] = useState(null);
+  // Held in a ref so the fetch effect does not re-run when the parent hands it a
+  // fresh closure, which is every render.
+  const loaded = useRef(onLoaded);
+  loaded.current = onLoaded;
 
   // `revision` is bumped by whoever knows a run's state changed — the panel
   // beside this, when its stream reports a step or a terminal event. The rail
@@ -35,7 +39,12 @@ export default function RunList({ subject, activeId, onOpen, onNew, revision = 0
     let cancelled = false;
     api
       .listOptimizationRuns({ limit: 50 })
-      .then((page) => !cancelled && setRuns(page.items || []))
+      .then((page) => {
+        if (cancelled) return;
+        const items = page.items || [];
+        setRuns(items);
+        loaded.current?.(items);
+      })
       .catch((e) => !cancelled && setError(e.message));
     return () => {
       cancelled = true;
@@ -44,24 +53,21 @@ export default function RunList({ subject, activeId, onOpen, onNew, revision = 0
 
   return (
     <aside className="opt-runlist" aria-label="Optimization runs">
-      <div className="opt-runlist-head">
-        <h3>Runs</h3>
-        <Button variant="primary" icon={<IconPlus size={15} />} onClick={onNew}>
-          New
-        </Button>
-      </div>
+      {/* The rail goes quiet when it has nothing to list. With no runs, the
+          pane beside it is `RunList.Intro` — which says the same thing at
+          length and offers the same button — and the two together put two
+          sparkle icons, two headings and two New buttons on one empty screen. */}
+      {runs && runs.length > 0 && (
+        <div className="opt-runlist-head">
+          <h3>Runs</h3>
+          <Button variant="primary" icon={<IconPlus size={15} />} onClick={onNew}>
+            New
+          </Button>
+        </div>
+      )}
 
       {error && <p className="error">{error}</p>}
       {!runs && !error && <Skeleton variant="row" count={4} />}
-
-      {/* The composed empty state, not a bare sentence. `RunList.Intro` below
-          has said the useful thing all along; the rail said "No runs yet." and
-          left the New button above as the only clue what to do with that. */}
-      {runs && runs.length === 0 && (
-        <EmptyState size="sm" icon={<IconSparkles size={18} />} title="No runs yet">
-          A run trains one skill against your eval sets.
-        </EmptyState>
-      )}
 
       {runs && runs.length > 0 && (
         <ul className="opt-runlist-items">
@@ -117,8 +123,7 @@ RunList.Intro = function Intro({ onNew }) {
     >
       A run answers a batch of your questions with the skill as it stands, reads
       the failures, rewrites the skill, and keeps the rewrite only if it beats
-      the old one on questions held back for the purpose. Pick a run on the left
-      to see how it went.
+      the old one on questions held back for the purpose.
     </EmptyState>
   );
 };

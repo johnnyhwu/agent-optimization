@@ -657,6 +657,7 @@
    --------------------------------------------------------------------------- */
 .opt-section { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
 @media (max-width: 900px) { .opt-section { grid-template-columns: minmax(0, 1fr); } }
+.opt-section.is-bare { grid-template-columns: minmax(0, 1fr); }
 
 .opt-runlist { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .opt-runlist-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
@@ -681,7 +682,7 @@
 .opt-run-phase { color: var(--accent); font-variant-numeric: tabular-nums; }
 
 /* The step bar: all six, always, in order. */
-.opt-wizard { display: flex; flex-direction: column; gap: var(--space-5); }
+.opt-wizard { display: flex; flex-direction: column; gap: var(--space-5); flex: 1 1 0; min-height: 0; }
 .opt-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-1); overflow-x: auto; }
 .opt-step { flex: 1 1 0; min-width: 120px; }
 .opt-step button {
@@ -705,21 +706,84 @@
 .opt-step-label { font-size: var(--text-body); font-weight: var(--fw-medium); }
 .opt-step-hint { font-size: var(--text-micro); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.opt-wizard-body { display: flex; flex-direction: column; gap: var(--space-5); min-height: 240px; }
-.opt-wizard-foot { display: flex; align-items: center; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+/* The body scrolls, the footer does not.
+   `.opt-wizard` is a `.page-fill` child, so it is handed the height left in the
+   window and this row split divides it. Before, the whole wizard was ordinary
+   document flow and the footer sat wherever the step's content ended — measured
+   at y=506 on Source, y=1573 on Skill, y=820 on Split — so Back and Continue
+   moved between every step, and on the longest step they were below the fold
+   along with the sentence explaining why Continue was disabled. */
+.opt-wizard-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--space-5);
+  /* Scroll-padding, not margin: the last card must be able to clear the
+     footer's top border, and the gap belongs inside the scroll region so the
+     scrollbar runs the full height of it. */
+  padding-bottom: var(--space-4);
+}
+.opt-wizard-foot {
+  flex: none;
+  display: flex; align-items: center; gap: var(--space-3);
+  padding-top: var(--space-3); border-top: 1px solid var(--border);
+  background: var(--bg);
+}
 .opt-wizard-blocked { flex: 1; font-size: var(--text-body); color: var(--muted); }
 
-.opt-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.opt-sources label { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-sm); cursor: pointer; }
-.opt-sources label:hover { background: var(--panel-2); }
+.opt-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+/* A row, not a tick with words after it. The whole row has always been inside
+   the <label> and therefore always clickable; what it lacked was any sign of
+   that — no border, no selected state, and a checkbox stretched across it. */
+.opt-source {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.opt-source:hover { background: var(--panel-2); border-color: var(--border-strong); }
+.opt-source.is-selected { border-color: var(--accent); background: var(--accent-soft); }
 .opt-source-name { font-weight: var(--fw-medium); }
 .opt-source-meta { margin-left: auto; font-size: var(--text-micro); color: var(--muted); }
 
 .opt-groups { display: flex; flex-direction: column; gap: var(--space-4); }
 /* The ring is additive: a bare `inset` shadow replaces the whole property, so
-   the selected card used to be the one card on the step sitting flat. */
-.opt-group.is-selected { box-shadow: inset 0 0 0 1px var(--accent), var(--shadow-1); }
-.opt-group.is-disabled { opacity: 0.85; }
+   the selected card used to be the one card on the step sitting flat. Two
+   pixels and a tinted ground, because 1px was the only thing distinguishing the
+   chosen option from the three it was chosen over. */
+.opt-group.is-selected {
+  box-shadow: inset 0 0 0 2px var(--accent), var(--shadow-1);
+  background: var(--accent-soft);
+}
+/* Unavailable, not merely faded. `opacity: 0.85` was the entire difference
+   between a card you pick and a card you cannot, which at a glance is no
+   difference at all. */
+.opt-group.is-unavailable {
+  background: var(--panel-2); border-style: dashed; box-shadow: none;
+  cursor: not-allowed;
+}
+.opt-group.is-unavailable .ui-card-head-title h4 { color: var(--muted); }
+.opt-group-pick { display: flex; align-items: center; gap: var(--space-2); }
+/* Drawn rather than an <input>: the card itself is the button, and a real radio
+   here would be a second tab stop announcing the same choice. */
+.opt-group-radio {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  border: 2px solid var(--border-strong); background: var(--panel);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.opt-group-radio.is-on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--panel), inset 0 0 0 8px var(--accent);
+}
+.opt-group-blocked {
+  display: flex; align-items: center; gap: 6px; margin: 0;
+  font-size: var(--text-body); color: var(--amber);
+}
+.opt-group-questions > summary {
+  cursor: pointer; font-size: var(--text-body); color: var(--muted);
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+.opt-group-questions > summary:focus-visible { outline: none; box-shadow: var(--ring); }
+.opt-group-summary { margin-left: auto; font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
 .opt-group-note, .opt-group-more, .opt-hint, .opt-col-hint { margin: 0; font-size: var(--text-body); color: var(--muted); }
 
 .opt-qtable { width: 100%; border-collapse: collapse; font-size: var(--text-body); }
@@ -749,9 +813,6 @@
 .opt-excluded-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .opt-excluded-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 
-.opt-check { display: flex; flex-direction: column; gap: var(--space-2); }
-.opt-check-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.opt-files { list-style: none; margin: 0; padding: 0; font-size: var(--text-body); }
 .opt-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 @media (max-width: 760px) { .opt-modes { grid-template-columns: minmax(0, 1fr); } }
 .opt-mode {
@@ -759,10 +820,12 @@
   border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
 }
 .opt-mode.is-selected { border-color: var(--accent); background: var(--accent-soft); }
-.opt-mode.is-disabled { cursor: not-allowed; opacity: 0.6; }
+/* The radio sits beside the title. In a grid it was a row of its own and — being
+   stretched to 556px by the bare `input` rule — the dot landed centred above the
+   heading rather than in front of it. */
+.opt-mode-head { display: flex; align-items: center; gap: var(--space-2); }
 .opt-mode-title { font-weight: var(--fw-medium); }
 .opt-mode-desc { font-size: var(--text-body); color: var(--muted); }
-.opt-mode-reason { display: flex; align-items: center; gap: 6px; font-size: var(--text-micro); color: var(--amber); }
 
 .opt-review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); margin: 0; }
 .opt-review-grid dt { font-size: var(--text-micro); color: var(--muted); }

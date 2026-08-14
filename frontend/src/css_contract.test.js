@@ -199,6 +199,18 @@ test("the page box grows with its content and only the fill views shrink", () =>
       "own padding-bottom outside the scroll region and squashes any child " +
       "that is a scroll container.",
   );
+  // The wizard is the second of these, for the same reason: its footer is
+  // pinned to the bottom of the window and its body scrolls between the step
+  // bar and that footer. Before, the wizard was ordinary flow and the footer
+  // sat at the end of whatever the step rendered — three steps apart in y, and
+  // below the fold on the longest one, along with the sentence saying why
+  // Continue was disabled.
+  assert.notEqual(
+    shrinkOf(flexOf(".page:has(> .opt-wizard)")),
+    0,
+    "the wizard must shrink to the window, or its footer cannot be pinned to " +
+      "the bottom and its body has no definite height to scroll within.",
+  );
   assert.notEqual(
     shrinkOf(flexOf(".page:has(> .page-fill)")),
     0,
