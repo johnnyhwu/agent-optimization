@@ -77,25 +77,50 @@ alias. Add a CI guard (below) so this class of bug cannot return.
 const steps = live.steps.length ? live.steps : run.steps || [];
 ```
 
-`live.steps` is written **only** by the `snapshot` handler
-(`RunPanel.jsx:49`), and the backend emits `snapshot` exactly once, at
-connection open (`backend/app/routers/optimization.py:934`). The live handlers
-that follow — `step_started`, `gate_done` — write only `live.phase`, never
-`live.steps`. The engine's per-step payloads (`rollout_done`, `update_done`,
-`gate_done` in `backend/app/optimizer/engine.py`) are never consumed.
+There are **two** independent bugs stacked here, and the second is worse than
+the first.
 
-Consequences, all user-visible:
+**Bug A — only two of seven step events are subscribed to.** `live.steps` is
+written only by the `snapshot` handler, and the backend emits `snapshot` exactly
+once, at connection open
+(`backend/app/routers/optimization.py:934`). The handlers that follow —
+`step_started`, `gate_done` — write only `live.phase`. The engine publishes
+`step_started`, `rollout_done` (twice per step, minutes apart), `rollout_retry`,
+`reflect_done`, `update_done`, `gate_done` and `slow_update_done`
+(`backend/app/optimizer/engine.py`); five of those are never consumed.
 
-- The chart and the step table are frozen at whatever existed when the page
-  opened. A run is ~an hour long; only the one-line `live.phase` text moves.
-- Worse, after `run_completed` → `reload()` refetches the run with fresh steps,
-  but `live.steps.length` is still truthy, so the stale snapshot **still wins**.
-  The page never shows the finished run's real steps until a hard reload.
+**Bug B — the handlers never parsed their payload.** `openStream` in `api.js`
+hands a handler the SSE *frame*, whose `data` is raw JSON text. Every other
+stream in this app calls `JSON.parse(e.data)` — `RunDetail.jsx:133`,
+`RunProgress.jsx:20`, `Playground.jsx:478`. `RunPanel` was the only call site
+that did not; it read `e.steps` and `e.step_no` straight off the frame, where
+both are `undefined`.
 
-**Fix:** make step state a single reducer keyed by `step_no` — seed from
-`snapshot`, upsert on `rollout_done` / `update_done` / `gate_done`, and replace
-wholesale from `reload()`. Drop the `live.steps.length ? … : …` fallback
-entirely.
+Replaying the real wire bytes through the old handlers:
+
+```
+OLD CODE, snapshot steps captured : []
+OLD CODE, caption rendered        : "step undefined · undefined"
+```
+
+So `live.steps` was `[]` for the entire life of the page — the `live.steps.length
+? live.steps : run.steps` fallback always took the second branch — and the
+caption above the chart displayed the literal string **"step undefined ·
+undefined"** for the whole run. The chart therefore moved only when `reload()`
+happened to fire, which is on `run_completed` and on a `resync`, not on the
+15-second keepalive ping.
+
+**Correction to an earlier draft:** that draft said the stale snapshot outranked
+the post-run refetch, so the finished numbers never appeared. That specific
+claim was wrong — since `live.steps` was always empty, the refetch always won,
+and a completed run did render correctly. The chart being dead *during* the run
+was real; the after-the-run half was not, and the "step undefined · undefined"
+caption, which is the most visible symptom of the pair, was missed entirely.
+
+**Fix:** parse once, in one wrapper, so there is no second call site to forget;
+subscribe to all seven step events; and merge them through a reducer keyed by
+`step_no` (`optimize_steps.js`) where events only ever add fields and a refetch
+replaces the map outright.
 
 ### 1.3 `.opt-section` collides with itself — **high**
 
@@ -375,15 +400,25 @@ Verified in headless Chromium against both stylesheets, before and after:
 
 184 existing tests pass; `vite build` clean.
 
-### Phase 2 — The live-run data flow (the real bug, ~half a day)
+### Phase 2 — The live-run data flow — **DONE**
 
-8. Replace `RunPanel`'s `live`/`run.steps` fallback with a `stepsById` reducer;
-   subscribe to `rollout_done`, `update_done`, `gate_done`; make `reload()`
-   authoritative (§1.2).
-9. Add tests in `optimize_*.test.js` style for the reducer: snapshot-then-events,
-   out-of-order events, terminal-then-reload.
-10. Fix `NaN` renders, the shared `downloading` flag, and the orphaned `pinned`
-    step (§1.13).
+8. ✅ `optimize_steps.js`: a reducer keyed by `step_no`. Events add fields only;
+   a refetch replaces the map. `RunPanel` parses each frame once and subscribes
+   to all seven step events (§1.2, bugs A and B).
+9. ✅ 16 unit tests (`optimize_steps.test.js`) and 4 integration tests over real
+   `sse-starlette` wire bytes (`optimize_stream.test.js`).
+10. ✅ `NaN` guards on `best_score` and `total_steps`; `downloading` keyed by
+    target instead of a shared boolean; orphaned `pinned` step cleared (§1.13).
+11. ✅ One `stepProgress` helper for the rail and the panel (§1.11) — pulled
+    forward from Phase 4 because it is the same helper.
+
+**Backend gap found, not fixed:** `_run_baseline` marks step 0 `done` in the
+database but publishes no event saying so — its last word is `rollout_done`. A
+client building the chart from the stream alone can never learn the baseline
+finished. Handled frontend-side by treating step 0's validation rollout as its
+completion (which is the engine's own definition of the baseline: one rollout,
+no train, no reflect, no update, no gate), but the honest fix is a `step_done`
+event from the engine. Worth a backend issue.
 
 ### Phase 3 — Wizard correctness (~half a day)
 

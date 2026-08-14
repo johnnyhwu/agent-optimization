@@ -5,6 +5,7 @@ import Button from "../ui/Button.jsx";
 import EmptyState from "../ui/EmptyState.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconPlus, IconSparkles } from "../icons.jsx";
+import { stepProgress } from "../../optimize_steps.js";
 
 // The left rail of the Optimize section: every run this person can see, newest
 // first. One run is one complete optimization — a dataset, a skill, and the
@@ -75,10 +76,13 @@ export default function RunList({ subject, activeId, onOpen, onNew }) {
                   <span>{run.mode}</span>
                   {/* Progress as steps rather than a percentage: a run that was
                       cancelled at step 3 of 12 did three steps' worth of real
-                      work, and "25%" says the opposite. */}
-                  <span>
-                    {run.steps_done}/{run.total_steps} steps
-                  </span>
+                      work, and "25%" says the opposite.
+
+                      Through the shared helper, because this rail and the panel
+                      beside it used to disagree about the same run: the rail
+                      left the baseline out of the denominator and the panel put
+                      it in, so one read 4/12 while the other read 5/13. */}
+                  <span>{stepProgress(run, null).label} steps</span>
                 </span>
               </button>
             </li>
