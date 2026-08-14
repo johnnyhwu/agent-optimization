@@ -11,8 +11,17 @@ import { IconAlert, IconCheck, IconPlay, IconRefresh } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
-import { canStart, counts, makeSplit } from "../../optimize_split.js";
+import { counts, makeSplit } from "../../optimize_split.js";
 import { estimateRun } from "../../optimize_cost.js";
+import {
+  HYPER_FIELDS,
+  STEPS,
+  blockingReason,
+  checkFor,
+  extraConfig,
+  furthestStep,
+  hyperState,
+} from "../../optimize_wizard.js";
 
 // The new-run wizard: a whole page, at its own address, with a static horizontal
 // step bar.
@@ -25,15 +34,6 @@ import { estimateRun } from "../../optimize_cost.js";
 // hides one. Every conditional wizard turns "how much is left" into a question
 // nobody can answer, and this one asks for real money at the end.
 
-const STEPS = [
-  { id: "source", label: "Source", hint: "Which eval sets" },
-  { id: "skill", label: "Skill", hint: "What to optimise" },
-  { id: "split", label: "Split", hint: "Train and validate" },
-  { id: "target", label: "Target", hint: "The agent" },
-  { id: "settings", label: "Settings", hint: "Models and grading" },
-  { id: "review", label: "Review", hint: "Start" },
-];
-
 export default function Wizard() {
   const toast = useToast();
   const [stepIndex, setStepIndex] = useState(0);
@@ -44,8 +44,11 @@ export default function Wizard() {
   const [previewing, setPreviewing] = useState(false);
   const [skill, setSkill] = useState(null);
   const [split, setSplit] = useState(null);
+  // `{ skill, status, result, error }`. It carries the skill it was run for so
+  // that a check for a different one cannot be read as this one's — the old
+  // shape relied on remembering to clear it, and two of the three places that
+  // changed the skill did not.
   const [check, setCheck] = useState(null);
-  const [checking, setChecking] = useState(false);
   const [mode, setMode] = useState("isolated");
   const [config, setConfig] = useState({});
   const [secrets, setSecrets] = useState({});
@@ -102,15 +105,23 @@ export default function Wizard() {
   }
 
   async function runSkillCheck(skillName) {
-    setChecking(true);
+    setCheck({ skill: skillName, status: "checking" });
     try {
       const result = await api.skillCheck(skillName);
-      setCheck(result);
+      // Guarded against its own lateness: two checks can be in flight after a
+      // quick change of mind, and the first to return is not the one wanted.
+      setCheck((current) =>
+        current?.skill === skillName ? { skill: skillName, status: "ok", result } : current,
+      );
       if (!result.has_frontmatter && mode === "routing") setMode("isolated");
     } catch (e) {
-      setError(e.message);
-    } finally {
-      setChecking(false);
+      // A failed check belongs on the Target step beside its retry, not in the
+      // page-level error banner where it reads as a dead end.
+      setCheck((current) =>
+        current?.skill === skillName
+          ? { skill: skillName, status: "failed", error: e.message }
+          : current,
+      );
     }
   }
 
@@ -124,9 +135,12 @@ export default function Wizard() {
         skill_name: skill,
         train: split.train,
         val: split.val,
-        num_epochs: Number(hyper.num_epochs ?? defaults.defaults.num_epochs),
-        batch_size: Number(hyper.batch_size ?? defaults.defaults.batch_size),
-        config: { ...config, ...pickHyper(hyper) },
+        // Coerced here and nowhere else: the fields hold what was typed, and
+        // `blockingReason` has already refused to let this run with a value
+        // these would turn into 0.
+        num_epochs: hyperValues.num_epochs,
+        batch_size: hyperValues.batch_size,
+        config: { ...config, ...extraConfig(hyper), learning_rate: hyperValues.learning_rate },
         secrets,
         detector: {},
       });
@@ -138,13 +152,23 @@ export default function Wizard() {
     }
   }
 
-  const blocked = blockingReason({ stepIndex, sourceIds, preview, skill, split, limits, check, mode });
+  // One description of where the wizard is, read by the footer, the step bar and
+  // the Start button alike. They used to compute reachability separately from
+  // blocking, which is how the bar could offer a step whose body rendered
+  // nothing.
+  const wizardState = {
+    stepIndex, sourceIds, preview, skill, split, limits, check, mode,
+    hyper, defaults: defaults?.defaults,
+  };
+  const blocked = blockingReason(wizardState);
+  const reachable = furthestStep(wizardState);
+  const { values: hyperValues, errors: hyperErrors } = hyperState(hyper, defaults?.defaults);
 
   if (!defaults) return <Skeleton variant="row" count={5} />;
 
   return (
     <div className="opt-wizard">
-      <StepBar steps={STEPS} current={stepIndex} onGo={setStepIndex} furthest={furthest({ sourceIds, preview, skill, split, check })} />
+      <StepBar steps={STEPS} current={stepIndex} onGo={setStepIndex} furthest={reachable} />
 
       {error && (
         <Banner tone="error" title="That did not work">
@@ -176,20 +200,41 @@ export default function Wizard() {
           )
         )}
 
-        {step.id === "split" && split && (
-          <SplitEditor split={split} limits={limits} onChange={setSplit} />
+        {/* Never an empty body. Reachability should keep this unreachable, but
+            a step that renders nothing is how the old wizard reported a
+            missing prerequisite, and the failure was silent. */}
+        {step.id === "split" && (
+          split ? (
+            <SplitEditor split={split} limits={limits} onChange={setSplit} />
+          ) : (
+            <MissingPrerequisite
+              title="No split yet"
+              onBack={() => setStepIndex(STEPS.findIndex((s) => s.id === "skill"))}
+            >
+              The split is proposed from the skill's questions, and no skill is
+              chosen — picking one builds it.
+            </MissingPrerequisite>
+          )
         )}
 
         {step.id === "target" && (
-          <TargetStep
-            skill={skill}
-            check={check}
-            checking={checking}
-            onCheck={() => runSkillCheck(skill)}
-            mode={mode}
-            onMode={setMode}
-            impls={defaults.impls}
-          />
+          skill ? (
+            <TargetStep
+              skill={skill}
+              check={checkFor(check, skill)}
+              onCheck={() => runSkillCheck(skill)}
+              mode={mode}
+              onMode={setMode}
+              impls={defaults.impls}
+            />
+          ) : (
+            <MissingPrerequisite
+              title="No skill chosen"
+              onBack={() => setStepIndex(STEPS.findIndex((s) => s.id === "skill"))}
+            >
+              This step checks one skill against the agent, and none is selected.
+            </MissingPrerequisite>
+          )
         )}
 
         {step.id === "settings" && (
@@ -212,6 +257,8 @@ export default function Wizard() {
             defaults={defaults}
             hyper={hyper}
             onHyper={setHyper}
+            values={hyperValues}
+            errors={hyperErrors}
             impls={defaults.impls}
           />
         )}
@@ -232,7 +279,11 @@ export default function Wizard() {
             disabled={Boolean(blocked)}
             onClick={() => {
               const next = stepIndex + 1;
-              if (STEPS[next].id === "target" && !check) runSkillCheck(skill);
+              // Keyed on *this* skill's check, so changing the skill re-checks
+              // rather than inheriting the previous answer.
+              if (STEPS[next].id === "target" && !checkFor(check, skill)) {
+                runSkillCheck(skill);
+              }
               setStepIndex(next);
             }}
           >
@@ -254,39 +305,18 @@ export default function Wizard() {
   );
 }
 
-// Which steps have enough behind them to be jumped back to. Forward jumps are
-// not offered: a later step reads what an earlier one produced, and arriving
-// with half of it is how a wizard shows an empty screen and blames the user.
-function furthest({ sourceIds, preview, skill, split, check }) {
-  if (check) return 5;
-  if (split) return 3;
-  if (skill) return 2;
-  if (preview) return 1;
-  return sourceIds.length ? 0 : 0;
-}
-
-function blockingReason({ stepIndex, sourceIds, preview, skill, split, limits, check, mode }) {
-  const id = STEPS[stepIndex].id;
-  if (id === "source") {
-    if (!sourceIds.length) return "Choose at least one eval set.";
-    if (!preview) return "Load the questions to continue.";
-  }
-  if (id === "skill" && !skill) return "Pick the skill this run optimises.";
-  if (id === "split") {
-    if (!split) return "Pick a skill first.";
-    if (!canStart(split, limits)) return "The split is too small — see above.";
-  }
-  if (id === "target") {
-    if (!check) return "Checking the agent…";
-    if (!check.exists) return `The agent has no skill directory named “${skill}”.`;
-    if (mode === "routing" && !check.has_frontmatter) return check.routing_blocked_reason;
-  }
-  return null;
-}
-
-function pickHyper(hyper) {
-  const { num_epochs, batch_size, ...rest } = hyper;
-  return rest;
+// A step reached without what it reads. Reachability should prevent it; this is
+// what stands there if it ever does happen, because the alternative — which is
+// what shipped — is a blank panel and a footer sentence blaming the user.
+function MissingPrerequisite({ title, children, onBack }) {
+  return (
+    <Banner tone="warning" title={title}>
+      {children}{" "}
+      <Button variant="link" onClick={onBack}>
+        Go back and choose one
+      </Button>
+    </Banner>
+  );
 }
 
 function StepBar({ steps, current, onGo, furthest }) {
@@ -367,7 +397,9 @@ function SourceStep({ evalSets, selected, onToggle, preview, previewing, onLoad 
   );
 }
 
-function TargetStep({ skill, check, checking, onCheck, mode, onMode, impls }) {
+function TargetStep({ skill, check, onCheck, mode, onMode, impls }) {
+  const status = check?.status ?? "checking";
+  const result = check?.status === "ok" ? check.result : null;
   return (
     <FormSection
       title="The agent this run measures against"
@@ -384,29 +416,43 @@ function TargetStep({ skill, check, checking, onCheck, mode, onMode, impls }) {
       <div className="opt-check">
         <div className="opt-check-head">
           <strong>{skill}</strong>
-          <Button variant="ghost" icon={<IconRefresh size={14} />} loading={checking} onClick={onCheck}>
-            Re-check
+          <Button
+            variant="ghost"
+            icon={<IconRefresh size={14} />}
+            loading={status === "checking"}
+            onClick={onCheck}
+          >
+            {status === "failed" ? "Try again" : "Re-check"}
           </Button>
         </div>
-        {!check ? (
-          <Skeleton variant="row" count={2} />
-        ) : check.exists ? (
+        {status === "checking" && <Skeleton variant="row" count={2} />}
+        {/* A check that failed is not a check still running. The old screen said
+            "Checking the agent…" underneath a disabled Continue, for as long as
+            the developer was willing to wait for a request that had already
+            come back. */}
+        {status === "failed" && (
+          <Banner tone="error" title="The agent could not be checked">
+            {check.error} — this says nothing about whether the skill is there;
+            the request itself did not get through. Retry above.
+          </Banner>
+        )}
+        {result && (result.exists ? (
           <>
             <Badge tone="success" icon={<IconCheck size={13} />}>Found on the agent</Badge>
             <ul className="opt-files">
-              {check.files.map((path) => (
+              {result.files.map((path) => (
                 <li key={path}><code>{path}</code></li>
               ))}
             </ul>
-            <p className="opt-hint">{check.n_chars.toLocaleString()} characters in total.</p>
+            <p className="opt-hint">{result.n_chars.toLocaleString()} characters in total.</p>
           </>
         ) : (
           <Banner tone="error" title={`No skill directory named “${skill}”`}>
-            The agent has: {check.available_skills.join(", ") || "no skills at all"}.
+            The agent has: {result.available_skills?.join(", ") || "no skills at all"}.
             A question's skill tag and the agent's directory name have to be the
             same word.
           </Banner>
-        )}
+        ))}
       </div>
 
       <Field label="What this run edits" help="The two modes are mirror images: each freezes what the other changes.">
@@ -425,8 +471,14 @@ function TargetStep({ skill, check, checking, onCheck, mode, onMode, impls }) {
             id="routing"
             title="Routing — the description"
             selected={mode === "routing"}
-            disabled={check ? !check.has_frontmatter : true}
-            reason={check?.routing_blocked_reason}
+            disabled={result ? !result.has_frontmatter : true}
+            reason={
+              result
+                ? result.routing_blocked_reason
+                : status === "failed"
+                  ? "The agent could not be checked, so its frontmatter is unknown."
+                  : "Waiting for the agent check."
+            }
             onSelect={() => onMode("routing")}
           >
             The whole workspace is sent and only the frontmatter description
@@ -533,10 +585,17 @@ function SettingsStep({ defaults, config, onConfig, secrets, onSecrets }) {
   );
 }
 
-function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper, impls }) {
+function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper, values, errors, impls }) {
   const c = counts(split);
-  const epochs = Number(hyper.num_epochs ?? defaults.defaults.num_epochs);
-  const batch = Number(hyper.batch_size ?? defaults.defaults.batch_size);
+  // The effective values, which are the typed ones when they parse and the
+  // server's defaults when the field has not been touched. A field mid-edit —
+  // empty, or "1x" — has no value here, and the estimate below says so rather
+  // than quietly computing with a zero.
+  const epochs = values.num_epochs;
+  const batch = values.batch_size;
+  // Raw, so the input renders exactly what was typed. Backing a number input
+  // with `Number(raw)` is what made these fields impossible to clear.
+  const raw = (key) => hyper[key] ?? String(defaults.defaults[key] ?? "");
   const set = (key) => (e) => onHyper({ ...hyper, [key]: e.target.value });
 
   // Stated as calls rather than as money: the models are whatever base URL the
@@ -545,14 +604,16 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
   // counts, because the expensive one is not the biggest one — a run makes
   // thousands of agent calls on a small model and a few dozen optimizer calls
   // on the largest one available, each carrying a minibatch of traces.
-  const estimate = estimateRun({
-    nTrain: c.train,
-    nVal: c.val,
-    epochs,
-    batchSize: batch,
-    minibatchSize: hyper.minibatch_size ?? defaults.defaults.minibatch_size,
-  });
-  const { stepsPerEpoch, totalSteps } = estimate;
+  const estimable = epochs != null && batch != null;
+  const estimate = estimable
+    ? estimateRun({
+        nTrain: c.train,
+        nVal: c.val,
+        epochs,
+        batchSize: batch,
+        minibatchSize: hyper.minibatch_size ?? defaults.defaults.minibatch_size,
+      })
+    : null;
 
   return (
     <>
@@ -566,18 +627,44 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
         title="How long it trains"
         description="A step is one minibatch: answer, reflect, edit, then judge the edit against the validation split."
       >
-        <Field label="Epochs" help="One pass over the whole training split.">
-          <input type="number" min="1" max="20" value={epochs} onChange={set("num_epochs")} />
-        </Field>
-        <Field label="Batch size" help="Questions per step. Set it to the size of the training split and one epoch is one step.">
-          <input type="number" min="1" value={batch} onChange={set("batch_size")} />
-        </Field>
-        <Field label="Learning rate" help="The most edits one step may apply. This is the whole meaning of the word here.">
+        <Field
+          label="Epochs"
+          help="One pass over the whole training split."
+          error={errors.num_epochs}
+        >
           <input
             type="number"
-            min="1"
-            value={hyper.learning_rate ?? defaults.defaults.learning_rate}
+            min={HYPER_FIELDS.num_epochs.min}
+            max={HYPER_FIELDS.num_epochs.max}
+            value={raw("num_epochs")}
+            onChange={set("num_epochs")}
+            aria-invalid={errors.num_epochs ? "true" : undefined}
+          />
+        </Field>
+        <Field
+          label="Batch size"
+          help="Questions per step. Set it to the size of the training split and one epoch is one step."
+          error={errors.batch_size}
+        >
+          <input
+            type="number"
+            min={HYPER_FIELDS.batch_size.min}
+            value={raw("batch_size")}
+            onChange={set("batch_size")}
+            aria-invalid={errors.batch_size ? "true" : undefined}
+          />
+        </Field>
+        <Field
+          label="Learning rate"
+          help="The most edits one step may apply. This is the whole meaning of the word here."
+          error={errors.learning_rate}
+        >
+          <input
+            type="number"
+            min={HYPER_FIELDS.learning_rate.min}
+            value={raw("learning_rate")}
             onChange={set("learning_rate")}
+            aria-invalid={errors.learning_rate ? "true" : undefined}
           />
         </Field>
       </FormSection>
@@ -616,7 +703,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
             <span>Carry the optimizer's own notes between epochs</span>
           </label>
         </Field>
-        {epochs < 2 && (hyper.slow_update || hyper.meta_skill) && (
+        {epochs != null && epochs < 2 && (hyper.slow_update || hyper.meta_skill) && (
           <Banner tone="warning" title="One epoch has no boundary to compare across">
             Both passes compare one epoch with the previous one. With a single
             epoch there is no previous, so neither will run and neither will cost
@@ -631,15 +718,28 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           <div><dt>Skill</dt><dd><code>{skill}</code> · {mode}</dd></div>
           <div><dt>Training</dt><dd>{c.train} questions</dd></div>
           <div><dt>Validation</dt><dd>{c.val} questions{c.overlap ? ` · ${c.overlap} shared` : ""}</dd></div>
-          <div><dt>Steps</dt><dd>{stepsPerEpoch} per epoch · {totalSteps} in total</dd></div>
-          <div><dt>Agent calls</dt><dd>≈ {estimate.agentCalls.toLocaleString()}</dd></div>
-          <div><dt>Judge calls</dt><dd>≈ {estimate.judgeCalls.toLocaleString()}</dd></div>
-          <div>
-            <dt>Optimizer calls</dt>
-            <dd title="Analyst calls per minibatch, plus one merge and one ranking per step. Each analyst prompt carries a whole minibatch of traces.">
-              up to {estimate.optimizerCallsMax.toLocaleString()}
-            </dd>
-          </div>
+          {/* Withheld rather than guessed while a training number is mid-edit.
+              An estimate computed from a zero is not a smaller estimate, it is
+              a wrong one, and this table is the last thing read before an hour
+              of calls is authorised. */}
+          {estimate ? (
+            <>
+              <div><dt>Steps</dt><dd>{estimate.stepsPerEpoch} per epoch · {estimate.totalSteps} in total</dd></div>
+              <div><dt>Agent calls</dt><dd>≈ {estimate.agentCalls.toLocaleString()}</dd></div>
+              <div><dt>Judge calls</dt><dd>≈ {estimate.judgeCalls.toLocaleString()}</dd></div>
+              <div>
+                <dt>Optimizer calls</dt>
+                <dd title="Analyst calls per minibatch, plus one merge and one ranking per step. Each analyst prompt carries a whole minibatch of traces.">
+                  up to {estimate.optimizerCallsMax.toLocaleString()}
+                </dd>
+              </div>
+            </>
+          ) : (
+            <div>
+              <dt>Size of the run</dt>
+              <dd>— fix the training settings above</dd>
+            </div>
+          )}
         </dl>
         <p className="opt-hint">
           Counts, not currency — this platform never sees the price of a call.

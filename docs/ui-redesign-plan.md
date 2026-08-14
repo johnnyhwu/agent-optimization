@@ -420,13 +420,46 @@ completion (which is the engine's own definition of the baseline: one rollout,
 no train, no reflect, no update, no gate), but the honest fix is a `step_done`
 event from the engine. Worth a backend issue.
 
-### Phase 3 — Wizard correctness (~half a day)
+### Phase 3 — Wizard correctness — **DONE**
 
-11. Reset `check` on skill/preview change; rebuild `furthest()` from the real
-    prerequisite chain; give every step a non-empty state (§1.8).
-12. String-backed number inputs with inline validation on epochs / batch size /
-    learning rate (§1.9).
-13. Explicit check state machine with a Retry affordance (§1.10).
+12. ✅ The skill check now carries the skill it was run for, and `checkFor`
+    refuses to return it for any other (§1.8). This is structural rather than
+    disciplinary: the old bug was a missing reset in two of the three places
+    that change the skill, and a reset can be forgotten again. It cannot be
+    reintroduced by a caller now — a check for the wrong skill is simply not
+    visible. The in-flight response is guarded the same way, so a quick change
+    of mind cannot let a slow first request overwrite a fast second one.
+13. ✅ `furthestStep` is derived, not tracked: you can reach step N only if
+    every earlier step is unblocked. One definition shared with the Continue
+    button, so the bar can no longer offer a step whose body renders nothing.
+14. ✅ Both steps that could render empty now render a `MissingPrerequisite`
+    banner with a link back, instead of a blank panel under a footer sentence
+    blaming the user.
+15. ✅ Number fields hold the raw string and coerce once, at submit. Inline
+    `Field` errors, `aria-invalid`, and a review gate so an invalid value cannot
+    reach `createOptimizationRun` (§1.9).
+16. ✅ Check state machine — `checking | ok | failed` — with the failure shown
+    on the step beside a "Try again" button rather than as a permanent
+    "Checking the agent…" under a disabled Continue (§1.10).
+
+The number field, before and after, on the same keystrokes:
+
+| User action | Old rendered | New rendered |
+|---|---|---|
+| initial | `3` | `3` |
+| select all, delete | `0` — snaps back, uneditable | `` (empty) |
+| type `7` | `7` | `7` |
+
+and what reaches the API: cleared → blocked with "Required."; `7` → `7`;
+untouched → the server's default, `3`.
+
+18 tests in `optimize_wizard.test.js` covering the stale check, the failed
+check, reachability along the prerequisite chain, and the number rules.
+
+**Not verified:** there is no DOM-level render test of the wizard's JSX — this
+project has no React test renderer and adding one was out of scope. `vite build`
+compiles it; the gating logic is tested as a pure module, which is where this
+codebase puts logic it wants covered.
 
 ### Phase 4 — Consistency and a11y sweep (~half a day)
 
