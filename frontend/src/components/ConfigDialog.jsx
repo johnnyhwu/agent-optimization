@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
+import { initialConfigTab } from "../config_tab.js";
 import Modal from "./Modal.jsx";
 import ShareEditor from "./ShareEditor.jsx";
 import JudgePromptEditor from "./JudgePromptEditor.jsx";
@@ -22,9 +23,13 @@ const TABS = [
   ["judging", "Judging"],
 ];
 
-export default function ConfigDialog({ evalSet, subject, initialTab = "general", onClose, onSaved }) {
+export default function ConfigDialog({ evalSet, subject, onClose, onSaved }) {
   const toast = useToast();
-  const [tab, setTab] = useState(initialTab);
+  // Which tab to land on is a property of the set, not of the button that was
+  // pressed. There is no `initialTab` prop to override it with: there were two
+  // callers, they passed two different things, and the developer met whichever
+  // one their route happened to go through.
+  const [tab, setTab] = useState(initialConfigTab(evalSet));
   const [name, setName] = useState(evalSet.name);
   const [description, setDescription] = useState(evalSet.description || "");
   const [metaRows, setMetaRows] = useState(

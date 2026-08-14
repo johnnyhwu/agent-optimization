@@ -246,7 +246,6 @@ export default function EvalSetList({ onOpen, subject }) {
         <ConfigDialog
           evalSet={configSet}
           subject={subject}
-          initialTab={configSet.judge_prompt?.reviewed_at ? "general" : "judging"}
           onClose={closeConfig}
           onSaved={() => { setConfigSet(null); refresh(); }}
         />

@@ -63,7 +63,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
   const [viewConfigRun, setViewConfigRun] = useState(null);
   const [deleteRun, setDeleteRun] = useState(null);
   const [showDownload, setShowDownload] = useState(false);
-  const [configTab, setConfigTab] = useState(null);
+  const [showConfig, setShowConfig] = useState(false);
   const subject = getSubject();
 
   // The set's current grading criteria. Every run below records the prompt it
@@ -210,7 +210,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
             unreviewedJudging={unreviewedJudging}
             onDownload={() => setShowDownload(true)}
             onEditQuestions={() => setShowEditor(true)}
-            onConfigure={() => setConfigTab("judging")}
+            onConfigure={() => setShowConfig(true)}
           />
         }
       />
@@ -354,11 +354,10 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
         />
       )}
       {showEditor && <QuestionEditor evalSet={evalSet} onClose={() => setShowEditor(false)} />}
-      {configTab && (
+      {showConfig && (
         <ConfigDialog
           evalSet={evalSet}
           subject={subject}
-          initialTab={configTab}
           onClose={async () => {
             // Opening the tab is the review. Recorded on close rather than on
             // save so the marker also clears for an owner who looked, decided
@@ -370,10 +369,10 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
                 /* the marker staying lit is not worth an error toast */
               }
             }
-            setConfigTab(null);
+            setShowConfig(false);
           }}
           onSaved={async () => {
-            setConfigTab(null);
+            setShowConfig(false);
             try {
               onEvalSetChanged?.(await api.getEvalSet(evalSet.id));
             } catch {
