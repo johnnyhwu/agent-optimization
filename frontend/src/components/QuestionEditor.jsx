@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
+import { parseSkillCell, skillToText } from "../upload_parse.js";
+import { skillNote } from "../skill_tags.js";
 import { useToast } from "./Toast.jsx";
 import Button from "./ui/Button.jsx";
 
@@ -22,6 +24,12 @@ export default function QuestionEditor({ evalSet, onClose }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  // The tags live in the draft as the text the owner is typing, not as the
+  // array they parse to — same shape, and the same `parseSkillCell`, as the
+  // upload table's skill cell, so "billing, reports" means here what it meant in
+  // the file this set came from.
+  const asDraft = (q) => ({ ...q, skillText: skillToText(q.skills) });
+
   function load() {
     api
       .listQuestions(evalSet.id)
@@ -32,7 +40,7 @@ export default function QuestionEditor({ evalSet, onClose }) {
         // that fills the screen to show nothing until you click is asking for a
         // click it does not need.
         setActive((a) => a ?? qs[0] ?? null);
-        setDraft((d) => d ?? (qs[0] ? { ...qs[0] } : null));
+        setDraft((d) => d ?? (qs[0] ? asDraft(qs[0]) : null));
       })
       .catch((e) => setError(e.message));
   }
@@ -40,9 +48,14 @@ export default function QuestionEditor({ evalSet, onClose }) {
 
   function pick(q) {
     setActive(q);
-    setDraft({ ...q });
+    setDraft(asDraft(q));
     setError(null);
   }
+
+  const skills = draft ? parseSkillCell(draft.skillText) : [];
+  // Only for the two shapes that leave a question out of every skill group —
+  // see skill_tags.js.
+  const note = skillNote(skills);
 
   async function save() {
     setError(null);
@@ -52,11 +65,17 @@ export default function QuestionEditor({ evalSet, onClose }) {
         question: draft.question,
         ground_truth_response: draft.ground_truth_response,
         ground_truth_reasoning: draft.ground_truth_reasoning,
+        // Sent every save, so a tag deleted in the box is a tag deleted on the
+        // question. Omitting the field is how the API says "leave them alone",
+        // which is not what an empty box means here.
+        skills,
         version: active.version,
       });
       toast.success(`Saved · ${updated.question_id} kept, v→${updated.version}`);
       setActive(updated);
-      setDraft({ ...updated });
+      // From the response rather than from the draft: the server strips, drops
+      // blanks and de-duplicates, so this is what the box should now read.
+      setDraft(asDraft(updated));
       load();
     } catch (e) {
       if (e.status === 409) { setError("409 Conflict — " + e.message); toast.error("Conflict — reload"); }
@@ -69,7 +88,7 @@ export default function QuestionEditor({ evalSet, onClose }) {
   return (
     <Modal
       title={`Edit questions — ${evalSet.name}`}
-      subtitle="Locked set: edit text only (no add/delete). question_id stays fixed; each save bumps version."
+      subtitle="Locked set: edit only (no add/delete). question_id stays fixed; each save bumps version."
       onClose={onClose}
       width="min(1100px, 96vw)"
       height="92vh"
@@ -145,6 +164,23 @@ export default function QuestionEditor({ evalSet, onClose }) {
                     value={draft.ground_truth_reasoning}
                     onChange={(e) => setDraft({ ...draft, ground_truth_reasoning: e.target.value })}
                   />
+                </div>
+                {/* The upload's fourth column, and the field that decides
+                    which skill group an optimization run files this question
+                    under. A comma-separated box rather than chips, because that
+                    is what the upload table used and what an owner re-reading
+                    their own file expects to type. */}
+                <div className="field">
+                  <label htmlFor="qe-skills">Skills</label>
+                  <input
+                    id="qe-skills"
+                    value={draft.skillText}
+                    placeholder="billing, reports"
+                    onChange={(e) => setDraft({ ...draft, skillText: e.target.value })}
+                  />
+                  <p className="hint">
+                    {note || "Comma separated. Names must match the agent's skill directories."}
+                  </p>
                 </div>
               </>
             )}

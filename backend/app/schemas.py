@@ -252,10 +252,20 @@ class QuestionOut(BaseModel):
 
 
 class QuestionUpdate(BaseModel):
-    """Edit question text (locked set: no add/delete). question_id is immutable."""
+    """Edit a question (locked set: no add/delete). question_id is immutable."""
     question: str | None = None
     ground_truth_response: str | None = None
     ground_truth_reasoning: str | None = None
+    # The upload's fourth column, editable here for the same reason as the other
+    # three: the file is not a document anyone keeps, and a tag typed as
+    # "billling" is otherwise only fixable by re-uploading the whole set.
+    #
+    # `None` means "leave the tags alone", as it does for every field above it.
+    # `[]` is a real value — it clears them — and is not the same thing: a
+    # question with no tag is one the optimizer files under `ambiguous`, which is
+    # an existing state (sets promoted from a shortlist arrive that way) rather
+    # than a state this endpoint invents.
+    skills: list[str] | None = None
     version: int  # optimistic lock; mismatch -> 409
 
 

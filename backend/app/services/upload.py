@@ -36,6 +36,34 @@ def generate_question_id() -> str:
     return "q_" + uuid.uuid4().hex[:8]
 
 
+def normalize_skills(skills: list[str]) -> list[str]:
+    """The tags a question is stored with, in the order they were given.
+
+    Used by the question edit endpoint, where the names arrive from a text box
+    rather than from a validated upload line. Three rules, each one a thing the
+    optimizer would otherwise get wrong:
+
+    * **Stripped.** `question_skills.skill_name` is matched against the agent's
+      skill directory names (decision 6), and `"billing "` matches nothing.
+    * **Blanks dropped**, so a trailing comma is a typo rather than a tag named
+      "".
+    * **De-duplicated**, first occurrence winning. This is the one that is not
+      merely tidy: the optimizer groups by "questions with exactly one skill"
+      and sends anything else to the `ambiguous` bucket, so `billing, billing`
+      would quietly drop a question out of the group it obviously belongs to.
+
+    Case is preserved and case differences are kept apart — a skill name is a
+    directory name, and `Billing` and `billing` are not the same directory on
+    every filesystem this runs against.
+    """
+    out: list[str] = []
+    for raw in skills:
+        name = raw.strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 def parse_jsonl(raw: str) -> ParseResult:
     result = ParseResult()
     seen_ids: set[str] = set()

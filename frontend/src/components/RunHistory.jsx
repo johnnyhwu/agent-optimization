@@ -9,17 +9,17 @@ import RunConfigView from "./RunConfigView.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import ConfigDialog from "./ConfigDialog.jsx";
 import DownloadDialog from "./DownloadDialog.jsx";
+import EvalSetMenu from "./EvalSetMenu.jsx";
 import { useToast } from "./Toast.jsx";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
 import DataTable from "./ui/DataTable.jsx";
 import EmptyState from "./ui/EmptyState.jsx";
-import Menu, { MenuItem, MenuSeparator } from "./ui/Menu.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
 import Toolbar, { SegmentedControl } from "./ui/Toolbar.jsx";
 import {
-  IconDownload, IconFileText, IconGear, IconInbox, IconPlay, IconStop, IconTrash,
+  IconFileText, IconInbox, IconPlay, IconStop, IconTrash,
 } from "./icons.jsx";
 
 // Which questions the detail view treats as incorrect when several runs are
@@ -63,7 +63,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
   const [viewConfigRun, setViewConfigRun] = useState(null);
   const [deleteRun, setDeleteRun] = useState(null);
   const [showDownload, setShowDownload] = useState(false);
-  const [configTab, setConfigTab] = useState(null);
+  const [showConfig, setShowConfig] = useState(false);
   const subject = getSubject();
 
   // The set's current grading criteria. Every run below records the prompt it
@@ -202,27 +202,16 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
           </Button>
         }
         menu={
-          <Menu label="Eval set actions">
-            <MenuItem icon={<IconDownload size={15} />} onClick={() => setShowDownload(true)}>
-              Download results…
-            </MenuItem>
-            {myRole === "owner" && <MenuSeparator />}
-            {myRole === "owner" && (
-              <MenuItem icon={<IconFileText size={15} />} onClick={() => setShowEditor(true)}>
-                Edit questions
-              </MenuItem>
-            )}
-            {myRole === "owner" && (
-              <MenuItem
-                icon={<IconGear size={15} />}
-                onClick={() => setConfigTab("judging")}
-                title={unreviewedJudging ? "Nobody has reviewed how this set is graded yet" : undefined}
-              >
-                Settings
-                {unreviewedJudging && <Badge tone="warning" size="sm">review grading</Badge>}
-              </MenuItem>
-            )}
-          </Menu>
+          // Same menu as the set's card in the grid, minus Delete — see
+          // EvalSetMenu.
+          <EvalSetMenu
+            label="Eval set actions"
+            owner={myRole === "owner"}
+            unreviewedJudging={unreviewedJudging}
+            onDownload={() => setShowDownload(true)}
+            onEditQuestions={() => setShowEditor(true)}
+            onConfigure={() => setShowConfig(true)}
+          />
         }
       />
       {(error || loadError) && <div className="error">{error || loadError}</div>}
@@ -365,11 +354,10 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
         />
       )}
       {showEditor && <QuestionEditor evalSet={evalSet} onClose={() => setShowEditor(false)} />}
-      {configTab && (
+      {showConfig && (
         <ConfigDialog
           evalSet={evalSet}
           subject={subject}
-          initialTab={configTab}
           onClose={async () => {
             // Opening the tab is the review. Recorded on close rather than on
             // save so the marker also clears for an owner who looked, decided
@@ -381,10 +369,10 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
                 /* the marker staying lit is not worth an error toast */
               }
             }
-            setConfigTab(null);
+            setShowConfig(false);
           }}
           onSaved={async () => {
-            setConfigTab(null);
+            setShowConfig(false);
             try {
               onEvalSetChanged?.(await api.getEvalSet(evalSet.id));
             } catch {

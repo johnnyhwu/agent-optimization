@@ -197,7 +197,13 @@ select { cursor: pointer; }
 .app {
   display: grid;
   grid-template-columns: var(--rail-w) 1fr;
+  /* `dvh` with a `vh` fallback for anything that doesn't know the unit. A mobile
+     browser counts its retracting URL bar in `vh` but not in `dvh`, so with `vh`
+     alone the shell is taller than the window it is meant to be framed by and
+     the bottom of the scrolling column sits underneath the browser chrome —
+     which is the last row of whatever is on screen, permanently. */
   height: 100vh;
+  height: 100dvh;
 }
 :root.rail-collapsed .app { grid-template-columns: var(--rail-w-collapsed) 1fr; }
 
@@ -330,13 +336,32 @@ select { cursor: pointer; }
 .page {
   max-width: var(--page-max); margin: 0 auto; width: 100%;
   padding: var(--space-5) var(--gutter) var(--space-7);
-  /* `min-height: 0` is what makes this height *definite* — inherited from
-     .main's 100vh rather than measured from the content. Without it a column
-     flex container falls back to intrinsic sizing, every `flex: 1` below
-     resolves to max-content, and the three columns grow to the length of the
-     question list instead of the height of the window. */
-  flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  /* Grows into the leftover height so a short page still fills the window, and
+     never shrinks below its content — `flex: 1` (i.e. `1 1 0%`) did shrink it,
+     and on every page longer than the window that cost the bottom of the page.
+     A shrunk flex item does not clip its content, so the page still scrolled;
+     what was lost was everything measured from the item's box rather than from
+     its content. Two things, on every scrolling page in the app:
+
+       - `padding-bottom` sits at the bottom edge of the *shrunk* box, which is
+         mid-page, so it is not in the scroll region at all. Scrolled to the
+         end, the last button ended flush against the bottom of the window with
+         0px under it — the "stuck just before the bottom" feeling, and a
+         genuine clip anywhere the last row carries a shadow or a focus ring.
+       - A direct child that is its own scroll container has an automatic
+         minimum size of zero, so it absorbed all the shrinking: a 300px box in
+         a page twice the window's height measured 2px. */
+  flex: 1 0 auto; display: flex; flex-direction: column; min-width: 0;
 }
+/* The three-column views are the one case that *wants* the window's height
+   rather than the content's: their columns scroll internally, so the page must
+   stop at the bottom of the window instead of growing past it.
+   `min-height: 0` is what makes this height *definite* — inherited from .main's
+   viewport height rather than measured from the content. Without it a column
+   flex container falls back to intrinsic sizing, every `flex: 1` below resolves
+   to max-content, and the three columns grow to the length of the question list
+   instead of the height of the window. */
+.page:has(> .page-fill) { flex: 1 1 0; min-height: 0; }
 /* A section that wants the leftover height rather than its natural one — the
    three-column views. min-height: 0 keeps the columns scrolling internally
    instead of growing the page. */

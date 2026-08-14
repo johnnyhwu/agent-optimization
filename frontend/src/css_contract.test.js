@@ -154,6 +154,59 @@ test("a font size with a token in the scale uses the token", () => {
   assert.deepEqual(offenders, [], `\n  ${offenders.join("\n  ")}`);
 });
 
+test("the page box grows with its content and only the fill views shrink", () => {
+  // `.page` is the flex item that every screen renders into, inside `.main`,
+  // which is the app's scroll container. It was `flex: 1` — grow *and* shrink —
+  // so on any page longer than the window the item was squeezed to the window's
+  // height while its content overflowed it. Nothing threw and the page still
+  // scrolled; what silently stopped existing was everything measured from the
+  // item's own box:
+  //
+  //   its `padding-bottom` landed mid-page, outside the scroll region, so the
+  //   last control on every long screen ended flush against the bottom edge of
+  //   the window with 0px under it;
+  //
+  //   a direct child that is its own scroll container has an automatic minimum
+  //   size of zero and therefore absorbed the whole shrink — measured in
+  //   headless Chromium, a child asking for 300px rendered at 2px.
+  //
+  // The three-column views are the exception and must keep shrinking: their
+  // columns scroll internally, so the page has to end at the bottom of the
+  // window rather than grow past it. That is why the shrink is scoped to
+  // `:has(> .page-fill)` instead of living on `.page`.
+  const styles = stripped["styles.css"];
+  const flexOf = (selector) => {
+    const rule = styles.match(
+      new RegExp(`(?:^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`),
+    );
+    assert.ok(rule, `no \`${selector}\` rule found`);
+    const decl = [...rule[1].matchAll(/(?:^|;)\s*flex\s*:\s*([^;]+)/g)].pop();
+    assert.ok(decl, `\`${selector}\` declares no flex`);
+    return decl[1].replace(/\s+/g, " ").trim();
+  };
+
+  const shrinkOf = (flex) => {
+    const parts = flex.split(" ");
+    // One-value `flex: 1` is `1 1 0%`: the shrink factor is 1 by omission,
+    // which is exactly how this bug was written.
+    return parts.length > 1 ? Number(parts[1]) : 1;
+  };
+
+  assert.equal(
+    shrinkOf(flexOf(".page")),
+    0,
+    "`.page` must not shrink below its content — a shrunk page box puts its " +
+      "own padding-bottom outside the scroll region and squashes any child " +
+      "that is a scroll container.",
+  );
+  assert.notEqual(
+    shrinkOf(flexOf(".page:has(> .page-fill)")),
+    0,
+    "the fill views must still shrink to the window, or their internally " +
+      "scrolling columns grow to the length of their lists.",
+  );
+});
+
 // --- Selector collisions ----------------------------------------------------
 
 // Top-level rules only. Inside @media a repeated selector is the whole point,
