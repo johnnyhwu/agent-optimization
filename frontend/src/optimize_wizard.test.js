@@ -6,10 +6,12 @@ import {
   STEPS,
   blockingReason,
   checkFor,
+  defaultSkill,
   extraConfig,
   furthestStep,
   hyperState,
   parseCount,
+  skillStatus,
 } from "./optimize_wizard.js";
 
 // Every case below is one where the wizard let a run be started, or a step be
@@ -48,13 +50,16 @@ const okCheck = (skill, over = {}) => ({
   result: { exists: true, has_frontmatter: true, files: ["SKILL.md"], n_chars: 10, ...over },
 });
 
+const checksOf = (...entries) =>
+  Object.fromEntries(entries.map((entry) => [entry.skill, entry]));
+
 const ready = (over = {}) => ({
   sourceIds: ["a"],
   preview: { groups: [] },
   skill: "writer",
   split: splitOf(20, 10),
   limits: {},
-  check: okCheck("writer"),
+  checks: checksOf(okCheck("writer")),
   mode: "isolated",
   hyper: {},
   defaults: { num_epochs: 3, batch_size: 4, learning_rate: 2 },
@@ -65,53 +70,139 @@ const ready = (over = {}) => ({
 
 test("a check belongs to the skill it was run for, and to no other", () => {
   const check = okCheck("writer");
-  assert.equal(checkFor(check, "writer"), check);
-  assert.equal(checkFor(check, "router"), null);
-  assert.equal(checkFor(check, null), null);
+  const checks = checksOf(check);
+  assert.equal(checkFor(checks, "writer"), check);
+  assert.equal(checkFor(checks, "router"), null);
+  assert.equal(checkFor(checks, null), null);
   assert.equal(checkFor(null, "writer"), null);
 });
 
 test("changing the skill cannot inherit the previous skill's check", () => {
-  // The bug: pick A, check runs, go back, pick B — and the Target step showed
-  // A's files while the footer validated B against A's frontmatter flag.
-  const state = ready({ skill: "router", check: okCheck("writer") });
-  assert.match(blockingReason({ ...state, stepIndex: index("target") }), /Checking the agent/);
+  // The bug: pick A, check runs, go back, pick B — and the wizard showed A's
+  // files while the footer validated B against A's frontmatter flag.
+  const state = ready({ skill: "router", checks: checksOf(okCheck("writer")) });
+  assert.match(blockingReason({ ...state, stepIndex: index("skill") }), /Checking the agent/);
 });
 
 test("routing mode is blocked by the selected skill's own frontmatter", () => {
   const blocked = ready({
     mode: "routing",
-    check: okCheck("writer", {
-      has_frontmatter: false,
-      routing_blocked_reason: "SKILL.md has no frontmatter block.",
-    }),
+    checks: checksOf(
+      okCheck("writer", {
+        has_frontmatter: false,
+        routing_blocked_reason: "SKILL.md has no frontmatter block.",
+      }),
+    ),
   });
   assert.equal(
-    blockingReason({ ...blocked, stepIndex: index("target") }),
+    blockingReason({ ...blocked, stepIndex: index("skill") }),
     "SKILL.md has no frontmatter block.",
   );
   // The same run in isolated mode is fine — the modes freeze opposite halves.
-  assert.equal(blockingReason({ ...blocked, mode: "isolated", stepIndex: index("target") }), null);
+  assert.equal(blockingReason({ ...blocked, mode: "isolated", stepIndex: index("skill") }), null);
 });
 
 // --- The check state machine ------------------------------------------------
 
 test("a failed check does not masquerade as one still running", () => {
-  const failed = ready({ check: { skill: "writer", status: "failed", error: "connection refused" } });
-  const reason = blockingReason({ ...failed, stepIndex: index("target") });
+  const failed = ready({
+    checks: checksOf({ skill: "writer", status: "failed", error: "connection refused" }),
+  });
+  const reason = blockingReason({ ...failed, stepIndex: index("skill") });
   assert.match(reason, /could not be checked/);
   assert.match(reason, /connection refused/);
   assert.ok(!reason.includes("Checking"), reason);
 });
 
 test("a check that is genuinely in flight says so", () => {
-  const checking = ready({ check: { skill: "writer", status: "checking" } });
-  assert.match(blockingReason({ ...checking, stepIndex: index("target") }), /Checking the agent/);
+  const checking = ready({ checks: checksOf({ skill: "writer", status: "checking" }) });
+  assert.match(blockingReason({ ...checking, stepIndex: index("skill") }), /Checking the agent/);
 });
 
 test("a skill missing from the agent is named, not merely rejected", () => {
-  const missing = ready({ check: { skill: "writer", status: "ok", result: { exists: false } } });
-  assert.match(blockingReason({ ...missing, stepIndex: index("target") }), /writer/);
+  const missing = ready({
+    checks: checksOf({ skill: "writer", status: "ok", result: { exists: false } }),
+  });
+  assert.match(blockingReason({ ...missing, stepIndex: index("skill") }), /writer/);
+});
+
+// --- Mode first -------------------------------------------------------------
+
+test("the mode step comes before the source step and blocks nothing", () => {
+  assert.equal(index("mode"), 0);
+  assert.ok(index("mode") < index("source"));
+  assert.ok(index("source") < index("skill"));
+  // Openable from a standing start: the wizard mounts on it with `isolated`
+  // already chosen, so there is nothing to satisfy.
+  assert.equal(blockingReason({ stepIndex: index("mode"), mode: "isolated" }), null);
+  assert.equal(blockingReason({ stepIndex: index("mode"), mode: "routing" }), null);
+});
+
+test("the wizard opens on a step that is immediately usable", () => {
+  // The old first step was Source, which blocked until an eval set was ticked.
+  // Whatever is first must not greet an empty wizard with a disabled Continue
+  // and no explanation of what it wants.
+  assert.equal(furthestStep({ mode: "isolated", hyper: {}, defaults: {} }), index("source"));
+});
+
+// --- Eligibility, shared by the footer, the cards and the default ------------
+
+test("skillStatus separates cannot-be-checked from cannot-be-used", () => {
+  assert.equal(skillStatus(null, "isolated").state, "checking");
+  assert.equal(skillStatus({ skill: "w", status: "checking" }, "isolated").state, "checking");
+  assert.equal(
+    skillStatus({ skill: "w", status: "failed", error: "boom" }, "isolated").state,
+    "failed",
+  );
+  assert.equal(
+    skillStatus({ skill: "w", status: "ok", result: { exists: false } }, "isolated").state,
+    "blocked",
+  );
+  assert.equal(skillStatus(okCheck("w"), "isolated").state, "ready");
+});
+
+test("a skill without frontmatter is ready for isolated and blocked for routing", () => {
+  const check = okCheck("w", { has_frontmatter: false });
+  assert.equal(skillStatus(check, "isolated").state, "ready");
+  assert.equal(skillStatus(check, "isolated").reason, null);
+  assert.equal(skillStatus(check, "routing").state, "blocked");
+  assert.match(skillStatus(check, "routing").reason, /frontmatter/);
+});
+
+// --- The default selection --------------------------------------------------
+
+test("the first skill is selected before any check has come back", () => {
+  // Waiting for every agent call would leave the step looking exactly like the
+  // old one — a wall of tables with nothing chosen — for as long as the slowest
+  // request takes.
+  const groups = [{ skill_name: "billing" }, { skill_name: "reporting" }];
+  assert.equal(defaultSkill(groups, {}, "isolated"), "billing");
+});
+
+test("routing skips a skill it cannot edit and takes the first that it can", () => {
+  const groups = [{ skill_name: "billing" }, { skill_name: "reporting" }];
+  const checks = checksOf(
+    okCheck("billing", { has_frontmatter: false }),
+    okCheck("reporting"),
+  );
+  assert.equal(defaultSkill(groups, checks, "routing"), "reporting");
+  // The same pair in isolated mode keeps the first: frontmatter is irrelevant
+  // there, and reordering the default would be unexplained.
+  assert.equal(defaultSkill(groups, checks, "isolated"), "billing");
+});
+
+test("with nothing usable the default still names a skill, so the reason can be shown", () => {
+  // Selecting nothing would put the wizard back on "Pick the skill this run
+  // optimises." — which is not what is wrong. Something has to be selected for
+  // its blocking reason to be the sentence in the footer.
+  const groups = [{ skill_name: "billing" }];
+  const checks = checksOf(okCheck("billing", { has_frontmatter: false }));
+  assert.equal(defaultSkill(groups, checks, "routing"), "billing");
+});
+
+test("no groups means no default", () => {
+  assert.equal(defaultSkill([], {}, "isolated"), null);
+  assert.equal(defaultSkill(undefined, {}, "isolated"), null);
 });
 
 // --- Reachability -----------------------------------------------------------
@@ -123,16 +214,18 @@ test("reachability follows the prerequisite chain, one step at a time", () => {
   const loaded = { sourceIds: ["a"], preview: { groups: [] }, hyper: {}, defaults: {} };
   assert.equal(furthestStep(loaded), index("skill"));
 
-  const picked = { ...loaded, skill: "writer", split: splitOf(20, 10), limits: {} };
-  assert.equal(furthestStep(picked), index("target"));
+  // A skill picked but not yet cleared by the agent stops here — the check is
+  // part of this step now, not of a later one.
+  const picking = { ...loaded, skill: "writer", split: splitOf(20, 10), limits: {} };
+  assert.equal(furthestStep(picking), index("skill"));
 
   assert.equal(furthestStep(ready()), index("review"));
 });
 
 test("a check for the wrong skill does not unlock the rest of the wizard", () => {
   // This is what returned 5 the moment any check existed.
-  const state = ready({ skill: "router", check: okCheck("writer") });
-  assert.equal(furthestStep(state), index("target"));
+  const state = ready({ skill: "router", checks: checksOf(okCheck("writer")) });
+  assert.equal(furthestStep(state), index("skill"));
 });
 
 test("clearing the skill walks reachability back rather than leaving a blank step", () => {

@@ -21,27 +21,94 @@
 //   * `blockingReason` said "Checking the agent…" for any absent check,
 //     including one that had failed and would never arrive.
 //
-// The fix for the first is structural rather than disciplinary: the check
-// carries the skill it was run for, and `checkFor` refuses to hand it back for
-// any other. There is no reset to forget.
+// The fix for the first is structural rather than disciplinary: checks are held
+// in a map keyed by skill name, and `checkFor` can only ever return the entry
+// filed under the skill asked for. There is no reset to forget.
 
 import { canStart } from "./optimize_split.js";
 
+// Mode comes first, and the agent check now lives on the Skill step rather than
+// on a Target step of its own.
+//
+// Mode first because it changes what the Skill step *means*. `isolated` sends
+// one skill and edits its body; `routing` sends the whole workspace and edits
+// one description, which a skill without frontmatter cannot offer. Asking for
+// the skill before the mode meant the wizard could not say which skills were
+// eligible at the moment it was asking — and then rejected the answer two steps
+// later, on the old Target step, after the split had already been chosen.
+//
+// The agent check merged into Skill for the same reason: once the mode is known
+// up front, every candidate skill can be checked as the step opens, so
+// eligibility is part of picking rather than a verdict delivered afterwards. A
+// separate step would have restated what the card already showed.
 export const STEPS = [
+  { id: "mode", label: "Mode", hint: "What this run edits" },
   { id: "source", label: "Source", hint: "Which eval sets" },
   { id: "skill", label: "Skill", hint: "What to optimise" },
   { id: "split", label: "Split", hint: "Train and validate" },
-  { id: "target", label: "Target", hint: "The agent" },
   { id: "settings", label: "Settings", hint: "Models and grading" },
   { id: "review", label: "Review", hint: "Start" },
 ];
 
-// The skill check, or nothing, for the skill actually selected. A check for a
-// different skill is not stale data to be cleaned up later — from here it
-// simply does not exist.
-export function checkFor(check, skill) {
-  if (!check || !skill || check.skill !== skill) return null;
-  return check;
+// The agent check for one skill, or nothing. `checks` is `{ [skillName]: entry }`
+// — a check for a different skill is not stale data to be cleaned up later, it
+// is simply filed elsewhere and unreachable from here.
+export function checkFor(checks, skill) {
+  if (!checks || !skill) return null;
+  return checks[skill] || null;
+}
+
+// Whether one skill can be optimised in this mode, and what to say when it
+// cannot. Read by three callers that used to answer it separately: the footer's
+// blocking sentence, the card's disabled state, and the default selection.
+//
+// `state` is one of:
+//   checking — the agent has not answered yet
+//   failed   — the request did not get through; says nothing about the skill
+//   blocked  — the agent answered and this skill cannot be used in this mode
+//   ready    — usable
+export function skillStatus(check, mode) {
+  if (!check || check.status === "checking") {
+    return { state: "checking", reason: "Checking the agent…" };
+  }
+  // Never the same sentence as "in progress". A check that failed is not going
+  // to arrive, and the screen offers a retry beside this.
+  if (check.status === "failed") {
+    return {
+      state: "failed",
+      reason: `The agent could not be checked: ${check.error || "the request failed"}`,
+    };
+  }
+  const result = check.result || {};
+  if (!result.exists) {
+    return {
+      state: "blocked",
+      reason: `The agent has no skill directory named “${check.skill}”.`,
+    };
+  }
+  if (mode === "routing" && !result.has_frontmatter) {
+    return {
+      state: "blocked",
+      reason: result.routing_blocked_reason || "This skill has no frontmatter to edit.",
+    };
+  }
+  return { state: "ready", reason: null };
+}
+
+// Which skill to select for someone who has not chosen one.
+//
+// The first usable skill, falling back to the first skill at all. The fallback
+// matters while the checks are still in flight: selecting nothing until every
+// agent call has returned would leave the step looking like the old one — a
+// wall of tables with no indication that picking is what it wants — for exactly
+// as long as the slowest request takes. Selecting the first immediately and
+// moving off it if it turns out to be ineligible is the behaviour that reads as
+// "already filled in" rather than "still loading".
+export function defaultSkill(groups, checks, mode) {
+  const names = (groups || []).map((g) => g.skill_name);
+  if (!names.length) return null;
+  const usable = names.find((name) => skillStatus(checkFor(checks, name), mode).state === "ready");
+  return usable ?? names[0];
 }
 
 // --- Hyperparameters --------------------------------------------------------
@@ -103,37 +170,29 @@ export function blockingReason(state) {
   const { stepIndex } = state;
   const id = STEPS[stepIndex]?.id;
 
+  // `mode` asks nothing: it opens with `isolated` already chosen, and both
+  // modes are always offerable because what makes `routing` impossible is a
+  // property of a skill, which has not been picked yet.
+  if (id === "mode") return null;
+
   if (id === "source") {
     if (!state.sourceIds?.length) return "Choose at least one eval set.";
     if (!state.preview) return "Load the questions to continue.";
     return null;
   }
 
+  // Picking the skill and clearing it against the agent are the same step now,
+  // so this is where a missing skill, a missing directory, an unreachable agent
+  // and a mode the skill cannot serve are all reported.
   if (id === "skill") {
-    return state.skill ? null : "Pick the skill this run optimises.";
+    if (!state.skill) return "Pick the skill this run optimises.";
+    return skillStatus(checkFor(state.checks, state.skill), state.mode).reason;
   }
 
   if (id === "split") {
     if (!state.split) return "Pick a skill first.";
     if (!canStart(state.split, state.limits || {})) {
       return "The split is too small — see above.";
-    }
-    return null;
-  }
-
-  if (id === "target") {
-    const check = checkFor(state.check, state.skill);
-    if (!check || check.status === "checking") return "Checking the agent…";
-    // Never the same sentence as "in progress". A check that failed is not
-    // going to arrive, and the screen offers a retry beside this.
-    if (check.status === "failed") {
-      return `The agent could not be checked: ${check.error || "the request failed"}`;
-    }
-    if (!check.result?.exists) {
-      return `The agent has no skill directory named “${state.skill}”.`;
-    }
-    if (state.mode === "routing" && !check.result.has_frontmatter) {
-      return check.result.routing_blocked_reason || "This skill has no frontmatter to edit.";
     }
     return null;
   }
