@@ -7,18 +7,18 @@ import UploadDialog from "./UploadDialog.jsx";
 import ConfigDialog from "./ConfigDialog.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import DownloadDialog from "./DownloadDialog.jsx";
+import EvalSetMenu from "./EvalSetMenu.jsx";
+import QuestionEditor from "./QuestionEditor.jsx";
 import { useToast } from "./Toast.jsx";
 import Button from "./ui/Button.jsx";
 import Badge, { BadgeRow } from "./ui/Badge.jsx";
 import Card from "./ui/Card.jsx";
 import EmptyState from "./ui/EmptyState.jsx";
-import Menu, { MenuItem, MenuSeparator } from "./ui/Menu.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
 import { SkeletonCards } from "./ui/Skeleton.jsx";
 import Toolbar, { SearchInput, SegmentedControl } from "./ui/Toolbar.jsx";
 import {
-  IconDownload, IconGear, IconInbox, IconSearch, IconTrash, IconTrendDown,
-  IconTrendUp, IconUpload, IconUsers,
+  IconInbox, IconSearch, IconTrendDown, IconTrendUp, IconUpload, IconUsers,
 } from "./icons.jsx";
 
 const PAGE_SIZE = 24;
@@ -41,6 +41,7 @@ export default function EvalSetList({ onOpen, subject }) {
   const [configSet, setConfigSet] = useState(null);
   const [deleteSet, setDeleteSet] = useState(null);
   const [downloadSet, setDownloadSet] = useState(null);
+  const [editSet, setEditSet] = useState(null);
 
   // Search / filter / sort. `query` is what's typed; `search` is the debounced
   // value that actually hits the API — a request per keystroke would both
@@ -207,6 +208,7 @@ export default function EvalSetList({ onOpen, subject }) {
               index={i % PAGE_SIZE}
               onOpen={() => onOpen(s)}
               onDownload={() => setDownloadSet(s)}
+              onEditQuestions={() => setEditSet(s)}
               onConfigure={() => setConfigSet(s)}
               onDelete={() => setDeleteSet(s)}
             />
@@ -237,6 +239,9 @@ export default function EvalSetList({ onOpen, subject }) {
           onClose={() => setDownloadSet(null)}
         />
       )}
+      {/* No refresh on close: the editor rewrites a question's text and cannot
+          add or remove one, so nothing the card shows about the set changes. */}
+      {editSet && <QuestionEditor evalSet={editSet} onClose={() => setEditSet(null)} />}
       {configSet && (
         <ConfigDialog
           evalSet={configSet}
@@ -264,7 +269,7 @@ export default function EvalSetList({ onOpen, subject }) {
   );
 }
 
-function SetCard({ set: s, index, onOpen, onDownload, onConfigure, onDelete }) {
+function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigure, onDelete }) {
   const owner = s.my_role === "owner";
   const members = (s.roles || []).length;
   // "Nobody has looked at how this set is graded yet" — not "your judge prompt is
@@ -299,30 +304,18 @@ function SetCard({ set: s, index, onOpen, onDownload, onConfigure, onDelete }) {
             only way to discover that a set could be downloaded or deleted was to
             happen to move the pointer over it. */}
         <div className="set-card-menu" onClick={(e) => e.stopPropagation()}>
-          <Menu label={`Actions for ${s.name}`}>
-            {/* Download is offered to every role. A viewer can already read every
-                row an export contains, so withholding the file would protect
-                nothing while denying it to most of the people who want it. */}
-            <MenuItem icon={<IconDownload size={15} />} onClick={onDownload}>
-              Download…
-            </MenuItem>
-            {owner && (
-              <MenuItem
-                icon={<IconGear size={15} />}
-                onClick={onConfigure}
-                title={unreviewed ? "Nobody has reviewed how this set is graded yet" : undefined}
-              >
-                Settings
-                {unreviewed && <Badge tone="warning" size="sm">review grading</Badge>}
-              </MenuItem>
-            )}
-            {owner && <MenuSeparator />}
-            {owner && (
-              <MenuItem icon={<IconTrash size={15} />} variant="danger" onClick={onDelete}>
-                Delete eval set
-              </MenuItem>
-            )}
-          </Menu>
+          <EvalSetMenu
+            label={`Actions for ${s.name}`}
+            owner={owner}
+            unreviewedJudging={unreviewed}
+            onDownload={onDownload}
+            onEditQuestions={onEditQuestions}
+            onConfigure={onConfigure}
+            // The only item this menu has and the set's own page does not:
+            // deleting from the grid leaves the developer looking at a grid,
+            // not at a page for a set that has just stopped existing.
+            onDelete={owner ? onDelete : undefined}
+          />
           {unreviewed && <span className="set-card-nudge" aria-hidden="true" />}
         </div>
       </div>
