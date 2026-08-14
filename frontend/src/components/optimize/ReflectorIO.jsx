@@ -155,7 +155,7 @@ function PatchList({ patch }) {
 function Section({ title, children, compact }) {
   if (!children) return null;
   return (
-    <div className={compact ? "opt-section compact" : "opt-section"}>
+    <div className={compact ? "opt-io-block compact" : "opt-io-block"}>
       <h5>{title}</h5>
       <pre className="opt-pre">{children}</pre>
     </div>

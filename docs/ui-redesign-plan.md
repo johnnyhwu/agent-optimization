@@ -118,12 +118,23 @@ two-column page. **Fix:** rename ReflectorIO's to `.opt-io-block`.
 - `ui.css:813` — `.opt-groups { display:flex; flex-direction:column }` for the
   rollout list (`RolloutDetail.jsx:158`).
 
-Same file, later rule wins, so the **wizard's skill-selection cards render with
-zero gap**, stacked flush against each other. And `ui.css:814`
-`.opt-group + .opt-group { border-top: 1px solid var(--border) }` — written for
-the rollout's flat list — also lands on those wizard `Card`s, drawing a stray
-rule between elevated surfaces. **Fix:** rename the rollout's pair to
-`.opt-rollout-groups` / `.opt-rollout-group`.
+The damage is `ui.css:814` — `.opt-group + .opt-group { border-top: 1px solid
+var(--border) }`, written for the rollout's flat list — also landing on the
+wizard's `Card`s, drawing a divider between elevated surfaces that already have
+a gap between them. Measured in Chromium: the wizard's second card carries
+`border-top-width: 1px` before the rename and `0px` after, while the rollout's
+own rows keep the `1px` they are supposed to have.
+
+**Correction to an earlier draft of this document:** it claimed the duplicate
+`.opt-groups` rule also collapsed the wizard's gap to zero. That was wrong. The
+cascade resolves per *declaration*, not per rule, and the second `.opt-groups`
+block declares only `display` and `flex-direction` — it never mentions `gap`, so
+the first rule's `gap: var(--space-4)` survives untouched. Measured at 16px both
+before and after. The collision was real and worth fixing; that particular
+mechanism was not.
+
+**Fix:** rename the rollout's set to `.opt-rollout-groups` /
+`.opt-rollout-group` / `.opt-rollout-group-head`.
 
 ### 1.5 `Badge tone="info"` is not a tone that exists — **high**
 
@@ -335,20 +346,34 @@ already done right at `SkillGroups.jsx:148`), and `RunList.jsx:67`'s
 Ordered by the skill's fix-priority rule — highest visual impact, lowest risk,
 first — and shaped so each phase is independently shippable and reviewable.
 
-### Phase 0 — Stop the bleeding (CSS only, ~1 hour, zero JS risk)
+### Phase 0 — Stop the bleeding — **DONE**
 
-1. Define `--text-sm: var(--text-body)` in `styles.css`. Fixes 28 rules at once.
-2. `ui.css:763` — `outline: 2px solid var(--ring)` → `box-shadow: inset var(--ring)`.
-3. `ui.css:863` — `.opt-difffile.selected` → `color: var(--accent); background: var(--accent-soft)`.
-4. Add `.ui-badge-info` to the tone palette.
+1. ✅ Define `--text-sm: var(--text-body)` in `styles.css`. Fixes 28 rules at once.
+2. ✅ `.opt-steptable tbody tr:focus-visible` — `outline: 2px solid var(--ring)` → `box-shadow: inset var(--ring)`.
+3. ✅ `.opt-difffile.selected` → `color: var(--accent); background: var(--accent-soft)`.
+4. ✅ Add `.ui-badge-info` as an alias of `neutral` (not a sixth colour — see §1.5).
 
-Four one-line changes. This alone removes most of what reads as "buggy".
+### Phase 1 — Kill the collisions — **DONE**
 
-### Phase 1 — Kill the collisions (mechanical rename, ~2 hours)
+5. ✅ `ReflectorIO`'s `.opt-section` → `.opt-io-block` (§1.3).
+6. ✅ `RolloutDetail`'s `.opt-group*` → `.opt-rollout-group*` (§1.4).
+7. ✅ Stray `border-top` off the wizard's cards; selected card keeps its elevation.
 
-5. `ReflectorIO`'s `.opt-section` → `.opt-io-block` (§1.3).
-6. `RolloutDetail`'s `.opt-groups`/`.opt-group` → `.opt-rollout-groups`/`-group` (§1.4).
-7. Restore the wizard's intended `gap` and remove the stray `border-top` from its cards.
+Verified in headless Chromium against both stylesheets, before and after:
+
+| Measure | Before | After |
+|---|---|---|
+| `.opt-runlist-head h3` font-size | 14px | 13px |
+| `.opt-runitem-name` font-size | 14px | 13px |
+| `.opt-steptable` font-size | 14px | 13px |
+| `.ui-badge-info` background | `transparent` (untoned) | `#f4f5fa`, matches `neutral` |
+| `.opt-difffile.selected` colour | `rgb(255,255,255)` on white | `rgb(99,102,241)` on accent-soft |
+| step-row `:focus-visible` shadow | `none` | `inset 0 0 0 3px accent-soft` |
+| ReflectorIO block layout | `grid 260px 1000px` | `block` |
+| wizard 2nd card `border-top` | `1px` | `0px` |
+| rollout 2nd row `border-top` | `1px` | `1px` (unchanged, as intended) |
+
+184 existing tests pass; `vite build` clean.
 
 ### Phase 2 — The live-run data flow (the real bug, ~half a day)
 

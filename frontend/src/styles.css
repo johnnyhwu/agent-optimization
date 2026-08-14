@@ -22,6 +22,16 @@
   --text-micro: 11px;    /* badges, pills, dense meta */
   --text-caption: 12px;  /* labels, hints             */
   --text-body: 13px;     /* dense body, list rows     */
+  /* An alias, and a deliberate one. The Optimize stylesheet reached for
+     `--text-sm` twenty-eight times — a size between caption and ui — and got
+     nothing, because the token was never defined: an unresolvable var() is
+     invalid at computed-value time, so all twenty-eight font sizes silently
+     fell back to whatever they inherited. `--text-body` is that size; the fact
+     that twenty-eight sites reached past its name for a size-shaped one is
+     evidence the vocabulary does not match how people reach for it, which is a
+     rename to settle on its own. Until then this makes the existing rules mean
+     what they were written to mean. */
+  --text-sm: var(--text-body);
   --text-ui: 14px;       /* controls, default body    */
   --text-title: 16px;    /* card titles               */
   --text-section: 20px;  /* page heading              */
