@@ -661,7 +661,6 @@
 .opt-runlist { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .opt-runlist-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .opt-runlist-head h3 { margin: 0; font-size: var(--text-sm); font-weight: var(--fw-semibold); }
-.opt-runlist-empty { margin: 0; color: var(--muted); font-size: var(--text-sm); }
 .opt-runlist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .opt-runitem {
   display: flex; flex-direction: column; gap: 3px; width: 100%;
@@ -820,7 +819,6 @@
 .opt-stepcard-value { font-variant-numeric: tabular-nums; }
 .opt-stepcard-sub { grid-column: 2; font-size: var(--text-micro); color: var(--muted); }
 .opt-stepcard-summary { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--text); }
-.opt-metric-toggle { display: flex; gap: 2px; }
 .opt-stepcard-links { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
 /* --- Part 1: one rollout ------------------------------------------------- */

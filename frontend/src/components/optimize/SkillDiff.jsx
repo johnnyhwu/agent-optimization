@@ -5,6 +5,7 @@ import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
+import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { IconArrowLeft, IconDownload } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import { diffRows } from "../../diff.js";
@@ -90,22 +91,24 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
           title={`${view.step_no === 0 ? "Baseline" : `Step ${view.step_no}`} · what changed in the skill`}
           actions={
             <>
-              <div className="opt-metric-toggle" role="group" aria-label="Diff baseline">
-                <Button
-                  variant={base === "parent" ? "secondary" : "ghost"}
-                  onClick={() => setBase("parent")}
-                  title="Against the last skill the gate accepted — what this step alone changed"
-                >
-                  vs previous
-                </Button>
-                <Button
-                  variant={base === "initial" ? "secondary" : "ghost"}
-                  onClick={() => setBase("initial")}
-                  title="Against the skill this run started with — everything the run has done so far"
-                >
-                  vs initial
-                </Button>
-              </div>
+              <SegmentedControl
+                value={base}
+                onChange={setBase}
+                ariaLabel="Diff baseline"
+                size="sm"
+                options={[
+                  {
+                    value: "parent",
+                    label: "vs previous",
+                    title: "Against the last skill the gate accepted — what this step alone changed",
+                  },
+                  {
+                    value: "initial",
+                    label: "vs initial",
+                    title: "Against the skill this run started with — everything the run has done so far",
+                  },
+                ]}
+              />
               {view.step_no > 0 && (
                 <Button
                   variant="ghost"

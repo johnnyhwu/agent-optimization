@@ -214,5 +214,21 @@ export function chartModel(steps, options = {}) {
       const value = x0 + ((px - plot.left) / plot.width) * span;
       return Math.min(lastStep, Math.max(0, Math.round(value)));
     },
+    /**
+     * The step under a point, or null outside the plot area.
+     *
+     * `stepAt` clamps, which is right inside the plot — the column is the
+     * target, not the dot — and wrong everywhere else. The svg element is the
+     * full 720×260 including a 38px left gutter of axis labels and a 26px strip
+     * of step numbers below, so a click anywhere on those pinned step 0 or the
+     * last step, and moving the pointer across the y-axis labels showed a
+     * readout for a step nowhere near it.
+     */
+    stepAtPoint(px, py) {
+      if (px < plot.left || px > plot.left + plot.width) return null;
+      if (py < plot.top || py > plot.top + plot.height) return null;
+      const value = x0 + ((px - plot.left) / plot.width) * span;
+      return Math.min(lastStep, Math.max(0, Math.round(value)));
+    },
   };
 }

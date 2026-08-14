@@ -461,14 +461,34 @@ project has no React test renderer and adding one was out of scope. `vite build`
 compiles it; the gating logic is tested as a pure module, which is where this
 codebase puts logic it wants covered.
 
-### Phase 4 — Consistency and a11y sweep (~half a day)
+### Phase 4 — Consistency and a11y sweep — **DONE**
 
-14. One step-count helper for rail and panel (§1.11).
-15. Run-list revalidation on run state change (§1.12).
-16. Metric toggle → `.ui-segmented`, `aria-pressed`, and make the step table
-    follow the selected metric (§1.13).
-17. Chart hit-testing confined to the plot rect (§1.13).
-18. `RunList` empty case → `EmptyState`.
+20. ✅ One step-count helper for rail and panel (§1.11) — landed in Phase 2,
+    since it was the same helper.
+21. ✅ The rail revalidates. It has no stream of its own — one per visible run
+    would be a connection each — so the open run's panel signals it on
+    `gate_done` (the event that finishes a step, minutes apart) and on the
+    terminal event, plus after Stop and Resume. Through a ref, so a parent
+    re-render handing over a new callback cannot tear down the stream (§1.12).
+22. ✅ Metric toggle → the existing `SegmentedControl`. It was two
+    ghost-vs-secondary `Button`s in a `role="group"`, announced as two unrelated
+    buttons with no indication which was on. `SkillDiff`'s "vs previous / vs
+    initial" toggle was the identical pattern and went the same way, which
+    retires the one-off `.opt-metric-toggle` class entirely.
+23. ✅ The step table follows the selected metric, and its column headers name
+    it. It always read the `*_hard` columns, so switching the chart to soft left
+    the numbers underneath silently saying something else (§1.13).
+24. ✅ `chartModel.stepAtPoint(px, py)` returns null outside the plot rect. The
+    svg is the full 720×260 canvas including a 38px gutter of accuracy labels
+    and a 26px strip of step numbers; `stepAt` clamps, so a click anywhere on
+    either pinned a step and sweeping the pointer across the axis labels showed
+    a readout for a step nowhere near it (§1.13).
+25. ✅ `RunList`'s empty case → `EmptyState`, retiring `.opt-runlist-empty`.
+
+Measured in headless Chromium after the change: the segmented control's active
+and inactive segments are distinguishable (`#fff` on `transparent`), the empty
+state has non-zero height, and `.ui-banner-success` from Phase 5 renders green
+fill, border and title.
 
 ### Phase 5 — System guards — **DONE**
 

@@ -22,10 +22,15 @@ export const STATUS_TONE = {
   interrupted: "warning",
 };
 
-export default function RunList({ subject, activeId, onOpen, onNew }) {
+export default function RunList({ subject, activeId, onOpen, onNew, revision = 0 }) {
   const [runs, setRuns] = useState(null);
   const [error, setError] = useState(null);
 
+  // `revision` is bumped by whoever knows a run's state changed — the panel
+  // beside this, when its stream reports a step or a terminal event. The rail
+  // used to fetch once and never again, so starting a run from the wizard and
+  // landing on its page left "pending" sitting in the rail for the rest of the
+  // hour, next to a panel showing it running.
   useEffect(() => {
     let cancelled = false;
     api
@@ -35,7 +40,7 @@ export default function RunList({ subject, activeId, onOpen, onNew }) {
     return () => {
       cancelled = true;
     };
-  }, [subject]);
+  }, [subject, revision]);
 
   return (
     <aside className="opt-runlist" aria-label="Optimization runs">
@@ -49,8 +54,13 @@ export default function RunList({ subject, activeId, onOpen, onNew }) {
       {error && <p className="error">{error}</p>}
       {!runs && !error && <Skeleton variant="row" count={4} />}
 
+      {/* The composed empty state, not a bare sentence. `RunList.Intro` below
+          has said the useful thing all along; the rail said "No runs yet." and
+          left the New button above as the only clue what to do with that. */}
       {runs && runs.length === 0 && (
-        <p className="opt-runlist-empty">No runs yet.</p>
+        <EmptyState size="sm" icon={<IconSparkles size={18} />} title="No runs yet">
+          A run trains one skill against your eval sets.
+        </EmptyState>
       )}
 
       {runs && runs.length > 0 && (

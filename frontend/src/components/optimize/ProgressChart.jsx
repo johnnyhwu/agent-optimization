@@ -36,9 +36,15 @@ export default function ProgressChart({ steps, totalSteps, bestStep, metric, onP
   // The pointer is in CSS pixels of a scaled SVG; the model is in viewBox
   // units. Without the ratio, every reading is wrong by the scale factor —
   // subtly on a wide panel, wildly on a narrow one.
-  function toViewBoxX(event) {
+  //
+  // Both axes, because the plot is inset from the canvas on all four sides and
+  // the model has to be asked about a point rather than a column.
+  function toViewBox(event) {
     const box = svgRef.current.getBoundingClientRect();
-    return ((event.clientX - box.left) / box.width) * WIDTH;
+    return [
+      ((event.clientX - box.left) / box.width) * WIDTH,
+      ((event.clientY - box.top) / box.height) * HEIGHT,
+    ];
   }
 
   const hovered = hover != null ? steps.find((s) => s.step_no === hover) : null;
@@ -55,9 +61,15 @@ export default function ProgressChart({ steps, totalSteps, bestStep, metric, onP
           (bestStep != null ? `, best at step ${bestStep}.` : ".") +
           " The table below carries the same numbers."
         }
-        onMouseMove={(e) => setHover(model.stepAt(toViewBoxX(e)))}
+        onMouseMove={(e) => setHover(model.stepAtPoint(...toViewBox(e)))}
         onMouseLeave={() => setHover(null)}
-        onClick={(e) => onPick(model.stepAt(toViewBoxX(e)))}
+        // Outside the plot is not a step. A click on the axis labels used to
+        // pin whichever step the clamp landed on, which is a pin the user did
+        // not ask for on a step they were not pointing at.
+        onClick={(e) => {
+          const stepNo = model.stepAtPoint(...toViewBox(e));
+          if (stepNo != null) onPick(stepNo);
+        }}
       >
         {/* Epoch bands first: everything else draws on top of them. */}
         {model.bands.map((band, index) => (
