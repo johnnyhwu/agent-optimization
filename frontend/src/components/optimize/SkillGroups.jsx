@@ -5,8 +5,10 @@ import Card, { CardHeader } from "../ui/Card.jsx";
 import EmptyState from "../ui/EmptyState.jsx";
 import Banner from "../ui/Banner.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
-import { IconAlert, IconCheck, IconRefresh, IconTarget } from "../icons.jsx";
+import { IconAlert, IconCheck, IconChevronRight, IconRefresh, IconTarget } from "../icons.jsx";
 import { plural } from "../../plural.js";
+import { charLabel, skillTree } from "../../skill_tree.js";
+import { evalSetLabel } from "../../eval_set_label.js";
 import { checkFor, skillStatus } from "../../optimize_wizard.js";
 
 // Wizard step 3: the imported questions, grouped by the skill they are tagged
@@ -107,15 +109,21 @@ export default function SkillGroups({
         <Card className="opt-group is-unavailable">
           <CardHeader
             title="Cannot be assigned"
-            count={ambiguous.length}
-            actions={<Badge tone="warning" icon={<IconAlert size={13} />}>Excluded</Badge>}
+            actions={
+              <>
+                <span className="opt-group-count">{plural(ambiguous.length, "question")}</span>
+                <Badge tone="warning" icon={<IconAlert size={13} />}>Excluded</Badge>
+              </>
+            }
           />
-          <p className="opt-group-note">
-            These carry no skill tag, or more than one. A run trains one skill, so
-            there is no correct place to put them — tagging them in the eval set
-            is what brings them in.
-          </p>
-          <QuestionDetails questions={ambiguous} showSkills label="the excluded questions" />
+          <div className="opt-group-body">
+            <p className="opt-group-note">
+              These carry no skill tag, or more than one. A run trains one skill,
+              so there is no correct place to put them — tagging them in the eval
+              set is what brings them in.
+            </p>
+            <QuestionDetails questions={ambiguous} showSkills noun="excluded question" />
+          </div>
         </Card>
       )}
     </div>
@@ -148,6 +156,13 @@ function SkillCard({ group, selected, status, check, mode, onSelect, onRecheck }
       className={className}
       aria-disabled={blocked || undefined}
     >
+      {/* The count says what it counts. `CardHeader`'s bare `count` renders a
+          muted number beside the title with nothing to attach it to — it read as
+          a version, an index, anything but "this many questions" — and, because
+          the title is a flex row whose first item is the radio circle, the
+          baseline it aligned to was the circle's rather than the skill name's,
+          so it sat visibly low. Passed as an action instead, where it is a
+          labelled chip on the same centre line as everything else. */}
       <CardHeader
         title={
           <span className="opt-group-pick">
@@ -161,42 +176,84 @@ function SkillCard({ group, selected, status, check, mode, onSelect, onRecheck }
             <code>{group.skill_name}</code>
           </span>
         }
-        count={group.questions.length}
-        actions={<SkillCardStatus status={status} onRecheck={onRecheck} mode={mode} />}
+        actions={
+          <>
+            <span className="opt-group-count">
+              {plural(group.questions.length, "question")}
+            </span>
+            <SkillCardStatus status={status} onRecheck={onRecheck} mode={mode} />
+          </>
+        }
       />
 
-      {status.state === "checking" && <Skeleton variant="row" count={1} />}
+      {/* Everything below the header is indented to the header's own text, which
+          is what `.opt-group-body` is for. The card pads itself and `CardHeader`
+          pads again, so every line of this used to start a full 16px to the
+          *left* of the skill name it was describing. */}
+      <div className="opt-group-body has-pick">
+        {status.state === "checking" && <Skeleton variant="row" count={1} />}
 
-      {status.state === "failed" && (
-        <Banner tone="error" title="The agent could not be checked">
-          {check.error} — this says nothing about whether the skill is there; the
-          request itself did not get through.
-        </Banner>
-      )}
+        {status.state === "failed" && (
+          <Banner tone="error" title="The agent server could not be reached">
+            {check.error} — this says nothing about whether the skill is there;
+            the request itself did not get through.
+          </Banner>
+        )}
 
-      {blocked && (
-        <p className="opt-group-blocked">
-          <IconAlert size={13} /> {status.reason}
-        </p>
-      )}
+        {blocked && (
+          <p className="opt-group-blocked">
+            <IconAlert size={13} /> {status.reason}
+          </p>
+        )}
 
-      {result?.exists && (
-        <p className="opt-hint">
-          {plural(result.files.length, "file")} on the agent ·{" "}
-          {result.n_chars.toLocaleString()} characters ·{" "}
-          <code>{result.files.join(", ")}</code>
-        </p>
-      )}
+        {result?.exists && (
+          <>
+            <p className="opt-hint">
+              Skill found on agent server
+              {result.agent_base_url && (
+                <>
+                  {" "}(<code>{result.agent_base_url}</code>)
+                </>
+              )}
+            </p>
+            {/* The directory, not a comma-separated line of paths that each
+                repeat the skill's name. One total for the whole skill cannot say
+                whether this is a long SKILL.md or a short one beside a large
+                reference — and in isolated mode that is the difference between a
+                skill the run can move and one it cannot. */}
+            <ul className="opt-skilltree">
+              {skillTree(group.skill_name, result.files, result.file_chars).map((row) => (
+                <li
+                  key={row.path || `${row.depth}/${row.name}`}
+                  className={row.isDir ? "is-dir" : ""}
+                  style={{ paddingLeft: `${row.depth * 14}px` }}
+                >
+                  <code>{row.name}</code>
+                  {!row.isDir && charLabel(row.chars) && (
+                    <span className="opt-skilltree-size">({charLabel(row.chars)})</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
 
-      {result && !result.exists && (
-        <p className="opt-hint">
-          The agent has: {result.available_skills?.join(", ") || "no skills at all"}.
-          A question's skill tag and the agent's directory name have to be the
-          same word.
-        </p>
-      )}
+        {result && !result.exists && (
+          <p className="opt-hint">
+            Not found on agent server
+            {result.agent_base_url && (
+              <>
+                {" "}(<code>{result.agent_base_url}</code>)
+              </>
+            )}
+            . It has: {result.available_skills?.join(", ") || "no skills at all"}.
+            A question's skill tag and the agent's directory name have to be the
+            same word.
+          </p>
+        )}
 
-      <QuestionDetails questions={group.questions} label="the questions" />
+        <QuestionDetails questions={group.questions} />
+      </div>
     </Card>
   );
 }
@@ -224,13 +281,16 @@ function SkillCardStatus({ status, onRecheck, mode }) {
   if (status.state === "blocked") {
     return (
       <Badge tone="warning" icon={<IconAlert size={13} />}>
-        {mode === "routing" ? "No description to edit" : "Not on the agent"}
+        {mode === "routing" ? "No description to edit" : "Not on the agent server"}
       </Badge>
     );
   }
+  // "the agent server", not "the agent". The thing that was asked is a server at
+  // an address the developer typed on step 1, and the tree underneath is its
+  // answer; "the agent" reads as the model.
   return (
     <Badge tone="success" icon={<IconCheck size={13} />}>
-      Found on the agent
+      Found on the agent server
     </Badge>
   );
 }
@@ -238,7 +298,15 @@ function SkillCardStatus({ status, onRecheck, mode }) {
 // Folded by default. Three skills' worth of six-row tables was most of the
 // 1652px this step used to run to, and none of it is needed to choose between
 // them — the count and the accuracy spread are, and those are in the summary.
-function QuestionDetails({ questions, showSkills = false, label }) {
+//
+// Two things changed once it was opened. The summary is drawn as a control:
+// bordered, with a chevron that turns, because "Show the questions" in muted
+// grey with nothing around it was read as a caption and left unclicked. And the
+// table shows *every* question inside a box about ten rows tall rather than the
+// first eight followed by a sentence about the rest — sixty questions used to
+// mean either a truncated list or a card that grew past the fold, and neither is
+// a thing you can scan.
+function QuestionDetails({ questions, showSkills = false, noun = "question" }) {
   const scored = questions.filter((q) => q.prior_accuracy != null);
   const mean = scored.length
     ? Math.round((scored.reduce((sum, q) => sum + q.prior_accuracy, 0) / scored.length) * 100)
@@ -252,21 +320,28 @@ function QuestionDetails({ questions, showSkills = false, label }) {
       onClick={(e) => e.stopPropagation()}
     >
       <summary>
-        Show {label}
+        <IconChevronRight size={14} className="opt-group-chevron" />
+        Show {plural(questions.length, noun)}
         <span className="opt-group-summary">
           {mean != null
             ? `${mean}% average prior accuracy over ${plural(scored.length, "question")}`
             : "never run"}
         </span>
       </summary>
-      <QuestionTable questions={questions.slice(0, 8)} showSkills={showSkills} />
-      {questions.length > 8 && (
-        <p className="opt-group-more">
-          and {questions.length - 8} more — all of them go to the next step, where
-          the split is chosen.
-        </p>
-      )}
+      <div className="opt-group-scroll">
+        <QuestionTable questions={questions} showSkills={showSkills} />
+      </div>
     </details>
+  );
+}
+
+function SetLabel({ question }) {
+  const { name, id, fullId } = evalSetLabel(question);
+  return (
+    <span className="opt-qset-label" title={fullId ? `${name} · ${fullId}` : name}>
+      <span className="opt-qset-name">{name}</span>
+      {id && <code className="opt-qset-id">{id}</code>}
+    </span>
   );
 }
 
@@ -287,7 +362,15 @@ function QuestionTable({ questions, showSkills = false }) {
             <td className="opt-qtext" title={q.question}>
               {q.question}
             </td>
-            <td className="opt-qset">{q.eval_set_name}</td>
+            {/* Name and id, because two eval sets may carry one name — the
+                system identifies a set by its id and lets an owner reuse a
+                label. Reading "Billing questions" twice down this column and
+                having no way to tell which is which is exactly the case this
+                column exists to answer. The head of the uuid is enough to
+                separate them by eye; the whole value is in the `title`. */}
+            <td className="opt-qset">
+              <SetLabel question={q} />
+            </td>
             {showSkills && (
               <td>
                 <BadgeRow>

@@ -53,6 +53,50 @@ export function estimateRun({
   };
 }
 
+// The arithmetic behind each number, in words, for the `?` beside it.
+//
+// Written from the same inputs the estimate was computed from rather than
+// hand-written prose beside it, so a change to the formula above cannot leave a
+// confident explanation of the old one on the screen. The review card is the
+// last thing read before an hour of calls is authorised, and "≈ 1,240" with no
+// derivation is a number nobody can check — the two questions it always draws
+// are "does that include validation?" and "is that per epoch?".
+export function explainRun({
+  nTrain, nVal, epochs, batchSize, minibatchSize,
+} = {}) {
+  const train = count(nTrain);
+  const val = count(nVal);
+  const passes = Math.max(1, count(epochs));
+  const batch = Math.max(1, count(batchSize));
+  const group = Math.max(1, count(minibatchSize));
+  const e = estimateRun({ nTrain, nVal, epochs, batchSize, minibatchSize });
+  const perStep = Math.min(batch, train);
+  const analystPerStep = Math.ceil(perStep / group) + (perStep >= 2 ? 1 : 0);
+
+  return {
+    steps:
+      `${train} training questions ÷ ${batch} per batch = ${e.stepsPerEpoch} `
+      + `step(s) per epoch, × ${passes} epoch(s) = ${e.totalSteps}.`,
+    agentCalls:
+      `${val} for the baseline measurement, then each of the ${e.totalSteps} `
+      + `step(s) answers ${perStep} training question(s) and re-answers all `
+      + `${val} validation question(s): ${val} + ${e.totalSteps} × `
+      + `(${perStep} + ${val}) = ${e.agentCalls.toLocaleString()}.`,
+    judgeCalls:
+      "One judge call grades one agent answer, so this is the agent count "
+      + `again: ${e.judgeCalls.toLocaleString()}. It is named separately `
+      + "because leaving it out halves an estimate.",
+    optimizerCalls:
+      `Per step: ${analystPerStep} analyst call(s) — ${perStep} question(s) in `
+      + `minibatches of ${group}, with failures and successes reflected on `
+      + "separately — plus one merge and one ranking. "
+      + `${e.totalSteps} × (${analystPerStep} + 2) = `
+      + `${e.optimizerCallsMax.toLocaleString()} at most. These run on the `
+      + "largest model configured and each carries a minibatch of traces, so "
+      + "this small number is usually the large bill.",
+  };
+}
+
 function count(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;

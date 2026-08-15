@@ -810,8 +810,17 @@ class SkillCheck(BaseModel):
     skill_name: str
     exists: bool
     files: list[str] = Field(default_factory=list)
+    # The same paths, each with its own length. `n_chars` is their sum and is
+    # kept because two callers already read it; this is what lets the wizard draw
+    # the skill as a tree instead of as one number for the whole directory —
+    # "4,820 characters" says nothing about which file holds them.
+    file_chars: dict[str, int] = Field(default_factory=dict)
     n_chars: int = 0
     has_frontmatter: bool = False
+    # Which agent server answered. The check used to read only the server's own
+    # environment while the wizard collected a base URL of its own, so a
+    # developer could clear a skill against one agent and run against another.
+    agent_base_url: str = ""
     # Set when routing mode cannot be offered, with the reason to show instead.
     routing_blocked_reason: str | None = None
     available_skills: list[str] = Field(default_factory=list)

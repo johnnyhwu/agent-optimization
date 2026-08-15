@@ -767,6 +767,14 @@ select { cursor: pointer; }
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 18px 20px 12px; border-bottom: 1px solid var(--border); }
 .dialog-head h3 { margin: 0; font-size: 17px; }
 .dialog-sub { margin: 3px 0 0; color: var(--muted); font-size: var(--text-caption); }
+/* An internal number in a line of plain language — the eval set's edit-conflict
+   version. Marked as a thing with a definition (dotted underline, help cursor)
+   rather than left looking like part of the sentence, which is how `v3` was read
+   as "the third version of this question set". */
+.dialog-sub-tag {
+  font-family: var(--font-mono); font-size: var(--text-micro);
+  border-bottom: 1px dotted var(--border-strong); cursor: help;
+}
 .dialog-body { padding: 16px 20px; overflow: auto; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
 .field { margin-bottom: 14px; }
@@ -1621,8 +1629,17 @@ pre.prompt-text {
   font-family: var(--font); font-size: var(--text-body); line-height: 1.55;
 }
 /* Short by nature — a question is a sentence, the answer and the process are
-   paragraphs, and splitting the height evenly starves the two that need it. */
-.field.grow-field.grow-field-sm { flex: 0 1 auto; min-height: 0; }
+   paragraphs, and splitting the height evenly starves the two that need it.
+
+   The min-height is not decoration and must stay above label + textarea. It was
+   `0`, which in a column that has to shrink is an instruction to disappear: the
+   two `grow-field` siblings stop at their own 120px, so this was the only item
+   left able to absorb the shortfall, and under about 800px of window it was
+   flattened to nothing. A `.field` sets no overflow, so its textarea kept its
+   62px and painted straight over the next field — the question box vanished and
+   its label sat on top of "Ground truth response". Only below the fold of a
+   laptop, which is why it shipped. */
+.field.grow-field.grow-field-sm { flex: 0 1 auto; min-height: 84px; }
 .field.grow-field.grow-field-sm textarea { min-height: 62px; }
 .preview-meta { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); flex: none; }
 .preview-meta input.mono { font-family: var(--font-mono); font-size: var(--text-caption); }

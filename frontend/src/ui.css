@@ -664,7 +664,13 @@
 .opt-runlist-head h3 { margin: 0; font-size: var(--text-body); font-weight: var(--fw-semibold); }
 .opt-runlist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .opt-runitem {
-  display: flex; flex-direction: column; gap: 3px; width: 100%;
+  /* `align-items` explicitly, because this is a <button>: the UA stylesheet
+     gives buttons `align-items: center`, which in a column flex box makes every
+     child shrink to its own text and sit centred. The rail's rows were each
+     centred on their own longest line — a ragged column that read as an
+     alignment accident, because it was one. `text-align: left` could not fix it;
+     the boxes themselves were not full width. */
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%;
   padding: var(--space-2); text-align: left;
   background: none; border: none; border-radius: var(--radius-sm); cursor: pointer;
   transition: background 0.12s;
@@ -675,6 +681,8 @@
 .opt-runitem-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .opt-runitem-name { font-size: var(--text-body); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-runitem-meta { display: flex; gap: var(--space-2); font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Fixed-width and below the name, where the locale form used to be the name. */
+.opt-runitem-when { font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .opt-pane { min-width: 0; }
 .opt-run { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -762,6 +770,15 @@
 }
 .opt-group.is-unavailable .ui-card-head-title h4 { color: var(--muted); }
 .opt-group-pick { display: flex; align-items: center; gap: var(--space-2); }
+/* The skill's name is a directory name on the agent, so it is shown as one. The
+   card header's default is uppercase small-caps for section labels, which turned
+   `billing` into `BILLING` — a word that does not exist on the agent, printed
+   directly above a tree in which the same directory reads `billing/`. */
+.opt-group .ui-card-head-title h4 {
+  text-transform: none; letter-spacing: 0; font-size: var(--text-title);
+  color: var(--text); font-weight: var(--fw-semibold);
+}
+.opt-group .ui-card-head-title code { font-family: var(--font-mono); }
 /* Drawn rather than an <input>: the card itself is the button, and a real radio
    here would be a second tab stop announcing the same choice. */
 .opt-group-radio {
@@ -777,13 +794,61 @@
   display: flex; align-items: center; gap: 6px; margin: 0;
   font-size: var(--text-body); color: var(--amber);
 }
-.opt-group-questions > summary {
-  cursor: pointer; font-size: var(--text-body); color: var(--muted);
-  display: flex; align-items: center; gap: var(--space-2);
-  padding: var(--space-1) 0;
+/* Everything under the header lines up with the header's text.
+   `.ui-card.is-padded` pads by --space-4 and `.ui-card-head` pads again by the
+   same, so a card body left at the card's own padding starts a full 16px to the
+   *left* of the title it belongs to — plus the radio's width, which put the
+   skill's own description further out than the skill's name. */
+.opt-group-body {
+  display: flex; flex-direction: column; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) 0;
 }
+/* On a card whose title is preceded by the radio, the body lines up with the
+   skill *name* rather than with the circle in front of it — the name is what the
+   description is about. The excluded card has no radio and keeps the plain
+   indent, which is why this is a modifier and not the rule. */
+.opt-group-body.has-pick { padding-left: calc(var(--space-4) + 16px + var(--space-2)); }
+.opt-group-count {
+  font-size: var(--text-micro); color: var(--muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* The skill as the directory it is. Indented by depth from the row's own data,
+   because the depth is what the tree means and a nested list would need a
+   recursive component to render four lines of text. */
+.opt-skilltree {
+  list-style: none; margin: 0; padding: var(--space-2) var(--space-3);
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-caption); line-height: 1.7;
+}
+.opt-skilltree li { display: flex; align-items: baseline; gap: var(--space-2); }
+.opt-skilltree code { font-family: var(--font-mono); font-size: var(--text-caption); }
+.opt-skilltree li.is-dir code { color: var(--text); font-weight: var(--fw-medium); }
+.opt-skilltree-size { color: var(--muted); font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
+
+/* A control, not a caption. This was muted text with nothing around it, and
+   people did not know it could be clicked. */
+.opt-group-questions > summary {
+  cursor: pointer; font-size: var(--text-body); color: var(--text);
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); list-style: none;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.opt-group-questions > summary::-webkit-details-marker { display: none; }
+.opt-group-questions > summary:hover { border-color: var(--border-strong); }
 .opt-group-questions > summary:focus-visible { outline: none; box-shadow: var(--ring); }
-.opt-group-summary { margin-left: auto; font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
+.opt-group-chevron { flex: none; transition: transform 0.12s var(--ease); }
+.opt-group-questions[open] > summary .opt-group-chevron { transform: rotate(90deg); }
+.opt-group-summary { margin-left: auto; font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Every question, in a box about ten rows tall. Showing the first eight and a
+   sentence about the rest meant the list could not be searched by eye; showing
+   all sixty meant a card taller than the window. */
+.opt-group-scroll {
+  max-height: 440px; overflow-y: auto; margin-top: var(--space-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
 .opt-group-note, .opt-group-more, .opt-hint, .opt-col-hint { margin: 0; font-size: var(--text-body); color: var(--muted); }
 
 .opt-qtable { width: 100%; border-collapse: collapse; font-size: var(--text-body); }
@@ -792,12 +857,59 @@
 .opt-qtable .num, .opt-steptable .num { text-align: right; font-variant-numeric: tabular-nums; }
 .opt-qtext { display: block; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-qset { color: var(--muted); font-size: var(--text-micro); }
+/* Name over id. Two sets may share a name — identity is the id — so the column
+   that answers "which set is this from" has to carry both. */
+.opt-qset-label { display: flex; flex-direction: column; gap: 1px; }
+.opt-qset-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt-qset-id { font-family: var(--font-mono); font-size: var(--text-micro); opacity: 0.75; }
+
+/* Under the eval set list on the source step: what the auto-load is doing. */
+.opt-source-status {
+  display: flex; align-items: center; gap: 6px; margin: 0;
+  font-size: var(--text-body); color: var(--muted); min-height: 20px;
+}
 .opt-qruns { display: block; font-size: var(--text-micro); color: var(--muted); }
 
 .opt-split { display: flex; flex-direction: column; gap: var(--space-4); }
 .opt-split-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
 .opt-split-counts { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .opt-sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-body); color: var(--muted); }
+/* The split's warnings, as a list of one-liners that open.
+   They were three `Banner`s in the `.opt-split` column, which put --space-4
+   between each pair on top of every banner's own padding — a screenful of
+   spaced-out prose standing between the developer and the two columns it was
+   commenting on. Stacked at 1px here, so they read as one list. */
+.opt-issues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.opt-issue {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.opt-issue > summary {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer; list-style: none; font-size: var(--text-body);
+}
+.opt-issue > summary::-webkit-details-marker { display: none; }
+.opt-issue > summary:focus-visible { outline: none; box-shadow: var(--ring); }
+.opt-issue-mark { display: inline-flex; flex: none; }
+.opt-issue-title { font-weight: var(--fw-semibold); }
+/* The number, in the same line as the claim it supports. Pushed to the right so
+   a column of these can be read as claim / evidence rather than as prose. */
+.opt-issue-summary { color: var(--muted); flex: 1; min-width: 0; }
+.opt-issue-chevron { flex: none; color: var(--muted); transition: transform 0.12s var(--ease); }
+.opt-issue[open] > summary .opt-issue-chevron { transform: rotate(180deg); }
+.opt-issue-detail {
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 14px + var(--space-2));
+  font-size: var(--text-body); color: var(--muted); line-height: 1.55;
+}
+.opt-issue-detail p { margin: 0 0 var(--space-2); }
+.opt-issue-detail p:last-child { margin-bottom: 0; }
+.opt-issue-do { color: var(--text); }
+.opt-issue.is-warning { border-color: var(--amber); background: var(--amber-soft); }
+.opt-issue.is-warning .opt-issue-mark, .opt-issue.is-warning .opt-issue-title { color: var(--amber); }
+.opt-issue.is-error { border-color: var(--red); background: var(--red-soft); }
+.opt-issue.is-error .opt-issue-mark, .opt-issue.is-error .opt-issue-title { color: var(--red); }
+
 .opt-split-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
 @media (max-width: 900px) { .opt-split-cols { grid-template-columns: minmax(0, 1fr); } }
 .opt-col-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -827,9 +939,48 @@
 .opt-mode-title { font-weight: var(--fw-medium); }
 .opt-mode-desc { font-size: var(--text-body); color: var(--muted); }
 
-.opt-review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); margin: 0; }
-.opt-review-grid dt { font-size: var(--text-micro); color: var(--muted); }
-.opt-review-grid dd { margin: 2px 0 0; font-size: var(--text-body); font-variant-numeric: tabular-nums; }
+/* The last card before Start. It was a `CardHeader` — small-caps, 12px, with a
+   rule under it — followed by a seven-cell auto-fit grid pressed against that
+   rule, then a four-line paragraph pressed against the grid. Everything was the
+   same size and nothing had any air, so the one screen that is meant to be read
+   carefully read as a block. Now: a real heading, and the facts in two bands
+   with the counts given the size of counts. */
+.opt-review { display: flex; flex-direction: column; gap: var(--space-4); }
+.opt-review-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.opt-review-head h3 {
+  margin: 0; font-family: var(--font-display);
+  font-size: var(--text-title); font-weight: var(--fw-semibold);
+}
+/* The band label between the two halves — what the run is, and what it spends. */
+.opt-review-band {
+  margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--border);
+  font-size: var(--text-micro); font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+}
+.opt-review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-4) var(--space-3); margin: 0; }
+.opt-review-grid dt {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--text-micro); color: var(--muted);
+}
+.opt-review-grid dd { margin: 3px 0 0; font-size: var(--text-body); font-variant-numeric: tabular-nums; }
+/* A count is the thing being read here, so it is the size of a number rather
+   than the size of the label above it. */
+.opt-review-grid.is-numbers dd { font-family: var(--font-display); font-size: var(--text-display); line-height: 1.1; }
+.opt-review-grid.is-numbers dd.opt-review-sub {
+  margin-top: 2px; font-family: var(--font); font-size: var(--text-micro); color: var(--muted);
+}
+
+/* "Where does this number come from?", offered rather than hidden in a `title`
+   nobody knows to hover. */
+.opt-explain {
+  display: inline-grid; place-items: center; width: 15px; height: 15px; flex: none;
+  padding: 0; border: 1px solid var(--border-strong); border-radius: 50%;
+  background: none; color: var(--muted);
+  font: inherit; font-size: 10px; font-weight: var(--fw-bold); line-height: 1;
+  cursor: help;
+}
+.opt-explain:hover { border-color: var(--accent); color: var(--accent); }
+.opt-explain:focus-visible { outline: none; box-shadow: var(--ring); }
 
 .opt-steptable { width: 100%; border-collapse: collapse; font-size: var(--text-body); }
 .opt-steptable th { text-align: left; font-weight: var(--fw-medium); color: var(--muted); font-size: var(--text-micro); padding: var(--space-1) var(--space-2); }

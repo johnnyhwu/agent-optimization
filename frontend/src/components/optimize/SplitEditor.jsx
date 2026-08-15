@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import Badge from "../ui/Badge.jsx";
-import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import { InlineEmpty } from "../ui/EmptyState.jsx";
 import {
+  IconAlert,
   IconChevronDown,
   IconChevronRight,
   IconCopyPlus,
@@ -67,15 +67,37 @@ export default function SplitEditor({ split, limits, onChange }) {
         </label>
       </div>
 
-      {issues.map((issue) => (
-        <Banner
-          key={issue.code}
-          tone={issue.level === "error" ? "error" : "warning"}
-          title={issue.level === "error" ? "This split cannot be run" : undefined}
-        >
-          {issue.message}
-        </Banner>
-      ))}
+      {/* One line each until asked. Three warnings, each a full paragraph in its
+          own padded box with 16px between them, filled the screen above the
+          thing they were about — and each said only what was true of the split,
+          never what to do about it. Now the box is the title and the number, and
+          the reasoning and the move it implies are one click away. */}
+      {issues.length > 0 && (
+        <ul className="opt-issues">
+          {issues.map((issue) => (
+            <li key={issue.code}>
+              <details className={`opt-issue is-${issue.level}`}>
+                <summary>
+                  <span className="opt-issue-mark">
+                    <IconAlert size={14} />
+                  </span>
+                  <span className="opt-issue-title">{issue.title}</span>
+                  <span className="opt-issue-summary">{issue.summary}</span>
+                  <IconChevronDown size={14} className="opt-issue-chevron" />
+                </summary>
+                <div className="opt-issue-detail">
+                  <p>{issue.detail}</p>
+                  {/* The part that was missing. A warning a developer cannot act
+                      on is one they learn to scroll past. */}
+                  <p className="opt-issue-do">
+                    <strong>What to do:</strong> {issue.suggestion}
+                  </p>
+                </div>
+              </details>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="opt-split-cols">
         <Column

@@ -254,8 +254,20 @@ export const api = {
     req("POST", "/optimization/import-preview", { eval_set_ids: evalSetIds }),
   // Proves the skill tag and the agent's directory are the same name before a
   // run exists, rather than at step 0 after a batch of agent calls.
-  skillCheck: (skillName) =>
-    req("GET", `/optimization/skill-check${qs({ skill_name: skillName })}`),
+  //
+  // The agent travels with the question. The wizard collects a base URL on its
+  // first step and starts the run against it; a check that read the server's own
+  // environment instead could clear a skill on one agent and hand the run to
+  // another, and would look exactly like a check that passed.
+  skillCheck: (skillName, agent = {}) =>
+    req(
+      "GET",
+      `/optimization/skill-check${qs({
+        skill_name: skillName,
+        agent_base_url: agent.agent_base_url,
+        agent_timeout_s: agent.agent_timeout_s,
+      })}`,
+    ),
   createOptimizationRun: (payload) => req("POST", "/optimization/runs", payload),
 
   listOptimizationRuns: (params = {}) =>

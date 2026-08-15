@@ -6,6 +6,7 @@ import {
   STEPS,
   blockingReason,
   checkFor,
+  cleanConfig,
   defaultSkill,
   extraConfig,
   furthestStep,
@@ -297,7 +298,80 @@ test("the run cannot be started while a training number is invalid", () => {
   assert.equal(blockingReason({ ...good, stepIndex: index("review") }), null);
 });
 
-test("the three named hyperparameters are not duplicated into config", () => {
-  const extra = extraConfig({ num_epochs: "3", batch_size: "4", learning_rate: "2", seed: "42" });
+test("a validated field is not duplicated into config as its raw string", () => {
+  const extra = extraConfig({
+    num_epochs: "3", batch_size: "4", learning_rate: "2", concurrency: "8", seed: "42",
+  });
   assert.deepEqual(extra, { seed: "42" });
+});
+
+test("concurrency is validated, and out of range stops the run", () => {
+  // How many questions go to the agent server at once. Not a hyperparameter —
+  // it changes how fast the run is, never what it produces — but it is typed on
+  // the same screen and wrong in the same ways, so it is checked the same way.
+  assert.equal(hyperState({ concurrency: "4" }, {}).values.concurrency, 4);
+  assert.match(hyperState({ concurrency: "0" }, {}).errors.concurrency, /at least 1/);
+  assert.match(hyperState({ concurrency: "200" }, {}).errors.concurrency, /at most 32/);
+
+  const bad = ready({ hyper: { concurrency: "0" } });
+  assert.ok(blockingReason({ ...bad, stepIndex: index("review") }));
+});
+
+test("an untouched concurrency is the server's own, not a number this page invented", () => {
+  const state = hyperState({}, { concurrency: 3 });
+  assert.equal(state.ok, true);
+  assert.equal(state.values.concurrency, 3);
+});
+
+// --- The source step loads itself -------------------------------------------
+
+test("the source step reports rather than asking for a button press", () => {
+  // The questions are fetched as soon as a set is ticked. The footer used to
+  // read "Load the questions to continue", which described a control the wizard
+  // could have pressed itself — and did not, so the step blocked on it.
+  const picked = { stepIndex: index("source"), sourceIds: ["a"], hyper: {}, defaults: {} };
+  assert.equal(blockingReason(picked), "Reading the questions…");
+  assert.equal(blockingReason({ ...picked, preview: { groups: [] } }), null);
+});
+
+test("a failed load says so instead of claiming to still be reading", () => {
+  // Without this the footer promises a fetch that is not coming, which is the
+  // same bug the skill check had: "checking…" for a request that already failed.
+  const failed = {
+    stepIndex: index("source"), sourceIds: ["a"], previewError: "network down",
+    hyper: {}, defaults: {},
+  };
+  assert.match(blockingReason(failed), /could not be loaded/);
+});
+
+test("choosing nothing is still the developer's move to make", () => {
+  const empty = { stepIndex: index("source"), sourceIds: [], hyper: {}, defaults: {} };
+  assert.equal(blockingReason(empty), "Choose at least one eval set.");
+});
+
+test("a field the developer cleared is absent, not an empty string", () => {
+  // `agent_timeout_s` is `float | None` on the API. Typing a timeout and then
+  // thinking better of it left "" in the box, which is a 422 rather than the
+  // "use the environment" that every blank field on this form means.
+  const sent = cleanConfig({
+    agent_base_url: "http://agent:8080",
+    agent_timeout_s: "",
+    langfuse_host: "   ",
+    judge_model: null,
+    optimizer_model: undefined,
+    concurrency: 4,
+    failure_only: false,
+  });
+  assert.deepEqual(sent, {
+    agent_base_url: "http://agent:8080",
+    // A real false is a value, not a blank — dropping it would silently turn
+    // "off" into "whatever the server defaults to".
+    concurrency: 4,
+    failure_only: false,
+  });
+});
+
+test("cleaning a config nobody filled in is an empty object, not a crash", () => {
+  assert.deepEqual(cleanConfig({}), {});
+  assert.deepEqual(cleanConfig(undefined), {});
 });

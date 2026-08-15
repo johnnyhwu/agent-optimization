@@ -6,6 +6,7 @@ import EmptyState from "../ui/EmptyState.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconPlus, IconSparkles } from "../icons.jsx";
 import { stepProgress } from "../../optimize_steps.js";
+import { runStartedAt, runTitle } from "../../optimize_run_label.js";
 
 // The left rail of the Optimize section: every run this person can see, newest
 // first. One run is one complete optimization — a dataset, a skill, and the
@@ -60,7 +61,17 @@ export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, re
       {runs && runs.length > 0 && (
         <div className="opt-runlist-head">
           <h3>Runs</h3>
-          <Button variant="primary" icon={<IconPlus size={15} />} onClick={onNew}>
+          {/* Small and secondary. A full-height filled button in a 260px rail,
+              beside a 13px heading, was the heaviest thing on a column whose job
+              is to be a list — it read as the point of the pane rather than as
+              the way out of it. The primary New is on the empty state, which is
+              the screen where starting a run *is* the point. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<IconPlus size={14} />}
+            onClick={onNew}
+          >
             New
           </Button>
         </div>
@@ -79,10 +90,14 @@ export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, re
                 onClick={() => onOpen(run)}
                 aria-current={String(run.id) === String(activeId) ? "true" : undefined}
               >
+                {/* Through the shared helper, because this rail and the panel
+                    beside it used to fall back differently for a run nobody
+                    named — which is most of them, the wizard's Name field
+                    offering its suggestion as a placeholder. The rail showed a
+                    locale timestamp and the panel showed "Optimizing billing",
+                    so one run appeared under two names on one screen. */}
                 <span className="opt-runitem-top">
-                  <span className="opt-runitem-name">
-                    {run.name || new Date(run.started_at).toLocaleString()}
-                  </span>
+                  <span className="opt-runitem-name">{runTitle(run)}</span>
                   <Badge tone={STATUS_TONE[run.status] || "neutral"} size="sm">
                     {run.status}
                   </Badge>
@@ -100,6 +115,11 @@ export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, re
                       it in, so one read 4/12 while the other read 5/13. */}
                   <span>{stepProgress(run, null).label} steps</span>
                 </span>
+                {/* The timestamp the name used to be. It is still worth having —
+                    it is how two runs of the same skill are told apart — but as
+                    the row's identity it was competing with the name, and in
+                    locale form it was the widest thing in a 260px rail. */}
+                <span className="opt-runitem-when">{runStartedAt(run)}</span>
               </button>
             </li>
           ))}

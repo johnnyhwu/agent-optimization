@@ -229,6 +229,48 @@ test("a comfortable split produces no issues at all", () => {
   );
 });
 
+test("every issue carries something to do about it", () => {
+  // The whole point of the rewrite. A warning that only describes the split
+  // leaves the developer holding an accurate sentence and no next move, which
+  // is how three of these were read as decoration.
+  const cases = [
+    splitIssues(split(["a"], ["b"]), { min_train: 8, min_val: 5 }),
+    splitIssues(
+      split(
+        Array.from({ length: 10 }, (_, i) => `t${i}`),
+        Array.from({ length: 6 }, (_, i) => `v${i}`),
+      ),
+      { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+    ),
+    splitIssues(
+      split(
+        Array.from({ length: 20 }, (_, i) => `t${i}`),
+        [...Array.from({ length: 10 }, (_, i) => `v${i}`), "t0"],
+      ),
+      { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+    ),
+  ];
+  const all = cases.flat();
+  assert.ok(all.length >= 5, "expected every branch to be covered");
+  for (const i of all) {
+    for (const field of ["title", "summary", "detail", "suggestion"]) {
+      assert.ok(i[field] && i[field].length > 10, `${i.code} has no ${field}`);
+    }
+    // The one-line form stays available for a caller with one line to spend.
+    assert.equal(i.message, `${i.title} — ${i.summary}`);
+  }
+});
+
+test("an issue's suggestion names the number of questions to move", () => {
+  // "Add more questions" is the version that was already there. The arithmetic
+  // is the part the developer would otherwise do at the top of the screen.
+  const [tooSmall] = splitIssues(split(["a", "b"], ["c", "d", "e", "f", "g"]), {
+    min_train: 8, min_val: 5,
+  });
+  assert.equal(tooSmall.code, "train_too_small");
+  assert.match(tooSmall.suggestion, /6 more question/);
+});
+
 test("the browser's thresholds come from the server, not from a copy", () => {
   // Same numbers, one source. A hardcoded 8 here would drift from the server's
   // and enable Start on a request that 400s.
