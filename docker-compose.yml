@@ -107,6 +107,11 @@ services:
       # The playground's view of the agent's config + skills; reads
       # {AGENT_BASE_URL}/get_workspace.
       WORKSPACE_IMPL: ${WORKSPACE_IMPL:-fake}
+      # The model that turns scored rollouts into skill edits. Its own seam, and
+      # it was the one seam missing from this list: `OPTIMIZER_IMPL=real` set on
+      # the host never reached the container, so an operator who had switched it
+      # on still got canned edits with nothing anywhere saying why.
+      OPTIMIZER_IMPL: ${OPTIMIZER_IMPL:-fake}
 
       # --- Real integrations. Credentials come from the host environment or a
       # repo-root .env; they are never baked into the image. ---
@@ -120,6 +125,10 @@ services:
       JUDGE_MODEL: ${JUDGE_MODEL:-Qwen3.6-27B}
       DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-Qwen3.6-27B}
       SYNTHESIS_MODEL: ${SYNTHESIS_MODEL:-Qwen3.6-27B}
+      # Separate from the other three on purpose: this is the call that reasons
+      # about a whole minibatch of traces at once, so it is the one people point
+      # at a stronger model. `OPTIMIZER_IMPL=real` refuses to start without it.
+      OPTIMIZER_MODEL: ${OPTIMIZER_MODEL:-Qwen3.6-27B}
       JUDGE_SCORE_THRESHOLD: ${JUDGE_SCORE_THRESHOLD:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-ai4bi.cpoap-dev.dev.tsmc.com}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}

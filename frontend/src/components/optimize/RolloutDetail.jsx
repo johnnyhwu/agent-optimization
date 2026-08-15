@@ -278,15 +278,19 @@ function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
           <Skeleton variant="row" count={4} />
         ) : (
           <>
+            {/* `question` is a string, because that is what `SpanList` renders
+                it as. This passed `{question, ground_truth_response}` — an
+                object handed to React as a child, which throws, and with no
+                error boundary above it took the whole app down to a white page
+                every time a question in a rollout was clicked. The expected
+                answer was never this prop's job: `SpanList` reads it off the
+                trace, which carries it. */}
             <SpanList
               trace={trace}
               activeSpan={activeSpan}
               onPickSpan={onPickSpan}
               canReDiagnose={false}
-              question={{
-                question: result.question,
-                ground_truth_response: result.ground_truth_response,
-              }}
+              question={result.question}
               emptyHint="No trace for this question."
             />
             <SpanDetail span={activeSpan} />

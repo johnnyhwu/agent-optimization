@@ -458,6 +458,23 @@ class FakeWorkspaceClient:
         return f"fake.{hashlib.sha256(payload).hexdigest()[:7]}"
 
 
+def _skill_paths(prompt: str) -> list[str]:
+    """The skill's file paths, read out of the prompt the optimizer was sent.
+
+    `app/optimizer/skillio.render_skill` writes the directory into the prompt as
+    a run of `### File: {path}` headings, and the analyst is told to name one of
+    them on every edit. Parsing them back is how the fake proposes edits against
+    whichever skill the run is actually optimising instead of a hardcoded one —
+    the same list a real model has to work from, so the fake cannot name a file
+    the real one could not.
+    """
+    return [
+        line[len("### File:"):].strip()
+        for line in prompt.splitlines()
+        if line.startswith("### File:") and line[len("### File:"):].strip()
+    ]
+
+
 class FakeOptimizerClient:
     """A deterministic stand-in for the model that writes skill edits.
 
@@ -491,6 +508,9 @@ class FakeOptimizerClient:
     ) -> tuple[str, dict[str, int]]:
         seed = int(hashlib.sha256(user.encode()).hexdigest()[:8], 16)
         usage = {"prompt_tokens": len(user) // 4, "completion_tokens": 120, "calls": 1}
+        # Which files this run is actually allowed to edit, read out of the same
+        # "## Current Skill" block a real model reads them from.
+        paths = _skill_paths(user)
 
         if stage == "ranking":
             # Keep the first few in the order they arrived; the real ranker
@@ -523,7 +543,7 @@ class FakeOptimizerClient:
         if stage == "merge":
             return json.dumps({
                 "reasoning": "fake merge: near-duplicate edits collapsed",
-                "edits": self._edits(seed),
+                "edits": self._edits(seed, paths),
             }), usage
 
         # The analyst stage, which also carries the failure summary Part 1 shows.
@@ -543,32 +563,57 @@ class FakeOptimizerClient:
             ],
             "patch": {
                 "reasoning": "fake analyst: two common patterns across the minibatch",
-                "edits": self._edits(seed),
+                "edits": self._edits(seed, paths),
             },
         }), usage
 
     @staticmethod
-    def _edits(seed: int) -> list[dict]:
+    def _edits(seed: int, paths: list[str]) -> list[dict]:
+        """Edits aimed at the skill actually being optimised.
+
+        These paths used to be the literals `billing/SKILL.md` and
+        `billing/references/refunds.md`, which made the fake correct for exactly
+        one skill and a liar for every other one. Optimising `reporting` sent
+        every edit at `billing/`, the patcher refused all of them as
+        `skipped_invalid_path`, the candidate came out identical to its parent,
+        the validation rollout was skipped as a cache hit, and the diff view
+        said the step had changed nothing — four symptoms, one hardcoded string,
+        and a demo that appeared to be editing a skill it had never been given.
+
+        `paths` comes from the prompt's own "## Current Skill" listing, which is
+        where a real model is told what it may name, so the fake now works from
+        the same evidence rather than from an assumption.
+        """
         rng = random.Random(seed)
         rule = rng.randint(100, 999)
+        if not paths:
+            # No file list in the prompt (a stage that is not shown one).
+            # Proposing a path that was never offered is what the bug above did.
+            return []
+        entry = next((p for p in paths if p.endswith("SKILL.md")), paths[0])
+        # A second file when the skill has one, so the multi-file diff stays
+        # reachable; the entry point again when it does not.
+        other = next((p for p in paths if p != entry), entry)
         edits = [
             {
                 "op": "append",
-                "path": "billing/SKILL.md",
+                "path": entry,
                 "content": f"{rule}. State the period alongside every figure.",
             },
             {
                 "op": "append",
-                "path": "billing/references/refunds.md",
+                "path": other,
                 "content": f"- Rule {rule}: quote the currency with the amount.",
             },
         ]
         if seed % 3 == 0:
             # A target that will not be found, so the diff view's "proposed but
-            # not applied" section is reachable in the demo.
+            # not applied" section is reachable in the demo. An anchor that does
+            # not exist is a real failure a real model makes; an out-of-skill
+            # path is not — it is the bug this docstring is about.
             edits.append({
                 "op": "replace",
-                "path": "billing/SKILL.md",
+                "path": entry,
                 "target": "a line this skill does not contain",
                 "content": "unreachable",
             })
