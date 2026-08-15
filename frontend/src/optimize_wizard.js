@@ -117,10 +117,18 @@ export function defaultSkill(groups, checks, mode) {
 // backed by `Number(raw)` cannot be cleared: emptying it yields `Number("")`,
 // which is 0, which the input immediately renders back. Select-all-and-retype —
 // the way anyone edits a number — was impossible, and 0 reached the API.
+// `concurrency` is here with the training numbers rather than among the
+// connection settings because it is validated the same way and typed on the
+// same screen — but note it is not a hyperparameter: it changes how fast the
+// run goes, never what it produces. The cap is this side's alone; the server
+// only insists on ≥ 1. Above about this many parallel questions the limit stops
+// being the optimizer and starts being the agent server the developer is
+// pointing at, and a run that overruns it fails as "the agent is flaky".
 export const HYPER_FIELDS = {
   num_epochs: { min: 1, max: 20 },
   batch_size: { min: 1 },
   learning_rate: { min: 1 },
+  concurrency: { min: 1, max: 32 },
 };
 
 export function parseCount(raw, { min, max } = {}) {
@@ -153,14 +161,34 @@ export function hyperState(hyper, defaults) {
   return { values, errors, ok: Object.keys(errors).length === 0 };
 }
 
-// What goes in the request body's `config`. The three named above are sent as
-// their own fields, so they must not be duplicated here.
+// What goes in the request body's `config`. Everything in `HYPER_FIELDS` is sent
+// by `start()` from its validated value, so it must not be duplicated here — the
+// raw string beside the parsed number is how "1x" reached the API.
 export function extraConfig(hyper) {
   const rest = {};
   for (const [key, value] of Object.entries(hyper || {})) {
     if (!(key in HYPER_FIELDS)) rest[key] = value;
   }
   return rest;
+}
+
+// What is actually sent as the run's `config`.
+//
+// A blank field means "use the server's environment", which the API expresses as
+// the field being absent — every one of them has a default. An empty *string* is
+// not the same thing: `agent_timeout_s` is typed `float | None`, so a developer
+// who typed a timeout and then cleared the box was sending `""` and getting a
+// 422 from a field they had deliberately emptied. Dropped here rather than
+// guarded per field, because the next number added to this form would have
+// arrived with the same bug.
+export function cleanConfig(config) {
+  const out = {};
+  for (const [key, value] of Object.entries(config || {})) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 // --- Gating -----------------------------------------------------------------
@@ -175,9 +203,16 @@ export function blockingReason(state) {
   // property of a skill, which has not been picked yet.
   if (id === "mode") return null;
 
+  // The questions load themselves as soon as a set is ticked, so nothing here
+  // asks for an action any more — it reports. It used to say "Load the questions
+  // to continue", which was a footer sentence describing a button three inches
+  // above it: the wizard knew what it needed, could fetch it unprompted, and
+  // instead blocked until the developer pressed a key it had already told them
+  // to press.
   if (id === "source") {
     if (!state.sourceIds?.length) return "Choose at least one eval set.";
-    if (!state.preview) return "Load the questions to continue.";
+    if (state.previewError) return "The questions could not be loaded — try again.";
+    if (!state.preview) return "Reading the questions…";
     return null;
   }
 

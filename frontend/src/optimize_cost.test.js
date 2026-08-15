@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estimateRun } from "./optimize_cost.js";
+import { estimateRun, explainRun } from "./optimize_cost.js";
 
 // What the wizard's last step promises before anyone presses Start.
 //
@@ -103,4 +103,31 @@ test("questions answered is the agent count, named for what a reader is picturin
   // agent call per question, one question per agent call.
   const e = estimateRun(base);
   assert.equal(e.questionsAnswered, e.agentCalls);
+});
+
+test("every number on the review card can be checked by the reader", () => {
+  // The `?` beside each count. A derivation that disagreed with the number
+  // beside it would be worse than none, so it is generated from the same inputs
+  // rather than written out by hand next to the estimate.
+  const e = estimateRun(base);
+  const x = explainRun(base);
+  assert.ok(x.steps.includes(String(e.totalSteps)));
+  assert.ok(x.agentCalls.includes(e.agentCalls.toLocaleString()));
+  assert.ok(x.judgeCalls.includes(e.judgeCalls.toLocaleString()));
+  assert.ok(x.optimizerCalls.includes(e.optimizerCallsMax.toLocaleString()));
+});
+
+test("the agent explanation accounts for the baseline as well as the steps", () => {
+  // "Does that include validation?" is the question the bare number always
+  // draws, and the baseline pass is the part nobody expects.
+  const x = explainRun(base);
+  assert.match(x.agentCalls, /baseline/);
+  assert.match(x.agentCalls, /10 \+ 4 × \(5 \+ 10\)/);
+});
+
+test("a half-filled wizard still explains itself without NaN", () => {
+  for (const x of Object.values(explainRun({}))) {
+    assert.ok(x.length > 0);
+    assert.ok(!x.includes("NaN"), x);
+  }
 });

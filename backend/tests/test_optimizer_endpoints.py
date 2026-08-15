@@ -32,6 +32,7 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from fastapi import HTTPException
 
+from app.config import settings
 from app.db import Base
 from app.models import (
     EvalSet,
@@ -186,6 +187,45 @@ async def test_skill_check_lists_the_files_of_a_skill_that_exists():
     assert check.exists is True
     assert any(path.endswith("SKILL.md") for path in check.files)
     assert len(check.files) > 1, "the fake skill has a reference file; the tree needs it"
+
+
+async def test_skill_check_measures_each_file_and_not_only_their_sum():
+    """The card draws a tree, and a tree needs a number per file.
+
+    `n_chars` alone is one figure for a whole directory, which cannot say
+    whether a skill is one long SKILL.md or a short one beside a large
+    reference — the difference that decides what an optimization run can move.
+    """
+    check = await opt.skill_check(skill_name="billing", subject="alice")
+    assert set(check.file_chars) == set(check.files)
+    assert all(n > 0 for n in check.file_chars.values())
+    assert sum(check.file_chars.values()) == check.n_chars
+
+
+async def test_skill_check_answers_for_the_agent_it_was_given():
+    """The wizard collects a base URL; the check has to use that one.
+
+    Reading the environment instead let a skill be cleared against one agent and
+    the run be sent to another — a mismatch with no symptom, because the check
+    passed.
+    """
+    check = await opt.skill_check(
+        skill_name="billing", agent_base_url="http://agent.example:9000", subject="alice"
+    )
+    assert check.agent_base_url == "http://agent.example:9000"
+
+    # Blank keeps meaning "the server's own", as everywhere else in this config.
+    fallback = await opt.skill_check(skill_name="billing", subject="alice")
+    assert fallback.agent_base_url == settings.agent_base_url
+
+
+async def test_skill_check_names_the_agent_even_when_the_skill_is_missing():
+    """A skill that was not found most needs to say *where* it was looked for."""
+    check = await opt.skill_check(
+        skill_name="billling", agent_base_url="http://agent.example:9000", subject="alice"
+    )
+    assert check.exists is False
+    assert check.agent_base_url == "http://agent.example:9000"
 
 
 async def test_skill_check_names_the_skills_that_do_exist_when_one_is_missing():

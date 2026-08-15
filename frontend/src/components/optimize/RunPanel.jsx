@@ -10,6 +10,7 @@ import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
+import { runTitle } from "../../optimize_run_label.js";
 import {
   applyEvent,
   emptySteps,
@@ -178,7 +179,11 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
     <div className="opt-run">
       <Card>
         <CardHeader
-          title={run.name || `Optimizing ${run.skill_name}`}
+          // Through the shared helper. This fell back to "Optimizing billing"
+          // while the rail beside it fell back to a locale timestamp, so an
+          // unnamed run — most of them — carried two different names on one
+          // screen and read as two runs.
+          title={runTitle(run)}
           actions={
             <>
               {/* The run's only output. Offered whenever there is a scored step,

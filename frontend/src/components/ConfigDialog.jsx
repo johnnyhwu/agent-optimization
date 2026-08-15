@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
-import { initialConfigTab } from "../config_tab.js";
+import { evalSetEdits, initialConfigTab } from "../config_tab.js";
+import { shortStamp } from "../timestamp.js";
 import Modal from "./Modal.jsx";
 import ShareEditor from "./ShareEditor.jsx";
 import JudgePromptEditor from "./JudgePromptEditor.jsx";
@@ -74,11 +75,20 @@ export default function ConfigDialog({ evalSet, subject, onClose, onSaved }) {
       //    to the grading criteria gets the same 409 conflict protection the
       //    rest of the card has — two owners editing at once is the case that
       //    would otherwise silently lose one of them.
-      await api.updateEvalSet(evalSet.id, {
-        name, description, metadata,
-        judge_system_prompt: system, judge_user_prompt: user,
-        version: evalSet.version,
-      });
+      //
+      //    Skipped when nothing on this tab changed. The PATCH bumps the
+      //    version unconditionally, so pressing Save to close the dialog after
+      //    only reading it used to advance the number — and the number is what
+      //    every other open copy of this card is holding to detect a real
+      //    conflict. Making it move for a non-edit is how the 409 becomes noise.
+      const edits = evalSetEdits(evalSet, { name, description, metadata, system, user });
+      if (edits.length) {
+        await api.updateEvalSet(evalSet.id, {
+          name, description, metadata,
+          judge_system_prompt: system, judge_user_prompt: user,
+          version: evalSet.version,
+        });
+      }
       // 2) share list
       await api.updateRoles(evalSet.id, shares);
       toast.success("Saved");
@@ -98,7 +108,25 @@ export default function ConfigDialog({ evalSet, subject, onClose, onSaved }) {
   return (
     <Modal
       title="Configure eval set"
-      subtitle={`${evalSet.name} · v${evalSet.version}`}
+      // `v3` on its own read as "the third version of this question set", which
+      // it is not — it counts saves of *this dialog* and exists to detect two
+      // owners editing at once. Nothing else bumps it: not editing questions,
+      // not changing the share list, not opening the Judging tab. So the line
+      // now leads with the fact anyone actually wants (when it last changed) and
+      // keeps the number as a marked-up aside that says what it is on hover.
+      subtitle={
+        <>
+          {evalSet.name}
+          {evalSet.updated_at && <> · edited {shortStamp(evalSet.updated_at)}</>}
+          {" · "}
+          <span
+            className="dialog-sub-tag"
+            title="Edit-conflict version. It goes up by one each time these settings are saved, and is how a save detects that someone else changed this card first."
+          >
+            v{evalSet.version}
+          </span>
+        </>
+      }
       onClose={onClose}
       width={680}
       footer={

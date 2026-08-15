@@ -149,6 +149,27 @@ export function counts(split) {
 // limits the server sent. Checking here as well is not duplication for its own
 // sake: it is what lets the developer find out while they can still fix it,
 // instead of on a 400 three screens later.
+//
+// Each issue is four pieces rather than one sentence, because one sentence had
+// to be three things at once and managed none of them. `title` is what is wrong,
+// in the fewest words that can be scanned past; `summary` is the number that
+// makes it true; `detail` is why the number matters, which nobody needs on the
+// way past and everybody needs once; and `suggestion` is the move — the part
+// that was missing entirely. "14 training questions is workable but thin"
+// described the split accurately and left the developer with nothing to do
+// about it.
+//
+// The screen shows title + summary, and folds the other two away behind a
+// disclosure. `message` is kept as title + summary joined, because it is what a
+// caller with one line to spend still wants.
+function issue({ level, code, title, summary, detail, suggestion, ...rest }) {
+  return {
+    level, code, title, summary, detail, suggestion,
+    message: `${title} — ${summary}`,
+    ...rest,
+  };
+}
+
 export function splitIssues(split, limits = {}) {
   const {
     min_train: minTrain = 8,
@@ -160,41 +181,89 @@ export function splitIssues(split, limits = {}) {
   const issues = [];
 
   if (train < minTrain) {
-    issues.push({
+    issues.push(issue({
       level: "error",
       code: "train_too_small",
-      message: `${train} training questions — at least ${minTrain} are needed for a minibatch to say anything about a pattern.`,
-    });
+      title: "Too few training questions to run",
+      summary: `${train} in the training column; ${minTrain} is the minimum.`,
+      detail:
+        "Each step reflects on one minibatch at a time and looks for what the "
+        + "failures have in common. Below this many questions a minibatch is a "
+        + "handful of unrelated cases, and the edit it produces is fitted to "
+        + "whichever one happened to be in it.",
+      suggestion:
+        `Move ${minTrain - train} more question(s) into Training, or go back a `
+        + "step and pick an eval set with more questions tagged for this skill.",
+    }));
   } else if (train < warnTrain) {
-    issues.push({
+    issues.push(issue({
       level: "warning",
       code: "train_small",
-      message: `${train} training questions is workable but thin — reflection generalises from what repeats across a batch.`,
-    });
+      title: "The training split is thin",
+      summary: `${train} questions — ${warnTrain} or more is where reflection starts generalising.`,
+      detail:
+        "The optimizer writes an edit from what repeats across a batch. With a "
+        + "small split there is little repetition to find, so the edits tend to "
+        + "name specific questions instead of the pattern behind them — which "
+        + "improves those questions and nothing else.",
+      suggestion:
+        "The run is still worth doing; read the step diffs and be suspicious of "
+        + "edits that mention one question's subject matter. To widen it, add "
+        + `${warnTrain - train} more questions from another eval set.`,
+    }));
   }
 
   if (val < minVal) {
-    issues.push({
+    issues.push(issue({
       level: "error",
       code: "val_too_small",
-      message: `${val} validation questions — at least ${minVal} are needed before an accuracy comparison means anything.`,
-    });
+      title: "Too few validation questions to run",
+      summary: `${val} in the validation column; ${minVal} is the minimum.`,
+      detail:
+        "Validation is what decides whether an edit is kept. With this few "
+        + "questions the comparison is not a measurement — one question "
+        + "answering differently would swing the verdict on its own.",
+      suggestion:
+        `Move ${minVal - val} question(s) from Training into Validation. Taking `
+        + "them from Training is better than duplicating them: a question in "
+        + "both columns is not held out.",
+    }));
   } else if (val < warnVal) {
-    issues.push({
+    issues.push(issue({
       level: "warning",
       code: "val_small",
-      message: `With ${val} validation questions each one moves accuracy by ${Math.round(100 / val)} points, so the gate will be noisy.`,
-    });
+      title: "The gate will be noisy",
+      summary: `${val} validation questions, so one answer moves accuracy by ${Math.round(100 / val)} points.`,
+      detail:
+        "After each step the candidate skill is kept only if it scores better "
+        + "on this column. When one question is worth "
+        + `${Math.round(100 / val)} points, an agent that answers differently `
+        + "for reasons of its own can both keep a bad edit and reject a good "
+        + "one, and the chart will look like progress either way.",
+      suggestion:
+        `Move questions into Validation until it holds at least ${warnVal} — `
+        + "Training can usually spare them more cheaply than the gate can.",
+    }));
   }
 
   if (overlap) {
     const valSet = new Set(split.val);
-    issues.push({
+    issues.push(issue({
       level: "warning",
       code: "overlap",
       item_keys: split.train.filter((k) => valSet.has(k)),
-      message: `${overlap} question(s) are in both splits. Validation is not held out for those, so the gate will read improvements that are partly the skill being fitted to them.`,
-    });
+      title: "Validation is not fully held out",
+      summary: `${overlap} question(s) are in both columns.`,
+      detail:
+        "Those questions are learned from and then used to judge the learning. "
+        + "The gate will see improvement on them because the edit was written "
+        + "against them, so part of every score after this is the skill being "
+        + "fitted to questions it has already read.",
+      suggestion:
+        "Intentional for a question that defines what the skill is for. "
+        + "Otherwise use the ✕ on one of the two copies, or the ← / → button to "
+        + "move it rather than share it.",
+    }));
   }
   return issues;
 }

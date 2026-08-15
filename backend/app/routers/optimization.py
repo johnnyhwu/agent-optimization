@@ -22,6 +22,7 @@ import json
 import math
 import uuid
 from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import case, func, select
@@ -348,18 +349,34 @@ async def import_preview(
 @router.get("/skill-check", response_model=SkillCheck)
 async def skill_check(
     skill_name: str = Query(..., min_length=1),
+    # `Annotated` rather than `= Query(...)` for these two: the endpoints in this
+    # package are also called directly as plain functions by the tests, and a
+    # bare `Query(default)` leaves the parameter holding a FastAPI object rather
+    # than the default when nobody routes the call.
+    agent_base_url: Annotated[str, Query(description="blank uses the server's own")] = "",
+    agent_timeout_s: Annotated[float | None, Query(gt=0)] = None,
     subject: str = Depends(current_subject),
 ):
-    """Does the agent actually have this skill directory? (wizard step 4)
+    """Does the agent actually have this skill directory? (wizard step 3)
 
     Decision 6 treats a question's skill tag and the agent's directory name as
     the same name. That is only safe if it is checked before the run starts —
     otherwise a one-character typo costs a run row, an item snapshot and a batch
     of agent calls before anyone finds out.
 
+    The agent is a parameter, not an environment lookup. The wizard asks for a
+    base URL and then starts the run against it; a check that always read the
+    server's own value could clear a skill on one agent and hand the run to
+    another, which looks exactly like a check that passed.
+
     No session dependency: this reads the agent server, not the database.
     """
-    seams = build_seams(include_workspace=True)
+    config = {"agent_base_url": agent_base_url, "agent_timeout_s": agent_timeout_s}
+    seams = build_seams(config, include_workspace=True)
+    # What the run would resolve to, by the same rule `run_config.resolve` uses —
+    # so the card names the agent that answered rather than the box that was
+    # left blank.
+    effective_url = (agent_base_url or "").strip() or settings.agent_base_url
     workspace = await seams.workspace.get_workspace()
     files = {
         path: text for path, text in workspace.skills.items()
@@ -370,7 +387,7 @@ async def skill_check(
     if not files:
         return SkillCheck(
             skill_name=skill_name, exists=False, available_skills=available,
-            workspace_version=workspace.version,
+            workspace_version=workspace.version, agent_base_url=effective_url,
             routing_blocked_reason="this skill was not found on the agent",
         )
 
@@ -379,8 +396,10 @@ async def skill_check(
         skill_name=skill_name,
         exists=True,
         files=sorted(files),
+        file_chars={path: len(text) for path, text in files.items()},
         n_chars=sum(len(text) for text in files.values()),
         has_frontmatter=has_frontmatter,
+        agent_base_url=effective_url,
         routing_blocked_reason=None if has_frontmatter else (
             f"{skillio.entry_point_for(skill_name)} has no YAML frontmatter, so "
             "there is no description for routing mode to optimise"
