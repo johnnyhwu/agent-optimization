@@ -180,6 +180,31 @@
 .ui-table-primary { font-weight: var(--fw-semibold); color: var(--text); }
 .ui-table-sub { font-size: var(--text-caption); color: var(--muted); margin-top: 1px; }
 
+/* --- Renaming a run, in place -------------------------------------------- */
+/* The pencil is revealed on hover and on focus. Always-on it would put a
+   control on every row of a list people mostly scan; never-on it would be a
+   feature nobody finds. Focus matters as much as hover: it is the only way a
+   keyboard reaches it, and `:focus-within` is what keeps it visible once the
+   field it opened has the caret. */
+.run-name { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.run-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-name .run-name-edit { opacity: 0; transition: opacity .12s ease; flex: none; }
+.run-name:hover .run-name-edit,
+.run-name:focus-within .run-name-edit,
+.run-name.is-editing .run-name-edit { opacity: 1; }
+.run-name.is-editing { align-items: flex-start; }
+.run-name-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.run-name-input {
+  width: 100%; min-width: 0;
+  padding: 2px var(--space-2);
+  font: inherit; color: var(--text);
+  background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+}
+.run-name-input:focus-visible { outline: none; box-shadow: var(--ring); }
+/* Inline rather than a toast: the field that has to change is right here, and a
+   toast about a name is read after the field it refers to has closed. */
+.run-name-error { font-size: var(--text-micro); font-weight: var(--fw-normal); color: var(--red); }
+
 /* ---------------------------------------------------------------------------
    Badge
    --------------------------------------------------------------------------- */
@@ -376,14 +401,24 @@
   backdrop-filter: blur(6px);
 }
 .ui-card-head-title { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+/* A card's title is the name of what is in the card, so it is set as a heading:
+   dark, semibold, body-sized, in sentence case. It used to be muted uppercase
+   micro-caps, which is label styling, and the result was that "ACCURACY BY STEP"
+   and the run's own name — a `CardHeader` title too — read as the same kind of
+   thing, while a bold black "Step 2" three inches below read as a third. Three
+   heading styles on one screen, none of them agreeing about which was the more
+   important. */
 .ui-card-head-title h4 {
-  margin: 0; font-size: var(--text-caption); font-weight: var(--fw-bold);
-  text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+  margin: 0; font-size: var(--text-title); font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em; color: var(--text);
   white-space: nowrap;
 }
+/* The variant for a title that is a file path or an identifier rather than a
+   phrase — the diff pane's `billing/SKILL.md`. Monospace and allowed to elide,
+   because it is data being named rather than a section being introduced. */
 .ui-card-head.is-data .ui-card-head-title h4 {
-  text-transform: none; letter-spacing: 0; font-size: var(--text-body);
-  color: var(--text); font-family: var(--font-mono); font-weight: var(--fw-medium);
+  letter-spacing: 0; font-size: var(--text-body);
+  font-family: var(--font-mono); font-weight: var(--fw-medium);
   overflow: hidden; text-overflow: ellipsis;
 }
 .ui-card-head-count { font-size: var(--text-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -686,8 +721,66 @@
 
 .opt-pane { min-width: 0; }
 .opt-run { display: flex; flex-direction: column; gap: var(--space-4); }
+/* Still used by the rollout and diff pages, which carry a genuine one-line
+   summary. The run header no longer does — see `.opt-runhead` below. */
 .opt-run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); font-size: var(--text-body); color: var(--muted); }
-.opt-run-phase { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+/* --- The run header ------------------------------------------------------ */
+/* The run's name is the name of the thing on screen, so it is sized like one.
+   It used to be a card-header title — muted, uppercase, caption-sized — which
+   put it in the same visual class as "ACCURACY BY STEP" two inches below, and
+   left the filled red Stop button as the heaviest element on the panel. */
+.opt-runhead { display: flex; flex-direction: column; gap: var(--space-4); }
+.opt-runhead-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.opt-runhead-title { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
+.opt-runhead-title h2 {
+  margin: 0; min-width: 0;
+  font-family: var(--font-display); font-size: var(--text-section); font-weight: var(--fw-bold);
+  color: var(--text); letter-spacing: -0.01em;
+}
+.opt-runhead-actions { display: flex; align-items: center; gap: var(--space-2); flex: none; }
+/* Stop, without the filled red block. It is one control on a page whose
+   subject is a chart; as a solid danger button it drew every eye on the
+   screen, and the thing it stops is not destructive — finished steps are kept. */
+.ui-btn.is-danger-text { color: var(--red); }
+.ui-btn.is-danger-text:hover:not(:disabled) { border-color: var(--red); background: var(--red-soft); }
+
+/* Fixed facts: what this run was set up to do. Separated from the live numbers
+   because they are read once and never change, and running the two together in
+   one line was most of what made the old header unreadable. */
+.opt-runfacts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-3); margin: 0;
+  padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.opt-fact { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.opt-fact dt { font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.opt-fact dd { margin: 0; font-size: var(--text-ui); font-weight: var(--fw-semibold); color: var(--text); font-variant-numeric: tabular-nums; }
+.opt-fact dd code { font-family: var(--font-mono); font-size: var(--text-body); }
+.opt-fact-sub { font-size: var(--text-micro); color: var(--muted); }
+
+/* Live state: everything below this line moves while you watch it. */
+.opt-runprogress { display: flex; flex-direction: column; gap: var(--space-3); }
+.opt-runprogress-bar { display: flex; flex-direction: column; gap: var(--space-1); }
+.opt-runprogress-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-wrap: wrap; }
+.opt-runprogress-label { font-size: var(--text-body); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; }
+.opt-runprogress-done, .opt-runprogress-waiting { margin: 0; font-size: var(--text-body); color: var(--muted); }
+.opt-meter { height: 6px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
+.opt-meter-fill { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s ease; }
+
+/* The stage strip. Five lamps in the order the engine performs them, which is
+   the answer to "what is it doing" that "step 3 · rollout" could not give. */
+.opt-phases { display: flex; flex-direction: column; gap: var(--space-2); }
+.opt-phase-strip { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.opt-phase { display: flex; align-items: center; gap: var(--space-1); font-size: var(--text-micro); color: var(--muted); }
+.opt-phase-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); flex: none; }
+.opt-phase.is-done .opt-phase-dot { background: var(--green); }
+.opt-phase.is-done .opt-phase-label { color: var(--text); }
+.opt-phase.is-now .opt-phase-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.opt-phase.is-now .opt-phase-label { color: var(--accent); font-weight: var(--fw-semibold); }
+.opt-phase-detail { margin: 0; font-size: var(--text-body); font-variant-numeric: tabular-nums; }
+.opt-phase-count { color: var(--accent); font-weight: var(--fw-medium); }
 
 /* The step bar: all six, always, in order. */
 .opt-wizard { display: flex; flex-direction: column; gap: var(--space-5); flex: 1 1 0; min-height: 0; }
@@ -993,6 +1086,15 @@
    does it this way. */
 .opt-steptable tbody tr:focus-visible { outline: none; box-shadow: inset var(--ring); }
 .opt-steptable tbody tr.pinned { background: var(--accent-soft); }
+/* Widths for the skipped-edits table. Without them the browser sized four
+   columns from their content, which put the heading of the widest one over a
+   cell that had been squeezed to nothing. */
+.opt-skipped { table-layout: fixed; }
+.opt-skipped col.opt-skipped-no { width: 3rem; }
+.opt-skipped col.opt-skipped-reason { width: 16rem; }
+.opt-skipped col.opt-skipped-file { width: 22rem; }
+.opt-skipped tbody tr { cursor: default; }
+.opt-skipped tbody tr:hover { background: transparent; }
 
 /* --- The run chart ------------------------------------------------------- */
 .opt-chart { margin-top: var(--space-2); }
@@ -1013,20 +1115,97 @@
 .opt-chart-dot.val.rejected line { stroke: var(--muted); stroke-width: 2; }
 .opt-chart-ring { fill: none; stroke: var(--green); stroke-width: 2; }
 .opt-chart-dot.pinned circle { stroke: var(--text); stroke-width: 2; }
+/* The clickable step. `.pinned` and `.hover` are bands rather than marker
+   styling because a rejected step is drawn as a cross with no circle to stroke
+   and a step whose validation was skipped has no marker at all — on a run where
+   the gate rejected every candidate, the old dot-only pin styling meant
+   clicking the chart produced no visible change whatsoever. */
+.opt-chart-col { pointer-events: none; }
+.opt-chart-col.hover { fill: var(--text); opacity: .05; }
+.opt-chart-col.pinned { fill: var(--accent); opacity: .12; }
+.opt-chart-pinline { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; pointer-events: none; }
+.opt-chart-axis { fill: var(--muted); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.opt-chart-tick.step.hover { fill: var(--text); }
+.opt-chart-tick.step.pinned { fill: var(--accent); font-weight: 700; }
 .opt-chart-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-micro); color: var(--muted); padding: var(--space-1) 0; }
 .opt-chart-legend .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 .opt-chart-legend .swatch.train { background: var(--muted); }
 .opt-chart-legend .swatch.val { background: var(--accent); }
 .opt-chart-legend .swatch.best { background: var(--green); }
 .opt-chart-legend .swatch.rejected { background: var(--muted); opacity: .5; }
-.opt-chart-readout { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-body); font-variant-numeric: tabular-nums; padding: var(--space-1) 0; }
+/* The hover readout floats over the plot instead of sitting in the flow under
+   it. As a block it was laid out, which pushed the pinned card and everything
+   below it down the page every time the pointer crossed the chart. */
+.opt-chart-frame { position: relative; }
+.opt-chart-tip {
+  position: absolute; top: var(--space-3); transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--panel); box-shadow: var(--shadow-2);
+  font-size: var(--text-micro); font-variant-numeric: tabular-nums;
+  white-space: nowrap; pointer-events: none; z-index: 2;
+}
+.opt-chart-tip .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.opt-chart-tip .swatch.train { background: var(--muted); }
+.opt-chart-tip .swatch.val { background: var(--accent); }
+.opt-chart-tip .verdict { color: var(--muted); }
 
 /* --- The pinned step ----------------------------------------------------- */
 .opt-stepcard { border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--panel-2); margin-top: var(--space-3); }
 .opt-stepcard-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); }
 .opt-stepcard-spacer { flex: 1; }
 .opt-stepcard-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); padding: var(--space-3); }
-.opt-stepcard-body h4 { margin: 0 0 var(--space-2); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.opt-stepcard-body h4 { margin: 0 0 var(--space-2); font-size: var(--text-body); font-weight: var(--fw-semibold); color: var(--text); }
+
+/* Train and validation side by side. Every question a reader has about a step's
+   numbers is a comparison between the two splits, so the comparison is the
+   layout — before this they were two flat lists of "83% hard · 82% soft" rows
+   and the comparing was left to the reader. */
+.opt-splittable { width: 100%; border-collapse: collapse; font-size: var(--text-body); }
+.opt-splittable thead th { text-align: right; padding: 0 var(--space-2) var(--space-1); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: var(--fw-medium); }
+.opt-splittable thead th:first-child { text-align: left; }
+.opt-splittable tbody th { text-align: left; font-weight: var(--fw-normal); color: var(--muted); padding: 3px var(--space-2); }
+.opt-splittable tbody th[title] { cursor: help; text-decoration: underline dotted var(--border-strong); text-underline-offset: 3px; }
+.opt-splittable td { padding: 3px var(--space-2); text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.opt-splittable tr.is-strong th, .opt-splittable tr.is-strong td { font-weight: var(--fw-semibold); color: var(--text); font-size: var(--text-ui); }
+.opt-splittable tbody tr + tr th, .opt-splittable tbody tr + tr td { border-top: 1px solid var(--border); }
+
+/* The analyst's own sentence about its patch, attributed. Unlabelled it read as
+   the page talking, which is how the fake optimizer's "fake merge: …" string
+   came across as a bug report rather than as the stand-in model's reasoning. */
+.opt-rationale { margin-top: var(--space-2); padding-left: var(--space-2); border-left: 2px solid var(--border-strong); }
+.opt-rationale-label { display: block; font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.opt-rationale p { margin: 2px 0 0; font-size: var(--text-body); color: var(--text); }
+
+/* --- Rollout detail ------------------------------------------------------ */
+/* A step measures two splits, so its detail page has two tabs. The page used to
+   show only whichever split was in the URL, which made the validation half
+   unreachable from the step card on any step that skipped it. */
+.opt-splittabs { display: flex; gap: var(--space-1); }
+.opt-splittab {
+  flex: 1; min-width: 0; text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  font: inherit; font-size: var(--text-body); font-weight: var(--fw-medium);
+  color: var(--muted); cursor: pointer;
+}
+.opt-splittab:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.opt-splittab.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.opt-splittab:disabled { cursor: not-allowed; opacity: .55; }
+.opt-splittab:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* One failure the analyst named: what kind, how many, and in words. */
+.opt-failure-head { display: flex; align-items: center; gap: var(--space-2); }
+.opt-failure-desc { display: block; margin-top: 2px; color: var(--text); }
+
+/* What became of the patch. The proposal raises exactly one question and this
+   is where it gets answered, rather than on another page. */
+.opt-editoutcome {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel-2); font-size: var(--text-body);
+}
 .opt-stepcard-row { display: grid; grid-template-columns: 96px 1fr; gap: var(--space-2); padding: 3px 0; font-size: var(--text-body); }
 .opt-stepcard-row.warning .opt-stepcard-value { color: var(--amber); }
 .opt-stepcard-label { color: var(--muted); }
@@ -1110,7 +1289,11 @@
   border-radius: var(--radius-sm); font-weight: var(--fw-semibold);
 }
 .opt-difffile:hover .opt-difffile-name { text-decoration: underline; }
-.opt-difffile-quiet { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); padding-top: var(--space-1); color: var(--muted); font-size: var(--text-body); }
+/* A file this step left alone. Selectable like any other — it opens on a diff
+   against itself — but muted, so the tree still reads as "these changed, those
+   did not" at a glance. */
+.opt-difffile.is-quiet { color: var(--muted); }
+.opt-difffile.is-quiet.selected { color: var(--text); }
 .added { color: var(--green); }
 .removed { color: var(--red); }
 

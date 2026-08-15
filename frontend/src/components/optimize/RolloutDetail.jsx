@@ -31,7 +31,7 @@ const OUTCOME = {
   pending: { mark: "·", tone: "neutral" },
 };
 
-export default function RolloutDetail({ runId, stepNo, split, onBack }) {
+export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSplit, onOpenSkill }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
   const [selection, setSelection] = useState(null);
@@ -92,15 +92,56 @@ export default function RolloutDetail({ runId, stepNo, split, onBack }) {
     <div className="opt-rollout">
       <Card>
         <CardHeader
-          title={`${detail.step_no === 0 ? "Baseline" : `Step ${detail.step_no}`} · ${
-            split === "train" ? "training" : "validation"
-          }`}
+          title={`${detail.step_no === 0 ? "Baseline" : `Step ${detail.step_no}`} in detail`}
           actions={
             <Button variant="ghost" icon={<IconArrowLeft size={15} />} onClick={onBack}>
               Back to the run
             </Button>
           }
         />
+
+        {/* Both splits, from one page.
+            This page only ever showed the split in its URL, and the step card
+            that led here offered a link per split — so the validation half was
+            unreachable on exactly the steps that skipped it, and reaching it on
+            the others meant going back to the chart. A step measures two things;
+            this is the page about that step.
+
+            The tab changes the route rather than local state, deliberately: the
+            address is one a developer sends to a colleague, and it should name
+            what they will see. */}
+        <div className="opt-splittabs" role="tablist" aria-label="Which split to show">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={split === "train"}
+            className={split === "train" ? "opt-splittab is-on" : "opt-splittab"}
+            disabled={detail.step_no === 0}
+            title={detail.step_no === 0
+              ? "The baseline buys no training rollout — there was no candidate to train on yet"
+              : undefined}
+            onClick={() => onPickSplit?.("train")}
+          >
+            Training
+            <span className="muted"> · answered, then reflected on</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={split === "val"}
+            className={split === "val" ? "opt-splittab is-on" : "opt-splittab"}
+            disabled={!detail.val_rolled_out}
+            title={detail.val_rolled_out
+              ? undefined
+              : "This step changed nothing, so its candidate was identical to a skill already scored and no validation rollout was bought"}
+            onClick={() => onPickSplit?.("val")}
+          >
+            Validation
+            <span className="muted">
+              {detail.val_rolled_out ? " · held back, and what the gate judged" : " · skipped"}
+            </span>
+          </button>
+        </div>
         <div className="opt-run-meta">
           {/* Which skill was rolled out, not which step ran it. On training
               these differ — the step measures the skill it inherited, then
@@ -110,13 +151,14 @@ export default function RolloutDetail({ runId, stepNo, split, onBack }) {
             skill from step {detail.skill_step_no}
             {split === "train" && detail.skill_step_no !== detail.step_no && " (before this step's edits)"}
           </Badge>
-          <span>hard {pct(detail.hard)}</span>
-          <span>soft {pct(detail.soft)}</span>
-          <span>
-            latency {secs(detail.latency_min_ms)} / {secs(detail.latency_p50_ms)} /{" "}
-            {secs(detail.latency_max_ms)}
+          <span>accuracy {pct(detail.hard)}</span>
+          <span title="Mean / median / slowest time the agent took to answer one question">
+            latency {secs(detail.latency_mean_ms)} avg · {secs(detail.latency_p50_ms)} median ·{" "}
+            {secs(detail.latency_max_ms)} max
           </span>
-          <span>activation {pct(detail.activation_rate)}</span>
+          <span title="How often the agent was actually seen reading this skill">
+            activation {pct(detail.activation_rate)}
+          </span>
           <span>
             {detail.n_scored} of {detail.n_items} scored
           </span>
@@ -144,7 +186,18 @@ export default function RolloutDetail({ runId, stepNo, split, onBack }) {
                 : `The gate accepted this candidate (${detail.gate_action.replace(/_/g, " ")})`
             }
           >
-            {detail.edit_summary || "These are the numbers the gate compared."}
+            {/* The numbers above are what the gate compared. The analyst's
+                sentence about its patch used to be dropped in here as the
+                banner's whole body, unattributed, so it read as the gate's
+                explanation of its own verdict — which it is not. */}
+            These are the numbers the gate compared: this candidate's accuracy on
+            the held-back questions, against the best a candidate has scored so
+            far.
+            {detail.edit_summary && (
+              <div className="ui-banner-note">
+                The analyst described its patch as: “{detail.edit_summary}”
+              </div>
+            )}
           </Banner>
         )}
       </Card>
@@ -169,7 +222,18 @@ export default function RolloutDetail({ runId, stepNo, split, onBack }) {
         </Card>
 
         <div className="opt-rollout-pane">
-          {selectedBatch && <ReflectorIO minibatch={selectedBatch} />}
+          {selectedBatch && (
+            <ReflectorIO
+              minibatch={selectedBatch}
+              // What became of the patch this analyst proposed. The pane showed
+              // what was asked for and stopped there, so "did any of this land?"
+              // — the only question the proposal raises — needed another page.
+              editReports={detail.edit_reports}
+              nApplied={detail.n_edits_applied}
+              nSkipped={detail.n_edits_skipped}
+              onOpenSkill={onOpenSkill}
+            />
+          )}
           {selectedResult && (
             <QuestionPane
               result={selectedResult}
@@ -181,7 +245,9 @@ export default function RolloutDetail({ runId, stepNo, split, onBack }) {
           )}
           {!selectedBatch && !selectedResult && (
             <p className="opt-hint">
-              Pick a question, or an analyst call, from the list.
+              {split === "train"
+                ? "Pick a question, or an analyst call, from the list."
+                : "Pick a question from the list to see how the agent answered it."}
             </p>
           )}
         </div>
@@ -278,15 +344,19 @@ function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
           <Skeleton variant="row" count={4} />
         ) : (
           <>
+            {/* `question` is a string, because that is what `SpanList` renders
+                it as. This passed `{question, ground_truth_response}` — an
+                object handed to React as a child, which throws, and with no
+                error boundary above it took the whole app down to a white page
+                every time a question in a rollout was clicked. The expected
+                answer was never this prop's job: `SpanList` reads it off the
+                trace, which carries it. */}
             <SpanList
               trace={trace}
               activeSpan={activeSpan}
               onPickSpan={onPickSpan}
               canReDiagnose={false}
-              question={{
-                question: result.question,
-                ground_truth_response: result.ground_truth_response,
-              }}
+              question={result.question}
               emptyHint="No trace for this question."
             />
             <SpanDetail span={activeSpan} />

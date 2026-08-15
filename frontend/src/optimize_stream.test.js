@@ -50,7 +50,7 @@ function subscribe() {
 
   on("snapshot", parse((d) => { state = replaceSteps(state, d.steps || []); }));
   for (const name of [
-    "step_started", "rollout_done", "rollout_retry",
+    "step_started", "rollout_done", "rollout_progress", "rollout_retry",
     "reflect_done", "update_done", "gate_done", "slow_update_done",
   ]) {
     on(name, parse((d) => { state = applyEvent(state, name, d); }));
@@ -111,15 +111,36 @@ test("a run's real wire output assembles the chart the page draws", () => {
   assert.equal(one.status, "done");
 });
 
-test("the caption names a real step, not undefined", () => {
+test("what the run is doing names a real step, not undefined", () => {
   // The exact symptom: `e.step_no` off an unparsed frame is undefined, and the
-  // header rendered that string at the user.
+  // header rendered that string at the user. The activity is structured now
+  // rather than a sentence, so the guard is that the step number is a number.
   const sub = subscribe();
   parseFrames(frame("gate_done", { step_no: 4, action: "reject" }), sub.emit);
 
-  assert.ok(sub.state.phase, "a caption should have been produced");
-  assert.ok(!sub.state.phase.includes("undefined"), sub.state.phase);
-  assert.match(sub.state.phase, /step 4/);
+  assert.ok(sub.state.activity, "an activity should have been produced");
+  assert.equal(sub.state.activity.stepNo, 4);
+  assert.equal(sub.state.activity.phase, "gate");
+});
+
+test("a rollout_progress frame off the wire carries its counts through", () => {
+  // Same parse path as every other frame, and the one event whose whole value
+  // is the two numbers on it.
+  const sub = subscribe();
+  parseFrames(
+    frame("rollout_progress", { step_no: 2, split: "train", done: 5, total: 8, attempt: 1 }),
+    sub.emit,
+  );
+
+  assert.deepEqual(
+    {
+      stepNo: sub.state.activity.stepNo,
+      phase: sub.state.activity.phase,
+      done: sub.state.activity.done,
+      total: sub.state.activity.total,
+    },
+    { stepNo: 2, phase: "rollout_train", done: 5, total: 8 },
+  );
 });
 
 test("a frame split across chunk boundaries is not mistaken for two", () => {

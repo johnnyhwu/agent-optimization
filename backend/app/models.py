@@ -580,6 +580,12 @@ class OptimizationRollout(Base):
     latency_min_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_p50_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_max_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The mean, stored rather than derived. It cannot be recovered from the three
+    # above — median and mean answer different questions, and the gap between
+    # them is exactly what says whether a slow rollout was slow throughout or was
+    # one question hanging until the timeout. Recomputing it from the results
+    # would work only for as long as they are all still on disk.
+    latency_mean_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     aborted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

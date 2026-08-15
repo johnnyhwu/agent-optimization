@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # --- Eval sets --------------------------------------------------------------
@@ -319,6 +319,52 @@ class RunCreate(BaseModel):
     # copied server-side and never travel to the browser; a credential is only
     # copied when its paired endpoint is unchanged (see routers/runs.py).
     reuse_secrets_from_run_id: uuid.UUID | None = None
+
+
+# The longest name the two list surfaces will render without truncating, and the
+# same number the browser checks against (`frontend/src/run_name.js`). Named once
+# so the two cannot drift into a form that accepts what the server refuses.
+RUN_NAME_MAX_LENGTH = 120
+
+
+def _clean_run_name(value: str | None) -> str | None:
+    """A run name as it is stored: trimmed, blank meaning none.
+
+    Blank is a value, not an error — clearing the name is how a rename is undone,
+    and both list surfaces fall back to the run's start time when it is unset.
+    Control characters are refused because a name made of them renders as
+    nothing: the row would read as unnamed while the database held a value, with
+    nothing on screen able to explain the difference.
+    """
+    if value is None:
+        return None
+    name = value.strip()
+    if not name:
+        return None
+    if len(name) > RUN_NAME_MAX_LENGTH:
+        raise ValueError(
+            f"name is {len(name)} characters; the limit is {RUN_NAME_MAX_LENGTH}"
+        )
+    if any(ch < " " or ch == "\x7f" for ch in name):
+        raise ValueError("name may not contain line breaks or control characters")
+    return name
+
+
+class RunRename(BaseModel):
+    """Body of PATCH .../runs/{id} — the run's name and nothing else.
+
+    Deliberately its own model rather than a partial `RunCreate`: a run's config
+    and credentials describe what it was executed with and are not editable
+    after the fact, and a PATCH that accepted them would silently promise an
+    edit the orchestrator would never see.
+    """
+
+    name: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check(cls, value: str | None) -> str | None:
+        return _clean_run_name(value)
 
 
 class RunOut(BaseModel):
@@ -668,6 +714,7 @@ class OptimizationStepSummary(BaseModel):
     train_n_judge_error: int | None = None
     train_latency_min_ms: int | None = None
     train_latency_p50_ms: int | None = None
+    train_latency_mean_ms: int | None = None
     train_latency_max_ms: int | None = None
 
     val_hard: float | None = None
@@ -679,6 +726,7 @@ class OptimizationStepSummary(BaseModel):
     val_n_judge_error: int | None = None
     val_latency_min_ms: int | None = None
     val_latency_p50_ms: int | None = None
+    val_latency_mean_ms: int | None = None
     val_latency_max_ms: int | None = None
 
     # The second half of the hover card: what this step did to the skill.
@@ -701,6 +749,22 @@ class OptimizationStepSummary(BaseModel):
     best_score: float | None = None
     started_at: datetime
     completed_at: datetime | None = None
+
+
+class OptimizationRunRename(BaseModel):
+    """Body of PATCH /optimization/runs/{id} — the name, and nothing else.
+
+    Same shape and same rules as an eval run's rename (`RunRename`): the two
+    lists sit two clicks apart and rename the same way, so a name one accepts
+    and the other refuses would be a difference with nothing behind it.
+    """
+
+    name: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check(cls, value: str | None) -> str | None:
+        return _clean_run_name(value)
 
 
 class OptimizationRunOut(BaseModel):
@@ -1003,9 +1067,23 @@ class OptimizationRolloutDetail(BaseModel):
     n_activated: int = 0
     latency_min_ms: int | None = None
     latency_p50_ms: int | None = None
+    latency_mean_ms: int | None = None
     latency_max_ms: int | None = None
     aborted: bool = False
     abort_reason: str | None = None
+
+    # What became of the edits the analysts proposed. Carried on the *training*
+    # page because that is where the proposals are read: the minibatch pane shows
+    # what was asked for, and without this the reader had to leave the page to
+    # find out whether any of it landed.
+    n_edits_applied: int | None = None
+    n_edits_skipped: int | None = None
+    edit_reports: list["EditReportOut"] = Field(default_factory=list)
+    # Whether this step bought a validation rollout at all. False when every edit
+    # was refused: the candidate is then identical to a skill already scored, so
+    # the engine reuses that score instead. The page has to say so — a validation
+    # tab that simply 404s reads as a bug.
+    val_rolled_out: bool = True
 
     results: list[OptimizationResultOut] = Field(default_factory=list)
     # Empty on validation, which is measured and never reflected on.
@@ -1085,6 +1163,11 @@ class OptimizationSkillDiff(BaseModel):
     # every file's text on every request grows the payload with the skill rather
     # than with the edit.
     unchanged_paths: list[str] = Field(default_factory=list)
+    # The same files, with their contents. `unchanged_paths` names them for the
+    # tree; this lets the pane draw a real all-context diff for one, so a step
+    # that changed nothing still looks like a diff rather than like a sentence
+    # where the diff used to be.
+    unchanged_files: list["SkillDiffFile"] = Field(default_factory=list)
     lines_added: int = 0
     lines_removed: int = 0
     answer_leaks: list[AnswerLeak] = Field(default_factory=list)

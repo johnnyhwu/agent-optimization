@@ -9,6 +9,7 @@ import RunDetail from "./components/RunDetail.jsx";
 import Playground from "./components/Playground.jsx";
 import OptimizeSection from "./components/optimize/OptimizeSection.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
 import UserMenu from "./components/UserMenu.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
@@ -109,7 +110,17 @@ export default function App() {
             </div>
           </header>
 
+          {/* Inside the page rather than around the whole shell, so a crash in
+              a section leaves the rail, the top bar and the breadcrumb intact —
+              the parts that get you out of it. Keyed on the route so navigating
+              away from whatever broke clears the error by itself. */}
           <div className="page">
+            <ErrorBoundary
+              where={sectionTitle(route.section)}
+              resetKey={[
+                route.section, route.tier, route.esId, route.runId, route.stepNo, route.split,
+              ].join("|")}
+            >
             {route.section === "evaluation" && (
               <>
                 <Breadcrumb route={route} evalSet={resolved} />
@@ -179,6 +190,7 @@ export default function App() {
             {route.section === "optimize" && (
               <OptimizeSection route={route} subject={subject} />
             )}
+            </ErrorBoundary>
           </div>
         </div>
       </div>

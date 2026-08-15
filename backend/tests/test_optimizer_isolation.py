@@ -49,10 +49,18 @@ from app.models import (
 from app.routers.eval_sets import list_eval_sets
 from app.routers.runs import list_runs
 
-MIGRATION = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "alembic" / "versions" / "0009_optimization.py"
-)
+VERSIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
+MIGRATION = VERSIONS / "0009_optimization.py"
+
+# Migrations after 0009 that add to Optimize's own tables. 0009 stays create-only
+# — that is what the two tests below guard — so a column added to an optimization
+# model later arrives in its own migration, and the schema-agreement test has to
+# read those too or it fails for a column that is perfectly well migrated.
+#
+# They are listed rather than globbed: the point of this file is that a change to
+# Optimize's schema is a deliberate act somebody had to write down here, and a
+# glob would quietly accept a migration that touched `runs`.
+LATER_OPTIMIZATION_MIGRATIONS = [VERSIONS / "0010_rollout_mean_latency.py"]
 
 # The tables that existed before Optimize. Nothing in the 0009 migration may
 # touch one of them.
@@ -144,7 +152,56 @@ def _created_tables() -> dict[str, set[str]]:
                 if arg.args and isinstance(arg.args[0], ast.Constant):
                     columns.add(arg.args[0].value)
         tables[name] = columns
+
+    # Columns added by later migrations count as declared: the model and the
+    # database do agree, they just agree across two files.
+    for path in LATER_OPTIMIZATION_MIGRATIONS:
+        for table, column in _added_columns(path):
+            assert table in tables, (
+                f"{path.name} adds to {table}, which 0009 never created — "
+                "a migration in this list may only extend Optimize's own tables"
+            )
+            tables[table].add(column)
     return tables
+
+
+def _added_columns(path: pathlib.Path) -> list[tuple[str, str]]:
+    """`(table, column)` for every `op.add_column` in a migration's `upgrade()`."""
+    tree = ast.parse(path.read_text())
+    fn = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "upgrade"
+    )
+    added: list[tuple[str, str]] = []
+    for node in ast.walk(fn):
+        is_add = (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_column"
+            and len(node.args) >= 2
+        )
+        if not is_add or not isinstance(node.args[0], ast.Constant):
+            continue
+        column = node.args[1]
+        if isinstance(column, ast.Call) and column.args and isinstance(column.args[0], ast.Constant):
+            added.append((node.args[0].value, column.args[0].value))
+    return added
+
+
+def test_later_optimization_migrations_stay_off_evaluation_tables():
+    """The additive rule outlives 0009.
+
+    0009 is create-only and two tests above say so, but every migration after it
+    is free to `add_column` — and `runs` is exactly where someone would put an
+    "is this an optimization run" flag. Same guard, applied to the migrations
+    that extend Optimize's schema.
+    """
+    for path in LATER_OPTIMIZATION_MIGRATIONS:
+        touched = {table for table, _ in _added_columns(path)}
+        assert not (touched & PRE_EXISTING_TABLES), (
+            f"{path.name} adds columns to {sorted(touched & PRE_EXISTING_TABLES)}, "
+            "which Evaluation owns"
+        )
 
 
 def test_the_migration_and_the_models_describe_the_same_schema():

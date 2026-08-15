@@ -81,7 +81,19 @@ export function usePagedList(fetchPage, { pageSize = 24, deps = [] } = {}) {
     load({ offset: 0, limit: Math.max(shown, pageSize), append: false });
   }, [load, pageSize]);
 
-  return { items, total, hasMore, loadingMore, error, loadMore, refresh };
+  // One row, changed in place.
+  //
+  // `refresh()` is the wrong tool for a rename: it re-reads every page on
+  // screen, which costs a request per page to change one string, and any row
+  // that crossed a page boundary in between moves under the reader. A rename
+  // affects exactly one row and the server has already returned it.
+  const patchItem = useCallback((id, patch) => {
+    setItems((prev) =>
+      prev ? prev.map((item) => (item.id === id ? { ...item, ...patch } : item)) : prev,
+    );
+  }, []);
+
+  return { items, total, hasMore, loadingMore, error, loadMore, refresh, patchItem };
 }
 
 // Sentinel that calls `onVisible` when scrolled into view. The button is not a

@@ -262,6 +262,15 @@ export const IconCheck = (p) => (
     <polyline points="4 12.5 9 17.5 20 6.5" />
   </S>
 );
+// Rename, on both run lists. Paired with IconCheck above: the pencil turns into
+// the tick while the field is open, so one control is both "edit this" and
+// "that's the name" without a second button appearing beside it.
+export const IconPencil = (p) => (
+  <S {...p}>
+    <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z" />
+    <line x1="14.5" y1="6.5" x2="17.5" y2="9.5" />
+  </S>
+);
 // Empty states: a shelf with nothing on it.
 export const IconInbox = (p) => (
   <S {...p}>

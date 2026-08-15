@@ -359,8 +359,10 @@ function QuestionTable({ questions, showSkills = false }) {
       <tbody>
         {questions.map((q) => (
           <tr key={q.item_key}>
-            <td className="opt-qtext" title={q.question}>
-              {q.question}
+            {/* The class goes on a span: `opt-qtext` is `display: block`, and a
+                block `<td>` drops out of the table's column model. */}
+            <td title={q.question}>
+              <span className="opt-qtext">{q.question}</span>
             </td>
             {/* Name and id, because two eval sets may carry one name — the
                 system identifies a set by its id and lets an owner reuse a

@@ -663,6 +663,28 @@ async def _rollout(
     retried = False
 
     for attempt in (1, 2):
+        # Per-question progress, which is the difference between a page that
+        # says "step 3 · rollout" for six minutes and one that says how far
+        # through those six minutes it is. `rollout_done` fires once, when the
+        # whole split has been answered and judged; between the two there was
+        # nothing at all, on the longest-running part of every step.
+        #
+        # Counted here rather than derived from the rows: `run_rollout` fills a
+        # pre-sized list and the caller cannot see it until the gather returns.
+        done = 0
+        total = len(items)
+
+        async def item_done(_row, _attempt=attempt) -> None:
+            nonlocal done
+            done += 1
+            await publish({
+                "type": "rollout_progress", "step_no": step_no, "split": split,
+                "done": done, "total": total,
+                # A retry restarts the count, and a bar that jumped backwards
+                # with no explanation would read as a bug in the page.
+                "attempt": _attempt,
+            })
+
         rows = await run_rollout(
             items,
             skill_files=skill_files,
@@ -675,6 +697,7 @@ async def _rollout(
             concurrency=int(config.get("concurrency") or settings.run_concurrency),
             detectable=bool(spec.detector.get("detectable")),
             path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
+            on_progress=item_done,
         )
         summary = score_rollout(
             rows, split=split, skill_step_no=skill_step_no, error_threshold=threshold
@@ -712,6 +735,7 @@ async def _publish_rollout(publish: Publisher, step_no: int, summary) -> None:
         "n_agent_error": summary.n_agent_error, "n_judge_error": summary.n_judge_error,
         "latency_min_ms": summary.latency_min_ms,
         "latency_p50_ms": summary.latency_p50_ms,
+        "latency_mean_ms": summary.latency_mean_ms,
         "latency_max_ms": summary.latency_max_ms,
     })
 

@@ -44,11 +44,28 @@ const ROLLOUT_FIELDS = [
   "n_judge_error",
   "latency_min_ms",
   "latency_p50_ms",
+  "latency_mean_ms",
   "latency_max_ms",
 ];
 
+// The stages of one step, in the order the engine performs them. The header
+// draws this as a strip with the current one lit, because "step 3 · rollout"
+// told a reader what was happening without telling them where that sits in the
+// step, how many stages are left, or how long any of it should take.
+//
+// The baseline performs only the first of them — it is one validation rollout
+// and nothing else — which is why the strip is driven by the phase rather than
+// by a fixed list of five lamps that would sit dark for the whole of step 0.
+export const STEP_PHASES = [
+  { key: "rollout_train", label: "Answer", hint: "the training questions, with the skill as it stands" },
+  { key: "reflect", label: "Reflect", hint: "the analyst reads the failures" },
+  { key: "update", label: "Edit", hint: "the proposed edits are applied to the skill" },
+  { key: "rollout_val", label: "Validate", hint: "the validation questions, with the edited skill" },
+  { key: "gate", label: "Gate", hint: "keep the edit, or roll it back" },
+];
+
 export function emptySteps() {
-  return { byNo: new Map(), phase: null };
+  return { byNo: new Map(), activity: null };
 }
 
 // The array the chart and the table read. Sorted by step number rather than by
@@ -67,19 +84,20 @@ export function replaceSteps(state, steps) {
 }
 
 // `run_completed` is the one event that says nothing about a step. It clears
-// the caption; the caller refetches for the final rows.
+// what the run is doing; the caller refetches for the final rows.
 export function applyEvent(state, type, data) {
   if (!data || typeof data.step_no !== "number") {
-    return type === "run_completed" ? { ...state, phase: null } : state;
+    return type === "run_completed" ? { ...state, activity: null } : state;
   }
 
+  const activity = activityFor(type, data, state.activity) ?? state.activity;
   const patch = patchFor(type, data);
-  if (!patch) return { ...state, phase: phaseFor(type, data) ?? state.phase };
+  if (!patch) return { ...state, activity };
 
   const byNo = new Map(state.byNo);
   const before = byNo.get(data.step_no) || blankStep(data);
   byNo.set(data.step_no, { ...before, ...patch });
-  return { byNo, phase: phaseFor(type, data) ?? state.phase };
+  return { byNo, activity };
 }
 
 // A step the stream told us about before any refetch did. `status: "running"`
@@ -149,25 +167,71 @@ function patchFor(type, data) {
   return null;
 }
 
-// The caption above the chart. Present tense, because it names what the run is
-// doing right now rather than what it just finished.
-function phaseFor(type, data) {
-  const where = data.step_no === 0 ? "baseline" : `step ${data.step_no}`;
+// What the run is doing right now, as structure rather than as a sentence.
+//
+// This used to return a string — "step 3 · rollout" — which is all the header
+// had to show for the several minutes a rollout takes. It said which step and
+// roughly what, and nothing about how far through: no count of questions
+// answered, no sense of which stage of the step this is, no way to tell a
+// rollout that is nearly finished from one that has just begun.
+//
+// Returning an object lets the header draw a stage strip and a per-question
+// count, and keeps the phrasing in the component where phrasing belongs. The
+// shape is:
+//
+//   { stepNo, phase, done, total, note }
+//
+// `done`/`total` are present only during a rollout, which is the only stage
+// with countable work in it. `note` is a short sentence for the stages that
+// have something worth saying and nothing to count.
+//
+// Events *after* a stage report its completion, so each one names the stage the
+// engine has moved on to — `reflect_done` means the analyst has answered and the
+// edits are next. `gate_done` is the exception: it ends the step, so it reports
+// the verdict rather than a following stage.
+function activityFor(type, data, previous) {
+  const at = (phase, extra = {}) => ({ stepNo: data.step_no, phase, ...extra });
+
   switch (type) {
     case "step_started":
-      return `${where} · ${data.phase || "starting"}`;
-    case "rollout_done":
-      return `${where} · ${data.split === "train" ? "train" : "validation"} scored`;
+      // The baseline answers the validation split; every other step starts on
+      // training. `_run_baseline` publishes `phase: "baseline"`.
+      return at(data.phase === "baseline" ? "rollout_val" : "rollout_train");
+    case "rollout_progress":
+      return at(data.split === "train" ? "rollout_train" : "rollout_val", {
+        done: data.done,
+        total: data.total,
+        note: data.attempt > 1 ? "retrying after a failed rollout" : null,
+      });
     case "rollout_retry":
-      return `${where} · retrying the ${data.split} rollout`;
+      return at(data.split === "train" ? "rollout_train" : "rollout_val", {
+        note: `retrying the ${data.split === "train" ? "training" : "validation"} rollout`,
+      });
+    case "rollout_done":
+      // Train finishing hands over to reflection; validation finishing hands
+      // over to the gate. Which is also why the strip is ordered the way it is.
+      return data.split === "train"
+        ? at("reflect")
+        : at("gate");
     case "reflect_done":
-      return `${where} · reflecting (${data.n_minibatches ?? "?"} minibatches)`;
+      return at("update", {
+        note: `${data.n_minibatches ?? "?"} minibatch${data.n_minibatches === 1 ? "" : "es"} reflected on`,
+      });
     case "update_done":
-      return `${where} · editing the skill`;
+      return at("rollout_val", {
+        note:
+          data.n_edits_applied != null
+            ? `${data.n_edits_applied} edit${data.n_edits_applied === 1 ? "" : "s"} applied`
+            : null,
+      });
     case "gate_done":
-      return `${where} · ${data.action === "reject" ? "rejected" : data.action || "judged"}`;
+      return at("gate", {
+        note: data.action === "reject" ? "candidate rejected" : "candidate kept",
+      });
     case "slow_update_done":
-      return `epoch ${data.epoch_no} · epoch guidance written`;
+      // Between epochs, not inside a step. Keeps whichever stage was showing
+      // rather than blanking the strip for a pass that belongs to neither.
+      return { ...(previous || {}), note: `epoch ${data.epoch_no}: guidance written` };
     default:
       return null;
   }

@@ -165,24 +165,77 @@ test("an event with no step number changes no rows", () => {
   assert.deepEqual(stepList(after), stepList(state));
 });
 
-test("run_completed clears the caption without touching the rows", () => {
+test("run_completed clears what the run is doing, without touching the rows", () => {
   const state = feed(emptySteps(), [
     ["step_started", { step_no: 1, epoch_no: 1, phase: "rollout" }],
   ]);
-  assert.ok(state.phase);
+  assert.ok(state.activity);
 
   const done = applyEvent(state, "run_completed", { status: "completed" });
-  assert.equal(done.phase, null);
+  assert.equal(done.activity, null);
   assert.equal(stepList(done).length, 1);
 });
 
-test("the caption names the step and what it is doing", () => {
+test("the activity names the step and the stage it is in", () => {
+  // The baseline is one validation rollout; every other step opens on training.
   let state = applyEvent(emptySteps(), "step_started", { step_no: 0, phase: "baseline" });
-  assert.match(state.phase, /baseline/);
+  assert.deepEqual(
+    { stepNo: state.activity.stepNo, phase: state.activity.phase },
+    { stepNo: 0, phase: "rollout_val" },
+  );
+
+  state = applyEvent(state, "step_started", { step_no: 1, epoch_no: 1, phase: "rollout" });
+  assert.equal(state.activity.phase, "rollout_train");
 
   state = applyEvent(state, "gate_done", { step_no: 4, action: "reject" });
-  assert.match(state.phase, /step 4/);
-  assert.match(state.phase, /rejected/);
+  assert.equal(state.activity.stepNo, 4);
+  assert.equal(state.activity.phase, "gate");
+  assert.match(state.activity.note, /rejected/);
+});
+
+test("a rollout reports how many of its questions are answered", () => {
+  // The whole point of the event: `rollout_done` fires once, at the end, and a
+  // rollout is the longest thing in a step. Between the two the header had
+  // nothing to say for minutes at a time.
+  let state = applyEvent(emptySteps(), "step_started", { step_no: 2, epoch_no: 1 });
+  assert.equal(state.activity.done, undefined);
+
+  state = applyEvent(state, "rollout_progress", {
+    step_no: 2, split: "train", done: 3, total: 8, attempt: 1,
+  });
+  assert.deepEqual(
+    {
+      phase: state.activity.phase,
+      done: state.activity.done,
+      total: state.activity.total,
+      note: state.activity.note,
+    },
+    { phase: "rollout_train", done: 3, total: 8, note: null },
+  );
+
+  // A retry restarts the count, so it says so rather than appearing to go
+  // backwards for no reason.
+  state = applyEvent(state, "rollout_progress", {
+    step_no: 2, split: "train", done: 1, total: 8, attempt: 2,
+  });
+  assert.equal(state.activity.done, 1);
+  assert.match(state.activity.note, /retrying/);
+
+  // Progress carries no step fields, so it must not invent a row or disturb one.
+  assert.equal(stepList(state).length, 1);
+  assert.equal(stepList(state)[0].step_no, 2);
+});
+
+test("each stage hands over to the one the engine actually does next", () => {
+  // Every event reports a *completed* stage, so the activity it produces has to
+  // name what follows it — otherwise the strip lags one stage behind the run
+  // for the whole of it.
+  const after = (type, data) => applyEvent(emptySteps(), type, data).activity.phase;
+
+  assert.equal(after("rollout_done", { step_no: 1, split: "train" }), "reflect");
+  assert.equal(after("reflect_done", { step_no: 1, n_minibatches: 2 }), "update");
+  assert.equal(after("update_done", { step_no: 1, n_edits_applied: 2 }), "rollout_val");
+  assert.equal(after("rollout_done", { step_no: 1, split: "val" }), "gate");
 });
 
 test("the baseline finishes on its validation rollout, having no gate to end it", () => {
