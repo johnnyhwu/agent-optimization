@@ -57,17 +57,21 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
       .getStepSkillDiff(runId, stepNo, base)
       .then((data) => {
         setView(data);
-        // Open on the first changed file. The alternative is an empty pane
-        // beside a populated tree, which reads as a diff that failed to load.
+        // Open on the first changed file, falling back to an unchanged one so
+        // a step that edited nothing still opens on a real (all-context) diff
+        // rather than on an empty pane beside a populated tree.
         setPath((current) => {
-          const paths = data.files.map((f) => f.path);
+          const paths = [...data.files, ...(data.unchanged_files || [])].map((f) => f.path);
           return current && paths.includes(current) ? current : paths[0] || null;
         });
       })
       .catch((e) => setError(e.message));
   }, [runId, stepNo, base]);
 
-  const file = view?.files.find((f) => f.path === path) || null;
+  // Changed files first, then the untouched ones — both are selectable, and a
+  // diff of a file against itself is a legitimate thing to want to read.
+  const allFiles = view ? [...view.files, ...(view.unchanged_files || [])] : [];
+  const file = allFiles.find((f) => f.path === path) || null;
   const rows = useMemo(
     () => (file ? diffRows(file.before, file.after) : []),
     [file],
@@ -148,29 +152,14 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
           </span>
         </div>
 
-        {/* The banner has to say the edits were discarded, because everything
-            below it looks exactly like an applied change. A reader who skims
-            the diff and misses the verdict walks away believing the skill says
-            something it does not. */}
-        {rejected && (
-          <Banner tone="warning" title="These edits were not kept">
-            The gate rejected this candidate
-            {view.gate_reject_reason === "activation"
-              ? " because the agent stopped reading the skill"
-              : " because it did not beat the current skill on validation"}
-            , and the run continued from step {view.base_step_no}. What follows is
-            what the step proposed, not what the skill contains.
-          </Banner>
-        )}
-        {/* Step 0 is a fallback by definition — it is the base — and saying so
-            adds a caveat to the one page that has nothing to caveat. */}
-        {view.base_is_fallback && view.step_no > 0 && (
-          <Banner tone="info" title="Nothing had been accepted yet at this point">
-            No earlier candidate had passed the gate, so this step was derived
-            from the skill as it arrived. "vs previous" and "vs initial" are the
-            same comparison here.
-          </Banner>
-        )}
+        {/* One conclusion, not a stack of banners.
+            This was two: "These edits were not kept" and, immediately under it,
+            "Nothing had been accepted yet at this point". They are two halves of
+            the same fact — what happened to this step's edits, and what the diff
+            below is therefore measured against — and as separate coloured blocks
+            they read as two independent problems. */}
+        <Outcome view={view} rejected={rejected} />
+
         {view.answer_leaks.length > 0 && (
           <Banner tone="error" title="This step may have memorised an answer">
             {plural(view.answer_leaks.length, "added line")} contain a training question’s
@@ -179,37 +168,109 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
             question is genuinely held out. The lines are marked below.
           </Banner>
         )}
-        {view.edit_summary && <p className="opt-stepcard-summary">{view.edit_summary}</p>}
+        {/* Attributed, so the analyst's sentence about its own patch is not
+            mistaken for the page's. */}
+        {view.edit_summary && (
+          <div className="opt-rationale">
+            <span className="opt-rationale-label">Analyst's rationale</span>
+            <p>{view.edit_summary}</p>
+          </div>
+        )}
       </Card>
 
-      {view.files.length === 0 ? (
-        <Card>
-          <p className="opt-hint">
-            {view.step_no === 0
-              ? "The baseline is the skill as it arrived — there is nothing before it to compare against."
-              : "This step changed nothing: every edit it proposed was skipped."}
-          </p>
-        </Card>
-      ) : (
-        <div className="opt-skilldiff-body">
-          <Card padded={false} className="opt-skilldiff-tree">
-            <CardHeader title="Files" count={view.files.length} />
-            <DiffFileTree
-              files={view.files}
-              unchanged={view.unchanged_paths}
-              selected={path}
-              onSelect={setPath}
-            />
-          </Card>
-          <Card padded={false} className="opt-skilldiff-pane">
-            <CardHeader title={file ? file.path : "—"} />
-            <DiffTable rows={rows} isLeak={leaked} />
-          </Card>
-        </div>
-      )}
-
+      {/* Above the diff, not below it.
+          What was proposed and refused is the context for reading what landed —
+          a diff missing the edit you expected is explained by this table, and at
+          the bottom of the page it was read after the reader had already formed
+          a conclusion from the diff, if it was read at all. */}
       <SkippedEdits reports={view.edit_reports} />
+
+      <div className="opt-skilldiff-body">
+        <Card padded={false} className="opt-skilldiff-tree">
+          <CardHeader title="Files" count={allFiles.length} />
+          <DiffFileTree
+            files={view.files}
+            unchanged={view.unchanged_files || []}
+            selected={path}
+            onSelect={setPath}
+          />
+        </Card>
+        <Card padded={false} className="opt-skilldiff-pane">
+          <CardHeader title={file ? file.path : "—"} variant="data" />
+          {/* Rendered whether or not anything changed. A step that edited
+              nothing used to replace this whole pane with one sentence, so the
+              page's layout depended on the outcome — and the reader lost the
+              ability to read the file at all on exactly the steps where "what
+              does it say now?" is the question. Both sides are identical and
+              every row is context, which is what "no change" looks like. */}
+          <DiffTable rows={rows} isLeak={leaked} />
+        </Card>
+      </div>
     </div>
+  );
+}
+
+// What became of this step's edits, as one statement.
+//
+// Three facts have to arrive together or the diff below is misread: whether the
+// edits were kept, why not if not, and what the diff is being measured against.
+// They used to be a warning banner and an info banner stacked on top of each
+// other, which is two colours and two headings for one outcome — and a reader
+// who took the second as a separate warning came away thinking two things had
+// gone wrong.
+function Outcome({ view, rejected }) {
+  const baseline = view.step_no === 0;
+  if (baseline) {
+    return (
+      <Banner tone="info" title="This is where the run started">
+        The baseline is the skill as it arrived. Nothing has been edited at this
+        point, so there is nothing before it to compare against — every later
+        step's diff is measured from here.
+      </Banner>
+    );
+  }
+
+  const nothingChanged = view.files.length === 0;
+  const against =
+    view.base_step_no === 0 ? "the skill this run started with" : `step ${view.base_step_no}`;
+  // The fallback note, folded in as a clause rather than raised as its own
+  // banner: it is a fact about the comparison, not a second problem.
+  const fallback = view.base_is_fallback
+    ? " No candidate had passed the gate yet, so “vs previous” and “vs initial” are the same comparison here."
+    : "";
+
+  if (nothingChanged) {
+    return (
+      <Banner tone="warning" title="This step changed nothing">
+        Every edit it proposed was refused before it reached the skill — the
+        table below says why for each one. The skill it produced is identical to{" "}
+        {against}, which is also why no validation rollout was bought for it: that
+        skill's score was already known.{fallback}
+      </Banner>
+    );
+  }
+
+  if (rejected) {
+    return (
+      <Banner tone="warning" title="These edits were not kept">
+        The gate rejected this candidate
+        {view.gate_reject_reason === "activation"
+          ? " because the agent stopped reading the skill"
+          : " because it did not beat the current skill on validation"}
+        , and the run carried on from {against}. What follows is what the step
+        proposed, not what the skill contains.{fallback}
+      </Banner>
+    );
+  }
+
+  return (
+    <Banner tone="success" title="These edits were kept">
+      The gate accepted this candidate
+      {view.gate_action === "accept_new_best"
+        ? " as a new best on validation"
+        : ", though it did not beat the best score so far"}
+      . The diff below is what the skill gained over {against}.{fallback}
+    </Banner>
   );
 }
 
@@ -253,7 +314,18 @@ function SkippedEdits({ reports }) {
   return (
     <Card>
       <CardHeader title="Edits that were not applied" count={skipped.length} />
-      <table className="opt-steptable">
+      {/* `opt-qtext` is `display: block`, so putting it on a `<td>` takes that
+          cell out of the table's column model. Two of them in a row here, and
+          the file and the target stacked on top of each other under one column
+          while the "What it aimed at" heading sat over an empty one. It belongs
+          on a span inside the cell; the widths belong to the table. */}
+      <table className="opt-steptable opt-skipped">
+        <colgroup>
+          <col className="opt-skipped-no" />
+          <col className="opt-skipped-reason" />
+          <col className="opt-skipped-file" />
+          <col />
+        </colgroup>
         <thead>
           <tr>
             <th className="num">#</th>
@@ -269,12 +341,14 @@ function SkippedEdits({ reports }) {
               <td>
                 <Badge tone="warning" size="sm">{REASONS[report.status] || report.status}</Badge>
               </td>
-              <td className="opt-qtext">
-                <code>{report.path || "—"}</code>
+              <td>
+                <code className="opt-qtext">{report.path || "—"}</code>
                 {report.path_defaulted && <span className="muted"> (no path given)</span>}
               </td>
-              <td className="opt-qtext" title={report.target || report.content_preview}>
-                {report.target || report.content_preview || "—"}
+              <td title={report.target || report.content_preview}>
+                <span className="opt-qtext">
+                  {report.target || report.content_preview || "—"}
+                </span>
               </td>
             </tr>
           ))}

@@ -17,7 +17,7 @@ from app.auth import current_subject, require_owner, require_reader, role_for
 from app.db import SessionLocal, get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
-from app.schemas import RunConfig, RunCreate, RunOut, RunPage
+from app.schemas import RunConfig, RunCreate, RunOut, RunPage, RunRename
 from app.services import judge_prompt, run_config
 from app.services.deletion import delete_run as delete_run_rows
 from app.sse import hub, resync_if_dropped, resync_or_ping
@@ -262,6 +262,46 @@ async def get_run(
     run = await session.get(Run, run_id)
     if run is None or run.eval_set_id != eval_set_id:
         raise HTTPException(status_code=404, detail="run not found")
+    return _run_out(
+        run,
+        await _incorrect_count(session, run_id),
+        await _judge_invalid_count(session, run_id),
+    )
+
+
+@router.patch("/{run_id}", response_model=RunOut)
+async def rename_run(
+    eval_set_id: uuid.UUID,
+    run_id: uuid.UUID,
+    body: RunRename,
+    subject: str = Depends(require_reader),
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename a run.
+
+    A name could only be set when the run was triggered, which is the one moment
+    a developer does not yet know what the run will turn out to be about — so
+    almost every run carried a timestamp forever, and a list of timestamps is not
+    a list anyone can read.
+
+    Permission mirrors cancel rather than delete: a viewer may trigger a run
+    (§6.16), and a name is the label on their own work. Owners can rename
+    anyone's; a viewer can rename the runs they started. Nothing about the run's
+    results changes, which is why this is not owner-only.
+    """
+    run = await session.get(Run, run_id)
+    if run is None or run.eval_set_id != eval_set_id:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.triggered_by != subject:
+        role = await role_for(session, eval_set_id, subject)
+        if role != "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="only an owner or the person who started this run can rename it",
+            )
+
+    run.name = body.name
+    await session.commit()
     return _run_out(
         run,
         await _incorrect_count(session, run_id),

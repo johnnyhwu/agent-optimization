@@ -24,7 +24,10 @@ const Y_TICK_VALUES = [0, 0.25, 0.5, 0.75, 1];
 // Enough ticks to locate a step, few enough to stay legible at panel width.
 const MAX_X_TICKS = 16;
 
-const PAD = { top: 14, right: 14, bottom: 26, left: 38 };
+// The left and bottom gutters carry an axis *title* as well as the tick labels
+// now. 38px was exactly wide enough for "100%" and nothing else, so the rotated
+// "Accuracy" landed on top of it.
+const PAD = { top: 14, right: 14, bottom: 42, left: 54 };
 
 function metricKeys(metric) {
   const suffix = metric === "soft" ? "soft" : "hard";
@@ -192,9 +195,33 @@ export function chartModel(steps, options = {}) {
   }));
 
   const lastStep = Math.round(x1 - 0.5);
+  // One full-height band per step, spanning the half-step either side of it.
+  //
+  // These are what makes a step look clickable and look picked. Before them the
+  // only pinned-state styling was a stroke on the validation dot, which meant a
+  // step whose candidate the gate rejected — drawn as a cross, with no circle in
+  // it — showed *nothing at all* when you clicked it, and a step whose
+  // validation was skipped entirely had no marker to style in the first place.
+  // Both are common: a run where every candidate is rejected is a run where
+  // clicking the chart appeared to do nothing.
+  //
+  // A band is independent of whether the step has a point, so the feedback is
+  // there whether or not the step managed to produce one.
+  const columns = [];
+  for (let stepNo = 0; stepNo <= lastStep; stepNo += 1) {
+    const left = sx(stepNo - 0.5);
+    columns.push({
+      stepNo,
+      x: left,
+      width: Math.max(0, sx(stepNo + 0.5) - left),
+      cx: sx(stepNo),
+    });
+  }
+
   return {
     plot,
     metric,
+    columns,
     train: trainPx,
     val: valPx,
     trainPath: path(trainPx),

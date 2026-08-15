@@ -410,3 +410,48 @@ test("a point outside the plot area picks no step at all", () => {
   assert.equal(model.stepAtPoint(left, top), 0);
   assert.equal(model.stepAtPoint(left + width, top + height), 2);
 });
+
+test("every planned step gets a column, whether or not it has a point", () => {
+  // The pin and hover feedback is drawn from these bands rather than from the
+  // markers, because the markers are exactly what a troubled run does not have:
+  // a rejected candidate is a cross with no circle to stroke, and a step whose
+  // validation was skipped as a cache hit has no validation marker at all. Both
+  // used to click with no visible effect whatsoever.
+  const model = chartModel(
+    [
+      baseline(0.4),
+      // Rejected: drawn as a cross.
+      step(1, { train: 0.5, val: 0.6, gate: "reject", best: 0.4 }),
+      // Validation skipped: no val point exists for this step.
+      step(2, { train: 0.6, val: null, gate: "reject", best: 0.4 }),
+    ],
+    { width: 400, height: 200, totalSteps: 4 },
+  );
+
+  // One per step across the whole *planned* run, not just the measured part —
+  // the axis is sized for the plan, so the columns have to be too or the ones
+  // past the end would be unclickable dead space.
+  assert.deepEqual(model.columns.map((c) => c.stepNo), [0, 1, 2, 3, 4]);
+
+  // A step with no validation marker still has a band to highlight.
+  const skipped = model.columns.find((c) => c.stepNo === 2);
+  assert.ok(skipped.width > 0);
+  assert.equal(model.val.some((p) => p.stepNo === 2), false);
+
+  // Bands tile the axis: each one starts where the last ended, and the centre
+  // of each is the x its markers are drawn at.
+  for (let i = 1; i < model.columns.length; i += 1) {
+    const previous = model.columns[i - 1];
+    const current = model.columns[i];
+    assert.ok(
+      Math.abs(previous.x + previous.width - current.x) < 0.001,
+      `column ${current.stepNo} should start where ${previous.stepNo} ended`,
+    );
+  }
+  const one = model.columns.find((c) => c.stepNo === 1);
+  const marker = model.val.find((p) => p.stepNo === 1);
+  assert.ok(Math.abs(one.cx - marker.x) < 0.001);
+
+  // And the band is the click target the model already reports.
+  assert.equal(model.stepAtPoint(one.cx, model.plot.top + 5), 1);
+});

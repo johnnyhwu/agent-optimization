@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { api, getSubject } from "../api.js";
 import { usePagedList } from "../usePagedList.js";
 import ListFooter from "./ListFooter.jsx";
+import RunNameEditor from "./RunNameEditor.jsx";
 import RunProgress from "./RunProgress.jsx";
 import QuestionEditor from "./QuestionEditor.jsx";
 import RunConfigDialog from "./RunConfigDialog.jsx";
@@ -74,7 +75,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
 
   const {
     items: runs, total, hasMore, loadingMore, error: loadError, loadMore,
-    refresh: load,
+    refresh: load, patchItem,
   } = usePagedList(
     ({ offset, limit }) => api.listRuns(evalSet.id, { offset, limit }),
     { pageSize: PAGE_SIZE, deps: [evalSet.id] }
@@ -115,6 +116,18 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
 
   // A viewer may trigger a run, so they must be able to stop it.
   const canCancel = (r) => myRole === "owner" || r.triggered_by === subject;
+  // And to label their own work. Same rule as cancel rather than the owner-only
+  // write rule: renaming changes nothing about what the run measured.
+  const canRename = (r) => myRole === "owner" || r.triggered_by === subject;
+
+  // The list is paged and appended to, so the renamed row is patched in place
+  // rather than refetched: a reload would drop every page after the first and
+  // send the reader back to the top of a list they were part-way down.
+  async function renameRun(run, name) {
+    const updated = await api.renameRun(evalSet.id, run.id, name);
+    patchItem(run.id, { name: updated.name });
+    toast.success(updated.name ? `Renamed to “${updated.name}”` : "Name cleared");
+  }
   const comparing = selected.length > 1;
 
   const columns = [
@@ -124,7 +137,18 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
       width: "minmax(0, 1fr)",
       render: (r) => (
         <>
-          <div className="ui-table-primary">{runLabel(r)}</div>
+          <div className="ui-table-primary">
+            {/* The name is the only part of a row a human wrote. It could only
+                be set when the run was triggered, so almost every row here fell
+                back to a timestamp — and a column of timestamps is not a list
+                anyone can read six weeks later. */}
+            <RunNameEditor
+              name={r.name}
+              fallback={new Date(r.started_at).toLocaleString()}
+              canEdit={canRename(r)}
+              onRename={(name) => renameRun(r, name)}
+            />
+          </div>
           <div className="ui-table-sub">
             by {r.triggered_by}
             {r.name && ` · ${new Date(r.started_at).toLocaleString()}`}

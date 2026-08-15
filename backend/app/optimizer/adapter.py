@@ -331,6 +331,10 @@ def score_rollout(
         summary.latency_min_ms = latencies[0]
         summary.latency_max_ms = latencies[-1]
         summary.latency_p50_ms = int(statistics.median(latencies))
+        # The mean as well as the median. They answer different questions, and
+        # the gap between them is what says whether a slow rollout was slow all
+        # the way through or was one question hanging until the timeout.
+        summary.latency_mean_ms = int(statistics.fmean(latencies))
 
     # Unknown is not false. Averaging an unobservable item in as zero would
     # invent a number; the rate describes what could actually be seen, and

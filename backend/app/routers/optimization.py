@@ -65,6 +65,7 @@ from app.schemas import (
     OptimizationRunDetail,
     OptimizationRunOut,
     OptimizationRunPage,
+    OptimizationRunRename,
     OptimizationSkillDiff,
     OptimizationStepSummary,
     PreviewQuestion,
@@ -807,6 +808,7 @@ def _step_summary(step: OptimizationStep, rollouts: dict) -> OptimizationStepSum
         train_n_judge_error=train.n_judge_error if train else None,
         train_latency_min_ms=train.latency_min_ms if train else None,
         train_latency_p50_ms=train.latency_p50_ms if train else None,
+        train_latency_mean_ms=train.latency_mean_ms if train else None,
         train_latency_max_ms=train.latency_max_ms if train else None,
         val_hard=_num(val.hard) if val else None,
         val_soft=_num(val.soft) if val else None,
@@ -817,6 +819,7 @@ def _step_summary(step: OptimizationStep, rollouts: dict) -> OptimizationStepSum
         val_n_judge_error=val.n_judge_error if val else None,
         val_latency_min_ms=val.latency_min_ms if val else None,
         val_latency_p50_ms=val.latency_p50_ms if val else None,
+        val_latency_mean_ms=val.latency_mean_ms if val else None,
         val_latency_max_ms=val.latency_max_ms if val else None,
         lines_added=step.lines_added,
         lines_removed=step.lines_removed,
@@ -833,6 +836,31 @@ def _step_summary(step: OptimizationStep, rollouts: dict) -> OptimizationStepSum
         started_at=step.started_at,
         completed_at=step.completed_at,
     )
+
+
+@router.patch("/runs/{run_id}", response_model=OptimizationRunOut)
+async def rename_optimization_run(
+    run_id: uuid.UUID,
+    body: OptimizationRunRename,
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename a run. Creator only, for the same reason cancel is.
+
+    The wizard offers a name on its last step and most runs are started without
+    one, so the rail filled up with timestamps — and a rail of timestamps is
+    exactly as useful as no rail. The name is a label on the experiment, so it
+    belongs to whoever ran it; a reader who can see the run still cannot retitle
+    someone else's work.
+    """
+    run = await _load_visible_run(session, run_id, subject)
+    if run.created_by != subject:
+        raise HTTPException(
+            status_code=403, detail="only the developer who started this run can rename it"
+        )
+    run.name = body.name
+    await session.commit()
+    return await _one_run_out(session, run)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=OptimizationRunOut)
@@ -1067,6 +1095,19 @@ async def get_rollout_detail(
         if split == "train"
         else []
     )
+    # Whether the step bought a validation rollout at all. Queried rather than
+    # read off `step.rollouts`: that relationship is lazy, and touching it in an
+    # async session raises rather than loading.
+    val_splits = set(
+        (
+            await session.scalars(
+                select(OptimizationRollout.split).where(
+                    OptimizationRollout.step_id == step.id
+                )
+            )
+        ).all()
+    )
+
     by_batch: dict[int, list[str]] = {}
     for row in results:
         if row.minibatch_no is not None:
@@ -1094,9 +1135,14 @@ async def get_rollout_detail(
         n_activated=rollout.n_activated,
         latency_min_ms=rollout.latency_min_ms,
         latency_p50_ms=rollout.latency_p50_ms,
+        latency_mean_ms=rollout.latency_mean_ms,
         latency_max_ms=rollout.latency_max_ms,
         aborted=rollout.aborted,
         abort_reason=rollout.abort_reason,
+        n_edits_applied=step.n_edits_applied,
+        n_edits_skipped=step.n_edits_skipped,
+        edit_reports=[EditReportOut(**report) for report in (step.edit_reports or [])],
+        val_rolled_out="val" in val_splits,
         results=[_result_out(row, items.get(row.item_key)) for row in results],
         minibatches=[
             OptimizationMinibatchOut(
@@ -1347,6 +1393,23 @@ async def get_step_skill_diff(
         )
         for path, counts in stats.items()
     ]
+    # The files this step left alone, with their contents rather than only their
+    # names. The page renders a real diff for them — both sides identical, every
+    # row context — because a step that changed nothing used to replace the whole
+    # diff view with one sentence, and the layout jumping between "a diff" and "a
+    # paragraph" depending on the outcome is a worse way to say "no change" than
+    # a diff that visibly has none.
+    unchanged = sorted((set(before) | set(after)) - set(stats))
+    unchanged_files = [
+        SkillDiffFile(
+            path=path,
+            before=after.get(path, before.get(path)),
+            after=after.get(path, before.get(path)),
+            added=0,
+            removed=0,
+        )
+        for path in unchanged
+    ]
     lines_added, lines_removed = skillio.total_line_changes(before, after)
 
     # Training answers only. Held-out validation answers are never shown to an
@@ -1378,7 +1441,8 @@ async def get_step_skill_diff(
         n_edits_applied=step.n_edits_applied,
         n_edits_skipped=step.n_edits_skipped,
         files=files,
-        unchanged_paths=sorted((set(before) | set(after)) - set(stats)),
+        unchanged_paths=unchanged,
+        unchanged_files=unchanged_files,
         lines_added=lines_added,
         lines_removed=lines_removed,
         answer_leaks=[

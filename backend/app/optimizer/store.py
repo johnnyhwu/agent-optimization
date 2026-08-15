@@ -122,6 +122,7 @@ class RolloutSummary:
     n_activated: int = 0
     latency_min_ms: int | None = None
     latency_p50_ms: int | None = None
+    latency_mean_ms: int | None = None
     latency_max_ms: int | None = None
     aborted: bool = False
     abort_reason: str | None = None
@@ -379,6 +380,7 @@ class DbOptimizationStore:
             n_activated=summary.n_activated,
             latency_min_ms=summary.latency_min_ms,
             latency_p50_ms=summary.latency_p50_ms,
+            latency_mean_ms=summary.latency_mean_ms,
             latency_max_ms=summary.latency_max_ms,
             aborted=summary.aborted,
             abort_reason=summary.abort_reason,

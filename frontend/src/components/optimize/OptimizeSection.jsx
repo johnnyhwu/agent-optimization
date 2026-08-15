@@ -36,6 +36,13 @@ export default function OptimizeSection({ route, subject }) {
         stepNo={route.stepNo}
         split={route.split}
         onBack={() => navigate(href.optimizeRun(route.runId))}
+        // `replace`, not `navigate`: the two splits are one page's two tabs, and
+        // filling the history with every flip between them would make Back mean
+        // "the other tab" for as many presses as the reader had compared.
+        onPickSplit={(next) =>
+          replace(href.optimizeRollout(route.runId, route.stepNo, next))
+        }
+        onOpenSkill={() => navigate(href.optimizeSkill(route.runId, route.stepNo))}
       />
     );
   }

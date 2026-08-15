@@ -182,6 +182,10 @@ export const api = {
   runConfigDefaults: () => req("GET", "/run-config/defaults"),
   triggerRun: (id, payload) => req("POST", `/eval-sets/${id}/runs`, payload),
   cancelRun: (id, runId) => req("POST", `/eval-sets/${id}/runs/${runId}/cancel`),
+  // A run's name, after the fact. It could only be set when the run was
+  // triggered, which is before anyone knows what it turned out to be about.
+  renameRun: (id, runId, name) =>
+    req("PATCH", `/eval-sets/${id}/runs/${runId}`, { name }),
   deleteRun: (id, runId) => req("DELETE", `/eval-sets/${id}/runs/${runId}`),
   results: (id, runIds, mode, lastN) => {
     const qs = new URLSearchParams();
@@ -275,6 +279,8 @@ export const api = {
   getOptimizationRun: (runId) => req("GET", `/optimization/runs/${runId}`),
   cancelOptimizationRun: (runId) =>
     req("POST", `/optimization/runs/${runId}/cancel`),
+  renameOptimizationRun: (runId, name) =>
+    req("PATCH", `/optimization/runs/${runId}`, { name }),
   // Only an interrupted run — one a backend restart caught mid-loop. A
   // cancelled or failed run is a decision or a dead end, not something to
   // continue under the same id.

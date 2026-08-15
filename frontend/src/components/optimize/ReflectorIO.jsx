@@ -18,7 +18,9 @@ import { editsProposed, truncationSummary } from "../../optimize_rollout.js";
 // The prompt is shown as it was sent, not rebuilt. A reconstruction looks right
 // and differs in exactly the way that mattered.
 
-export default function ReflectorIO({ minibatch }) {
+export default function ReflectorIO({
+  minibatch, editReports = [], nApplied, nSkipped, onOpenSkill,
+}) {
   const [tab, setTab] = useState("summary");
   const cut = truncationSummary(minibatch);
   const edits = editsProposed(minibatch);
@@ -68,19 +70,22 @@ export default function ReflectorIO({ minibatch }) {
         ))}
       </div>
 
-      {tab === "summary" && (
-        summary.length ? (
-          <ul className="opt-reflector-summary">
-            {summary.map((line, i) => (
-              <li key={i}>{typeof line === "string" ? line : JSON.stringify(line)}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="opt-hint">This analyst returned no failure summary.</p>
-        )
-      )}
+      {/* The analyst returns `failure_summary` as objects — a failure type, a
+          count and a description each — and this rendered anything that was not
+          already a string with `JSON.stringify`. Since it never was a string,
+          the tab a reader opens first showed them a wall of raw JSON:
+          {"count":2,"description":"…","failure_type":"rule_missing"}. */}
+      {tab === "summary" && <FailureSummary lines={summary} />}
 
-      {tab === "patch" && <PatchList patch={minibatch.raw_output?.patch} />}
+      {tab === "patch" && (
+        <PatchList
+          patch={minibatch.raw_output?.patch}
+          reports={editReports}
+          nApplied={nApplied}
+          nSkipped={nSkipped}
+          onOpenSkill={onOpenSkill}
+        />
+      )}
 
       {tab === "prompt" && (
         <>
@@ -131,24 +136,94 @@ function TruncationNote({ cut }) {
   );
 }
 
-function PatchList({ patch }) {
+// What each proposed failure actually was. Three fields, laid out as three
+// fields.
+function FailureSummary({ lines }) {
+  if (!lines.length) return <p className="opt-hint">This analyst returned no failure summary.</p>;
+  return (
+    <ul className="opt-reflector-summary">
+      {lines.map((line, i) => {
+        if (typeof line === "string") return <li key={i}>{line}</li>;
+        return (
+          <li key={i}>
+            <span className="opt-failure-head">
+              <Badge size="sm" mono>{(line.failure_type || "failure").replace(/_/g, " ")}</Badge>
+              {line.count != null && (
+                <span className="muted">{plural(line.count, "question")}</span>
+              )}
+            </span>
+            <span className="opt-failure-desc">{line.description || "—"}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// The patch, and what became of it.
+//
+// The proposal on its own raises exactly one question — did any of this reach
+// the skill? — and answering it used to mean leaving the page. The step's edit
+// reports say per edit, so each proposal now carries its own outcome, and the
+// summary line above them is the step's own count.
+function PatchList({ patch, reports = [], nApplied, nSkipped, onOpenSkill }) {
   const edits = patch?.edits || [];
   if (!edits.length) return <p className="opt-hint">No edits were proposed.</p>;
   return (
     <div className="opt-editlist">
-      {patch.reasoning && <p className="opt-reflector-reasoning">{patch.reasoning}</p>}
-      {edits.map((edit, i) => (
-        <div key={i} className="opt-edit">
-          <div className="opt-edit-head">
-            <Badge size="sm" mono>{edit.op || "edit"}</Badge>
-            <code>{edit.path || "(no path)"}</code>
-          </div>
-          {edit.target && (
-            <Section title="Anchor" compact>{edit.target}</Section>
-          )}
-          <Section title="Content" compact>{edit.content}</Section>
+      {patch.reasoning && (
+        <div className="opt-rationale">
+          <span className="opt-rationale-label">Analyst's rationale</span>
+          <p>{patch.reasoning}</p>
         </div>
-      ))}
+      )}
+
+      {/* The step's outcome, not this minibatch's: the analysts' patches are
+          merged and ranked before anything is applied, so an edit proposed here
+          may be collapsed into another one's. Saying whose count it is stops
+          the two numbers looking like they disagree. */}
+      {nApplied != null && (
+        <div className="opt-editoutcome">
+          <span>
+            Across the whole step: <strong>{plural(nApplied, "edit")} applied</strong>
+            {nSkipped ? `, ${nSkipped} refused` : ""}
+          </span>
+          {onOpenSkill && (
+            <Button variant="secondary" size="sm" onClick={onOpenSkill}>
+              View skill diff
+            </Button>
+          )}
+        </div>
+      )}
+
+      {edits.map((edit, i) => {
+        // Matched on path and op — the reports are the step's, after merging, so
+        // this is a best-effort tie-back rather than an index lookup. When no
+        // report matches, nothing is claimed.
+        const report = reports.find(
+          (r) => r.path === edit.path && (!r.op || r.op === edit.op),
+        );
+        return (
+          <div key={i} className="opt-edit">
+            <div className="opt-edit-head">
+              <Badge size="sm" mono>{edit.op || "edit"}</Badge>
+              <code>{edit.path || "(no path)"}</code>
+              {report && (
+                <Badge
+                  tone={report.status?.startsWith("applied") ? "success" : "warning"}
+                  size="sm"
+                >
+                  {report.status?.startsWith("applied") ? "applied" : "refused"}
+                </Badge>
+              )}
+            </div>
+            {edit.target && (
+              <Section title="Anchor" compact>{edit.target}</Section>
+            )}
+            <Section title="Content" compact>{edit.content}</Section>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -47,15 +47,33 @@ export default function DiffFileTree({ files, unchanged, selected, onSelect }) {
             </li>
           );
         })}
-        {/* Named but not clickable, and not silently dropped. A tree that shrank
-            to the edited files would stop being a picture of the skill, and the
-            reader would have no way to see how much of it this step left
-            alone — which is most of the reassurance a diff offers. */}
-        {unchanged.map((path) => (
-          <li key={path} className="opt-difffile-quiet">
-            <span className="opt-difffile-name" title={path}>{basename(path)}</span>
-            <span className="opt-difffile-stat muted">unchanged</span>
-            <span className="opt-difffile-dir">{dirname(path)}</span>
+        {/* Not silently dropped — a tree that shrank to the edited files would
+            stop being a picture of the skill, and the reader would have no way
+            to see how much of it this step left alone, which is most of the
+            reassurance a diff offers.
+
+            And now selectable, not just named. Opening one shows its diff
+            against itself: identical sides, every row context. That is a real
+            answer to "what does this file say?", which the tree used to raise
+            and then refuse to answer. */}
+        {unchanged.map((file) => (
+          <li key={file.path}>
+            <button
+              type="button"
+              className={
+                selected === file.path
+                  ? "opt-difffile is-quiet selected"
+                  : "opt-difffile is-quiet"
+              }
+              onClick={() => onSelect(file.path)}
+              aria-current={selected === file.path}
+            >
+              <span className="opt-difffile-name" title={file.path}>
+                {basename(file.path)}
+              </span>
+              <span className="opt-difffile-stat muted">unchanged</span>
+            </button>
+            <span className="opt-difffile-dir">{dirname(file.path)}</span>
           </li>
         ))}
       </ul>

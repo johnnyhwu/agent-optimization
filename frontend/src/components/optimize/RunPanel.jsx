@@ -4,13 +4,12 @@ import Badge from "../ui/Badge.jsx";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
+import RunHeader from "./RunHeader.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { SegmentedControl } from "../ui/Toolbar.jsx";
-import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
-import { runTitle } from "../../optimize_run_label.js";
 import {
   applyEvent,
   emptySteps,
@@ -18,7 +17,6 @@ import {
   stepList,
   stepProgress,
 } from "../../optimize_steps.js";
-import { STATUS_TONE } from "./RunList.jsx";
 import ProgressChart from "./ProgressChart.jsx";
 import StepCard from "./StepCard.jsx";
 
@@ -105,6 +103,10 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
     const events = [
       "step_started",
       "rollout_done",
+      // Per-question, while a rollout is in flight. The step events are minutes
+      // apart and a rollout is the long half of that gap, so without this the
+      // header had nothing to say for most of every step.
+      "rollout_progress",
       "rollout_retry",
       "reflect_done",
       "update_done",
@@ -152,6 +154,15 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
     }
   }
 
+  // The name is the run's identity in the rail as well as here, so the rail is
+  // told to refetch — otherwise the run you just renamed keeps its old name in
+  // the list beside the header showing the new one.
+  async function rename(name) {
+    const updated = await api.renameOptimizationRun(runId, name);
+    setRun((current) => (current ? { ...current, name: updated.name } : current));
+    notify.current?.();
+  }
+
   // `step` is "best" or a step number. The manifest inside the zip says which
   // one it turned out to be, so a download is never anonymous once it is on
   // disk — but the toast should say so too, while the page is still open.
@@ -178,67 +189,20 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
   return (
     <div className="opt-run">
       <Card>
-        <CardHeader
-          // Through the shared helper. This fell back to "Optimizing billing"
-          // while the rail beside it fell back to a locale timestamp, so an
-          // unnamed run — most of them — carried two different names on one
-          // screen and read as two runs.
-          title={runTitle(run)}
-          actions={
-            <>
-              {/* The run's only output. Offered whenever there is a scored step,
-                  including on a cancelled or interrupted run — the steps that
-                  finished are real, and their skill is the reason to have run
-                  it at all. */}
-              {run.best_step != null && (
-                <Button
-                  variant="secondary"
-                  icon={<IconDownload size={15} />}
-                  loading={downloading === "best"}
-                  onClick={() => downloadSkill("best")}
-                  title={`Step ${run.best_step}, the best this run scored on validation`}
-                >
-                  Download best skill
-                </Button>
-              )}
-              {run.status === "running" && isMine && (
-                <Button variant="danger" icon={<IconStop size={15} />} loading={busy}
-                        onClick={() => act(api.cancelOptimizationRun, "Stopping — finished steps are kept.")}>
-                  Stop
-                </Button>
-              )}
-              {/* Resume is offered only for `interrupted`: a cancelled run was a
-                  decision and a failed one stopped because continuing would
-                  produce a misleading result. Both stay available as the
-                  starting point for a new run instead. */}
-              {run.status === "interrupted" && isMine && (
-                <Button variant="primary" icon={<IconPlay size={15} />} loading={busy}
-                        onClick={() => act(api.resumeOptimizationRun, "Resuming from the last completed step.")}>
-                  Resume
-                </Button>
-              )}
-              <Button variant="ghost" icon={<IconRefresh size={15} />} onClick={reload}>
-                Refresh
-              </Button>
-            </>
-          }
+        <RunHeader
+          run={run}
+          activity={live.activity}
+          progress={progress}
+          steps={steps}
+          isMine={isMine}
+          busy={busy}
+          downloading={downloading}
+          onRename={rename}
+          onStop={() => act(api.cancelOptimizationRun, "Stopping — finished steps are kept.")}
+          onResume={() => act(api.resumeOptimizationRun, "Resuming from the last completed step.")}
+          onRefresh={reload}
+          onDownloadBest={() => downloadSkill("best")}
         />
-        <div className="opt-run-meta">
-          <Badge tone={STATUS_TONE[run.status] || "neutral"}>{run.status}</Badge>
-          <span><code>{run.skill_name}</code></span>
-          <span>{run.mode}</span>
-          <span>{run.n_train} train · {run.n_val} validation</span>
-          <span>{progress.label} steps</span>
-          {/* Both halves guarded: a run can carry a best step before its score
-              has been written back, and `(null * 100).toFixed(0)` is the string
-              "NaN" sitting in the middle of the run header. */}
-          {run.best_step != null && run.best_score != null && (
-            <Badge tone="success" mono>
-              best: step {run.best_step} · {(run.best_score * 100).toFixed(0)}%
-            </Badge>
-          )}
-          {live.phase && <span className="opt-run-phase">{live.phase}</span>}
-        </div>
 
         {run.status === "interrupted" && (
           <Banner tone="warning" title="This run was interrupted">
@@ -375,7 +339,11 @@ function StepTable({ steps, pinned, onPick, metric }) {
             <td className="num">
               {s.lines_added != null ? `+${s.lines_added} / −${s.lines_removed}` : "—"}
             </td>
-            <td className="opt-qtext" title={s.edit_summary || ""}>{s.edit_summary || "—"}</td>
+            {/* On a span, not on the cell: `opt-qtext` is `display: block` and a
+                block `<td>` leaves the table's column model. */}
+            <td title={s.edit_summary || ""}>
+              <span className="opt-qtext">{s.edit_summary || "—"}</span>
+            </td>
           </tr>
         ))}
       </tbody>
