@@ -38,15 +38,15 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from app.integrations.base import OptimizerClient
+from app.optimizer.analyst import run_analyst_minibatch
 from app.optimizer.skillio import build_protection, render_skill
+from app.optimizer.trajectory import Trajectory, trajectory_chars
 from app.optimizer.vendor._model import use_optimizer
 from app.optimizer.vendor.aggregate import merge_patches
 from app.optimizer.vendor.clip import rank_and_select
 from app.optimizer.vendor.reflect import (
     _split_minibatches,
     _shuffle_for_minibatch,
-    run_error_analyst_minibatch,
-    run_success_analyst_minibatch,
 )
 from app.optimizer.vendor.skill import apply_patch_with_report
 from app.optimizer.vendor.update_modes import get_payload_items
@@ -262,14 +262,11 @@ def _reflect(
         error: str | None = None
         patch: dict | None = None
         try:
-            runner = (
-                run_error_analyst_minibatch if source_type == "failure"
-                else run_success_analyst_minibatch
-            )
-            patch = runner(
-                skill_content, batch, None,
+            patch = run_analyst_minibatch(
+                skill_content, batch,
+                source_type=source_type,
+                mode=mode,
                 edit_budget=edit_budget,
-                system_prompt=_analyst_prompt(source_type, mode),
                 update_mode=update_mode,
                 meta_skill_context=meta_skill_context,
             )
@@ -319,25 +316,12 @@ def _reflect(
     return records, patches
 
 
-def _analyst_prompt(source_type: str, mode: str) -> str:
-    """The mode's own analyst prompt, loaded through upstream's resolver.
-
-    Upstream keys the override on the environment; here it is the optimization
-    mode, because that — not the benchmark — is what changes the question being
-    asked. Falling through to the generic prompt would ask a routing run to
-    rewrite a body it is forbidden to touch.
-    """
-    from app.optimizer.vendor.prompts import load_prompt
-
-    name = "analyst_error" if source_type == "failure" else "analyst_success"
-    return load_prompt(name, mode)
-
-
 def _batch_chars(batch: Sequence[dict]) -> int:
     """How much text this minibatch carries, as the analyst received it."""
     return sum(
-        len(str(event.get("obs", ""))) + len(str(event.get("cmd", "")))
-        for item in batch for event in item.get("conversation", [])
+        trajectory_chars(item["trajectory"])
+        for item in batch
+        if isinstance(item.get("trajectory"), Trajectory)
     )
 
 

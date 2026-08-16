@@ -20,6 +20,7 @@ import threading
 
 import pytest
 
+from app.optimizer.trajectory import ToolCall, Trajectory, Turn
 from app.optimizer.update import run_update_stage
 
 SKILL_DIR = "billing"
@@ -90,7 +91,7 @@ def analyst_reply(edits, *, reasoning="because") -> dict:
 
 
 def items(n, *, correct=False, prefix="q") -> list[dict]:
-    """`n` analyst items, each with a one-line conversation naming itself."""
+    """`n` analyst items, each with a one-turn trajectory naming itself."""
     return [
         {
             "id": f"{prefix}_{i}",
@@ -98,8 +99,12 @@ def items(n, *, correct=False, prefix="q") -> list[dict]:
             "soft": 1.0 if correct else 0.0,
             "task_description": f"question {prefix}_{i}",
             "reference_text": "the gold answer",
+            "agent_response": f"answer for {prefix}_{i}",
+            "fail_reason": "" if correct else "the figure is wrong",
             "n_turns": 1,
-            "conversation": [{"role": "assistant", "content": f"answer for {prefix}_{i}"}],
+            "trajectory": Trajectory(
+                turns=[Turn(role="assistant", text=f"answer for {prefix}_{i}")],
+            ),
         }
         for i in range(n)
     ]
@@ -480,12 +485,7 @@ def test_the_mode_chooses_the_analyst_prompt():
 
 
 def _spoken_items(n, *, chars=500):
-    """Items whose conversations carry `cmd`/`obs`, the keys the sizes are read from.
-
-    The fixture above uses `role`/`content`, which no size calculation looks at
-    — so a batch built from it measures zero characters however much is in it,
-    and any comparison between the two figures holds trivially.
-    """
+    """Items carrying a trajectory big enough for the size figures to be visible."""
     return [
         {
             "id": f"q_{i}",
@@ -493,8 +493,14 @@ def _spoken_items(n, *, chars=500):
             "soft": 0.0,
             "task_description": f"question {i}",
             "reference_text": "the gold answer",
-            "n_turns": 1,
-            "conversation": [{"cmd": "search: invoices", "obs": "x" * chars}],
+            "agent_response": "an answer",
+            "n_turns": 2,
+            "trajectory": Trajectory(
+                turns=[
+                    Turn(role="assistant", tool_calls=[ToolCall(name="search", args="invoices")]),
+                    Turn(role="tool", text="x" * chars),
+                ],
+            ),
         }
         for i in range(n)
     ]

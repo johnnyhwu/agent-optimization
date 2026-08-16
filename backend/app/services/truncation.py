@@ -7,11 +7,16 @@ elided — so the span skeleton and both ends of the evidence survive.
 `truncate_body` is the original, unchanged: the diagnosis path builds its prompt
 from `span.input` / `span.output` as text and shortens each independently.
 
-`truncate_trace` below is the structure-aware form the reflect stage needs, and
-it is an addition rather than a replacement — the two callers have genuinely
-different problems. Diagnosis sends **one** trace and can afford a generous
-per-body limit. Reflection sends a **minibatch** of them to a single analyst
-call, so the budget is shared, and *which* part of a span gives matters:
+`truncate_trace` below is the structure-aware form, and it is an addition rather
+than a replacement. It serves the diagnosis path, which sends **one** trace and
+must make it fit whatever else happens. Reflection used to share it and no
+longer does: its traces are folded into a single conversation first
+(`app/optimizer/trajectory.py`), which is a different structure with a different
+cascade over it — and the reason for the split is that this one cannot cut a
+span's first system message, which is correct for one trace and arithmetically
+hopeless once N spans each carry a copy of it. What *stays* shared is the
+vocabulary — the same stage order, the same elision marker, the same ledger
+shape — so a developer reads one format in both places:
 
   * A **tool call** — name and arguments — is the agent's decision, and the only
     place "it queried the wrong table" is visible at all. The final answer looks
@@ -19,9 +24,8 @@ call, so the budget is shared, and *which* part of a span gives matters:
     undiagnosable one.
   * A **tool result** is data. Losing its middle costs the analyst nothing.
 
-Hence one shared implementation with two budgets rather than two implementations:
-the elision marker a developer reads in a reflect prompt is the same one they
-read in a diagnosis prompt.
+`allocate_budget` is shared outright: sharing one budget fairly between several
+traces is the same arithmetic wherever it is done.
 """
 from __future__ import annotations
 
