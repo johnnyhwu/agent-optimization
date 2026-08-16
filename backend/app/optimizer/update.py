@@ -41,7 +41,12 @@ from typing import Any, Mapping, Sequence
 from app.integrations.base import OptimizerClient
 from app.optimizer.analyst import run_analyst_minibatch
 from app.optimizer.skillio import build_protection, render_skill
-from app.optimizer.trajectory import Trajectory, trajectory_chars
+from app.optimizer.trajectory import (
+    Trajectory,
+    conversation_chars,
+    preamble_chars,
+    shared_preamble,
+)
 from app.optimizer.vendor._model import use_optimizer
 from app.optimizer.vendor.aggregate import merge_patches
 from app.optimizer.vendor.clip import rank_and_select
@@ -461,12 +466,24 @@ def _reflect(
 
 
 def _batch_chars(batch: Sequence[dict]) -> int:
-    """How much text this minibatch carries, as the analyst received it."""
-    return sum(
-        trajectory_chars(item["trajectory"])
-        for item in batch
+    """How much text this minibatch carries, as the analyst received it.
+
+    The setup is counted once where the batch shares one, because that is how
+    many times it was sent. Counting it per trajectory would report a prompt
+    several times the size of the one the model was given, on the page whose
+    job is to say how much evidence the analyst had.
+    """
+    trajectories = [
+        item["trajectory"] for item in batch
         if isinstance(item.get("trajectory"), Trajectory)
-    )
+    ]
+    shared = shared_preamble(trajectories)
+    total = preamble_chars(shared) if shared else 0
+    for traj in trajectories:
+        total += conversation_chars(traj)
+        if shared is None:
+            total += preamble_chars(traj)
+    return total
 
 
 def _truncation_for(

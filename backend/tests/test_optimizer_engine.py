@@ -842,11 +842,14 @@ async def test_a_complete_run_executes_against_the_fake_layer(monkeypatch, confi
     for heading in ("#### Task", "#### Agent Response", "#### Ground-truth Response",
                     "Failure Reason (from the judge)"):
         assert heading in prompt, heading
-    # And the tool catalogue exactly once per trajectory, rather than once per
-    # step of it — the whole reason these prompts used to overflow a context
-    # window. The fake agent takes several steps, so a regression here shows up
-    # as a count larger than the number of trajectories in the batch.
-    assert prompt.count("#### Tools Available") == prompt.count("### Trajectory ")
+    # And the tool catalogue exactly once for the whole batch — not once per
+    # step, which is what used to overflow the context window, and not once per
+    # trajectory either: they were all answered by the same agent under the same
+    # skill, so it is hoisted. A regression shows up here as a count that scales
+    # with either the steps or the trajectories.
+    assert prompt.count("#### Tools Available") == 1
+    assert prompt.count("#### System Prompt") == 1
+    assert prompt.count("### Trajectory ") > 1
     # What became of those patches is recorded too: with one analyst there is
     # nothing to merge hierarchically, but the two groups are still combined.
     assert [c["stage"] for c in store.stage_calls]

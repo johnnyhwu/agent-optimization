@@ -29,6 +29,7 @@ returned here is what lets the page tell them apart.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Mapping, Sequence
 
 from app.integrations.base import Trace
@@ -36,23 +37,31 @@ from app.optimizer.store import ResultRow
 from app.optimizer.trajectory import (
     Trajectory,
     build_trajectory,
-    trajectory_chars,
+    conversation_chars,
+    preamble_chars,
+    shared_preamble,
     truncate_trajectory,
 )
 from app.services.truncation import DEFAULT_MIN_KEEP, allocate_budget
 
-# Roughly 35-40k tokens of trajectory per step, shared across its whole training
-# batch. Large enough that ordinary traces pass through untouched — the first
-# stage of the cascade is "measure, and cut nothing if it fits" — and small
-# enough to leave a 100k-token model room for the skill, the analyst's
-# instructions and its own 16k-token answer.
+# The trajectory half of one analyst prompt: everything the batch shares,
+# counted once, plus each question's own conversation and frame.
 #
-# It was 60,000, chosen when the budget was unreachable anyway: every span
-# repeated an uncuttable copy of the system prompt, so the cascade could not
-# meet any budget and every prompt went out oversized. Folding the repetition
-# away made the number load-bearing for the first time, and 60,000 would then
-# have started throwing away evidence that now fits.
-DEFAULT_REFLECT_BUDGET_CHARS = 150_000
+# 200,000 characters is roughly 50k-80k tokens depending on how dense the text
+# is, which leaves a 100k-token model room for the skill in front of it and the
+# analyst's own answer — up to 16k tokens — behind it. The wizard states that
+# rule beside the field, because the right number depends on the model the run
+# is pointed at and on the language its traces are in: CJK text costs several
+# times more tokens per character than this assumes.
+#
+# The history is worth knowing before adjusting it. It was 60,000 when every
+# span carried an uncuttable copy of the system prompt — a budget no cascade
+# could meet, so every prompt went out oversized regardless. Folding the
+# repetition away (`trajectory.py`) made it reachable, and hoisting what a
+# minibatch shares made it *buy* far more than it used to: with an 8k-token
+# system prompt and eight questions, seven copies of it — some 56k tokens —
+# used to be inside this figure and are now outside it entirely.
+DEFAULT_REFLECT_BUDGET_CHARS = 200_000
 
 
 def conversation_from_trace(trace: Trace | None) -> Trajectory:
@@ -112,6 +121,13 @@ def build_analyst_items(
     The budget is shared equally and then the unused part is redistributed, so a
     batch of one short trace and one long one does not cut the long one to half
     the budget while the short one leaves half of its own unspent.
+
+    What the batch shares is charged once, not once per trajectory. The system
+    prompt carries the skill and, on a real agent, runs to thousands of tokens;
+    every trajectory in a step was answered under the same one, so the prompt
+    prints it once (`analyst.format_minibatch`) and the budget is spent the same
+    way. Counting it per item instead would cut real evidence to make room for
+    copies that are never sent.
     """
     questions = questions or {}
     ground_truths = ground_truths or {}
@@ -125,19 +141,29 @@ def build_analyst_items(
         _header_chars(row, questions.get(row.item_key, ""), ground_truths.get(row.item_key, ""))
         for row in usable
     ]
+
+    # Charged once when it is common to the batch, per item when it is not.
+    shared = shared_preamble(folded)
+    spent_on_setup = preamble_chars(shared) if shared else 0
+    own_setup = [0 if shared else preamble_chars(traj) for traj in folded]
+    for_conversations = max(budget_chars - spent_on_setup, min_keep * len(usable))
+
     shares = allocate_budget(
-        [trajectory_chars(traj) + head for traj, head in zip(folded, headers)],
-        budget_chars,
+        [
+            conversation_chars(traj) + head + setup
+            for traj, head, setup in zip(folded, headers, own_setup)
+        ],
+        for_conversations,
     )
 
     items: list[dict] = []
     ledger: dict[str, list[dict]] = {}
-    for row, traj, head, share in zip(usable, folded, headers, shares):
+    for row, traj, head, setup, share in zip(usable, folded, headers, own_setup, shares):
         # The question, both answers and the judge's comment are not part of the
         # trajectory and are not cuttable — they are the frame that makes it
-        # readable — so the trajectory's share is what is left after them.
+        # readable — so the conversation's share is what is left after them.
         trimmed, entries = truncate_trajectory(
-            traj, max(share - head, min_keep), min_keep=min_keep,
+            traj, max(share - head - setup, min_keep), min_keep=min_keep,
         )
         if entries:
             ledger[row.item_key] = [{"item_key": row.item_key, **entry} for entry in entries]
@@ -150,7 +176,7 @@ def build_analyst_items(
             )
         )
 
-    return _drop_until_it_fits(items, budget_chars, ledger)
+    return _drop_until_it_fits(items, for_conversations, ledger)
 
 
 def _header_chars(row: ResultRow, question: str, ground_truth: str) -> int:
@@ -164,9 +190,15 @@ def _header_chars(row: ResultRow, question: str, ground_truth: str) -> int:
 
 
 def item_chars(item: dict) -> int:
-    """Everything one item contributes to the prompt."""
+    """What one item adds to the prompt, over what the batch already shares.
+
+    The conversation and the frame around it. Not the preamble: where it is
+    common to the batch it is printed once no matter how many items there are,
+    so charging it here would make dropping an item look like it saved several
+    thousand characters it never cost.
+    """
     traj = item.get("trajectory")
-    size = trajectory_chars(traj) if isinstance(traj, Trajectory) else 0
+    size = conversation_chars(traj) if isinstance(traj, Trajectory) else 0
     return size + sum(
         len(str(item.get(key) or ""))
         for key in ("task_description", "agent_response", "reference_text", "fail_reason")
@@ -206,11 +238,13 @@ def _drop_until_it_fits(
 
     total = sum(item_chars(item) for item in items)
 
-    shown = [i for i in items if trajectory_chars(i["trajectory"]) > 0]
+    shown = [i for i in items if conversation_chars(i["trajectory"]) > 0]
     while total > budget_chars and shown:
-        victim = max(shown, key=lambda item: trajectory_chars(item["trajectory"]))
-        size = trajectory_chars(victim["trajectory"])
-        victim["trajectory"] = Trajectory()
+        victim = max(shown, key=lambda item: conversation_chars(item["trajectory"]))
+        size = conversation_chars(victim["trajectory"])
+        # The setup is kept: it is shared with the rest of the batch and is
+        # printed once whatever happens to this item.
+        victim["trajectory"] = replace(victim["trajectory"], turns=[])
         victim["dropped"] = True
         victim["n_turns"] = 0
         total -= size

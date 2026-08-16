@@ -13,6 +13,7 @@ import {
   hyperState,
   parseCount,
   skillStatus,
+  tokenEstimate,
 } from "./optimize_wizard.js";
 
 // Every case below is one where the wizard let a run be started, or a step be
@@ -374,4 +375,49 @@ test("a field the developer cleared is absent, not an empty string", () => {
 test("cleaning a config nobody filled in is an empty object, not a crash", () => {
   assert.deepEqual(cleanConfig({}), {});
   assert.deepEqual(cleanConfig(undefined), {});
+});
+
+// --- The trajectory budget --------------------------------------------------
+//
+// It decides whether an analyst call fits in the optimizer's context window at
+// all, and it used to be reachable only through the API — so "the model refused
+// the request" was a thing you could hit and not adjust from anywhere you could
+// see.
+
+test("the trajectory budget is sent with the run's config", () => {
+  const { values, errors, ok } = hyperState(
+    { reflect_budget_chars: "120000" },
+    { reflect_budget_chars: 200000 },
+  );
+
+  assert.equal(ok, true);
+  assert.deepEqual(errors, {});
+  assert.equal(values.reflect_budget_chars, 120000);
+});
+
+test("an untouched budget falls back to the server's default", () => {
+  const { values } = hyperState({}, { reflect_budget_chars: 200000 });
+
+  assert.equal(values.reflect_budget_chars, 200000);
+});
+
+test("a budget below the API's floor is refused here rather than by a 422", () => {
+  const { errors, ok } = hyperState({ reflect_budget_chars: "500" }, {});
+
+  assert.equal(ok, false);
+  assert.match(errors.reflect_budget_chars, /at least 1000/);
+});
+
+test("the token estimate is a range, because the ratio depends on the text", () => {
+  const est = tokenEstimate(200000);
+
+  assert.equal(est.low, 50000);
+  assert.equal(est.high, 80000);
+  assert.ok(est.low < est.high);
+});
+
+test("a budget mid-edit has no estimate rather than an estimate of zero", () => {
+  assert.equal(tokenEstimate(null), null);
+  assert.equal(tokenEstimate(0), null);
+  assert.equal(tokenEstimate(NaN), null);
 });

@@ -22,7 +22,10 @@ from app.optimizer.reflection import build_analyst_items
 from app.optimizer.store import ResultRow
 from app.optimizer.trajectory import (
     build_trajectory,
+    conversation_chars,
+    preamble_chars,
     render_trajectory,
+    shared_preamble,
     trajectory_chars,
     truncate_trajectory,
 )
@@ -223,6 +226,86 @@ def test_a_summarised_history_does_not_lose_the_later_turns():
         assert expected in text
 
 
+# --- what a whole batch shares ----------------------------------------------
+#
+# The system prompt carries the skill, and on a real agent it is thousands of
+# tokens. Every trajectory in a minibatch was answered by the same agent under
+# the same candidate skill, so printing it per trajectory spends eight copies of
+# it before showing a single tool call.
+
+
+def _item(key, trace, **over):
+    return {
+        "id": key, "task_description": "How much does ACME owe?",
+        "agent_response": "4,000 EUR", "reference_text": "4,200 EUR",
+        "fail_reason": "off by 200", "trajectory": build_trajectory(trace), **over,
+    }
+
+
+def test_a_batch_that_shares_its_setup_is_shown_it_once():
+    items = [_item(f"q{i}", agent_trace(steps=4)) for i in range(4)]
+
+    prompt = build_user_prompt(
+        "the skill", items, source_type="failure", edit_budget=4, mode="patch",
+    )
+
+    assert prompt.count(SYSTEM) == 1
+    assert prompt.count("#### Tools Available") == 1
+    assert prompt.count("### Trajectory ") == 4
+    # And it says so, rather than leaving an analyst to assume the trajectories
+    # below it had no system prompt at all.
+    assert "What every agent below was set up with" in prompt
+
+
+def test_hoisting_saves_a_copy_per_extra_trajectory():
+    one = build_user_prompt(
+        "s", [_item("q0", agent_trace(steps=4))],
+        source_type="failure", edit_budget=4, mode="patch",
+    )
+    eight = build_user_prompt(
+        "s", [_item(f"q{i}", agent_trace(steps=4)) for i in range(8)],
+        source_type="failure", edit_budget=4, mode="patch",
+    )
+
+    # Eight trajectories, but nowhere near eight times the prompt: the shared
+    # setup is paid for once.
+    assert len(eight) < 8 * len(one)
+
+
+def test_an_agent_told_something_different_keeps_its_own_setup():
+    """Hoisting must not erase the difference. "This one was set up differently"
+    is itself a finding, and it is invisible once the batch is assumed uniform."""
+    odd = agent_trace(steps=3)
+    odd.spans[0].input_json["messages"][0]["content"] = "You are a different agent."
+
+    items = [_item("q0", agent_trace(steps=3)), _item("q1", odd)]
+    prompt = build_user_prompt(
+        "s", items, source_type="failure", edit_budget=4, mode="patch",
+    )
+
+    assert "You are a different agent." in prompt
+    assert prompt.count(SYSTEM) == 1  # still there, under its own trajectory
+    assert "What every agent below was set up with" not in prompt
+
+
+def test_one_trajectory_has_nothing_to_hoist():
+    assert shared_preamble([build_trajectory(agent_trace(steps=3))]) is None
+
+
+def test_the_shared_setup_is_charged_once_against_the_budget():
+    """Otherwise the batch cuts real evidence to make room for copies of a
+    system prompt that is only ever sent once."""
+    rows = [_row(f"q{i}", agent_trace(steps=4)) for i in range(4)]
+    preamble = preamble_chars(build_trajectory(agent_trace(steps=4)))
+
+    # A budget with room for one copy of the setup and little else. Charged per
+    # item, four copies would not fit and every conversation would be shredded.
+    items, _ = build_analyst_items(rows, budget_chars=preamble + 4_000)
+
+    kept = sum(conversation_chars(i["trajectory"]) for i in items)
+    assert kept > 2_000, kept
+
+
 # --- truncation -------------------------------------------------------------
 
 
@@ -236,8 +319,11 @@ def test_a_trajectory_that_fits_is_returned_untouched():
 
 
 def test_tool_results_are_cut_before_anything_else():
+    # The budget is over the conversation: the preamble is not cuttable, so
+    # counting it here would only mean cutting the conversation to make room for
+    # something no cut can reach.
     traj = build_trajectory(agent_trace(steps=5))
-    budget = trajectory_chars(traj) // 2
+    budget = conversation_chars(traj) // 2
 
     _, ledger = truncate_trajectory(traj, budget, min_keep=100)
 
@@ -269,13 +355,13 @@ def test_the_final_answer_and_the_system_prompt_survive():
 def test_the_ledger_says_what_was_cut_and_by_how_much():
     traj = build_trajectory(agent_trace(steps=5))
 
-    trimmed, ledger = truncate_trajectory(traj, trajectory_chars(traj) // 3, min_keep=100)
+    trimmed, ledger = truncate_trajectory(traj, conversation_chars(traj) // 3, min_keep=100)
 
     assert ledger
     for entry in ledger:
         assert entry["after"] < entry["before"]
         assert entry["span_index"] is not None
-    assert trajectory_chars(trimmed) < trajectory_chars(traj)
+    assert conversation_chars(trimmed) < conversation_chars(traj)
 
 
 # --- the budget, end to end -------------------------------------------------

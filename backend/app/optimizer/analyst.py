@@ -23,7 +23,12 @@ the edit-budget clipping, and the merge and ranking stages that follow.
 """
 from __future__ import annotations
 
-from app.optimizer.trajectory import Trajectory, render_trajectory
+from app.optimizer.trajectory import (
+    Trajectory,
+    render_conversation,
+    render_preamble,
+    shared_preamble,
+)
 from app.optimizer.vendor._model import chat_optimizer
 from app.optimizer.vendor.json_utils import extract_json
 from app.optimizer.vendor.meta_skill import format_meta_skill_context
@@ -48,7 +53,7 @@ def analyst_system_prompt(source_type: str, mode: str) -> str:
     return load_prompt(name, mode)
 
 
-def format_trajectory_item(item: dict, ordinal: int) -> str:
+def format_trajectory_item(item: dict, ordinal: int, *, include_preamble: bool = True) -> str:
     """One trajectory, headed by the four things a reviewer needs.
 
     Task, what the agent answered, what right looked like, and why it was marked
@@ -73,30 +78,61 @@ def format_trajectory_item(item: dict, ordinal: int) -> str:
         parts.append(f"#### Failure Reason (from the judge)\n{fail_reason}")
 
     trajectory = item.get("trajectory")
-    body = render_trajectory(trajectory) if isinstance(trajectory, Trajectory) else ""
-    if body:
-        parts.append(body)
-    elif item.get("dropped"):
-        # Said out loud rather than left as a silent gap. An analyst that knows
-        # a run was withheld can qualify what it proposes; one that is simply
-        # shown fewer trajectories than the batch contains cannot.
-        parts.append(
-            "#### Conversation\n(withheld — this run did not fit in the "
-            "analyst's context budget, so only the question, the answers and "
-            "the verdict above are shown for it)"
-        )
+    if isinstance(trajectory, Trajectory):
+        if include_preamble:
+            preamble = render_preamble(trajectory)
+            if preamble:
+                parts.append(preamble)
+        conversation = render_conversation(trajectory)
+        if conversation:
+            parts.append(conversation)
+        elif item.get("dropped"):
+            # Said out loud rather than left as a silent gap. An analyst that
+            # knows a run was withheld can qualify what it proposes; one that is
+            # simply shown fewer trajectories than the batch contains cannot.
+            parts.append(
+                "#### Conversation\n(withheld — this run did not fit in the "
+                "analyst's context budget, so only the question, the answers and "
+                "the verdict above are shown for it)"
+            )
 
     return "\n\n".join(parts)
 
 
 def format_minibatch(items: list[dict]) -> str:
-    """Every trajectory in one minibatch, separated as upstream separates them."""
+    """Every trajectory in one minibatch, separated as upstream separates them.
+
+    With the setup hoisted when they share one, which they almost always do: a
+    minibatch is several questions answered by the same agent under the same
+    candidate skill, so the tool catalogue and the system prompt are identical
+    across all of them. The system prompt is where the skill lives and in a real
+    deployment runs to thousands of tokens — printed per trajectory, an
+    eight-question batch spends eight copies of it before showing a single tool
+    call.
+    """
+    trajectories = [
+        item["trajectory"] for item in items
+        if isinstance(item.get("trajectory"), Trajectory)
+    ]
+    shared = shared_preamble(trajectories)
+
     rendered = [
         text for text in (
-            format_trajectory_item(item, i) for i, item in enumerate(items, 1)
+            format_trajectory_item(item, i, include_preamble=shared is None)
+            for i, item in enumerate(items, 1)
         ) if text.strip()
     ]
-    return "\n\n---\n\n".join(rendered)
+    body = "\n\n---\n\n".join(rendered)
+    if shared is None:
+        return body
+
+    # Said explicitly, because an analyst that cannot see a system prompt under
+    # a trajectory would otherwise have to assume there was none.
+    return (
+        "### What every agent below was set up with\n"
+        "Identical for all of these trajectories, so it is shown once.\n\n"
+        f"{render_preamble(shared)}\n\n---\n\n{body}"
+    )
 
 
 def build_user_prompt(

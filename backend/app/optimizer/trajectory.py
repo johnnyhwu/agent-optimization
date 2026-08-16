@@ -325,37 +325,88 @@ def _render_turn(turn: Turn, ordinal: int) -> str:
     return "\n".join(out)
 
 
-def render_trajectory(traj: Trajectory) -> str:
-    """The conversation as the analyst reads it: each thing said exactly once."""
+def render_preamble(traj: Trajectory) -> str:
+    """The setup every turn happened under: the tool catalogue and the system
+    prompt. Separable from the conversation because a whole minibatch usually
+    shares one — see `shared_preamble`."""
     blocks: list[str] = []
     if traj.tools:
         blocks.append(_render_tools(traj.tools))
     if traj.system_prompt:
         blocks.append(f"#### System Prompt\n{traj.system_prompt}")
-    if traj.turns:
-        turns = "\n\n".join(
-            _render_turn(turn, i) for i, turn in enumerate(traj.turns, 1)
-        )
-        blocks.append(f"#### Conversation ({len(traj.turns)} turns)\n{turns}")
     return "\n\n".join(blocks)
 
 
-def trajectory_chars(traj: Trajectory) -> int:
-    """How much of the analyst's budget this trajectory occupies.
+def render_conversation(traj: Trajectory) -> str:
+    if not traj.turns:
+        return ""
+    turns = "\n\n".join(_render_turn(turn, i) for i, turn in enumerate(traj.turns, 1))
+    return f"#### Conversation ({len(traj.turns)} turns)\n{turns}"
 
-    Everything that will be rendered, counted once — which is the same set of
-    strings `render_trajectory` joins, so the budget is spent in the units it is
-    measured in. Summed rather than rendered because the truncation loop asks
-    after every cut, and re-serialising a whole trajectory each time to learn its
-    length is work for nothing.
+
+def render_trajectory(traj: Trajectory, *, include_preamble: bool = True) -> str:
+    """The run as the analyst reads it: each thing said exactly once.
+
+    `include_preamble=False` is for the case where the batch shares one and it
+    has already been printed above all of them.
     """
+    blocks = []
+    if include_preamble:
+        blocks.append(render_preamble(traj))
+    blocks.append(render_conversation(traj))
+    return "\n\n".join(b for b in blocks if b)
+
+
+def preamble_chars(traj: Trajectory) -> int:
+    """The size of the shared setup: system prompt plus tool catalogue."""
     total = len(traj.system_prompt)
     for tool in traj.tools:
         total += len(json.dumps(tool, ensure_ascii=False))
+    return total
+
+
+def conversation_chars(traj: Trajectory) -> int:
+    """The size of what actually varies between one run and another."""
+    total = 0
     for turn in traj.turns:
         total += len(turn.text) + len(turn.role)
         total += sum(len(call.name) + len(call.args) for call in turn.tool_calls)
     return total
+
+
+def trajectory_chars(traj: Trajectory) -> int:
+    """Everything this trajectory would occupy if it were rendered alone.
+
+    Summed rather than rendered because the truncation loop asks after every
+    cut, and re-serialising a whole trajectory each time to learn its length is
+    work for nothing.
+    """
+    return preamble_chars(traj) + conversation_chars(traj)
+
+
+def shared_preamble(trajectories: list[Trajectory]) -> Trajectory | None:
+    """The setup, if every run in the batch had the same one — else `None`.
+
+    They normally did. A minibatch is several questions answered by the same
+    agent under the same candidate skill, so the tool catalogue is identical and
+    the system prompt is identical — and the system prompt is where the skill
+    lives, which for a real deployment is thousands of tokens. Printed per
+    trajectory, an eight-question batch spends eight copies of it before a
+    single tool call is shown; printed once, it costs what it is.
+
+    The check is exact equality rather than an assumption, because "the agent
+    was told something different on this one" is itself a finding, and hoisting
+    would erase it. One trajectory is not a batch, so there is nothing to hoist.
+    """
+    if len(trajectories) < 2:
+        return None
+    first = trajectories[0]
+    if not first.system_prompt and not first.tools:
+        return None
+    for other in trajectories[1:]:
+        if other.system_prompt != first.system_prompt or other.tools != first.tools:
+            return None
+    return Trajectory(tools=first.tools, system_prompt=first.system_prompt)
 
 
 # --- truncation -------------------------------------------------------------
@@ -364,10 +415,17 @@ def trajectory_chars(traj: Trajectory) -> int:
 def truncate_trajectory(
     traj: Trajectory, budget_chars: int, *, min_keep: int = 400,
 ) -> tuple[Trajectory, list[dict]]:
-    """Fit one trajectory into `budget_chars`, cutting as little as possible.
+    """Fit one trajectory's **conversation** into `budget_chars`, cutting as
+    little as possible.
 
-    Measure first: one that already fits is returned exactly as it came, so an
-    elision marker in a prompt always means something was genuinely cut.
+    The budget is over the conversation alone, because the preamble is not
+    cuttable and counting it here would only mean cutting the conversation to
+    make room for something no cut can reach. The caller reserves the preamble
+    separately — once for the whole batch when they share one.
+
+    Measure first: a conversation that already fits is returned exactly as it
+    came, so an elision marker in a prompt always means something was genuinely
+    cut.
 
     When it does not fit, turns are cut cheapest-stage-first and largest-first
     within a stage, re-measuring after each. Never cut:
@@ -381,7 +439,7 @@ def truncate_trajectory(
     Returns the trimmed trajectory and a ledger of what was cut, in the same
     shape `app/services/truncation.py` produces, so the UI reads one format.
     """
-    if trajectory_chars(traj) <= budget_chars:
+    if conversation_chars(traj) <= budget_chars:
         return traj, []
 
     turns = list(traj.turns)
@@ -393,7 +451,7 @@ def truncate_trajectory(
     )
 
     for index in candidates:
-        if trajectory_chars(replace(traj, turns=turns)) <= budget_chars:
+        if conversation_chars(replace(traj, turns=turns)) <= budget_chars:
             break
         turn = turns[index]
         before = len(turn.text)
