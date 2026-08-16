@@ -597,7 +597,12 @@ Notes:
   edits one step may apply, and a validation gate that throws away the ones that
   did not help. Six-step wizard, then a chart that grows a point per step while
   it runs. Click a step to see what it measured, which failures the analyst was
-  shown together, and a side-by-side diff of what it did to the skill. The
+  shown together, and a side-by-side diff of what it did to the skill. Every
+  model call the step made is on that page: each analyst's conclusion and the
+  patch it asked for, then — under *After the analysts* — the merge and ranking
+  calls that decided which of those edits survived, each with the prompt it was
+  sent one click away. An edit an analyst asked for and the skill does not have
+  was dropped in one of them. The
   output is a zip you put back on the agent server yourself; re-run it through
   Evaluation for an unbiased number. All seven seams are fake by default, so the
   whole loop runs on `SEED=1 ./scripts/dev.sh` with nothing external attached.
@@ -705,6 +710,8 @@ Notes:
 | Manual re-diagnose (owner-only) | `backend/app/routers/diagnosis.py` |
 | Roles / fake login (spec §11) | `backend/app/auth.py` |
 | Body truncation, diagnosis prompt only (spec §4.4) | `backend/app/services/truncation.py` |
+| A trace folded into one conversation, for the analyst prompt | `backend/app/optimizer/trajectory.py` |
+| The analyst prompt itself (minibatch of trajectories) | `backend/app/optimizer/analyst.py` |
 | Span input/output rendered as a chat exchange | `frontend/src/components/SpanPayload.jsx` |
 | Incorrect modes + regression + `phase` | `backend/app/services/aggregation.py` |
 | SSE hub | `backend/app/sse.py` |

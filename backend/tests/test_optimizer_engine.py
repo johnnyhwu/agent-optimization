@@ -835,8 +835,22 @@ async def test_a_complete_run_executes_against_the_fake_layer(monkeypatch, confi
     assert "train" in store.splits_of(1)
     # A real analyst call happened, with a real prompt, on real trajectories.
     assert store.minibatches
-    assert "### Trajectory 1" in store.minibatches[0]["prompt_user"]
+    prompt = store.minibatches[0]["prompt_user"]
+    assert "### Trajectory 1" in prompt
     assert store.minibatches[0]["raw_output"]["failure_summary"]
+    # The four things a reviewer of a failure needs, in the prompt itself.
+    for heading in ("#### Task", "#### Agent Response", "#### Ground-truth Response",
+                    "Failure Reason (from the judge)"):
+        assert heading in prompt, heading
+    # And the tool catalogue exactly once per trajectory, rather than once per
+    # step of it — the whole reason these prompts used to overflow a context
+    # window. The fake agent takes several steps, so a regression here shows up
+    # as a count larger than the number of trajectories in the batch.
+    assert prompt.count("#### Tools Available") == prompt.count("### Trajectory ")
+    # What became of those patches is recorded too: with one analyst there is
+    # nothing to merge hierarchically, but the two groups are still combined.
+    assert [c["stage"] for c in store.stage_calls]
+    assert all(c["prompt_user"] for c in store.stage_calls)
     # And a real candidate skill was produced and stored.
     candidates = [s for s in store.skills if s["kind"] == "candidate"]
     assert candidates
