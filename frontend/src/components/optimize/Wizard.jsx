@@ -723,8 +723,10 @@ function budgetHelp(chars) {
     "What does not fit is trimmed — tool results first, never a tool call or a " +
     "final answer — and if it still does not fit, whole runs are withheld and " +
     "the step says which.";
+  // The token figure first: it is the number that decides whether the call
+  // fits, and at the end of a four-line paragraph nobody reaches it.
   if (!est) return base;
-  return `${base} About ${est.low.toLocaleString()}–${est.high.toLocaleString()} tokens.`;
+  return `≈ ${est.low.toLocaleString()}–${est.high.toLocaleString()} tokens. ${base}`;
 }
 
 function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper, values, errors, impls }) {
