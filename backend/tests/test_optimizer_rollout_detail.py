@@ -377,6 +377,67 @@ async def test_the_minibatches_carry_the_prompt_that_was_actually_sent(session):
     assert batch.truncation[0]["span_index"] == 3
 
 
+async def test_the_stages_after_the_analysts_are_returned_in_pipeline_order(session):
+    """Merge and ranking are where a proposed edit usually stops being one.
+
+    They were not stored at all, so the page went from "the analyst asked for
+    this" straight to "the skill says that" with the deciding calls invisible.
+    """
+    run, step, keys = await make_run(session)
+    store = DbOptimizationStore(session)
+    await store.record_rollout(step.id, summary("train", [result_row(keys["q0"])]))
+    for seq, stage in enumerate(["merge_failure", "merge_final", "ranking"]):
+        await store.record_stage_call(
+            step.id, seq=seq, stage=stage, level=1 if seq == 0 else None,
+            prompt_system=f"{stage} system", prompt_user=f"{stage} user",
+            output={"reasoning": stage}, error=None, duration_ms=1200,
+        )
+
+    detail = await opt.get_rollout_detail(
+        run.id, 1, "train", subject="alice", session=session
+    )
+
+    assert [c.stage for c in detail.stage_calls] == [
+        "merge_failure", "merge_final", "ranking",
+    ]
+    assert detail.stage_calls[0].prompt_user == "merge_failure user"
+    assert detail.stage_calls[0].level == 1
+    assert detail.stage_calls[-1].output == {"reasoning": "ranking"}
+
+
+async def test_the_validation_split_shows_no_stages(session):
+    """Same rule as the minibatches: merge and ranking produced the candidate,
+    and showing them beside the held-out questions implies the gate saw them."""
+    run, step, keys = await make_run(session)
+    store = DbOptimizationStore(session)
+    await store.record_rollout(step.id, summary("train", [result_row(keys["q0"])]))
+    await store.record_rollout(step.id, summary("val", [result_row(keys["q4"])]))
+    await store.record_stage_call(
+        step.id, seq=0, stage="merge_final", level=None,
+        prompt_system="s", prompt_user="u", output={}, error=None, duration_ms=1,
+    )
+
+    detail = await opt.get_rollout_detail(
+        run.id, 1, "val", subject="alice", session=session
+    )
+
+    assert detail.stage_calls == []
+
+
+async def test_a_step_recorded_before_stages_were_stored_reports_none(session):
+    """Older runs have no rows here and cannot be backfilled — the prompts were
+    never written down. The page has to be able to say so."""
+    run, step, keys = await make_run(session)
+    store = DbOptimizationStore(session)
+    await store.record_rollout(step.id, summary("train", [result_row(keys["q0"])]))
+
+    detail = await opt.get_rollout_detail(
+        run.id, 1, "train", subject="alice", session=session
+    )
+
+    assert detail.stage_calls == []
+
+
 async def test_a_minibatch_whose_analyst_failed_says_so(session):
     """One failed analyst call does not end the step, and must not vanish either.
 

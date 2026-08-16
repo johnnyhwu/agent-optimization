@@ -1039,6 +1039,28 @@ class OptimizationMinibatchOut(BaseModel):
     duration_ms: int | None = None
 
 
+class OptimizationStageCallOut(BaseModel):
+    """One merge or ranking call: what it was shown, and what it answered.
+
+    Between the analysts and the applied skill there are two more model calls —
+    a hierarchical merge and, if the pool overflows the learning rate, a ranking
+    — and either can drop an edit. Steps recorded before this existed have none
+    of these, and the page says so rather than implying there were none.
+    """
+
+    seq: int
+    stage: str  # merge_failure | merge_success | merge_final | ranking
+    # Which round of the hierarchical merge; null where the stage runs once.
+    level: int | None = None
+    prompt_system: str | None = None
+    prompt_user: str | None = None
+    # Parsed, not raw. Every one of these stages is a JSON contract, and a reply
+    # that could not be parsed had its patch discarded — which `error` says.
+    output: dict | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+
+
 class OptimizationRolloutDetail(BaseModel):
     """Part 1: one step, one split — the numbers, the questions, the analysts."""
 
@@ -1088,6 +1110,9 @@ class OptimizationRolloutDetail(BaseModel):
     results: list[OptimizationResultOut] = Field(default_factory=list)
     # Empty on validation, which is measured and never reflected on.
     minibatches: list[OptimizationMinibatchOut] = Field(default_factory=list)
+    # The step's own stages, after the per-minibatch analysts: merge, then rank.
+    # Also empty on validation, and on any step run before they were recorded.
+    stage_calls: list[OptimizationStageCallOut] = Field(default_factory=list)
 
 
 class SkillDiffFile(BaseModel):

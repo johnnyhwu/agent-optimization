@@ -546,6 +546,17 @@ async def _run_step(
             chars_after=record.chars_after, error=record.error,
             duration_ms=record.duration_ms,
         )
+    # What happened to those patches afterwards. Merge and ranking are where a
+    # proposed edit most often stops being one, and until these were stored the
+    # page went straight from "the analyst asked for this" to "the skill says
+    # that" with the deciding calls invisible.
+    for call in outcome.stage_calls:
+        await store.record_stage_call(
+            step_id,
+            seq=call.seq, stage=call.stage, level=call.level,
+            prompt_system=call.prompt_system, prompt_user=call.prompt_user,
+            output=call.output, error=call.error, duration_ms=call.duration_ms,
+        )
     await publish({
         "type": "reflect_done", "step_no": step_no,
         "n_minibatches": len(outcome.minibatches),

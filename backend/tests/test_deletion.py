@@ -142,6 +142,7 @@ def test_every_child_table_is_covered():
         "optimization_rollouts",
         "optimization_results",
         "optimization_minibatches",
+        "optimization_stage_calls",
         "optimization_skills",
     }
     from app.db import Base

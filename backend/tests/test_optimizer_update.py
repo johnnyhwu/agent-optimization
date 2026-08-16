@@ -329,6 +329,102 @@ def test_ranking_clips_an_oversized_pool_to_the_budget():
     assert any(c["stage"] == "ranking" for c in client.calls)
 
 
+# --- What happened between the analysts and the skill -----------------------
+#
+# The stages after reflect decide which proposed edits survive, and they were
+# not recorded at all: the page could show what an analyst asked for and what
+# the skill ended up saying, with the deciding calls invisible in between.
+
+
+def _stages(outcome) -> list[str]:
+    return [call.stage for call in outcome.stage_calls]
+
+
+def test_each_merge_phase_is_recorded_under_its_own_name():
+    """`merge_patches` labels all three phases "merge"; the page needs to tell
+    a failure-group merge from the final combine, and the system prompt says
+    which is which."""
+    client = ScriptedOptimizer(
+        analyst=analyst_reply([edit(content="x")]),
+        merge={"reasoning": "m", "edits": [edit(content="x")]},
+    )
+    # Two failure batches and two success batches, so every phase runs.
+    outcome = run(
+        items=items(4) + items(4, correct=True, prefix="s"),
+        minibatch_size=2, client=client,
+    )
+
+    assert _stages(outcome) == ["merge_failure", "merge_success", "merge_final"]
+
+
+def test_the_ranking_call_is_recorded_last():
+    client = ScriptedOptimizer(
+        analyst=analyst_reply([edit(content=f"r{i}") for i in range(2)]),
+        merge={"reasoning": "m", "edits": [edit(content=f"r{i}") for i in range(4)]},
+        ranking={"selected_indices": [3, 0]},
+    )
+    outcome = run(items=items(4), minibatch_size=2, edit_budget=2, client=client)
+
+    assert _stages(outcome)[-1] == "ranking"
+    assert outcome.stage_calls[-1].output == {"selected_indices": [3, 0]}
+
+
+def test_a_stage_call_keeps_the_prompt_it_was_sent():
+    """Same reason as the analyst's: a rebuilt prompt is a plausible fiction."""
+    client = ScriptedOptimizer(
+        analyst=analyst_reply([edit(content="x")]),
+        merge={"reasoning": "m", "edits": [edit(content="x")]},
+    )
+    outcome = run(items=items(4), minibatch_size=2, client=client)
+
+    record = outcome.stage_calls[0]
+    sent = next(c for c in client.calls if c["stage"] == "merge")
+    assert record.prompt_system == sent["system"]
+    assert record.prompt_user == sent["user"]
+    assert record.output == {"reasoning": "m", "edits": [edit(content="x")]}
+
+
+def test_the_merge_round_is_recorded_so_a_hierarchy_can_be_read_in_order():
+    """A hierarchical merge is several rounds, and which round a call belongs to
+    is only in the prompt it was sent."""
+    client = ScriptedOptimizer(
+        analyst=analyst_reply([edit(content="x")]),
+        merge={"reasoning": "m", "edits": [edit(content="x")]},
+    )
+    outcome = run(items=items(8), minibatch_size=1, merge_batch_size=2, client=client)
+
+    levels = [c.level for c in outcome.stage_calls if c.stage == "merge_failure"]
+    assert levels == sorted(levels)
+    assert levels[0] == 1 and levels[-1] > 1, levels
+
+
+def test_a_stage_that_could_not_be_parsed_says_so_rather_than_looking_empty():
+    """Upstream falls back to concatenating its inputs when a merge reply will
+    not parse. That is a fact about the step, not an absence of one."""
+    class Unparseable(ScriptedOptimizer):
+        def chat_optimizer(self, system, user, **kw):
+            text, usage = super().chat_optimizer(system, user, **kw)
+            if kw.get("stage", "optimizer") == "merge":
+                return "I'm afraid I can't do that.", usage
+            return text, usage
+
+    client = Unparseable(analyst=analyst_reply([edit(content="x")]))
+    outcome = run(items=items(4), minibatch_size=2, client=client)
+
+    merge = next(c for c in outcome.stage_calls if c.stage.startswith("merge"))
+    assert merge.output is None
+    assert "discarded" in merge.error
+
+
+def test_a_step_with_nothing_to_merge_records_no_stages():
+    """One analyst, no edits: nothing was decided after it, and the page should
+    not imply a merge happened."""
+    client = ScriptedOptimizer(analyst=analyst_reply([]))
+    outcome = run(items=items(2), client=client)
+
+    assert outcome.stage_calls == []
+
+
 # --- Applying, and what the mode protects -----------------------------------
 
 

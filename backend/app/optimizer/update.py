@@ -31,6 +31,7 @@ than an argument.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -73,6 +74,26 @@ class MinibatchRecord:
 
 
 @dataclass
+class StageCallRecord:
+    """One post-analyst optimizer call, as `optimization_stage_calls` stores it.
+
+    Merge and ranking decide which of the analysts' edits survive, and until
+    these were recorded the page could show what was asked for and what was
+    applied with nothing in between — so "which stage lost my edit?" was
+    unanswerable from the run itself.
+    """
+
+    seq: int
+    stage: str  # merge_failure | merge_success | merge_final | ranking
+    level: int | None
+    prompt_system: str
+    prompt_user: str
+    output: dict | None
+    error: str | None
+    duration_ms: int
+
+
+@dataclass
 class UpdateOutcome:
     """A candidate skill, and everything the step row and Part 1 report about it."""
 
@@ -85,6 +106,7 @@ class UpdateOutcome:
     n_edits_applied: int
     n_edits_skipped: int
     edit_summary: str
+    stage_calls: list[StageCallRecord] = field(default_factory=list)
     tokens: dict = field(default_factory=dict)
 
 
@@ -102,6 +124,7 @@ class _Recorder:
         self._inner = inner
         self._lock = threading.Lock()
         self._by_thread: dict[int, list[dict]] = {}
+        self._next_seq = 0
         self.tokens: dict[str, int] = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
     @property
@@ -130,6 +153,8 @@ class _Recorder:
     def _store(self, call: dict, usage: Mapping[str, int] | None = None) -> None:
         ident = threading.get_ident()
         with self._lock:
+            call["seq"] = self._next_seq
+            self._next_seq += 1
             self._by_thread.setdefault(ident, []).append(call)
             if usage:
                 for key in self.tokens:
@@ -140,6 +165,19 @@ class _Recorder:
         ident = threading.get_ident()
         with self._lock:
             return self._by_thread.pop(ident, [])
+
+    def drain(self) -> list[dict]:
+        """Every thread's calls, in the order they were made, and clear them.
+
+        `take` is per-thread because an analyst has to be paired with *its own*
+        prompt. Merge and ranking have the opposite shape: they fan out over a
+        pool and the step wants all of them, so the sequence stamped at call
+        time is what puts a hierarchical merge back in order.
+        """
+        with self._lock:
+            calls = [call for bucket in self._by_thread.values() for call in bucket]
+            self._by_thread.clear()
+        return sorted(calls, key=lambda call: call.get("seq", 0))
 
     def reset(self) -> None:
         """Drop every buffer. Called between stages so pool threads do not leak."""
@@ -209,7 +247,11 @@ def run_update_stage(
         selected = rank_and_select(
             skill_content, merged, edit_budget, update_mode=update_mode
         )
-        recorder.reset()
+        # Everything merge and ranking asked, kept. It used to be dropped here,
+        # which left the page able to show what each analyst proposed and what
+        # the skill ended up with — and nothing about the stages in between,
+        # where an edit is most likely to have been lost.
+        stage_calls = _stage_calls(recorder.drain(), update_mode)
 
     n_ranked = len(get_payload_items(selected, update_mode))
 
@@ -229,8 +271,110 @@ def run_update_stage(
         n_edits_applied=applied,
         n_edits_skipped=len(reports) - applied,
         edit_summary=str(selected.get("reasoning") or "").strip(),
+        stage_calls=stage_calls,
         tokens=dict(recorder.tokens),
     )
+
+
+# The order the pipeline runs them in, which is also the order they are read in.
+_STAGE_ORDER = ["merge_failure", "merge_success", "merge_final", "ranking", "merge"]
+
+
+def _stage_calls(calls: list[dict], update_mode: str) -> list[StageCallRecord]:
+    """The drained merge/ranking calls, named and put back in pipeline order.
+
+    Which merge a call belongs to is read off the system prompt it was sent
+    with. `merge_patches` runs all three phases behind one function and labels
+    every one of them `stage="merge"`, and the alternative to matching the
+    prompt is re-implementing upstream's phase structure out here — a copy that
+    would drift from the thing it describes. The prompts are separate files, so
+    the match is exact.
+    """
+    known = {
+        _merge_prompt(name, update_mode): f"merge_{name}"
+        for name in ("failure", "success", "final")
+    }
+    records: list[StageCallRecord] = []
+    for call in calls:
+        raw_stage = call.get("stage", "")
+        if raw_stage == "analyst":
+            continue  # a straggler from a pool thread; the analyst has its own record
+        stage = "ranking" if raw_stage == "ranking" else known.get(call.get("system", ""), raw_stage)
+        output, error = _parsed_output(call)
+        records.append(StageCallRecord(
+            seq=int(call.get("seq", 0)),
+            stage=stage,
+            level=_merge_level(call.get("user", "")),
+            prompt_system=call.get("system", ""),
+            prompt_user=call.get("user", ""),
+            output=output,
+            error=error,
+            duration_ms=int(call.get("duration_ms", 0)),
+        ))
+
+    def rank(record: StageCallRecord) -> tuple[int, int, int]:
+        order = _STAGE_ORDER.index(record.stage) if record.stage in _STAGE_ORDER else len(_STAGE_ORDER)
+        return (order, record.level or 0, record.seq)
+
+    ordered = sorted(records, key=rank)
+    for position, record in enumerate(ordered):
+        record.seq = position
+    return ordered
+
+
+def _merge_prompt(name: str, update_mode: str) -> str:
+    """The system prompt `aggregate.merge_patches` would load for this mode."""
+    from app.optimizer.vendor.prompts import load_prompt
+    from app.optimizer.vendor.update_modes import (
+        is_full_rewrite_minibatch_mode,
+        is_rewrite_mode,
+        normalize_update_mode,
+    )
+
+    mode = normalize_update_mode(update_mode)
+    if is_full_rewrite_minibatch_mode(mode):
+        suffix = "_full_rewrite"
+    elif is_rewrite_mode(mode):
+        suffix = "_rewrite"
+    else:
+        suffix = ""
+    try:
+        return load_prompt(f"merge_{name}{suffix}")
+    except FileNotFoundError:
+        return ""
+
+
+def _parsed_output(call: dict) -> tuple[dict | None, str | None]:
+    """The answer as parsed, and why there isn't one when there isn't.
+
+    A stage that could not be parsed did not merely fail to be displayed — its
+    patch was discarded and upstream fell back to concatenating its inputs. That
+    is a fact about the step, so it is recorded as an error rather than as an
+    empty output.
+    """
+    from app.optimizer.vendor.json_utils import extract_json
+
+    if call.get("error"):
+        return None, str(call["error"])
+    text = call.get("output")
+    if not text:
+        return None, "the optimizer returned nothing"
+    parsed = extract_json(text)
+    if not isinstance(parsed, dict):
+        return None, "the reply was not the JSON this stage asks for, so its result was discarded"
+    return parsed, None
+
+
+def _merge_level(user_prompt: str) -> int | None:
+    """Which round of the hierarchical merge this was, read out of its own prompt.
+
+    `aggregate._merge_batch` writes the level into the heading it sends, which
+    makes the prompt we stored the authority on it. The `merge_level` stamped on
+    the resulting edits would say the same thing, but it is added *after* the
+    reply is parsed and so is absent from the reply itself.
+    """
+    match = re.search(r"merge level (\d+)", user_prompt or "")
+    return int(match.group(1)) if match else None
 
 
 def _reflect(

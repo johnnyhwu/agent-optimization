@@ -38,9 +38,11 @@ from app.models import (
     EvalSet,
     EvalSetRole,
     OptimizationItem,
+    OptimizationMinibatch,
     OptimizationResult,
     OptimizationRollout,
     OptimizationRun,
+    OptimizationStageCall,
     OptimizationStep,
     Question,
     QuestionResult,
@@ -52,15 +54,18 @@ from app.routers.runs import list_runs
 VERSIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
 MIGRATION = VERSIONS / "0009_optimization.py"
 
-# Migrations after 0009 that add to Optimize's own tables. 0009 stays create-only
-# — that is what the two tests below guard — so a column added to an optimization
-# model later arrives in its own migration, and the schema-agreement test has to
-# read those too or it fails for a column that is perfectly well migrated.
+# Migrations after 0009 that extend Optimize's own schema. 0009 stays create-only
+# — that is what the two tests below guard — so a column or a table added to
+# Optimize later arrives in its own migration, and the schema-agreement test has
+# to read those too or it fails for a column that is perfectly well migrated.
 #
 # They are listed rather than globbed: the point of this file is that a change to
 # Optimize's schema is a deliberate act somebody had to write down here, and a
 # glob would quietly accept a migration that touched `runs`.
-LATER_OPTIMIZATION_MIGRATIONS = [VERSIONS / "0010_rollout_mean_latency.py"]
+LATER_OPTIMIZATION_MIGRATIONS = [
+    VERSIONS / "0010_rollout_mean_latency.py",
+    VERSIONS / "0011_optimization_stage_calls.py",
+]
 
 # The tables that existed before Optimize. Nothing in the 0009 migration may
 # touch one of them.
@@ -121,9 +126,9 @@ def test_the_migration_never_names_a_pre_existing_table():
     )
 
 
-def _created_tables() -> dict[str, set[str]]:
-    """`{table: {column names}}` as the migration declares them."""
-    tree = ast.parse(MIGRATION.read_text())
+def _tables_created_by(path: pathlib.Path) -> dict[str, set[str]]:
+    """`{table: {column names}}` as one migration declares them."""
+    tree = ast.parse(path.read_text())
     fn = next(
         node for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == "upgrade"
@@ -152,14 +157,29 @@ def _created_tables() -> dict[str, set[str]]:
                 if arg.args and isinstance(arg.args[0], ast.Constant):
                     columns.add(arg.args[0].value)
         tables[name] = columns
+    return tables
 
-    # Columns added by later migrations count as declared: the model and the
-    # database do agree, they just agree across two files.
+
+def _created_tables() -> dict[str, set[str]]:
+    """Optimize's schema as the migrations declare it, across all of them.
+
+    0009 created the first seven tables and every later migration extends that —
+    a column on one of them, or a table of its own. Both count as declared: the
+    model and the database do agree, they just agree across several files.
+    """
+    tables = _tables_created_by(MIGRATION)
+
     for path in LATER_OPTIMIZATION_MIGRATIONS:
+        for table, columns in _tables_created_by(path).items():
+            assert table not in tables, f"{path.name} re-creates {table}"
+            assert table.startswith("optimization_"), (
+                f"{path.name} creates {table}, which is not Optimize's to create"
+            )
+            tables[table] = columns
         for table, column in _added_columns(path):
             assert table in tables, (
-                f"{path.name} adds to {table}, which 0009 never created — "
-                "a migration in this list may only extend Optimize's own tables"
+                f"{path.name} adds to {table}, which no migration in this list "
+                "created — these may only extend Optimize's own tables"
             )
             tables[table].add(column)
     return tables
@@ -218,10 +238,11 @@ def test_the_migration_and_the_models_describe_the_same_schema():
 
     for model in (
         OptimizationRun, OptimizationItem, OptimizationStep,
-        OptimizationRollout, OptimizationResult,
+        OptimizationRollout, OptimizationResult, OptimizationMinibatch,
+        OptimizationStageCall,
     ):
         name = model.__tablename__
-        assert name in declared, f"{name} is in models.py but not in migration 0009"
+        assert name in declared, f"{name} is in models.py but in no migration"
         assert declared[name] == set(model.__table__.columns.keys()), (
             f"{name}: migration and model disagree — "
             f"only in migration {sorted(declared[name] - set(model.__table__.columns.keys()))}, "

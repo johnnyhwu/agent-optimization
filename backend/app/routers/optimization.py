@@ -43,6 +43,7 @@ from app.models import (
     OptimizationRollout,
     OptimizationRun,
     OptimizationSkill,
+    OptimizationStageCall,
     OptimizationStep,
     Question,
     QuestionResult,
@@ -60,6 +61,7 @@ from app.schemas import (
     OptimizationConfig,
     OptimizationRunCreate,
     OptimizationMinibatchOut,
+    OptimizationStageCallOut,
     OptimizationResultOut,
     OptimizationRolloutDetail,
     OptimizationRunDetail,
@@ -1095,6 +1097,20 @@ async def get_rollout_detail(
         if split == "train"
         else []
     )
+    # The same rule, for the same reason: merge and ranking are steps in
+    # producing the candidate, and they belong beside the training rollout that
+    # produced it, not beside the held-out questions that judged it.
+    stage_calls = (
+        (
+            await session.scalars(
+                select(OptimizationStageCall)
+                .where(OptimizationStageCall.step_id == step.id)
+                .order_by(OptimizationStageCall.seq)
+            )
+        ).all()
+        if split == "train"
+        else []
+    )
     # Whether the step bought a validation rollout at all. Queried rather than
     # read off `step.rollouts`: that relationship is lazy, and touching it in an
     # async session raises rather than loading.
@@ -1160,6 +1176,19 @@ async def get_rollout_detail(
                 duration_ms=batch.duration_ms,
             )
             for batch in minibatches
+        ],
+        stage_calls=[
+            OptimizationStageCallOut(
+                seq=call.seq,
+                stage=call.stage,
+                level=call.level,
+                prompt_system=call.prompt_system,
+                prompt_user=call.prompt_user,
+                output=call.output,
+                error=call.error,
+                duration_ms=call.duration_ms,
+            )
+            for call in stage_calls
         ],
     )
 

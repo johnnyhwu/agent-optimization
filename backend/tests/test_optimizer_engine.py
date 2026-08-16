@@ -47,6 +47,7 @@ class RecordingStore:
         self.steps: list[dict] = []
         self.rollouts: list[tuple[int, RolloutSummary]] = []
         self.minibatches: list[dict] = []
+        self.stage_calls: list[dict] = []
         self.skills: list[dict] = []
         self.run_updates: list[dict] = []
         self.cancel = False
@@ -102,6 +103,9 @@ class RecordingStore:
 
     async def record_minibatch(self, step_id, **fields):
         self.minibatches.append({"step_no": self._step_no(step_id), **fields})
+
+    async def record_stage_call(self, step_id, **fields):
+        self.stage_calls.append({"step_no": self._step_no(step_id), **fields})
 
     async def record_skill(self, run_id, *, step_no, kind, files, content_hash, per_file_stats):
         self.skills.append({"step_no": step_no, "kind": kind, "files": files,
