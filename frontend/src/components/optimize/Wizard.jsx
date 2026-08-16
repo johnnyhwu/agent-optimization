@@ -22,6 +22,7 @@ import {
   extraConfig,
   furthestStep,
   hyperState,
+  tokenEstimate,
 } from "../../optimize_wizard.js";
 
 // The new-run wizard: a whole page, at its own address, with a static horizontal
@@ -236,6 +237,7 @@ export default function Wizard() {
           ...extraConfig(hyper),
           learning_rate: hyperValues.learning_rate,
           concurrency: hyperValues.concurrency,
+          reflect_budget_chars: hyperValues.reflect_budget_chars,
         }),
         secrets,
         detector: {},
@@ -711,6 +713,22 @@ function SettingsStep({ defaults, config, onConfig, secrets, onSecrets }) {
   );
 }
 
+// What a character budget means in the unit a context window is sold in. The
+// range is the honest form: the ratio depends on the text, and quoting one
+// number invites it to be treated as measured.
+function budgetHelp(chars) {
+  const est = tokenEstimate(chars);
+  const base =
+    "Characters of trajectory per analyst call, shared across the whole minibatch. " +
+    "What does not fit is trimmed — tool results first, never a tool call or a " +
+    "final answer — and if it still does not fit, whole runs are withheld and " +
+    "the step says which.";
+  // The token figure first: it is the number that decides whether the call
+  // fits, and at the end of a four-line paragraph nobody reaches it.
+  if (!est) return base;
+  return `≈ ${est.low.toLocaleString()}–${est.high.toLocaleString()} tokens. ${base}`;
+}
+
 function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper, values, errors, impls }) {
   const c = counts(split);
   // The effective values, which are the typed ones when they parse and the
@@ -819,6 +837,41 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
             aria-invalid={errors.concurrency ? "true" : undefined}
           />
         </Field>
+      </FormSection>
+
+      {/* The one setting that decides whether an analyst call fits in the
+          optimizer's context window at all. It lived in the API only, which
+          made "the model refused the request" a thing you could hit and not
+          adjust from anywhere you could see. */}
+      <FormSection
+        title="How much the analyst is shown"
+        description="Each step sends the optimizer one prompt per minibatch: the skill, then the trajectories of the questions in it. This caps the trajectory half."
+      >
+        <Field
+          label="Trajectory budget"
+          help={budgetHelp(values.reflect_budget_chars)}
+          error={errors.reflect_budget_chars}
+        >
+          <input
+            type="number"
+            min={HYPER_FIELDS.reflect_budget_chars.min}
+            step={10000}
+            value={raw("reflect_budget_chars")}
+            onChange={set("reflect_budget_chars")}
+            aria-invalid={errors.reflect_budget_chars ? "true" : undefined}
+          />
+        </Field>
+        <Banner tone="info" title="Leave the model room to answer">
+          This budget is <em>input</em>, and it is not the whole prompt: the
+          skill goes in front of it, and the analyst's reply can run to 16,000
+          tokens on top. The rule is the upper estimate above, plus the skill,
+          plus 16,000, under your optimizer model's context window. Going over
+          truncates nothing — the model refuses the call, and the step loses
+          that minibatch's gradient entirely.
+          {" "}Traces in Chinese or Japanese cost far more tokens per character
+          than this estimate assumes; treat the upper figure as a floor there,
+          or lower the budget.
+        </Banner>
       </FormSection>
 
       {/* Upstream's two longitudinal passes. Off by default and stated as what

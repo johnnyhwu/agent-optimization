@@ -539,6 +539,10 @@ class OptimizationStep(Base):
         back_populates="step", cascade="all, delete-orphan",
         order_by="OptimizationMinibatch.minibatch_no",
     )
+    stage_calls: Mapped[list["OptimizationStageCall"]] = relationship(
+        back_populates="step", cascade="all, delete-orphan",
+        order_by="OptimizationStageCall.seq",
+    )
 
 
 class OptimizationRollout(Base):
@@ -698,6 +702,59 @@ class OptimizationMinibatch(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     step: Mapped["OptimizationStep"] = relationship(back_populates="minibatches")
+
+
+class OptimizationStageCall(Base):
+    """Everything the optimizer was asked *after* the analysts: merge, then rank.
+
+    A step's edits are not the edits any one analyst proposed. The per-minibatch
+    patches are merged hierarchically — failures together, successes together,
+    then the two groups combined with failures taking priority — and if the pool
+    is still over the learning rate, a ranking call chooses which survive. Three
+    or more model calls, each of which can drop an edit or rewrite it.
+
+    None of it was recorded. The page could show what each analyst asked for and
+    what the skill ended up with, and nothing in between, so the commonest
+    question about a disappointing step — "which stage lost my edit?" — had no
+    answer on the page at all.
+
+    Stored per call rather than as a summary because the useful artefact is the
+    prompt: merge and ranking are LLM calls with the same failure modes as the
+    analyst, and one that misread its input looks exactly like one that judged
+    correctly unless its input is on screen.
+    """
+
+    __tablename__ = "optimization_stage_calls"
+    __table_args__ = (UniqueConstraint("step_id", "seq"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("optimization_steps.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Submission order within the step, so the page can lay the stages out in the
+    # order they happened without inferring it from timestamps that a thread pool
+    # makes meaningless.
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # merge_failure | merge_success | merge_final | ranking
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which round of the hierarchical merge, where there was one. Null for the
+    # final merge and for ranking, which happen once.
+    level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    prompt_system: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_user: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The answer as parsed, not as typed. The raw text buys nothing here: every
+    # one of these stages is a JSON contract, and when parsing fails the patch
+    # is discarded and `error` says so.
+    output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    step: Mapped["OptimizationStep"] = relationship(back_populates="stage_calls")
 
 
 class OptimizationSkill(Base):

@@ -184,11 +184,30 @@ to `None`. `run_minibatch_reflect`'s signature is untouched.
 Everything else — the header assembly, the two conversation formats, the budget
 wording, the JSON contract — is upstream's.
 
-**`run_minibatch_reflect` is vendored but not called.** Most of it is
-resume-by-checkpoint-file, and our checkpoint is a database row; the parts we do
-want (`_split_minibatches`, `_shuffle_for_minibatch`, and the two analyst
-functions) are called directly from `app/optimizer/update.py`. It stays in the
-file so the diff against upstream stays honest.
+**The analyst entry points are vendored but no longer called**, and neither is
+`run_minibatch_reflect`. `_split_minibatches` and `_shuffle_for_minibatch` still
+are, from `app/optimizer/update.py`. The whole file stays so the diff against
+upstream stays honest.
+
+What replaced them is `app/optimizer/analyst.py`, which builds the same prompt —
+same system prompts, same section order, same JSON contract, same clip to the
+edit budget — with three differences that are ours and could not be made from
+outside the file:
+
+* **The trajectory is folded first** (`app/optimizer/trajectory.py`). Upstream's
+  trajectories are step records; ours are Langfuse spans, and each span is a
+  whole chat-completions request. Formatted span by span they repeat the tool
+  catalogue and the system prompt — which carries the skill — once per step, and
+  the message history quadratically. That, not the size of the model, is what
+  made analyst calls overflow a 100k-token context window; the truncation
+  cascade could not fix it, because it refuses (rightly) to cut the system
+  message the skill lives in, and there were N uncuttable copies of it.
+* **The agent's own answer is shown.** The item always carried it and the
+  formatter never rendered it.
+* **`Task type` is gone and `Hidden Reference` is `Ground-truth Response`.** The
+  first is always empty here — upstream's benchmarks classify tasks, ours do
+  not. The second is a term no analyst prompt uses; the prompts talk about being
+  shown the correct answers, so the heading now says that.
 
 ### `prompts/__init__.py` — the override directory
 

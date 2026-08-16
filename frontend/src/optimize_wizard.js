@@ -129,7 +129,27 @@ export const HYPER_FIELDS = {
   batch_size: { min: 1 },
   learning_rate: { min: 1 },
   concurrency: { min: 1, max: 32 },
+  // How much trajectory text one analyst prompt may carry. Also not a
+  // hyperparameter — it changes how much evidence the analyst sees, never the
+  // algorithm — but it is the one setting that decides whether the call fits in
+  // the optimizer model's context window at all, which is why it is on the form
+  // rather than in the API only. The floor matches the API's own.
+  reflect_budget_chars: { min: 1000 },
 };
+
+// A character count read as tokens, which is the unit a context window is sold
+// in. Deliberately a range rather than a figure: the ratio depends on the text,
+// and the two ends here are the ones that actually bracket what goes into these
+// prompts — dense JSON tool results at the low end, ordinary prose at the high
+// end. A single number would be quoted back as if it were measured.
+//
+// CJK is outside the range and the caller says so separately: a Chinese
+// character is often a token by itself, so the same budget can cost several
+// times what this estimate suggests.
+export function tokenEstimate(chars) {
+  if (!Number.isFinite(chars) || chars <= 0) return null;
+  return { low: Math.round(chars / 4), high: Math.round(chars / 2.5) };
+}
 
 export function parseCount(raw, { min, max } = {}) {
   const text = String(raw ?? "").trim();

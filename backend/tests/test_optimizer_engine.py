@@ -47,6 +47,7 @@ class RecordingStore:
         self.steps: list[dict] = []
         self.rollouts: list[tuple[int, RolloutSummary]] = []
         self.minibatches: list[dict] = []
+        self.stage_calls: list[dict] = []
         self.skills: list[dict] = []
         self.run_updates: list[dict] = []
         self.cancel = False
@@ -102,6 +103,9 @@ class RecordingStore:
 
     async def record_minibatch(self, step_id, **fields):
         self.minibatches.append({"step_no": self._step_no(step_id), **fields})
+
+    async def record_stage_call(self, step_id, **fields):
+        self.stage_calls.append({"step_no": self._step_no(step_id), **fields})
 
     async def record_skill(self, run_id, *, step_no, kind, files, content_hash, per_file_stats):
         self.skills.append({"step_no": step_no, "kind": kind, "files": files,
@@ -831,8 +835,25 @@ async def test_a_complete_run_executes_against_the_fake_layer(monkeypatch, confi
     assert "train" in store.splits_of(1)
     # A real analyst call happened, with a real prompt, on real trajectories.
     assert store.minibatches
-    assert "### Trajectory 1" in store.minibatches[0]["prompt_user"]
+    prompt = store.minibatches[0]["prompt_user"]
+    assert "### Trajectory 1" in prompt
     assert store.minibatches[0]["raw_output"]["failure_summary"]
+    # The four things a reviewer of a failure needs, in the prompt itself.
+    for heading in ("#### Task", "#### Agent Response", "#### Ground-truth Response",
+                    "Failure Reason (from the judge)"):
+        assert heading in prompt, heading
+    # And the tool catalogue exactly once for the whole batch — not once per
+    # step, which is what used to overflow the context window, and not once per
+    # trajectory either: they were all answered by the same agent under the same
+    # skill, so it is hoisted. A regression shows up here as a count that scales
+    # with either the steps or the trajectories.
+    assert prompt.count("#### Tools Available") == 1
+    assert prompt.count("#### System Prompt") == 1
+    assert prompt.count("### Trajectory ") > 1
+    # What became of those patches is recorded too: with one analyst there is
+    # nothing to merge hierarchically, but the two groups are still combined.
+    assert [c["stage"] for c in store.stage_calls]
+    assert all(c["prompt_user"] for c in store.stage_calls)
     # And a real candidate skill was produced and stored.
     candidates = [s for s in store.skills if s["kind"] == "candidate"]
     assert candidates

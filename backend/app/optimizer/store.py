@@ -29,6 +29,7 @@ from app.models import (
     OptimizationRollout,
     OptimizationRun,
     OptimizationSkill,
+    OptimizationStageCall,
     OptimizationStep,
 )
 
@@ -180,6 +181,8 @@ class OptimizationStore(Protocol):
     ) -> uuid.UUID: ...
 
     async def record_minibatch(self, step_id: uuid.UUID, **fields: Any) -> None: ...
+
+    async def record_stage_call(self, step_id: uuid.UUID, **fields: Any) -> None: ...
 
     async def record_skill(
         self, run_id: uuid.UUID, *, step_no: int, kind: str,
@@ -446,6 +449,17 @@ class DbOptimizationStore:
                 )
                 .values(minibatch_no=fields.get("minibatch_no"))
             )
+        await self.session.commit()
+
+    async def record_stage_call(self, step_id: uuid.UUID, **fields: Any) -> None:
+        """One merge or ranking call, as it was sent and as it came back.
+
+        A plain insert: unlike a minibatch there is nothing to stamp back onto
+        the results, because these stages see patches rather than questions —
+        which is exactly why they need recording. An edit that no analyst is
+        blamed for and no skill contains was lost in one of these.
+        """
+        self.session.add(OptimizationStageCall(step_id=step_id, **fields))
         await self.session.commit()
 
     async def load_val_results(self, run_id: uuid.UUID, step_no: int) -> list[dict]:

@@ -10,6 +10,7 @@ import SpanDetail from "../SpanDetail.jsx";
 import { IconArrowLeft } from "../icons.jsx";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
 import ReflectorIO from "./ReflectorIO.jsx";
+import StageCalls from "./StageCalls.jsx";
 
 // Part 1: one step, one split.
 //
@@ -200,6 +201,19 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
             )}
           </Banner>
         )}
+
+        {/* The step's own stages, not any minibatch's — which is why they are
+            here and not in the list beside the analyst calls. One merge and one
+            ranking serve the whole step, and a row labelled like a minibatch
+            would claim an analyst saw something it did not. */}
+        {split === "train" && (
+          <StageCalls
+            stageCalls={detail.stage_calls}
+            nApplied={detail.n_edits_applied}
+            nSkipped={detail.n_edits_skipped}
+            editSummary={detail.edit_summary}
+          />
+        )}
       </Card>
 
       <div className="opt-rollout-body">
@@ -312,6 +326,16 @@ function Group({ group, split, selection, onSelect }) {
 }
 
 function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
+  // `SpanList` reports the span it was clicked on by **index**, and `SpanDetail`
+  // takes the span **object**. Handing the number straight across read
+  // plausibly and threw on `span.token_usage` the moment anyone clicked a step
+  // — with no error boundary above it, the whole app went white. Evaluation
+  // (`RunDetail.jsx`) and the playground both do this lookup; this page is the
+  // one that skipped it.
+  const activeSpanObj = trace?.spans?.find((s) => s.index === activeSpan) || null;
+  const suspectByIndex = {};
+  (trace?.analysis?.suspects || []).forEach((s) => (suspectByIndex[s.span_index] = s));
+
   return (
     <div className="opt-question">
       <div className="opt-question-head">
@@ -359,7 +383,10 @@ function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
               question={result.question}
               emptyHint="No trace for this question."
             />
-            <SpanDetail span={activeSpan} />
+            <SpanDetail
+              span={activeSpanObj}
+              suspect={activeSpanObj ? suspectByIndex[activeSpanObj.index] : null}
+            />
           </>
         )}
       </div>
