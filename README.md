@@ -602,7 +602,12 @@ Notes:
   patch it asked for, then — under *After the analysts* — the merge and ranking
   calls that decided which of those edits survived, each with the prompt it was
   sent one click away. An edit an analyst asked for and the skill does not have
-  was dropped in one of them. The
+  was dropped in one of them. The wizard's **trajectory budget** caps what the
+  analyst is shown: a whole minibatch shares one system prompt and one tool
+  catalogue, so those are sent once, and the rest of the budget is shared
+  across the conversations. The field states the rule — the token estimate,
+  plus the skill, plus 16k for the reply, under your optimizer model's window.
+  The
   output is a zip you put back on the agent server yourself; re-run it through
   Evaluation for an unbiased number. All seven seams are fake by default, so the
   whole loop runs on `SEED=1 ./scripts/dev.sh` with nothing external attached.
