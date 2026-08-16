@@ -10,6 +10,7 @@ import SpanDetail from "../SpanDetail.jsx";
 import { IconArrowLeft } from "../icons.jsx";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
 import ReflectorIO from "./ReflectorIO.jsx";
+import StageCalls from "./StageCalls.jsx";
 
 // Part 1: one step, one split.
 //
@@ -199,6 +200,19 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
               </div>
             )}
           </Banner>
+        )}
+
+        {/* The step's own stages, not any minibatch's — which is why they are
+            here and not in the list beside the analyst calls. One merge and one
+            ranking serve the whole step, and a row labelled like a minibatch
+            would claim an analyst saw something it did not. */}
+        {split === "train" && (
+          <StageCalls
+            stageCalls={detail.stage_calls}
+            nApplied={detail.n_edits_applied}
+            nSkipped={detail.n_edits_skipped}
+            editSummary={detail.edit_summary}
+          />
         )}
       </Card>
 

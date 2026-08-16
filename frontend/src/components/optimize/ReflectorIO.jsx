@@ -1,19 +1,27 @@
-import React, { useState } from "react";
+import React from "react";
 import Badge from "../ui/Badge.jsx";
 import { plural, pluralise } from "../../plural.js";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
+import { Collapsible } from "../SpanPayload.jsx";
 import { editsProposed, truncationSummary } from "../../optimize_rollout.js";
 
-// One analyst call, opened up: what it was shown, what it answered, and what
-// the truncation cascade cut out on the way.
+// One analyst call, opened up: what it concluded, what it asked for, and — for
+// anyone who needs it — exactly what it was shown.
 //
 // This exists because "why did the optimizer propose that?" is otherwise
-// unanswerable. The answer is not the patch — it is the prompt, and in
-// particular the parts of the prompt that were not there. A proposal built on
-// a trace that lost most of its tool output is a different kind of evidence
-// from one built on the whole thing, and the only place that difference can be
-// seen is here.
+// unanswerable. Part of the answer is the patch and part of it is the prompt,
+// and in particular the parts of the prompt that were not there: a proposal
+// built on a trace that lost most of its tool output is a different kind of
+// evidence from one built on the whole thing.
+//
+// But those two parts are not read equally often. The conclusion and the patch
+// are what every visit is for; the prompt is what a small number of visits are
+// for, and it is thousands of lines long. They used to be four tabs of equal
+// weight — with a Raw JSON tab nobody asked for — so the page made a reader
+// choose between two halves of one answer, and offered the wall of text at the
+// same size as the sentence. Now the answer is one block and the evidence is one
+// click below it.
 //
 // The prompt is shown as it was sent, not rebuilt. A reconstruction looks right
 // and differs in exactly the way that mattered.
@@ -21,7 +29,6 @@ import { editsProposed, truncationSummary } from "../../optimize_rollout.js";
 export default function ReflectorIO({
   minibatch, editReports = [], nApplied, nSkipped, onOpenSkill,
 }) {
-  const [tab, setTab] = useState("summary");
   const cut = truncationSummary(minibatch);
   const edits = editsProposed(minibatch);
   const summary = minibatch.raw_output?.failure_summary || [];
@@ -51,57 +58,59 @@ export default function ReflectorIO({
 
       <TruncationNote cut={cut} />
 
-      <div className="opt-tabs" role="tablist">
-        {[
-          ["summary", "What it concluded"],
-          ["patch", `Proposed patch (${edits})`],
-          ["prompt", "Prompt as sent"],
-          ["raw", "Raw JSON"],
-        ].map(([key, label]) => (
-          <Button
-            key={key}
-            role="tab"
-            aria-selected={tab === key}
-            variant={tab === key ? "secondary" : "ghost"}
-            onClick={() => setTab(key)}
-          >
-            {label}
-          </Button>
-        ))}
-      </div>
-
+      <h4 className="opt-block-title">What this analyst concluded</h4>
       {/* The analyst returns `failure_summary` as objects — a failure type, a
-          count and a description each — and this rendered anything that was not
-          already a string with `JSON.stringify`. Since it never was a string,
-          the tab a reader opens first showed them a wall of raw JSON:
-          {"count":2,"description":"…","failure_type":"rule_missing"}. */}
-      {tab === "summary" && <FailureSummary lines={summary} />}
+          count and a description each — and this once rendered anything that was
+          not already a string with `JSON.stringify`. Since it never was a
+          string, the first thing a reader saw was a wall of raw JSON. */}
+      <FailureSummary lines={summary} />
 
-      {tab === "patch" && (
-        <PatchList
-          patch={minibatch.raw_output?.patch}
-          reports={editReports}
-          nApplied={nApplied}
-          nSkipped={nSkipped}
-          onOpenSkill={onOpenSkill}
-        />
-      )}
+      {/* No count in this heading: the line at the top of the card already
+          says how many edits were proposed, and two numbers for one quantity
+          invite a reader to look for the difference between them. */}
+      <h4 className="opt-block-title">What it asked for</h4>
+      <PatchList
+        patch={minibatch.raw_output?.patch}
+        reports={editReports}
+        nApplied={nApplied}
+        nSkipped={nSkipped}
+        onOpenSkill={onOpenSkill}
+      />
 
-      {tab === "prompt" && (
-        <>
-          <Section title="System">{minibatch.prompt_system}</Section>
-          <Section title="User">{minibatch.prompt_user}</Section>
-        </>
-      )}
-
-      {tab === "raw" && (
-        <pre className="opt-pre">
-          {minibatch.raw_output
-            ? JSON.stringify(minibatch.raw_output, null, 2)
-            : "null — the analyst call did not return a patch."}
-        </pre>
-      )}
+      <PromptRecord
+        system={minibatch.prompt_system}
+        user={minibatch.prompt_user}
+        output={minibatch.raw_output}
+      />
     </div>
+  );
+}
+
+// The evidence, one click away: what this call was sent and what came back.
+//
+// Closed by default and deliberately last. The reply is shown as the parsed
+// object rather than the model's raw text — every one of these calls is a JSON
+// contract, and the parse is what the rest of the page is built from, so
+// showing anything else here would be showing a different answer from the one
+// that was acted on.
+export function PromptRecord({ system, user, output, label = "the analyst" }) {
+  if (!system && !user && !output) return null;
+  return (
+    <Collapsible
+      className="opt-promptlog"
+      title={<span className="opt-block-title">What {label} was sent, and what came back</span>}
+      meta={user
+        ? `${user.length.toLocaleString()} ${pluralise(user.length, "char")}`
+        : null}
+    >
+      <Section title="System prompt">{system}</Section>
+      <Section title="User prompt">{user}</Section>
+      <Section title="Reply">
+        {output
+          ? JSON.stringify(output, null, 2)
+          : "Nothing usable came back from this call."}
+      </Section>
+    </Collapsible>
   );
 }
 
@@ -126,9 +135,11 @@ function TruncationNote({ cut }) {
         )}
       </span>
       {cut.dropped.length > 0 && (
-        <Banner tone="warning" title={`${plural(cut.dropped.length, "question")} ${pluralise(cut.dropped.length, "was", "were")} not shown at all`}>
-          The batch still did not fit after trimming, so these were dropped
-          before the analyst saw them — nothing it proposed can rest on them:{" "}
+        <Banner tone="warning" title={`${plural(cut.dropped.length, "run")} ${pluralise(cut.dropped.length, "was", "were")} withheld`}>
+          The batch still did not fit after trimming, so these questions reached
+          the analyst without their trajectories — it saw the question, both
+          answers and the verdict, and was told the run itself was withheld.
+          Nothing it concluded about <em>how</em> they failed can rest on them:{" "}
           <code>{cut.dropped.join(", ")}</code>
         </Banner>
       )}
@@ -228,7 +239,7 @@ function PatchList({ patch, reports = [], nApplied, nSkipped, onOpenSkill }) {
   );
 }
 
-function Section({ title, children, compact }) {
+export function Section({ title, children, compact }) {
   if (!children) return null;
   return (
     <div className={compact ? "opt-io-block compact" : "opt-io-block"}>
