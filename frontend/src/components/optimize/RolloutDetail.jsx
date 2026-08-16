@@ -312,6 +312,16 @@ function Group({ group, split, selection, onSelect }) {
 }
 
 function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
+  // `SpanList` reports the span it was clicked on by **index**, and `SpanDetail`
+  // takes the span **object**. Handing the number straight across read
+  // plausibly and threw on `span.token_usage` the moment anyone clicked a step
+  // — with no error boundary above it, the whole app went white. Evaluation
+  // (`RunDetail.jsx`) and the playground both do this lookup; this page is the
+  // one that skipped it.
+  const activeSpanObj = trace?.spans?.find((s) => s.index === activeSpan) || null;
+  const suspectByIndex = {};
+  (trace?.analysis?.suspects || []).forEach((s) => (suspectByIndex[s.span_index] = s));
+
   return (
     <div className="opt-question">
       <div className="opt-question-head">
@@ -359,7 +369,10 @@ function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
               question={result.question}
               emptyHint="No trace for this question."
             />
-            <SpanDetail span={activeSpan} />
+            <SpanDetail
+              span={activeSpanObj}
+              suspect={activeSpanObj ? suspectByIndex[activeSpanObj.index] : null}
+            />
           </>
         )}
       </div>
