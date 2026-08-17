@@ -1122,7 +1122,17 @@
 
 /* --- The run chart ------------------------------------------------------- */
 .opt-chart { margin-top: var(--space-2); }
-.opt-chart-svg { width: 100%; height: auto; display: block; cursor: pointer; }
+/* Two controls where there was one, kept on the card header's single line. */
+.opt-chart-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* `min-width`, not `width`: a short run's canvas is the panel's width and fills
+   it, while a long run's is wider than the panel and keeps its own size so that
+   every step stays big enough to hit. The frame scrolls the difference. */
+.opt-chart-svg { min-width: 100%; height: auto; display: block; cursor: pointer; }
+/* The chart is focusable — arrow keys pin a step — so it needs to say so. */
+.opt-chart-svg:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm); }
+/* Invisible, and not a decoration: these are what `scrollIntoView` targets when
+   the keyboard walks the pin off the visible part of a long run. */
+.opt-chart-anchor { fill: none; pointer-events: none; }
 .opt-chart-band { fill: var(--panel-2); }
 .opt-chart-band.alt { fill: var(--panel-3); }
 .opt-chart-epoch { fill: var(--muted); font-size: 9px; letter-spacing: .04em; }
@@ -1157,10 +1167,28 @@
 .opt-chart-legend .swatch.val { background: var(--accent); }
 .opt-chart-legend .swatch.best { background: var(--green); }
 .opt-chart-legend .swatch.rejected { background: var(--muted); opacity: .5; }
+/* The legend entries are the series switches. They keep the legend's own type
+   and colour — a legend that suddenly looked like a row of buttons would be
+   heavier than the chart it labels — and earn their affordance from the hover
+   and the pressed state instead. */
+.opt-chart-legend-item {
+  display: inline-flex; align-items: center;
+  padding: 2px 6px; margin: -2px 0; border: none; border-radius: var(--radius-sm);
+  background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.opt-chart-legend-item:hover { background: var(--panel-2); color: var(--text); }
+.opt-chart-legend-item:focus-visible { outline: none; box-shadow: var(--ring); }
+/* Struck through, not merely faded: at this size a dimmed grey label beside a
+   normal grey one is not a difference anyone would notice. */
+.opt-chart-legend-item.is-off { text-decoration: line-through; opacity: .55; }
+.opt-chart-legend-item.is-off .swatch { opacity: .35; }
 /* The hover readout floats over the plot instead of sitting in the flow under
    it. As a block it was laid out, which pushed the pinned card and everything
-   below it down the page every time the pointer crossed the chart. */
-.opt-chart-frame { position: relative; }
+   below it down the page every time the pointer crossed the chart.
+   `overflow-x` is here rather than on `.opt-chart`, because the tooltip is
+   positioned against this box and a scrolling ancestor is what keeps the two
+   moving together. */
+.opt-chart-frame { position: relative; overflow-x: auto; }
 .opt-chart-tip {
   position: absolute; top: var(--space-3); transform: translateX(-50%);
   display: flex; flex-direction: column; gap: 2px;

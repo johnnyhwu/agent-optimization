@@ -46,6 +46,17 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
   const [busy, setBusy] = useState(false);
   const [pinned, setPinned] = useState(null);
   const [metric, setMetric] = useState("hard");
+  // How the chart is being read, held here because two of the three controls
+  // sit in the card header beside the metric toggle.
+  //
+  // `fit` by default: a skill that works scores somewhere between 70% and 100%,
+  // so on the full range every point of a good run is drawn in the top quarter
+  // of the plot and the differences between steps — which is the entire reason
+  // to look at this chart — are a few pixels apart. The axis says "zoomed" when
+  // it is not showing 0–100%, and `optimize_chart.js` refuses to zoom tighter
+  // than twenty points, which is what keeps the default from flattering a run.
+  const [yMode, setYMode] = useState("fit");
+  const [show, setShow] = useState({ train: true, val: true, best: true });
   // Which download is in flight — "best", a step number, or null. One boolean
   // put both this header's button and the pinned card's into a spinner
   // whichever was pressed, so the page reported work it was not doing.
@@ -258,24 +269,44 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
         <CardHeader
           title="Accuracy by step"
           actions={
-            // Two ghost-vs-secondary buttons in a `role="group"` announced as
-            // two unrelated buttons with no indication which was on. This is
-            // the primitive the rest of the app already uses to say "one of
-            // these".
-            <SegmentedControl
-              value={metric}
-              onChange={setMetric}
-              ariaLabel="Scoring metric"
-              size="sm"
-              options={[
-                { value: "hard", label: "hard", title: "Strictly correct answers only" },
-                {
-                  value: "soft",
-                  label: "soft",
-                  title: "Partial credit, as the judge scored each answer 0–1",
-                },
-              ]}
-            />
+            <div className="opt-chart-controls">
+              {/* Two ghost-vs-secondary buttons in a `role="group"` announced as
+                  two unrelated buttons with no indication which was on. This is
+                  the primitive the rest of the app already uses to say "one of
+                  these". */}
+              <SegmentedControl
+                value={metric}
+                onChange={setMetric}
+                ariaLabel="Scoring metric"
+                size="sm"
+                options={[
+                  { value: "hard", label: "hard", title: "Strictly correct answers only" },
+                  {
+                    value: "soft",
+                    label: "soft",
+                    title: "Partial credit, as the judge scored each answer 0–1",
+                  },
+                ]}
+              />
+              {/* The way back to the honest picture. Zooming is the useful
+                  default and the full range is the sanity check — "is this a
+                  real climb or four points of noise" is one click, rather than
+                  arithmetic on the axis labels. */}
+              <SegmentedControl
+                value={yMode}
+                onChange={setYMode}
+                ariaLabel="Accuracy range"
+                size="sm"
+                options={[
+                  {
+                    value: "fit",
+                    label: "zoom",
+                    title: "Fit the axis to the scores this run produced, never tighter than 20 points",
+                  },
+                  { value: "full", label: "0–100%", title: "The whole accuracy range" },
+                ]}
+              />
+            </div>
           }
         />
         <ProgressChart
@@ -283,8 +314,14 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
           totalSteps={run.total_steps}
           bestStep={run.best_step}
           metric={metric}
+          yMode={yMode}
+          show={show}
+          onToggleSeries={(key) => setShow((s) => ({ ...s, [key]: !s[key] }))}
           pinned={pinned}
-          onPick={(stepNo) => setPinned((current) => (current === stepNo ? null : stepNo))}
+          // The new pinned step, not a step to toggle: the chart decides, because
+          // it is the one place that knows whether this came from a click on an
+          // already-pinned column or from an arrow key walking onto it.
+          onPick={setPinned}
         />
         {pinnedStep && (
           <StepCard

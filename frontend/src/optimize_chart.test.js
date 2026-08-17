@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  Y_DOMAIN,
+  Y_FULL,
   bestSoFar,
   chartModel,
   epochBands,
@@ -252,17 +252,114 @@ test("a run that overran its planned step count still fits on the axis", () => {
   assert.deepEqual(xDomain([baseline(0.4), step(9, { train: 0.5, val: 0.6 })], 4), [-0.5, 9.5]);
 });
 
-test("the y axis is always the full accuracy range", () => {
-  // Auto-scaling accuracy to the data turns a two-point wobble into a dramatic
-  // climb. The question the chart answers is "how good is it", and that is only
-  // legible against 0 and 100.
-  assert.deepEqual(Y_DOMAIN, [0, 1]);
+test("the full range is 0 to 100 with the quarter marks on it", () => {
+  // The axis this chart has always had, now one of two modes. It is the honest
+  // answer to "how good is it", and the one to fall back on when a fitted axis
+  // would be answering a different question.
+  assert.deepEqual(Y_FULL, [0, 1]);
   const model = chartModel([baseline(0.51), step(1, { train: 0.52, val: 0.53, best: 0.53 })], {
-    width: 400,
-    height: 200,
-    totalSteps: 2,
+    width: 400, height: 200, totalSteps: 2, yMode: "full",
   });
+  assert.deepEqual(model.yDomain, [0, 1]);
   assert.deepEqual(model.yTicks.map((t) => t.value), [0, 0.25, 0.5, 0.75, 1]);
+  assert.deepEqual(model.yTicks.map((t) => t.label), ["0%", "25%", "50%", "75%", "100%"]);
+  assert.equal(model.zoomed, false);
+});
+
+test("a fitted axis opens up the range the run actually moved in", () => {
+  // The complaint this answers: a good run scores between 70 and 100, so on the
+  // full range every point it plots is in the top quarter of the plot and three
+  // quarters of the picture is empty space under them.
+  const steps = [baseline(0.72)];
+  for (let n = 1; n <= 6; n += 1) {
+    steps.push(step(n, { train: 0.74 + n * 0.01, val: 0.76 + n * 0.02, best: 0.76 + n * 0.02 }));
+  }
+  const model = chartModel(steps, { width: 400, height: 200, totalSteps: 6, yMode: "fit" });
+
+  const [lo, hi] = model.yDomain;
+  assert.ok(lo >= 0.6 && hi <= 1, `expected a tightened domain, got ${lo}–${hi}`);
+  // Every plotted value is inside it, including the train series that sits
+  // lowest and the best-so-far line that sits highest.
+  assert.ok(lo <= 0.72 && hi >= 0.88, `${lo}–${hi} does not contain the data`);
+  assert.equal(model.zoomed, true);
+  // Five-point marks: an axis labelled 71.3% is a number nobody asked about.
+  assert.ok(model.yTicks.every((t) => Number.isInteger(Math.round(t.value * 100))));
+  assert.ok(model.yTicks.length >= 3 && model.yTicks.length <= 6);
+});
+
+test("fitting never zooms tighter than twenty points", () => {
+  // The guard on the whole idea. Fitted to its own data, a run that wobbled
+  // between 51% and 53% draws the same dramatic climb as one that gained forty
+  // points, and the only way to tell them apart is to read the axis — which is
+  // exactly what a picture is for not having to do.
+  const model = chartModel([baseline(0.51), step(1, { train: 0.52, val: 0.53, best: 0.53 })], {
+    width: 400, height: 200, totalSteps: 2, yMode: "fit",
+  });
+  const [lo, hi] = model.yDomain;
+  assert.ok(hi - lo >= 0.2 - 1e-9, `span was ${hi - lo}`);
+});
+
+test("a run whose every score is identical still has an axis with height", () => {
+  // Otherwise the domain is a point, the scale divides by zero, and every
+  // coordinate is NaN — which SVG renders as nothing at all, with no error.
+  const model = chartModel([baseline(0.8), step(1, { train: 0.8, val: 0.8, best: 0.8 })], {
+    width: 400, height: 200, totalSteps: 2, yMode: "fit",
+  });
+  const [lo, hi] = model.yDomain;
+  assert.ok(hi - lo >= 0.2 - 1e-9);
+  assert.equal(/NaN/.test(JSON.stringify(model)), false);
+});
+
+test("a fitted axis stays inside 0 and 100", () => {
+  // Accuracy has no meaning outside them, and a plot area whose top eighth can
+  // never hold a point is the same wasted space this mode exists to remove — so
+  // the widened domain slides back inside rather than hanging over the edge.
+  const perfect = chartModel([baseline(0.99), step(1, { train: 1, val: 1, best: 1 })], {
+    width: 400, height: 200, totalSteps: 2, yMode: "fit",
+  });
+  assert.deepEqual(perfect.yDomain[1], 1);
+  assert.ok(perfect.yDomain[0] >= 0);
+
+  const hopeless = chartModel([baseline(0.02), step(1, { train: 0.01, val: 0.03, best: 0.03 })], {
+    width: 400, height: 200, totalSteps: 2, yMode: "fit",
+  });
+  assert.equal(hopeless.yDomain[0], 0);
+  assert.ok(hopeless.yDomain[1] <= 1);
+});
+
+test("an empty run falls back to the full range rather than to nothing", () => {
+  const model = chartModel([], { width: 400, height: 200, totalSteps: 6, yMode: "fit" });
+  assert.deepEqual(model.yDomain, [0, 1]);
+});
+
+test("hiding a series takes it out of the axis it was fitted to", () => {
+  // Turning off the train line on a run whose training scores sat well below
+  // validation should tighten the axis around what is left. Leaving the hidden
+  // series in the domain would keep a band of empty plot where its line used to
+  // be — the reader turned it off and the space it occupied stayed.
+  const steps = [baseline(0.9), step(1, { train: 0.4, val: 0.92, best: 0.92 })];
+  const both = chartModel(steps, { width: 400, height: 200, totalSteps: 1, yMode: "fit" });
+  const valOnly = chartModel(steps, {
+    width: 400, height: 200, totalSteps: 1, yMode: "fit",
+    show: { train: false, val: true, best: true },
+  });
+
+  assert.ok(both.yDomain[0] <= 0.4, "the train point must be on the axis while it is shown");
+  assert.ok(valOnly.yDomain[0] > 0.4, "hiding it should have tightened the axis");
+  assert.deepEqual(valOnly.train, []);
+  assert.equal(valOnly.trainPath, "");
+  // The series that are still on are untouched.
+  assert.equal(valOnly.val.length, both.val.length);
+  assert.ok(valOnly.bestPath.length > 0);
+});
+
+test("hiding every series leaves an axis rather than a divide by zero", () => {
+  const model = chartModel([baseline(0.8), step(1, { train: 0.8, val: 0.8, best: 0.8 })], {
+    width: 400, height: 200, totalSteps: 2, yMode: "fit",
+    show: { train: false, val: false, best: false },
+  });
+  assert.deepEqual(model.yDomain, [0, 1]);
+  assert.equal(/NaN/.test(JSON.stringify(model)), false);
 });
 
 // --- Pixel space ------------------------------------------------------------
@@ -273,7 +370,7 @@ test("higher accuracy is higher on the screen", () => {
   // chart that is otherwise entirely plausible.
   const model = chartModel(
     [baseline(0.0), step(1, { train: 0.5, val: 1.0, best: 1.0 })],
-    { width: 400, height: 200, totalSteps: 1 },
+    { width: 400, height: 200, totalSteps: 1, yMode: "full" },
   );
   const [low, high] = model.val;
   assert.ok(high.y < low.y, `expected ${high.y} above ${low.y}`);
@@ -360,6 +457,54 @@ test("the tick count stays readable on a long run", () => {
   assert.equal(model.xTicks.at(-1).label, "61");
   // …and the tick before it is dropped rather than left to collide with it.
   assert.ok(61 - model.xTicks.at(-2).stepNo > 1);
+});
+
+// --- The canvas a long run needs --------------------------------------------
+
+test("a short run draws at the width the panel gave it", () => {
+  // The canvas only grows when the arithmetic says it must: a ten-step run has
+  // room to spare, and widening it would introduce a horizontal scrollbar to
+  // reach empty space.
+  const steps = [baseline(0.4)];
+  for (let n = 1; n <= 10; n += 1) steps.push(step(n, { train: 0.5, val: 0.5 }));
+  const model = chartModel(steps, { width: 720, height: 280, totalSteps: 10 });
+  assert.equal(model.width, 720);
+});
+
+test("a long run widens the canvas rather than shrinking its steps", () => {
+  // The complaint: at a fixed width, a sixty-step run gave each step about
+  // fourteen screen pixels of click target and a hundred steps gave eight, so
+  // pinning the step you meant was a matter of luck. The columns keep a floor
+  // and the plot scrolls sideways instead.
+  for (const total of [40, 60, 100]) {
+    const steps = [baseline(0.4)];
+    for (let n = 1; n <= total; n += 1) steps.push(step(n, { train: 0.5, val: 0.5 }));
+    const model = chartModel(steps, { width: 720, height: 280, totalSteps: total });
+
+    assert.ok(model.width > 720, `a ${total}-step run should have widened the canvas`);
+    const narrowest = Math.min(...model.columns.map((c) => c.width));
+    assert.ok(narrowest >= 18, `a ${total}-step run gave a column ${narrowest} units`);
+  }
+});
+
+test("the widened canvas is still where the model says the steps are", () => {
+  // The component turns a pointer position into a coordinate with the width the
+  // model reports. If the columns were laid out for one width and the canvas
+  // drawn at another, every hover and click on a long run would report a step
+  // near the one under the pointer — the most confusing kind of wrong.
+  const steps = [baseline(0.4)];
+  for (let n = 1; n <= 60; n += 1) steps.push(step(n, { train: 0.5, val: 0.5 }));
+  const model = chartModel(steps, { width: 720, height: 280, totalSteps: 60 });
+
+  assert.equal(model.plot.left + model.plot.width, model.width - 14);
+  const mid = model.plot.top + model.plot.height / 2;
+  for (const stepNo of [0, 1, 37, 60]) {
+    const column = model.columns.find((c) => c.stepNo === stepNo);
+    assert.equal(model.stepAtPoint(column.cx, mid), stepNo);
+    // …and anywhere inside the column, which is the point of having one.
+    assert.equal(model.stepAtPoint(column.x + 1, mid), stepNo);
+    assert.equal(model.stepAtPoint(column.x + column.width - 1, mid), stepNo);
+  }
 });
 
 // --- Finding the step behind a click ----------------------------------------
