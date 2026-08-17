@@ -694,7 +694,31 @@
 @media (max-width: 900px) { .opt-section { grid-template-columns: minmax(0, 1fr); } }
 .opt-section.is-bare { grid-template-columns: minmax(0, 1fr); }
 
-.opt-runlist { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+/* Sticky, because the pane beside it is several times its height and the two
+   used to scroll as one page: reading down a run's step table carried the list
+   of runs off the top of the window, so getting back to another run meant
+   scrolling all the way up first. `.opt-section` is already `align-items: start`
+   — a stretched grid item is as tall as the row and has nowhere to stick — so
+   the rail only needs the offset and a height to scroll inside.
+
+   `top` clears the sticky top bar (`--topbar-h`, which the bar sets as its own
+   min-height) plus the page's own top padding, so the rail comes to rest lined
+   up with the first card in the pane rather than tucked under the bar. The
+   `max-height` is what makes a rail of fifty runs scroll inside itself instead
+   of growing past the bottom of the window, and `overscroll-behavior` keeps
+   that inner scroll from carrying on into the page once it hits its end. */
+.opt-runlist {
+  display: flex; flex-direction: column; gap: var(--space-2); min-width: 0;
+  position: sticky; top: calc(var(--topbar-h) + var(--space-5));
+  max-height: calc(100dvh - var(--topbar-h) - var(--space-5) - var(--space-7));
+  overflow-y: auto; overscroll-behavior: contain;
+}
+/* Single column: the rail is above the pane rather than beside it, and a sticky
+   band pinned across the top of a scrolling page is in the way of the thing it
+   is scrolling to. */
+@media (max-width: 900px) {
+  .opt-runlist { position: static; max-height: none; overflow-y: visible; }
+}
 .opt-runlist-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .opt-runlist-head h3 { margin: 0; font-size: var(--text-body); font-weight: var(--fw-semibold); }
 .opt-runlist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
