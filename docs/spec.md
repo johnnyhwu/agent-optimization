@@ -187,8 +187,9 @@ Stage 4 補的是「手動驗證一個假設」，Stage 3 補的是**把那個�
 | 兩種模式 | `isolated`（只送目標 skill、優化 body、保護 frontmatter）與 `routing`（送全部 skill、優化 frontmatter description、保護 body）。gate 在 routing 模式多一道 activation 守門 |
 | 迴圈 | step 0 baseline → 每個 step：訓練 minibatch rollout → reflect → aggregate → clip 到 learning rate → apply → 驗證 rollout → gate。可取消、可續跑（backend 重啟後是 `interrupted` 而非 `failed`）|
 | activation 偵測 | 兩個策略（tool call 路徑 + skill 內容逐字比對），**不注入任何 token**；`activation = A OR B`，兩者都測不出來時回報「未知」而不是「否」|
-| 觀測 | 六步 wizard、逐 step 圖表、Part 1（rollout + 送給 analyst 的 prompt 與截斷帳本）、Part 2（並排 diff + 未套用的 edit + 答案硬編告警）|
+| 觀測 | 六步 wizard、逐 step 圖表、Part 1（rollout + 送給 analyst 的 prompt 與截斷帳本）、Part 2（並排 diff + 未套用的 edit + 答案硬編告警）。圖表的 y 軸預設貼合資料（最小跨度 20 個百分點，非全幅時軸標題註明 zoomed）、canvas 依 step 數加寬到每個 step 至少 20 單位、legend 可開關單一系列、方向鍵可釘住 step；header 另有這個 run 的總耗時 |
 | 產出 | zip（skill 目錄 + `manifest.json`，含 warnings），**人工放回 agent server** |
+| 刪除 | `DELETE /optimization/runs/{id}`，**只有建立者**（與 cancel / resume 同一條線），且 `running` / `pending` 一律 409——背景 task 已經啟動但還沒把狀態翻成 `running` 的那段窗口，刪掉會讓它拿著不存在的 id 繼續買 agent 呼叫。刪除走 `services/deletion.py` 的 bulk delete（最深的先刪），不走 ORM cascade：一個 run 的子列是萬級的 |
 
 **刻意不做**（見 §15.1）：skill 自動寫回 agent server、test split、整份重寫模式、
 多次取樣壓抑溫度雜訊。slow update / meta skill 已接線但預設關閉。
@@ -1268,6 +1269,10 @@ Evaluation（三層下鑽）              Playground                        Opti
 （分組題目清單 + analyst 面板，面板裡還開得出兩欄 span 檢視），Part 2 是三欄文字
 （檔案樹 + 並排 diff）。擠在半頁裡，並排 diff 的每一行都會 wrap，而它存在的唯一理由
 就是把兩邊對齊。
+
+**run 清單那一欄是 sticky 的**（`top` 讓過 `--topbar-h`，本身超長就自己捲）。右欄是 header
+＋圖表＋step 表，高度是左欄的好幾倍，而全 app 只有 `.main` 一個捲動容器——兩欄一起捲的結果
+是「往下讀 step 表」等於「把 run 清單捲出畫面」，要換一個 run 得先捲回最上面。
 
 **Playground 先連線，才開始工作（connection bar）**
 
