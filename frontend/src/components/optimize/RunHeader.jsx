@@ -1,11 +1,13 @@
 import React from "react";
 import Badge from "../ui/Badge.jsx";
 import Button, { IconButton } from "../ui/Button.jsx";
+import RunDuration from "./RunDuration.jsx";
 import RunNameEditor from "../RunNameEditor.jsx";
-import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
+import { IconDownload, IconPlay, IconRefresh, IconStop, IconTrash } from "../icons.jsx";
 import { STATUS_TONE } from "./RunList.jsx";
 import { STEP_PHASES } from "../../optimize_steps.js";
 import { runStartedAt } from "../../optimize_run_label.js";
+import { formatSpan, runDuration } from "../../optimize_duration.js";
 import { plural } from "../../plural.js";
 
 // The run, at the top of its own page.
@@ -32,7 +34,7 @@ import { plural } from "../../plural.js";
 // how many of them are done.
 export default function RunHeader({
   run, activity, progress, steps, isMine, busy, downloading,
-  onRename, onStop, onResume, onRefresh, onDownloadBest,
+  onRename, onStop, onResume, onRefresh, onDownloadBest, onDelete,
 }) {
   const running = run.status === "running" || run.status === "pending";
   const cancelling = running && run.cancel_requested;
@@ -106,6 +108,22 @@ export default function RunHeader({
             onClick={onRefresh}
             label="Reload this run from the server"
           />
+          {/* Icon-only for the opposite reason: this one is irreversible, and a
+              labelled red button beside the chart would be the first thing the
+              eye lands on every time the page opens. Offered only to the
+              developer who started the run — everyone who shares its source
+              eval sets can read it — and only once it has stopped, because the
+              server refuses to delete a live run and a button that always
+              errors is worse than one that is not there. Stop first, then
+              delete; that is the same order the API enforces. */}
+          {isMine && !running && (
+            <IconButton
+              icon={<IconTrash size={15} />}
+              className="ui-btn-destructive-hover"
+              onClick={onDelete}
+              label="Delete this run"
+            />
+          )}
         </div>
       </div>
 
@@ -122,7 +140,17 @@ export default function RunHeader({
           sub={`${plural(run.num_epochs, "epoch")} of ${plural(run.steps_per_epoch, "step")}`}
         />
         <Fact label="Batch" value={run.batch_size} sub="questions per step" />
-        <Fact label="Started" value={runStartedAt(run)} sub={`by ${run.created_by}`} />
+        {/* When it started, and — the part that was missing entirely — how long
+            it went on for. The two belong in one fact rather than in two: a run
+            is an hour of paid agent calls, and "how long did that cost me" was
+            not answerable anywhere on the page. `RunDuration` is its own
+            component so that a live run's ticking second repaints these words
+            and nothing else. */}
+        <Fact
+          label="Started"
+          value={runStartedAt(run)}
+          sub={<RunDuration run={run} steps={steps} by={run.created_by} />}
+        />
       </dl>
 
       {/* Live state. Everything below this line changes while you watch it. */}
@@ -223,11 +251,18 @@ function finishedSentence(run, steps) {
   if (run.status === "interrupted") return "Stopped mid-loop by a restart. Every finished step is kept.";
   if (run.status === "failed") return "This run stopped early.";
   const scored = steps.filter((s) => s.status === "done").length;
-  if (run.best_step == null) return `Finished ${plural(scored, "step")}. No step was scored.`;
+  // "Finished 10 steps" was true and said nothing about the afternoon it took.
+  // The span is the same one the Started fact carries, through the same
+  // function, so the two cannot disagree on one screen.
+  const span = formatSpan(runDuration(run, steps).ms);
+  const finished = span
+    ? `Finished ${plural(scored, "step")} in ${span}.`
+    : `Finished ${plural(scored, "step")}.`;
+  if (run.best_step == null) return `${finished} No step was scored.`;
   if (run.best_step === 0) {
-    return `Finished ${plural(scored, "step")}. No candidate beat the skill it started with — the best score is still the baseline's.`;
+    return `${finished} No candidate beat the skill it started with — the best score is still the baseline's.`;
   }
-  return `Finished ${plural(scored, "step")}. Step ${run.best_step} scored best on validation.`;
+  return `${finished} Step ${run.best_step} scored best on validation.`;
 }
 
 function Fact({ label, value, sub }) {

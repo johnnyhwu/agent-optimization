@@ -47,6 +47,11 @@
   --gutter: var(--space-6);
   --rail-w: 216px;
   --rail-w-collapsed: 60px;
+  /* The sticky top bar's height, as a number anything below it can stick under.
+     True by construction rather than by measurement: `.topbar` sets this as its
+     `min-height`, so the two cannot drift the way `--chrome-h` did — that one
+     was a subtraction nothing ever defined, and every page got it wrong. */
+  --topbar-h: 48px;
 
   --accent: #6366f1;
   --accent-hover: #545bf0;
@@ -301,6 +306,9 @@ select { cursor: pointer; }
 /* ---- top bar ---- */
 .topbar {
   position: sticky; top: 0; z-index: 20;
+  /* `box-sizing: border-box` is global, so this is the outer height — which is
+     what a sticky element below has to clear. See `--topbar-h`. */
+  min-height: var(--topbar-h);
   padding: var(--space-3) var(--gutter);
   background: color-mix(in srgb, var(--panel) 80%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);

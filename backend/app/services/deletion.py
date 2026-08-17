@@ -22,6 +22,14 @@ from app.models import (
     EvalSet,
     EvalSetRole,
     EvalSetScript,
+    OptimizationItem,
+    OptimizationMinibatch,
+    OptimizationResult,
+    OptimizationRollout,
+    OptimizationRun,
+    OptimizationSkill,
+    OptimizationStageCall,
+    OptimizationStep,
     Question,
     QuestionResult,
     QuestionSkill,
@@ -50,6 +58,69 @@ async def _delete_run_rows(session: AsyncSession, run_ids: Sequence[uuid.UUID]) 
 async def delete_run(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Delete one run and everything hanging off it. Caller commits."""
     await _delete_run_rows(session, [run_id])
+
+
+async def delete_optimization_run(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """Delete one optimization run and everything under it. Caller commits.
+
+    Here rather than in the router, and as bulk statements rather than as
+    `session.delete(run)`, for a reason the eval side never had to face: an
+    optimization run is *large*. Every relationship from the run down is
+    `cascade="all, delete-orphan"` with no `passive_deletes`, so the ORM path
+    loads the whole tree into memory — items, steps, every rollout, and one row
+    per question per rollout, which for a sixty-step run over a twenty-question
+    batch is tens of thousands of objects — and then issues a DELETE per row.
+    The rows are all reachable from three ids, so this is nine statements.
+
+    Deepest first, like `_delete_run_rows` above, and for the same reason: the
+    database's own ON DELETE CASCADE would do it, but the order in which
+    Postgres walks a cascade is not something to depend on, and an explicit
+    order is the one thing here that can be read and tested.
+
+    The run's links *out* — `optimization_items.question_pk`,
+    `.source_eval_set_id`, `optimization_results.question_pk` — are all ON DELETE
+    SET NULL and point at eval tables. Deleting a run therefore touches nothing
+    on the evaluation side, which is the separation `test_optimizer_isolation.py`
+    exists to guard.
+    """
+    step_ids = (
+        await session.scalars(
+            select(OptimizationStep.id).where(OptimizationStep.run_id == run_id)
+        )
+    ).all()
+    if step_ids:
+        rollout_ids = (
+            await session.scalars(
+                select(OptimizationRollout.id).where(
+                    OptimizationRollout.step_id.in_(step_ids)
+                )
+            )
+        ).all()
+        if rollout_ids:
+            await session.execute(
+                delete(OptimizationResult).where(
+                    OptimizationResult.rollout_id.in_(rollout_ids)
+                )
+            )
+            await session.execute(
+                delete(OptimizationRollout).where(OptimizationRollout.id.in_(rollout_ids))
+            )
+        await session.execute(
+            delete(OptimizationStageCall).where(
+                OptimizationStageCall.step_id.in_(step_ids)
+            )
+        )
+        await session.execute(
+            delete(OptimizationMinibatch).where(
+                OptimizationMinibatch.step_id.in_(step_ids)
+            )
+        )
+        await session.execute(
+            delete(OptimizationStep).where(OptimizationStep.id.in_(step_ids))
+        )
+    await session.execute(delete(OptimizationItem).where(OptimizationItem.run_id == run_id))
+    await session.execute(delete(OptimizationSkill).where(OptimizationSkill.run_id == run_id))
+    await session.execute(delete(OptimizationRun).where(OptimizationRun.id == run_id))
 
 
 async def delete_eval_set(session: AsyncSession, eval_set_id: uuid.UUID) -> None:

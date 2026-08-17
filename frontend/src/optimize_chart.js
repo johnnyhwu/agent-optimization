@@ -16,13 +16,47 @@
 //   * **The best-so-far line is the gate's own threshold**, not a smoothing of
 //     the validation series. It is a staircase, it never falls, and a candidate
 //     is accepted exactly when its point clears it.
+//
+// Two of the three things a reader can now change about the picture also live
+// here, for the same reason — each of them can produce a chart that is
+// plausible and wrong. A fitted y axis can turn three points of noise into a
+// climb, so `yDomain` refuses to zoom tighter than twenty points and snaps to
+// marks a reader recognises. Hiding a series has to change the axis it was
+// fitted to, or the plot keeps a band of empty space where the hidden line
+// used to be. The third — the canvas growing so that every step stays big
+// enough to click — is `minStepWidth`, and it is here because the width it
+// returns is also what the component must map the pointer through.
 
-export const Y_DOMAIN = [0, 1];
+export const Y_FULL = [0, 1];
 
-const Y_TICK_VALUES = [0, 0.25, 0.5, 0.75, 1];
+// Which series a reader can turn off, and the default: all of them.
+export const ALL_SERIES = { train: true, val: true, best: true };
 
 // Enough ticks to locate a step, few enough to stay legible at panel width.
 const MAX_X_TICKS = 16;
+
+// The fitted axis snaps to five-point marks. Accuracy is read as a percentage
+// and a gridline at 71.3% is a number nobody asked about.
+const FIT_GRID = 0.05;
+
+// …and never zooms tighter than twenty points. This is the guard on the whole
+// idea: a run that moved from 81% to 84% fitted to its own data is a chart of a
+// dramatic climb, and the reader has to check the axis to find out it was three
+// points. Twenty is wide enough that a genuinely small change looks small.
+const MIN_FIT_SPAN = 0.2;
+
+// Gridline spacings worth drawing, coarsest last. The first that divides the
+// domain into five intervals or fewer wins — on the full range that is 0.25,
+// which is the axis this chart has always had.
+const TICK_STEPS = [0.05, 0.1, 0.25, 0.5];
+
+// Every step is at least this many units wide, and the canvas grows until that
+// is true. At the fixed 720 units the chart used to be, a sixty-step run gave
+// each step 10.7 units — about fourteen screen pixels — so pinning the step you
+// meant was a matter of luck, and at a hundred steps it was eight. The plot
+// scrolls sideways instead; a run of ten steps is unaffected, because the
+// canvas only grows when the arithmetic says it must.
+const MIN_STEP_WIDTH = 20;
 
 // The left and bottom gutters carry an axis *title* as well as the tick labels
 // now. 38px was exactly wide enough for "100%" and nothing else, so the rotated
@@ -127,6 +161,97 @@ export function xDomain(steps, totalSteps = 0) {
   return [-0.5, last + 0.5];
 }
 
+// Floating point: 0.72 - 0.05 is 0.6699999999999999, and a domain edge one
+// ulp below a gridline puts an extra tick on the axis.
+function tidy(value) {
+  return Number(value.toFixed(4));
+}
+
+function snapDown(value) {
+  return tidy(Math.floor(tidy(value / FIT_GRID)) * FIT_GRID);
+}
+
+function snapUp(value) {
+  return tidy(Math.ceil(tidy(value / FIT_GRID)) * FIT_GRID);
+}
+
+/** Every plotted number the axis has to contain, for the series still shown.
+ *
+ * Hidden series are excluded, and that is the point of passing `show` in here
+ * rather than filtering afterwards: turning off the train line on a run whose
+ * training scores sat ten points below validation should tighten the axis
+ * around what is left, not leave a band of empty plot where the hidden line
+ * used to be.
+ */
+function visibleValues(steps, { show, metric }) {
+  const key = metricKeys(metric);
+  const values = [];
+  for (const step of steps || []) {
+    if (show.train && step.step_no > 0 && step[key.train] != null) values.push(step[key.train]);
+    if (show.val && step[key.val] != null) values.push(step[key.val]);
+    if (show.best && step.best_score != null) values.push(step.best_score);
+  }
+  return values;
+}
+
+/** `[min, max]` of the y axis.
+ *
+ * `full` is 0–100%, which is the honest default for "how good is it" and was
+ * the only option this chart had. It is also three quarters of empty plot on
+ * every run that works: skills start useful, so the interesting range is the
+ * top twenty points and every point in it is drawn within a few pixels of the
+ * others.
+ *
+ * `fit` opens that up, with two rules that keep it from lying. It never zooms
+ * tighter than `MIN_FIT_SPAN`, so a three-point wobble cannot fill the plot;
+ * and it snaps to five-point marks, so the axis labels stay numbers a reader
+ * recognises. The component says "zoomed" on the axis when this is in force —
+ * an axis that silently changes meaning is worse than one that never moves.
+ */
+export function yDomain(steps, options = {}) {
+  const { mode = "fit", show = ALL_SERIES, metric = "hard" } = options;
+  if (mode !== "fit") return [...Y_FULL];
+
+  const values = visibleValues(steps, { show, metric });
+  if (!values.length) return [...Y_FULL];
+
+  let lo = snapDown(Math.min(...values));
+  let hi = snapUp(Math.max(...values));
+
+  // A run whose every score is identical snaps to a zero-width domain, which
+  // divides by zero in the scale. Widening to the minimum covers that case as
+  // well as the merely-too-tight one.
+  if (hi - lo < MIN_FIT_SPAN) {
+    const middle = (lo + hi) / 2;
+    lo = snapDown(middle - MIN_FIT_SPAN / 2);
+    hi = snapUp(middle + MIN_FIT_SPAN / 2);
+  }
+
+  // Accuracy has no meaning outside 0–100%, so the widened domain slides back
+  // inside rather than being clipped — a plot area whose top eighth can never
+  // hold a point is the same wasted space this mode exists to remove.
+  if (hi > 1) {
+    lo = tidy(Math.max(0, lo - (hi - 1)));
+    hi = 1;
+  }
+  if (lo < 0) {
+    hi = tidy(Math.min(1, hi - lo));
+    lo = 0;
+  }
+  return [lo, hi];
+}
+
+/** The gridlines for a domain: four to six of them, on round numbers. */
+export function yTickValues([lo, hi]) {
+  const span = hi - lo;
+  const stride = TICK_STEPS.find((s) => span / s <= 5) ?? TICK_STEPS.at(-1);
+  const ticks = [];
+  for (let v = tidy(Math.ceil(tidy(lo / stride)) * stride); v <= hi + 1e-9; v = tidy(v + stride)) {
+    ticks.push(v);
+  }
+  return ticks;
+}
+
 function xTickValues(last) {
   if (last <= 0) return [0];
   const stride = Math.max(1, Math.ceil(last / (MAX_X_TICKS - 1)));
@@ -156,12 +281,30 @@ function round(n) {
  */
 export function chartModel(steps, options = {}) {
   const {
-    width = 640,
+    width: requestedWidth = 640,
     height = 240,
     metric = "hard",
     bestStep = null,
     totalSteps = 0,
+    yMode = "fit",
+    show: showOption = ALL_SERIES,
+    minStepWidth = MIN_STEP_WIDTH,
   } = options;
+
+  const show = { ...ALL_SERIES, ...showOption };
+
+  const [x0, x1] = xDomain(steps, totalSteps);
+  const span = x1 - x0;
+  const lastStep = Math.round(x1 - 0.5);
+
+  // The canvas is as wide as the panel, or as wide as the steps need — whichever
+  // is more. The caller passes the panel's width; what comes back may be larger,
+  // and the component scrolls it. Everything below is in these units, so this
+  // has to be settled before a single coordinate is computed.
+  const width = Math.max(
+    requestedWidth,
+    PAD.left + PAD.right + (lastStep + 1) * minStepWidth,
+  );
 
   const plot = {
     left: PAD.left,
@@ -170,18 +313,21 @@ export function chartModel(steps, options = {}) {
     height: Math.max(1, height - PAD.top - PAD.bottom),
   };
 
-  const [x0, x1] = xDomain(steps, totalSteps);
-  const span = x1 - x0;
+  const [y0, y1] = yDomain(steps, { mode: yMode, show, metric });
+
   const sx = (x) => plot.left + ((x - x0) / span) * plot.width;
   // SVG's y grows downwards; accuracy grows upwards. This is the flip.
-  const sy = (v) => plot.top + (1 - (v - Y_DOMAIN[0]) / (Y_DOMAIN[1] - Y_DOMAIN[0])) * plot.height;
+  const sy = (v) => plot.top + (1 - (v - y0) / (y1 - y0)) * plot.height;
 
   const { train, val } = series(steps, metric, { bestStep });
-  const trainPx = train.map((p) => ({ ...p, x: sx(p.x), y: sy(p.value) }));
-  const valPx = val.map((p) => ({ ...p, x: sx(p.x), y: sy(p.value) }));
+  // A hidden series is dropped here rather than in the component, so the paths,
+  // the markers and the axis it was fitted to can never disagree about which
+  // lines are on screen.
+  const trainPx = show.train ? train.map((p) => ({ ...p, x: sx(p.x), y: sy(p.value) })) : [];
+  const valPx = show.val ? val.map((p) => ({ ...p, x: sx(p.x), y: sy(p.value) })) : [];
 
   // The staircase: carry the old threshold across to the new step, then rise.
-  const best = bestSoFar(steps);
+  const best = show.best ? bestSoFar(steps) : [];
   const bestPoints = [];
   best.forEach((p, i) => {
     if (i) bestPoints.push({ x: sx(p.x), y: sy(best[i - 1].value) });
@@ -194,7 +340,6 @@ export function chartModel(steps, options = {}) {
     width: Math.max(0, sx(b.x1) - sx(b.x0)),
   }));
 
-  const lastStep = Math.round(x1 - 0.5);
   // One full-height band per step, spanning the half-step either side of it.
   //
   // These are what makes a step look clickable and look picked. Before them the
@@ -219,16 +364,32 @@ export function chartModel(steps, options = {}) {
   }
 
   return {
+    // The canvas the component must draw at, which is not necessarily the width
+    // it asked for — see `minStepWidth`. It is also the number the component
+    // needs to turn a pointer position into a coordinate, and getting that from
+    // a constant instead is how a scrolled chart reports the wrong step.
+    width,
+    height,
     plot,
     metric,
+    show,
     columns,
+    yDomain: [y0, y1],
+    // Whether the axis is showing something other than the full range, so the
+    // component can say so. A zoomed axis that does not announce itself is the
+    // one way this feature could mislead.
+    zoomed: y0 !== Y_FULL[0] || y1 !== Y_FULL[1],
     train: trainPx,
     val: valPx,
     trainPath: path(trainPx),
     valPath: path(valPx),
     bestPath: path(bestPoints),
     bands,
-    yTicks: Y_TICK_VALUES.map((value) => ({ value, y: sy(value), label: `${value * 100}%` })),
+    yTicks: yTickValues([y0, y1]).map((value) => ({
+      value,
+      y: sy(value),
+      label: `${Math.round(value * 100)}%`,
+    })),
     xTicks: xTickValues(lastStep).map((stepNo) => ({
       stepNo,
       x: sx(stepNo),

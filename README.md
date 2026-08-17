@@ -596,8 +596,14 @@ Notes:
   you would train a model — epochs, steps, a learning rate that caps how many
   edits one step may apply, and a validation gate that throws away the ones that
   did not help. Six-step wizard, then a chart that grows a point per step while
-  it runs. Click a step to see what it measured, which failures the analyst was
-  shown together, and a side-by-side diff of what it did to the skill. Every
+  it runs. Click a step — or walk the chart with the arrow keys — to see what it
+  measured, which failures the analyst was shown together, and a side-by-side
+  diff of what it did to the skill. The chart fits its accuracy axis to the run
+  by default (never tighter than twenty points, and it says *zoomed* when it is
+  not showing 0–100%), widens itself on a long run so every step stays big
+  enough to hit, and switches either series off from the legend. The run's
+  header says how long it took as well as when it started, and a finished run
+  can be deleted by the developer who started it. Every
   model call the step made is on that page: each analyst's conclusion and the
   patch it asked for, then — under *After the analysts* — the merge and ranking
   calls that decided which of those edits survived, each with the prompt it was

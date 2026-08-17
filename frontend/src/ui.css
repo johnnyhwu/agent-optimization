@@ -694,7 +694,31 @@
 @media (max-width: 900px) { .opt-section { grid-template-columns: minmax(0, 1fr); } }
 .opt-section.is-bare { grid-template-columns: minmax(0, 1fr); }
 
-.opt-runlist { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+/* Sticky, because the pane beside it is several times its height and the two
+   used to scroll as one page: reading down a run's step table carried the list
+   of runs off the top of the window, so getting back to another run meant
+   scrolling all the way up first. `.opt-section` is already `align-items: start`
+   — a stretched grid item is as tall as the row and has nowhere to stick — so
+   the rail only needs the offset and a height to scroll inside.
+
+   `top` clears the sticky top bar (`--topbar-h`, which the bar sets as its own
+   min-height) plus the page's own top padding, so the rail comes to rest lined
+   up with the first card in the pane rather than tucked under the bar. The
+   `max-height` is what makes a rail of fifty runs scroll inside itself instead
+   of growing past the bottom of the window, and `overscroll-behavior` keeps
+   that inner scroll from carrying on into the page once it hits its end. */
+.opt-runlist {
+  display: flex; flex-direction: column; gap: var(--space-2); min-width: 0;
+  position: sticky; top: calc(var(--topbar-h) + var(--space-5));
+  max-height: calc(100dvh - var(--topbar-h) - var(--space-5) - var(--space-7));
+  overflow-y: auto; overscroll-behavior: contain;
+}
+/* Single column: the rail is above the pane rather than beside it, and a sticky
+   band pinned across the top of a scrolling page is in the way of the thing it
+   is scrolling to. */
+@media (max-width: 900px) {
+  .opt-runlist { position: static; max-height: none; overflow-y: visible; }
+}
 .opt-runlist-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .opt-runlist-head h3 { margin: 0; font-size: var(--text-body); font-weight: var(--fw-semibold); }
 .opt-runlist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -1098,7 +1122,17 @@
 
 /* --- The run chart ------------------------------------------------------- */
 .opt-chart { margin-top: var(--space-2); }
-.opt-chart-svg { width: 100%; height: auto; display: block; cursor: pointer; }
+/* Two controls where there was one, kept on the card header's single line. */
+.opt-chart-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* `min-width`, not `width`: a short run's canvas is the panel's width and fills
+   it, while a long run's is wider than the panel and keeps its own size so that
+   every step stays big enough to hit. The frame scrolls the difference. */
+.opt-chart-svg { min-width: 100%; height: auto; display: block; cursor: pointer; }
+/* The chart is focusable — arrow keys pin a step — so it needs to say so. */
+.opt-chart-svg:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm); }
+/* Invisible, and not a decoration: these are what `scrollIntoView` targets when
+   the keyboard walks the pin off the visible part of a long run. */
+.opt-chart-anchor { fill: none; pointer-events: none; }
 .opt-chart-band { fill: var(--panel-2); }
 .opt-chart-band.alt { fill: var(--panel-3); }
 .opt-chart-epoch { fill: var(--muted); font-size: 9px; letter-spacing: .04em; }
@@ -1133,10 +1167,28 @@
 .opt-chart-legend .swatch.val { background: var(--accent); }
 .opt-chart-legend .swatch.best { background: var(--green); }
 .opt-chart-legend .swatch.rejected { background: var(--muted); opacity: .5; }
+/* The legend entries are the series switches. They keep the legend's own type
+   and colour — a legend that suddenly looked like a row of buttons would be
+   heavier than the chart it labels — and earn their affordance from the hover
+   and the pressed state instead. */
+.opt-chart-legend-item {
+  display: inline-flex; align-items: center;
+  padding: 2px 6px; margin: -2px 0; border: none; border-radius: var(--radius-sm);
+  background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.opt-chart-legend-item:hover { background: var(--panel-2); color: var(--text); }
+.opt-chart-legend-item:focus-visible { outline: none; box-shadow: var(--ring); }
+/* Struck through, not merely faded: at this size a dimmed grey label beside a
+   normal grey one is not a difference anyone would notice. */
+.opt-chart-legend-item.is-off { text-decoration: line-through; opacity: .55; }
+.opt-chart-legend-item.is-off .swatch { opacity: .35; }
 /* The hover readout floats over the plot instead of sitting in the flow under
    it. As a block it was laid out, which pushed the pinned card and everything
-   below it down the page every time the pointer crossed the chart. */
-.opt-chart-frame { position: relative; }
+   below it down the page every time the pointer crossed the chart.
+   `overflow-x` is here rather than on `.opt-chart`, because the tooltip is
+   positioned against this box and a scrolling ancestor is what keeps the two
+   moving together. */
+.opt-chart-frame { position: relative; overflow-x: auto; }
 .opt-chart-tip {
   position: absolute; top: var(--space-3); transform: translateX(-50%);
   display: flex; flex-direction: column; gap: 2px;

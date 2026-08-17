@@ -77,7 +77,7 @@ from app.schemas import (
     SkillGroup,
     TraceView,
 )
-from app.services import judge_prompt, run_config
+from app.services import deletion, judge_prompt, run_config
 from app.services.trace_view import resolve_trace_spans, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
@@ -1657,15 +1657,35 @@ async def delete_optimization_run(
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
 ):
-    """Delete a run and everything under it. Creator only."""
+    """Delete a run and everything under it. Creator only, and not while it lives.
+
+    Creator only, like cancel and resume: a run is one developer's experiment
+    against their own agent endpoint, even though everyone who shares its source
+    eval sets can read it.
+
+    `pending` is refused as well as `running`, and that is not tidiness. The
+    background task is spawned after the transaction commits and reads the run
+    back by id; it then works for a while before flipping the status to
+    `running`. A delete landing inside that window leaves a task holding an id
+    that no longer exists — it goes on buying agent calls until its first step
+    insert trips the foreign key, which surfaces as a traceback in the log and a
+    bill for nothing. Stopping first closes the window: cancel accepts `pending`,
+    and a cancelled run deletes.
+
+    The engine may still be between its own checks even so, so the cancellation
+    event is signalled on the way out. It costs nothing when nothing is
+    listening, and it is what stops an in-flight agent call rather than waiting
+    for it to come back to a run that is gone.
+    """
     run = await _load_visible_run(session, run_id, subject)
     if run.created_by != subject:
         raise HTTPException(
             status_code=403, detail="only the developer who started this run can delete it"
         )
-    if run.status == "running":
+    if run.status in ("running", "pending"):
         raise HTTPException(
-            status_code=409, detail="cancel this run before deleting it"
+            status_code=409, detail="stop this run before deleting it"
         )
-    await session.delete(run)
+    await deletion.delete_optimization_run(session, run_id)
     await session.commit()
+    cancellation.signal(run_id)

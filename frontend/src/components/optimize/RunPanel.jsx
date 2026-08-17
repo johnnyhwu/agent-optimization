@@ -4,12 +4,16 @@ import Badge from "../ui/Badge.jsx";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
+import ConfirmDialog from "../ConfirmDialog.jsx";
 import RunHeader from "./RunHeader.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
+import { runTitle } from "../../optimize_run_label.js";
+import { plural } from "../../plural.js";
+import { setServerTime } from "../../useElapsed.js";
 import {
   applyEvent,
   emptySteps,
@@ -29,7 +33,7 @@ import StepCard from "./StepCard.jsx";
 // halfway through gets the steps that already happened rather than a blank
 // screen until the next one lands.
 
-export default function RunPanel({ runId, subject, onRunChanged }) {
+export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted }) {
   const toast = useToast();
   // Through a ref because the stream effect is keyed on `runId` alone — it must
   // not tear down and resubscribe because a parent re-rendered and handed over
@@ -42,10 +46,22 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
   const [busy, setBusy] = useState(false);
   const [pinned, setPinned] = useState(null);
   const [metric, setMetric] = useState("hard");
+  // How the chart is being read, held here because two of the three controls
+  // sit in the card header beside the metric toggle.
+  //
+  // `fit` by default: a skill that works scores somewhere between 70% and 100%,
+  // so on the full range every point of a good run is drawn in the top quarter
+  // of the plot and the differences between steps — which is the entire reason
+  // to look at this chart — are a few pixels apart. The axis says "zoomed" when
+  // it is not showing 0–100%, and `optimize_chart.js` refuses to zoom tighter
+  // than twenty points, which is what keeps the default from flattering a run.
+  const [yMode, setYMode] = useState("fit");
+  const [show, setShow] = useState({ train: true, val: true, best: true });
   // Which download is in flight — "best", a step number, or null. One boolean
   // put both this header's button and the pinned card's into a spinner
   // whichever was pressed, so the page reported work it was not doing.
   const [downloading, setDownloading] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // The run row *and* its steps: `getOptimizationRun` carries both, and the
   // steps it carries are authoritative — that is what makes this the recovery
@@ -94,7 +110,16 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
 
     // The snapshot is the stream's own opening statement of the same thing a
     // refetch gives, so it replaces rather than merges.
-    const onSnapshot = parse((d) => setLive((l) => replaceSteps(l, d.steps || [])));
+    //
+    // It also carries the server's clock, which this page was throwing away
+    // while the eval and playground streams both read it. The header now counts
+    // upward from `started_at`, and on a machine whose clock is a minute off —
+    // most of them are off by seconds — an uncorrected subtraction shows a
+    // number that is simply wrong, and a slow clock shows nothing at all.
+    const onSnapshot = parse((d) => {
+      setServerTime(d.server_time);
+      setLive((l) => replaceSteps(l, d.steps || []));
+    });
     // Everything else is a slice of a step row, and the reducer knows which.
     // These were the events the page was already being sent and throwing away:
     // a step is assembled from `step_started`, two `rollout_done`s minutes
@@ -178,6 +203,18 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
     }
   }
 
+  // No try/catch: `ConfirmDialog` catches, keeps itself open and shows the
+  // message inline, which is where an error about the thing being confirmed
+  // belongs — a toast would fire as the dialog closed under it. The stream is
+  // torn down by the unmount that follows the navigation.
+  async function confirmDelete() {
+    await api.deleteOptimizationRun(runId);
+    setConfirmingDelete(false);
+    toast.success("Run deleted");
+    notify.current?.();
+    onRunDeleted?.();
+  }
+
   if (error) return <Banner tone="error" title="Could not load this run">{error}</Banner>;
   if (!run) return <Skeleton variant="row" count={5} />;
 
@@ -202,6 +239,7 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
           onResume={() => act(api.resumeOptimizationRun, "Resuming from the last completed step.")}
           onRefresh={reload}
           onDownloadBest={() => downloadSkill("best")}
+          onDelete={() => setConfirmingDelete(true)}
         />
 
         {run.status === "interrupted" && (
@@ -231,24 +269,44 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
         <CardHeader
           title="Accuracy by step"
           actions={
-            // Two ghost-vs-secondary buttons in a `role="group"` announced as
-            // two unrelated buttons with no indication which was on. This is
-            // the primitive the rest of the app already uses to say "one of
-            // these".
-            <SegmentedControl
-              value={metric}
-              onChange={setMetric}
-              ariaLabel="Scoring metric"
-              size="sm"
-              options={[
-                { value: "hard", label: "hard", title: "Strictly correct answers only" },
-                {
-                  value: "soft",
-                  label: "soft",
-                  title: "Partial credit, as the judge scored each answer 0–1",
-                },
-              ]}
-            />
+            <div className="opt-chart-controls">
+              {/* Two ghost-vs-secondary buttons in a `role="group"` announced as
+                  two unrelated buttons with no indication which was on. This is
+                  the primitive the rest of the app already uses to say "one of
+                  these". */}
+              <SegmentedControl
+                value={metric}
+                onChange={setMetric}
+                ariaLabel="Scoring metric"
+                size="sm"
+                options={[
+                  { value: "hard", label: "hard", title: "Strictly correct answers only" },
+                  {
+                    value: "soft",
+                    label: "soft",
+                    title: "Partial credit, as the judge scored each answer 0–1",
+                  },
+                ]}
+              />
+              {/* The way back to the honest picture. Zooming is the useful
+                  default and the full range is the sanity check — "is this a
+                  real climb or four points of noise" is one click, rather than
+                  arithmetic on the axis labels. */}
+              <SegmentedControl
+                value={yMode}
+                onChange={setYMode}
+                ariaLabel="Accuracy range"
+                size="sm"
+                options={[
+                  {
+                    value: "fit",
+                    label: "zoom",
+                    title: "Fit the axis to the scores this run produced, never tighter than 20 points",
+                  },
+                  { value: "full", label: "0–100%", title: "The whole accuracy range" },
+                ]}
+              />
+            </div>
           }
         />
         <ProgressChart
@@ -256,8 +314,14 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
           totalSteps={run.total_steps}
           bestStep={run.best_step}
           metric={metric}
+          yMode={yMode}
+          show={show}
+          onToggleSeries={(key) => setShow((s) => ({ ...s, [key]: !s[key] }))}
           pinned={pinned}
-          onPick={(stepNo) => setPinned((current) => (current === stepNo ? null : stepNo))}
+          // The new pinned step, not a step to toggle: the chart decides, because
+          // it is the one place that knows whether this came from a click on an
+          // already-pinned column or from an arrow key walking onto it.
+          onPick={setPinned}
         />
         {pinnedStep && (
           <StepCard
@@ -281,6 +345,27 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
             numbers under it saying something else. */}
         <StepTable steps={steps} pinned={pinned} onPick={setPinned} metric={metric} />
       </Card>
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this run?"
+          message={`“${runTitle(run)}” and everything it recorded will be removed.`}
+          // What goes with it, in the units the reader has been looking at. The
+          // rollouts are the expensive part and the part people misjudge: a
+          // step is two of them, and each one answered every question in its
+          // split. The skill is the one thing that can be kept — hence the
+          // reminder rather than a bare warning.
+          detail={
+            `${plural(steps.length, "step")} of measurements, their rollouts over ` +
+            `${run.n_train + run.n_val} questions, every analyst call, and each ` +
+            "version of the skill this run produced. Download the best skill " +
+            "first if you want to keep it — this cannot be undone."
+          }
+          confirmLabel="Delete run"
+          onConfirm={confirmDelete}
+          onClose={() => setConfirmingDelete(false)}
+        />
+      )}
     </div>
   );
 }
