@@ -737,3 +737,181 @@ async def test_the_step_summary_reports_the_two_rollouts_apart(session, monkeypa
     # The exclusion belongs to the split that suffered it.
     assert (summary.train_n_agent_error, summary.val_n_agent_error) == (0, 1)
     assert (summary.train_n_scored, summary.val_n_scored) == (6, 5)
+
+
+# --- DELETE /optimization/runs/{id} ------------------------------------------
+#
+# The endpoint existed with no test and no caller: nothing in the UI reached it,
+# so its two rules — creator only, and not while the run is alive — had never
+# been exercised at all. Both are the kind that fail open.
+
+
+async def _seed_deletable_run(session, monkeypatch, *, subject="alice", status="completed"):
+    """A finished run with a step, both rollouts, results, and a skill snapshot.
+
+    Deep enough to prove the delete reaches the leaves: a result row hangs off a
+    rollout, which hangs off a step, which hangs off the run, and none of those
+    are reachable from the run's own row.
+    """
+    from app.models import (
+        OptimizationMinibatch,
+        OptimizationResult,
+        OptimizationRollout,
+        OptimizationSkill,
+        OptimizationStageCall,
+        OptimizationStep,
+    )
+
+    _stub_start(monkeypatch)
+    eval_set, questions, keys = await make_runnable_set(session)
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject=subject, session=session
+    )
+
+    row = await session.get(OptimizationRun, run.id)
+    row.status = status
+    step = OptimizationStep(
+        run_id=run.id, step_no=1, epoch_no=1, step_in_epoch=1, status="done",
+        gate_action="accept_new_best",
+    )
+    session.add(step)
+    await session.flush()
+    session.add(OptimizationMinibatch(
+        step_id=step.id, minibatch_no=0, source_type="failure", n_items=1,
+    ))
+    session.add(OptimizationStageCall(
+        step_id=step.id, seq=0, stage="merge_final", prompt_system="s", prompt_user="u",
+        output={"edits": []},
+    ))
+    session.add(OptimizationSkill(
+        run_id=run.id, step_no=1, kind="candidate",
+        files={"billing/SKILL.md": "# Billing\n"}, content_hash="abc", per_file_stats={},
+    ))
+    for split in ("train", "val"):
+        rollout = OptimizationRollout(
+            step_id=step.id, split=split, skill_step_no=1,
+            n_items=2, n_scored=2, hard=1.0, soft=1.0,
+        )
+        session.add(rollout)
+        await session.flush()
+        session.add(OptimizationResult(
+            rollout_id=rollout.id, item_key=keys[0], question_pk=questions[0].id,
+            correlation_id=uuid.uuid4().hex, verdict="correct", status="done",
+        ))
+    await session.commit()
+    return eval_set, run
+
+
+async def test_deleting_a_run_takes_every_row_under_it(session, monkeypatch):
+    """The run's children are not reachable from its own row, so "deleted" has to
+    mean the whole tree.
+
+    A rollout result left behind would be invisible — nothing lists results by
+    anything but their rollout — while still holding a `question_pk` into an eval
+    set the developer may later try to delete.
+    """
+    from sqlalchemy import func, select
+
+    from app.models import (
+        OptimizationMinibatch,
+        OptimizationResult,
+        OptimizationRollout,
+        OptimizationSkill,
+        OptimizationStageCall,
+        OptimizationStep,
+    )
+
+    _, run = await _seed_deletable_run(session, monkeypatch)
+
+    await opt.delete_optimization_run(run.id, subject="alice", session=session)
+
+    assert await session.get(OptimizationRun, run.id) is None
+    for model in (
+        OptimizationItem, OptimizationStep, OptimizationRollout, OptimizationResult,
+        OptimizationMinibatch, OptimizationStageCall, OptimizationSkill,
+    ):
+        left = await session.scalar(select(func.count()).select_from(model))
+        assert left == 0, f"{model.__tablename__} still has rows"
+
+
+async def test_deleting_a_run_leaves_the_questions_it_drew_from(session, monkeypatch):
+    """A run quotes an eval set; it does not own it.
+
+    The links across are ON DELETE SET NULL precisely so the two lifetimes stay
+    separate, and this is the direction that was never tested: deleting the run
+    must not take the eval set's questions — or anyone else's runs against them —
+    with it.
+    """
+    from sqlalchemy import func, select
+
+    eval_set, run = await _seed_deletable_run(session, monkeypatch)
+    before = await session.scalar(
+        select(func.count()).select_from(Question).where(Question.eval_set_id == eval_set.id)
+    )
+
+    await opt.delete_optimization_run(run.id, subject="alice", session=session)
+
+    after = await session.scalar(
+        select(func.count()).select_from(Question).where(Question.eval_set_id == eval_set.id)
+    )
+    assert after == before > 0
+    assert await session.get(EvalSet, eval_set.id) is not None
+
+
+async def test_only_the_developer_who_started_a_run_may_delete_it(session, monkeypatch):
+    """Sharing an eval set makes someone a reader of the run, not its owner.
+
+    Everyone with a role on the sources can open this run, watch its chart and
+    download its skill. Deleting it is the one thing that cannot be undone by
+    whoever it belongs to, so it follows cancel and resume: creator only.
+    """
+    eval_set, run = await _seed_deletable_run(session, monkeypatch)
+    session.add(EvalSetRole(eval_set_id=eval_set.id, user_subject="bob", role="viewer"))
+    await session.commit()
+
+    # Readable — this is the premise of the test, not incidental.
+    assert await opt.get_optimization_run(run.id, subject="bob", session=session)
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.delete_optimization_run(run.id, subject="bob", session=session)
+    assert exc.value.status_code == 403
+    assert await session.get(OptimizationRun, run.id) is not None
+
+
+async def test_a_run_you_cannot_see_is_not_there_to_delete(session, monkeypatch):
+    """404, not 403: whether a run exists at a given id is itself not theirs to
+    learn — the same choice `_load_visible_run` makes everywhere else."""
+    _, run = await _seed_deletable_run(session, monkeypatch)
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.delete_optimization_run(run.id, subject="carol", session=session)
+    assert exc.value.status_code == 404
+    assert await session.get(OptimizationRun, run.id) is not None
+
+
+@pytest.mark.parametrize("status", ["running", "pending"])
+async def test_a_live_run_must_be_stopped_before_it_can_be_deleted(
+    session, monkeypatch, status
+):
+    """`pending` counts as live, and that is the whole point of this test.
+
+    The background task is spawned after the create commits and reads the run
+    back by id, then works for a while before flipping the status to `running`.
+    A delete landing in that window leaves the task holding an id that no longer
+    exists: it goes on buying agent calls until its first step insert trips the
+    foreign key. Refusing both statuses closes the window — cancel accepts
+    `pending`, so stopping first is a route that exists.
+    """
+    _, run = await _seed_deletable_run(session, monkeypatch, status=status)
+
+    with pytest.raises(HTTPException) as exc:
+        await opt.delete_optimization_run(run.id, subject="alice", session=session)
+    assert exc.value.status_code == 409
+    assert await session.get(OptimizationRun, run.id) is not None
+
+
+async def test_a_cancelled_run_deletes(session, monkeypatch):
+    """The route out of the 409 above has to actually work."""
+    _, run = await _seed_deletable_run(session, monkeypatch, status="cancelled")
+    await opt.delete_optimization_run(run.id, subject="alice", session=session)
+    assert await session.get(OptimizationRun, run.id) is None

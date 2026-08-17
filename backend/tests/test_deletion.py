@@ -17,13 +17,19 @@ from app.models import (
     EvalSet,
     EvalSetRole,
     EvalSetScript,
+    OptimizationRollout,
+    OptimizationStep,
     Question,
     QuestionResult,
     QuestionSkill,
     Run,
     SpanAnalysis,
 )
-from app.services.deletion import delete_eval_set, delete_run
+from app.services.deletion import (
+    delete_eval_set,
+    delete_optimization_run,
+    delete_run,
+)
 
 
 class RecordingSession:
@@ -94,6 +100,67 @@ async def test_delete_eval_set_order_is_deepest_first():
     assert session.deleted.index("question_results") < session.deleted.index("questions")
 
 
+async def test_deleting_an_optimization_run_works_down_from_the_leaves():
+    """One run is tens of thousands of rows, and the order they go in is the part
+    that can be got wrong silently.
+
+    `session.delete(run)` would also work — every foreign key below the run
+    cascades — but it loads the entire tree into memory to do it: a row object
+    per question per rollout per step. These are nine statements instead, and
+    the order is explicit rather than left to however Postgres happens to walk
+    the cascade.
+    """
+    session = RecordingSession(
+        {
+            OptimizationStep.__tablename__: _ids(3),
+            OptimizationRollout.__tablename__: _ids(6),
+        }
+    )
+    await delete_optimization_run(session, uuid.uuid4())
+
+    assert session.deleted == [
+        "optimization_results",
+        "optimization_rollouts",
+        "optimization_stage_calls",
+        "optimization_minibatches",
+        "optimization_steps",
+        "optimization_items",
+        "optimization_skills",
+        "optimization_runs",
+    ]
+    # Nothing on the evaluation side is touched: the links that cross over are
+    # ON DELETE SET NULL, and a run must not take questions with it.
+    assert not {"questions", "question_results", "runs", "eval_sets"} & set(session.deleted)
+
+
+async def test_deleting_a_run_that_never_ran_a_step_still_drops_the_run():
+    """A run cancelled while pending has items and no steps at all."""
+    session = RecordingSession({OptimizationStep.__tablename__: []})
+    await delete_optimization_run(session, uuid.uuid4())
+    assert session.deleted == [
+        "optimization_items",
+        "optimization_skills",
+        "optimization_runs",
+    ]
+
+
+async def test_a_step_with_no_rollouts_still_takes_its_stage_calls():
+    """An aborted step has stage calls and no rollout — the analyst was called
+    and the run died before anything was scored."""
+    session = RecordingSession(
+        {OptimizationStep.__tablename__: _ids(1), OptimizationRollout.__tablename__: []}
+    )
+    await delete_optimization_run(session, uuid.uuid4())
+    assert session.deleted == [
+        "optimization_stage_calls",
+        "optimization_minibatches",
+        "optimization_steps",
+        "optimization_items",
+        "optimization_skills",
+        "optimization_runs",
+    ]
+
+
 async def test_delete_eval_set_with_no_runs_skips_run_children():
     session = RecordingSession(
         {Run.__tablename__: [], Question.__tablename__: _ids(1)}
@@ -129,13 +196,13 @@ def test_every_child_table_is_covered():
         EvalSetRole.__tablename__,
         EvalSetScript.__tablename__,
         EvalSet.__tablename__,
-        # Optimize's tables are not children of an eval set and deliberately have
-        # no line in deletion.py: they reference `questions` and `eval_sets` with
-        # ON DELETE SET NULL, and every row that needs a question carries its own
-        # snapshot of the text. An optimization run outlives the sets it drew
-        # from — it belongs to no single set, and deleting one next month must
-        # leave last month's run readable rather than delete it.
-        # `test_optimizer_isolation.py` proves the delete path over real tables.
+        # Optimize's tables are deleted by `delete_optimization_run`, which is a
+        # separate entry point on purpose: they are not children of an eval set.
+        # They reference `questions` and `eval_sets` with ON DELETE SET NULL and
+        # every row that needs a question carries its own snapshot of the text,
+        # so an optimization run outlives the sets it drew from — deleting a set
+        # next month must leave last month's run readable rather than delete it.
+        # `test_optimizer_isolation.py` proves that half over real tables.
         "optimization_runs",
         "optimization_items",
         "optimization_steps",

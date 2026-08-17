@@ -97,6 +97,16 @@ export default function OptimizeSection({ route, subject }) {
             runId={route.runId}
             subject={subject}
             onRunChanged={() => setRailRevision((n) => n + 1)}
+            // Back to the bare address, which is the one place that knows what
+            // to open next: `onRunsLoaded` below opens the newest run that is
+            // left, or leaves the intro standing when the deleted one was the
+            // last. `replace`, not `navigate`: the address being left is the
+            // deleted run's own, and pushing over it would leave it one press
+            // of Back away — an address that now loads an error.
+            onRunDeleted={() => {
+              setHasRuns(null);
+              replace(href.optimize());
+            }}
           />
         ) : (
           // Only ever reached with no runs to open — see `onRunsLoaded`. Its

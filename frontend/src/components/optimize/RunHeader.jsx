@@ -3,7 +3,7 @@ import Badge from "../ui/Badge.jsx";
 import Button, { IconButton } from "../ui/Button.jsx";
 import RunDuration from "./RunDuration.jsx";
 import RunNameEditor from "../RunNameEditor.jsx";
-import { IconDownload, IconPlay, IconRefresh, IconStop } from "../icons.jsx";
+import { IconDownload, IconPlay, IconRefresh, IconStop, IconTrash } from "../icons.jsx";
 import { STATUS_TONE } from "./RunList.jsx";
 import { STEP_PHASES } from "../../optimize_steps.js";
 import { runStartedAt } from "../../optimize_run_label.js";
@@ -34,7 +34,7 @@ import { plural } from "../../plural.js";
 // how many of them are done.
 export default function RunHeader({
   run, activity, progress, steps, isMine, busy, downloading,
-  onRename, onStop, onResume, onRefresh, onDownloadBest,
+  onRename, onStop, onResume, onRefresh, onDownloadBest, onDelete,
 }) {
   const running = run.status === "running" || run.status === "pending";
   const cancelling = running && run.cancel_requested;
@@ -108,6 +108,22 @@ export default function RunHeader({
             onClick={onRefresh}
             label="Reload this run from the server"
           />
+          {/* Icon-only for the opposite reason: this one is irreversible, and a
+              labelled red button beside the chart would be the first thing the
+              eye lands on every time the page opens. Offered only to the
+              developer who started the run — everyone who shares its source
+              eval sets can read it — and only once it has stopped, because the
+              server refuses to delete a live run and a button that always
+              errors is worse than one that is not there. Stop first, then
+              delete; that is the same order the API enforces. */}
+          {isMine && !running && (
+            <IconButton
+              icon={<IconTrash size={15} />}
+              className="ui-btn-destructive-hover"
+              onClick={onDelete}
+              label="Delete this run"
+            />
+          )}
         </div>
       </div>
 

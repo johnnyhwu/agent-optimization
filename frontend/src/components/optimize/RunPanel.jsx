@@ -4,12 +4,15 @@ import Badge from "../ui/Badge.jsx";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
+import ConfirmDialog from "../ConfirmDialog.jsx";
 import RunHeader from "./RunHeader.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
+import { runTitle } from "../../optimize_run_label.js";
+import { plural } from "../../plural.js";
 import { setServerTime } from "../../useElapsed.js";
 import {
   applyEvent,
@@ -30,7 +33,7 @@ import StepCard from "./StepCard.jsx";
 // halfway through gets the steps that already happened rather than a blank
 // screen until the next one lands.
 
-export default function RunPanel({ runId, subject, onRunChanged }) {
+export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted }) {
   const toast = useToast();
   // Through a ref because the stream effect is keyed on `runId` alone — it must
   // not tear down and resubscribe because a parent re-rendered and handed over
@@ -47,6 +50,7 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
   // put both this header's button and the pinned card's into a spinner
   // whichever was pressed, so the page reported work it was not doing.
   const [downloading, setDownloading] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // The run row *and* its steps: `getOptimizationRun` carries both, and the
   // steps it carries are authoritative — that is what makes this the recovery
@@ -188,6 +192,18 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
     }
   }
 
+  // No try/catch: `ConfirmDialog` catches, keeps itself open and shows the
+  // message inline, which is where an error about the thing being confirmed
+  // belongs — a toast would fire as the dialog closed under it. The stream is
+  // torn down by the unmount that follows the navigation.
+  async function confirmDelete() {
+    await api.deleteOptimizationRun(runId);
+    setConfirmingDelete(false);
+    toast.success("Run deleted");
+    notify.current?.();
+    onRunDeleted?.();
+  }
+
   if (error) return <Banner tone="error" title="Could not load this run">{error}</Banner>;
   if (!run) return <Skeleton variant="row" count={5} />;
 
@@ -212,6 +228,7 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
           onResume={() => act(api.resumeOptimizationRun, "Resuming from the last completed step.")}
           onRefresh={reload}
           onDownloadBest={() => downloadSkill("best")}
+          onDelete={() => setConfirmingDelete(true)}
         />
 
         {run.status === "interrupted" && (
@@ -291,6 +308,27 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
             numbers under it saying something else. */}
         <StepTable steps={steps} pinned={pinned} onPick={setPinned} metric={metric} />
       </Card>
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this run?"
+          message={`“${runTitle(run)}” and everything it recorded will be removed.`}
+          // What goes with it, in the units the reader has been looking at. The
+          // rollouts are the expensive part and the part people misjudge: a
+          // step is two of them, and each one answered every question in its
+          // split. The skill is the one thing that can be kept — hence the
+          // reminder rather than a bare warning.
+          detail={
+            `${plural(steps.length, "step")} of measurements, their rollouts over ` +
+            `${run.n_train + run.n_val} questions, every analyst call, and each ` +
+            "version of the skill this run produced. Download the best skill " +
+            "first if you want to keep it — this cannot be undone."
+          }
+          confirmLabel="Delete run"
+          onConfirm={confirmDelete}
+          onClose={() => setConfirmingDelete(false)}
+        />
+      )}
     </div>
   );
 }
