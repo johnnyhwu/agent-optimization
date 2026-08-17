@@ -562,7 +562,16 @@ class FakeOptimizerClient:
                 },
             ],
             "patch": {
-                "reasoning": "fake analyst: two common patterns across the minibatch",
+                # Names the switch, not just itself. "fake analyst: …" told a
+                # reader that something was fake and left them to guess what —
+                # the seam is not mentioned anywhere on the page this string
+                # lands on, and the obvious reading is that the optimizer model
+                # is broken. Every other fake in this file is either invisible
+                # or arrives somewhere the UI already labels.
+                "reasoning": (
+                    "fake analyst (OPTIMIZER_IMPL=fake — canned, no model was "
+                    "called): two common patterns across the minibatch"
+                ),
                 "edits": self._edits(seed, paths),
             },
         }), usage

@@ -23,6 +23,7 @@ import uuid
 from sqlalchemy import update
 
 from app import cancellation
+from app.config import settings
 from app.db import SessionLocal
 from app.integrations import build_seams
 from app.models import OptimizationRun
@@ -56,6 +57,24 @@ async def run_optimization_task(run_id: uuid.UUID) -> None:
             seams = build_seams(
                 spec.config, spec.secrets, include_optimizer=True, include_workspace=True,
             )
+            # Recorded before the first step, and logged, because "why are the
+            # edits canned?" is otherwise answerable only by reading the
+            # analyst's output and recognising the fake's phrasing. The run
+            # carries the answer from here on, and so does the log of the
+            # process that executed it.
+            impls = {
+                "agent": settings.agent_impl,
+                "judge": settings.judge_impl,
+                "trace": settings.trace_impl,
+                "optimizer": settings.optimizer_impl,
+            }
+            log.info(
+                "optimization run %s: seams agent=%s judge=%s trace=%s optimizer=%s (%s)",
+                run_id, impls["agent"], impls["judge"], impls["trace"],
+                impls["optimizer"],
+                getattr(seams.optimizer, "model_name", "—"),
+            )
+            await store.record_seam_impls(run_id, impls)
             await run_optimization(
                 run_id, store=store, seams=seams,
                 cancel_event=cancellation.event_for(run_id),

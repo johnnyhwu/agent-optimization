@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_subject
-from app.config import settings
+from app.config import env_file_overrides, seam_impls, settings
 from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
 from app.optimizer.runner import reap_interrupted_optimization_runs
@@ -83,8 +83,41 @@ async def reap_interrupted_runs(session_factory=None) -> int:
         return result.rowcount or 0
 
 
+log = logging.getLogger(__name__)
+
+
+def log_seam_configuration() -> None:
+    """Say which implementation each seam got, and name any that were ignored.
+
+    One line, at every boot, because "is this real or fake?" is the first
+    question asked of every surprising output the product produces — canned
+    skill edits most of all, since `OPTIMIZER_IMPL=fake` signs its work ("fake
+    analyst: …") without saying that a switch is responsible.
+
+    The warning below is the other half. A value set in a `.env` the process
+    reads is silently outranked by the same variable in the environment, which
+    is what makes a seam that *looks* switched on stay off: compose passes its
+    own `${OPTIMIZER_IMPL:-fake}` default into the container, and that beats any
+    file. Naming the key, both values and the winner turns a silent
+    misconfiguration into one line of log.
+    """
+    impls = seam_impls()
+    log.info(
+        "seams: %s", " ".join(f"{name}={impl}" for name, impl in impls.items())
+    )
+    for key, (file_value, env_value) in env_file_overrides().items():
+        log.warning(
+            "%s=%s in .env is being ignored: the environment sets %s=%s, and an "
+            "environment variable outranks the file. Under docker compose, set "
+            "it in the repo-root .env (the one compose interpolates from), not "
+            "in backend/.env.",
+            key, file_value, key, env_value,
+        )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_seam_configuration()
     await reap_interrupted_runs()
     # Its own reaper, and a different verdict: an optimization run is
     # checkpointed per step, so a restart leaves something resumable rather than

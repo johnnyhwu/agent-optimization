@@ -81,6 +81,52 @@ async def check_diagnosis() -> bool:
     return await _check_llm("diagnosis", settings.diagnosis_model)
 
 
+async def check_optimizer() -> bool:
+    """The seam that writes the skill edits — the one this preflight used to skip.
+
+    It was missing while every other seam was checked, which made `make
+    preflight` say nothing at all about the one seam whose fake is visible in
+    the product: `OPTIMIZER_IMPL=fake` puts "fake analyst: …" in the analyst
+    rationale of every Optimize run, and there was no command that would tell
+    you why.
+
+    Synchronous client, run off the loop, because that is what the seam is (see
+    `integrations/real/optimizer.py`).
+    """
+    if settings.optimizer_impl != "real":
+        _line(
+            SKIP, "optimizer",
+            "OPTIMIZER_IMPL=fake — Optimize will write canned edits, and the "
+            "analyst rationale will read 'fake analyst: …'",
+        )
+        return True
+    if not settings.optimizer_model:
+        _line(FAIL, "optimizer", "OPTIMIZER_MODEL is empty")
+        return False
+
+    from app.integrations.real.optimizer import LlmOptimizerClient
+
+    def call() -> str:
+        text, _ = LlmOptimizerClient().chat_optimizer(
+            system="Reply with the single word: ok",
+            user="ping",
+            max_completion_tokens=16,
+            # One attempt: a preflight is meant to answer quickly, and three
+            # backed-off retries would hide a dead endpoint behind a 14s pause.
+            retries=0,
+            stage="preflight",
+        )
+        return (text or "").strip()[:40]
+
+    try:
+        reply = await asyncio.to_thread(call)
+    except Exception as exc:  # noqa: BLE001
+        _line(FAIL, "optimizer", f"{settings.optimizer_model}: {exc}")
+        return False
+    _line(OK, "optimizer", f"{settings.optimizer_model} replied: {reply!r}")
+    return True
+
+
 async def check_trace() -> bool:
     if settings.trace_impl != "real":
         _line(SKIP, "trace", "TRACE_IMPL=fake")
@@ -155,6 +201,7 @@ async def main() -> int:
         await check_trace(),
         await check_diagnosis(),
         await check_workspace(),
+        await check_optimizer(),
     ]
     print()
     if all(results):

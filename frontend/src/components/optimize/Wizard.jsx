@@ -20,6 +20,7 @@ import {
   cleanConfig,
   defaultSkill,
   extraConfig,
+  fakeSeams,
   furthestStep,
   hyperState,
   tokenEstimate,
@@ -973,10 +974,36 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           </p>
         )}
 
-        {impls.agent === "fake" && (
-          <Banner tone="info" title="Nothing real will be called">
-            The agent, judge and optimizer seams are set to fake where marked, so
-            this run costs nothing and proves the machinery rather than the skill.
+        {/* Keyed on every seam, not on the agent alone. A stack with a real
+            agent and judge but `OPTIMIZER_IMPL=fake` showed no banner at all —
+            the run then costs real money on real rollouts and still writes
+            canned edits, which is the most expensive way to be confused. */}
+        {fakeSeams(impls).length > 0 && (
+          <Banner
+            tone={impls.agent === "fake" ? "info" : "warning"}
+            title={
+              impls.agent === "fake"
+                ? "Nothing real will be called"
+                : `Some of this run is faked: ${fakeSeams(impls).join(", ")}`
+            }
+          >
+            {impls.agent === "fake" ? (
+              <>
+                The {fakeSeams(impls).join(", ")}{" "}
+                {fakeSeams(impls).length === 1 ? "seam is" : "seams are"} set to
+                fake, so this run costs nothing and proves the machinery rather
+                than the skill.
+              </>
+            ) : (
+              <>
+                The rollouts are real, but the {fakeSeams(impls).join(", ")}{" "}
+                {fakeSeams(impls).length === 1 ? "seam is" : "seams are"} set to
+                fake — with a fake optimizer the skill edits are canned, so the
+                run measures nothing about the skill. Set the matching{" "}
+                <code>*_IMPL=real</code> in the repo-root <code>.env</code> and
+                recreate the backend container.
+              </>
+            )}
           </Banner>
         )}
         {c.overlap > 0 && (

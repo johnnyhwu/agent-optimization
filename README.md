@@ -497,6 +497,29 @@ Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
 forwards them into the backend container, and credentials never enter the image.
 See [`backend/.env.example`](backend/.env.example) for the full list.
 
+> **A switch that appears to do nothing is one of three things**, and all three
+> look identical from the UI, so check in this order:
+>
+> ```bash
+> docker compose config | grep IMPL          # what compose resolved from .env
+> docker compose exec backend printenv | grep IMPL   # what the container got
+> make preflight                             # what the app is running, seam by seam
+> ```
+>
+> 1. **The wrong `.env`.** Compose interpolates the **repo-root** one only. A
+>    value in `backend/.env` reaches the container (development bind-mounts the
+>    source) but loses to the environment variable compose sets from its own
+>    `${VAR:-fake}` default — the backend logs a warning at startup naming any
+>    key in that state.
+> 2. **A container that predates the edit.** `docker compose restart` reuses the
+>    old environment; `docker compose up -d backend` recreates it.
+> 3. **A run triggered before the change.** A run records the seams it executed
+>    with, and its pages keep saying so afterwards — a run whose analyst
+>    rationale reads "fake analyst: …" is labelled as canned on the rollout page.
+>
+> The backend prints one `seams: agent=… judge=… optimizer=…` line at every
+> boot, so `docker compose logs backend | grep seams:` answers this outright.
+
 The `*_IMPL` switches are the master switch, but the connection settings are only
 **defaults**. "Run eval" opens a config dialog prefilled from them, where each run
 gets its own name, agent base URL and timeout, Langfuse host/keys/timeout, LLM

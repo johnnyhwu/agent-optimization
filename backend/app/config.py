@@ -11,6 +11,8 @@ more than the fake layer's simulated one.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator
@@ -294,3 +296,56 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# Every seam switch, in the order the startup line and the preflight print them.
+SEAM_SETTINGS = (
+    ("agent", "AGENT_IMPL"),
+    ("judge", "JUDGE_IMPL"),
+    ("trace", "TRACE_IMPL"),
+    ("diagnosis", "DIAGNOSIS_IMPL"),
+    ("synthesis", "SYNTHESIS_IMPL"),
+    ("workspace", "WORKSPACE_IMPL"),
+    ("optimizer", "OPTIMIZER_IMPL"),
+)
+
+
+def seam_impls() -> dict[str, str]:
+    """Which implementation each seam is running, by seam name."""
+    return {
+        name: getattr(settings, f"{name}_impl") for name, _ in SEAM_SETTINGS
+    }
+
+
+def env_file_overrides() -> dict[str, tuple[str, str]]:
+    """Settings a `.env` next to the process sets and the environment overrules.
+
+    pydantic-settings ranks the process environment *above* `env_file`, and
+    `docker-compose.yml` passes a value for every setting it knows about —
+    including its own `${VAR:-fake}` defaults. So editing a `.env` that compose
+    does not read (the one under `backend/`, when the value has to be in the
+    repo-root one, which is the file compose interpolates from) changes nothing
+    at all, and nothing anywhere says why: the file is right there in the
+    container, correctly spelled, and simply outranked.
+
+    Returns `{KEY: (what the file says, what is in force)}` for exactly those
+    keys, so startup can name them. Blank file values are skipped — the shipped
+    example carries plenty, and "unset in a file, set in the environment" is the
+    normal case, not a mistake.
+
+    `python-dotenv` is pydantic-settings' own parser, so this reads the file by
+    the same rules that decided to ignore it.
+    """
+    from dotenv import dotenv_values
+
+    path = Path(str(settings.model_config.get("env_file") or ".env"))
+    if not path.is_file():
+        return {}
+    overridden: dict[str, tuple[str, str]] = {}
+    for key, file_value in dotenv_values(path).items():
+        if file_value is None or not file_value.strip():
+            continue
+        env_value = os.environ.get(key)
+        if env_value is not None and env_value != file_value:
+            overridden[key] = (file_value, env_value)
+    return overridden

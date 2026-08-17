@@ -159,6 +159,8 @@ class OptimizationStore(Protocol):
 
     async def load_run(self, run_id: uuid.UUID) -> RunSpec | None: ...
 
+    async def record_seam_impls(self, run_id: uuid.UUID, impls: dict[str, str]) -> None: ...
+
     async def load_items(self, run_id: uuid.UUID, split: str) -> list[Item]: ...
 
     async def last_completed_step(self, run_id: uuid.UUID) -> int | None: ...
@@ -228,6 +230,29 @@ class DbOptimizationStore:
             steps_per_epoch=run.steps_per_epoch,
             total_steps=run.total_steps,
         )
+
+    async def record_seam_impls(self, run_id: uuid.UUID, impls: dict[str, str]) -> None:
+        """Which implementation each seam had when this execution began.
+
+        Stored for the reason `_resolve_optimization_config` materialises the
+        rest of the config: today's environment is no witness to what it held
+        when the run started, and `optimizer_model` on its own is misleading —
+        with `OPTIMIZER_IMPL=fake` that field names a model nothing ever calls.
+        Without this, a page full of canned analyst output ("fake analyst: …")
+        is the only evidence that the seam was fake, and it reads as a bug in
+        the model rather than as configuration.
+
+        Written at execution rather than at trigger time so a resumed run
+        records the seams it is *actually* running against: a restart in between
+        is exactly when the environment changes.
+        """
+        run = await self.session.get(OptimizationRun, run_id)
+        if run is None:
+            return
+        # A new dict, not a mutation: SQLAlchemy tracks JSONB by identity, and an
+        # in-place update of `run.config` would never be flushed.
+        run.config = {**(run.config or {}), "seam_impls": dict(impls)}
+        await self.session.commit()
 
     async def load_items(self, run_id: uuid.UUID, split: str) -> list[Item]:
         rows = (

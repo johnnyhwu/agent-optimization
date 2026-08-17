@@ -1159,6 +1159,10 @@ async def get_rollout_detail(
         n_edits_skipped=step.n_edits_skipped,
         edit_reports=[EditReportOut(**report) for report in (step.edit_reports or [])],
         val_rolled_out="val" in val_splits,
+        # The run's own record, never `settings`: the seam may have been switched
+        # since, and a page that read today's value would relabel yesterday's
+        # canned edits as a model's work.
+        optimizer_impl=(run.config or {}).get("seam_impls", {}).get("optimizer"),
         results=[_result_out(row, items.get(row.item_key)) for row in results],
         minibatches=[
             OptimizationMinibatchOut(

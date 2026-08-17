@@ -9,6 +9,7 @@ import {
   cleanConfig,
   defaultSkill,
   extraConfig,
+  fakeSeams,
   furthestStep,
   hyperState,
   parseCount,
@@ -420,4 +421,30 @@ test("a budget mid-edit has no estimate rather than an estimate of zero", () => 
   assert.equal(tokenEstimate(null), null);
   assert.equal(tokenEstimate(0), null);
   assert.equal(tokenEstimate(NaN), null);
+});
+
+// The review banner's whole job is to say "part of this is not real". It was
+// keyed on the agent seam alone, which is the one combination where the run is
+// obviously fake anyway; the combination it stayed silent on — real rollouts,
+// canned edits — is the one that costs money and proves nothing.
+test("a fake optimizer counts even when the agent and judge are real", () => {
+  assert.deepEqual(
+    fakeSeams({ agent: "real", judge: "real", optimizer: "fake", trace: "fake" }),
+    ["optimizer"],
+  );
+});
+
+test("an all-real run has nothing to warn about", () => {
+  assert.deepEqual(fakeSeams({ agent: "real", judge: "real", optimizer: "real" }), []);
+});
+
+test("seams are named in a fixed order, whatever order they arrived in", () => {
+  assert.deepEqual(
+    fakeSeams({ optimizer: "fake", judge: "fake", agent: "fake" }),
+    ["agent", "judge", "optimizer"],
+  );
+});
+
+test("a config that has not loaded yet warns about nothing", () => {
+  assert.deepEqual(fakeSeams(undefined), []);
 });

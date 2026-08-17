@@ -1107,6 +1107,12 @@ class OptimizationRolloutDetail(BaseModel):
     # tab that simply 404s reads as a bug.
     val_rolled_out: bool = True
 
+    # Which optimizer seam actually wrote the edits below: "fake" means the
+    # analyst output on this page is canned rather than a model's, which is a
+    # fact about the run and not something a reader should have to infer from
+    # the wording of a rationale. None on runs executed before it was recorded.
+    optimizer_impl: str | None = None
+
     results: list[OptimizationResultOut] = Field(default_factory=list)
     # Empty on validation, which is measured and never reflected on.
     minibatches: list[OptimizationMinibatchOut] = Field(default_factory=list)

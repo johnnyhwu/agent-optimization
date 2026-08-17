@@ -173,6 +173,25 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
             fewer questions than it set out to is the thing worth noticing.
           </Banner>
         )}
+        {/* The seam that wrote the edits, named before anything it wrote is
+            read. The fake optimizer signs its own output ("fake analyst: …"),
+            and that string used to be the only thing that ever said so — which
+            reads as a broken model rather than as a switch that is off, and the
+            switch is not on this page. This banner is the
+            run's own record, so a run executed under the fake keeps saying so
+            after the seam is turned on. */}
+        {split === "train" && detail.optimizer_impl === "fake" && (
+          <Banner tone="warning" title="These edits were canned, not written by a model">
+            This run executed with <code>OPTIMIZER_IMPL=fake</code>, so every
+            analyst rationale and every edit below came from the deterministic
+            stand-in. Set <code>OPTIMIZER_IMPL=real</code> and{" "}
+            <code>OPTIMIZER_MODEL</code> in the <strong>repo-root</strong>{" "}
+            <code>.env</code> — the file compose reads — then recreate the
+            backend container (<code>docker compose up -d backend</code>;{" "}
+            <code>restart</code> alone keeps the old environment) and trigger a
+            new run. <code>make preflight</code> reports which seam is in force.
+          </Banner>
+        )}
         {detail.aborted && (
           <Banner tone="error" title="This rollout was abandoned">
             {detail.abort_reason || "too much of it failed to be worth scoring"}

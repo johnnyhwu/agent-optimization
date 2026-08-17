@@ -274,3 +274,19 @@ export function furthestStep(state) {
   }
   return STEPS.length - 1;
 }
+
+// The seams whose being fake changes what a run *means*, in the order the
+// review banner names them. Trace and workspace are left out on purpose: a fake
+// trace still produces a scored run, while a fake agent, judge or optimizer each
+// replace one of the three things a run is made of.
+export const RUN_SEAMS = ["agent", "judge", "optimizer"];
+
+// Which of them are fake, for the review step's banner.
+//
+// The banner used to be keyed on the agent alone, so a stack with a real agent
+// and a real judge but `OPTIMIZER_IMPL=fake` said nothing at all — that run
+// spends real money on real rollouts and then writes canned skill edits, which
+// is the most expensive way to be confused about a switch.
+export function fakeSeams(impls) {
+  return RUN_SEAMS.filter((seam) => (impls || {})[seam] === "fake");
+}
