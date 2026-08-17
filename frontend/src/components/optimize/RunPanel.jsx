@@ -10,6 +10,7 @@ import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
+import { setServerTime } from "../../useElapsed.js";
 import {
   applyEvent,
   emptySteps,
@@ -94,7 +95,16 @@ export default function RunPanel({ runId, subject, onRunChanged }) {
 
     // The snapshot is the stream's own opening statement of the same thing a
     // refetch gives, so it replaces rather than merges.
-    const onSnapshot = parse((d) => setLive((l) => replaceSteps(l, d.steps || [])));
+    //
+    // It also carries the server's clock, which this page was throwing away
+    // while the eval and playground streams both read it. The header now counts
+    // upward from `started_at`, and on a machine whose clock is a minute off —
+    // most of them are off by seconds — an uncorrected subtraction shows a
+    // number that is simply wrong, and a slow clock shows nothing at all.
+    const onSnapshot = parse((d) => {
+      setServerTime(d.server_time);
+      setLive((l) => replaceSteps(l, d.steps || []));
+    });
     // Everything else is a slice of a step row, and the reducer knows which.
     // These were the events the page was already being sent and throwing away:
     // a step is assembled from `step_started`, two `rollout_done`s minutes
