@@ -231,6 +231,50 @@ def test_missing_usage_is_empty_not_zeros():
     assert observation_to_span(_obs(), 0).token_usage == {}
 
 
+def test_latency_comes_from_the_two_ends_of_the_observation():
+    """Per-step duration, which the question-level figure cannot give.
+
+    A question reporting nine seconds says nothing about whether that was one
+    slow model call or a tool that hung, and that distinction is the difference
+    between a prompt problem and an infrastructure one.
+    """
+    span = observation_to_span(
+        _obs(startTime="2026-07-27T00:00:00Z", endTime="2026-07-27T00:00:02.400Z"), 0
+    )
+    assert span.latency_ms == 2400
+
+
+def test_latency_needs_both_ends():
+    """A start with no end is a step still running, not a step that took no time.
+
+    Its duration is unknown, and the time since it started is somebody else's
+    number.
+    """
+    assert observation_to_span(_obs(), 0).latency_ms is None
+    assert observation_to_span(_obs(startTime=None, endTime="2026-07-27T00:00:01Z"), 0).latency_ms is None
+
+
+def test_latency_survives_mixed_timestamp_shapes():
+    """The same `Z`-versus-offset handling the ordering key needs, shared with it.
+
+    Two copies of this parse is two chances to handle `Z` differently, and the
+    ordering bug that motivated the original one would then come back here.
+    """
+    span = observation_to_span(
+        _obs(startTime="2026-07-27T00:00:00+00:00", endTime="2026-07-27T00:00:00.250Z"), 0
+    )
+    assert span.latency_ms == 250
+
+
+def test_a_negative_duration_is_clamped_rather_than_shown():
+    """Clocks disagree. An agent process and the ingester need not be in step,
+    and `-4ms` on screen reads as a bug in the page rather than in a clock."""
+    span = observation_to_span(
+        _obs(startTime="2026-07-27T00:00:01Z", endTime="2026-07-27T00:00:00.996Z"), 0
+    )
+    assert span.latency_ms == 0
+
+
 def test_error_level_maps_to_error_status_with_message():
     span = observation_to_span(_obs(level="ERROR", statusMessage="tool exploded"), 3)
     assert span.status == "error"

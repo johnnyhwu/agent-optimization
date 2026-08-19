@@ -1689,6 +1689,16 @@ pre.prompt-text {
   font-weight: var(--fw-medium);
 }
 .format-help-note { margin: var(--space-2) 0; line-height: 1.5; }
+/* The live ceilings, under the prose and above the sample. Boxed rather than run
+   into the paragraph above it: it is the one part of this panel that is about
+   *this* installation rather than about the format, and it is read to check a
+   number rather than to be read. */
+.format-help-limits {
+  margin: 0 0 var(--space-2); padding: var(--space-2) var(--space-3);
+  line-height: 1.6;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
 .format-help-code {
   margin: 0; padding: var(--space-3); background: var(--code-bg);
   border: 1px solid var(--border); border-radius: var(--radius-sm);

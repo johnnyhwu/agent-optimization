@@ -5,6 +5,7 @@ import { SegmentedControl } from "./ui/Toolbar.jsx";
 import ElapsedTimer from "./ElapsedTimer.jsx";
 import { IconClock } from "./icons.jsx";
 import { isTimeout } from "../failure.js";
+import { plural } from "../plural.js";
 
 // Left column. Two jobs:
 //
@@ -105,6 +106,18 @@ export default function QuestionList({
                   finalMs={r.agent_latency_ms}
                   running={runLive && r.status === "pending"}
                 />
+                {/* What the answer cost, beside how long it took. Two questions
+                    that both took nine seconds are not the same question if one
+                    made a single model call and the other made eleven, and that
+                    is the first thing worth knowing when a run turns expensive.
+                    Absent rather than zero on runs from before it was counted:
+                    "no calls" is a claim, and it would be a false one. */}
+                {r.llm_call_count != null && (
+                  <span title="Model calls the agent made answering this question">
+                    {" · "}
+                    {plural(r.llm_call_count, "call")}
+                  </span>
+                )}
               </div>
               {/* A bare "failed" says nothing once the agent is a real service.
                   A timeout is the exception: it has one cause, so the row says

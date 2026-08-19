@@ -38,7 +38,8 @@ a deployed build behind nginx — see [Deploying it](#deploying-it).
 [Fake → real](#going-from-fake-to-real) ·
 [Trying the flows](#trying-the-flows) · [Where things live](#where-the-important-pieces-live) ·
 [API](#api-surface) · [Langfuse read strategies](#langfuse-read-strategies-and-the-events-table-error) ·
-[Paging](#paging-the-lists) · [Upload schema](#upload-schema) · [Download](#download-export)
+[Paging](#paging-the-lists) · [Upload schema](#upload-schema) ·
+[Script uploads](#building-an-eval-set-from-a-python-script) · [Download](#download-export)
 
 > **New to this codebase?** Read [The problem](#the-problem) and
 > [Life of a run](#life-of-a-run) below, then
@@ -885,6 +886,52 @@ eval set as `source_format`.
 | `ground_truth_reasoning_process_description` | ✅ | |
 | `skill` | ✅ | list of strings |
 | `question_id` | optional | system generates an immutable `q_<hex>` if omitted (not a content hash) |
+
+## Building an eval set from a Python script
+
+Instead of a file, you may upload one `.py` with a top-level
+`main(database_handler)`. The system runs it in a sandbox against a database you
+nominate for that one request, and drops what it returns into the same preview a
+file upload fills. Credentials are used for that connection and are not stored,
+logged or echoed back. `GET /eval-sets/templates/python` is a working example,
+also reachable from *Formats & examples* in the upload dialog.
+
+Every ceiling a run is held to is a deployment setting. The defaults are
+deliberately conservative — see
+[`backend/app/services/script_runner.py`](backend/app/services/script_runner.py)
+for what each one prevents — and none should be raised without reading that file:
+
+| variable | default | what it bounds |
+|---|---|---|
+| `SCRIPT_MAX_QUERIES` | `50` | `run_sql` calls in one run |
+| `SCRIPT_MAX_ROWS_PER_QUERY` | `50000` | rows one query may return, before it raises into the script |
+| `SCRIPT_STATEMENT_TIMEOUT_S` | `600` | one statement, enforced by the target database |
+| `SCRIPT_WALL_CLOCK_S` | `600` | the whole run |
+| `SCRIPT_MAX_OUTPUT_CHARS` | `262144` | stdout and stderr, each |
+| `SCRIPT_MEMORY_MB` | `1024` | the sandbox process |
+| `SCRIPT_MAX_CONCURRENT_RUNS` | `2` | people pressing Run at once before the rest queue |
+
+`SCRIPT_MAX_QUERIES` is the one most people meet, and usually because a script
+issues one query per row rather than fetching a set and looping over it in
+Python. Raising it is a legitimate answer; so is rewriting the script.
+
+**If you raise one and nothing changes**, check in this order:
+
+1. **The upload dialog prints the live values** under *Formats & examples →
+   Python script*, and the backend logs them at startup
+   (`eval-set script limits: …`). That is the authoritative answer to what the
+   process is actually enforcing.
+2. **Spelling.** The backend's settings are `extra="ignore"`, so a mistyped name
+   is discarded without a warning and the limit stays at its default.
+   `SCRIPT_MAX_QURIES=300` looks exactly like doing nothing.
+3. **Where you set it.** Compose interpolates from a repo-root `.env`
+   (see [`.env.example`](.env.example)); a value exported in your shell beats
+   that file. `docker compose up -d` after editing, so the container is
+   recreated with the new environment.
+
+Raising `SCRIPT_WALL_CLOCK_S` alone is not enough in the deployed form: nginx has
+to be willing to hold the request open at least as long, or it answers 504 first
+— see `proxy_read_timeout` in `frontend/nginx.conf.template`.
 
 ## How answers are graded (the judge prompt)
 

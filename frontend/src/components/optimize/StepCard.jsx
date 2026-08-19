@@ -2,6 +2,7 @@ import React from "react";
 import Badge from "../ui/Badge.jsx";
 import Button from "../ui/Button.jsx";
 import { IconChevronRight, IconDownload, IconX } from "../icons.jsx";
+import { secs } from "../../duration.js";
 import { plural } from "../../plural.js";
 
 // One step, pinned by clicking it on the chart. This is the half of the chart
@@ -279,9 +280,6 @@ function errors(agent, judge) {
   return total ? `${total}` : "none";
 }
 
-function secs(ms) {
-  return ms == null ? "—" : `${(ms / 1000).toFixed(1)}s`;
-}
 
 function pct(value) {
   return value == null ? "—" : `${Math.round(value * 100)}%`;

@@ -3,6 +3,7 @@ import Badge from "../ui/Badge.jsx";
 import Button, { IconButton } from "../ui/Button.jsx";
 import RunDuration from "./RunDuration.jsx";
 import RunNameEditor from "../RunNameEditor.jsx";
+import Fact from "./Fact.jsx";
 import { IconDownload, IconPlay, IconRefresh, IconStop, IconTrash } from "../icons.jsx";
 import { STATUS_TONE } from "./RunList.jsx";
 import { STEP_PHASES } from "../../optimize_steps.js";
@@ -265,12 +266,3 @@ function finishedSentence(run, steps) {
   return `${finished} Step ${run.best_step} scored best on validation.`;
 }
 
-function Fact({ label, value, sub }) {
-  return (
-    <div className="opt-fact">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-      {sub && <span className="opt-fact-sub">{sub}</span>}
-    </div>
-  );
-}

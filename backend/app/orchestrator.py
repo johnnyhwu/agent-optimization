@@ -73,6 +73,7 @@ from app.pipeline import (
     wait_for_trace,
 )
 from app.services.aggregation import result_phase
+from app.services.trace_view import count_llm_calls
 from app.services.failure_text import describe_failure
 from app.sse import hub
 
@@ -348,6 +349,11 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
         async with lock:
             result.trace_ready = trace is not None
             result.trace_error = trace_error
+            # Counted here because here is the one place the trace is already in
+            # hand. Spans are not stored — they are fetched from the trace store
+            # on demand — so working this out later would mean one Langfuse round
+            # trip per question every time somebody opened the run.
+            result.llm_call_count = count_llm_calls(trace)
             await session.commit()
         # The trace becoming available (or failing to) is itself a reason for the
         # middle column to refetch — diagnosis may still be minutes away.
@@ -434,6 +440,10 @@ async def _publish_progress(run_id, question_pk, result: QuestionResult,
             # so a reload resumes at the right number instead of restarting.
             "started_at": result.started_at.isoformat() if result.started_at else None,
             "agent_latency_ms": result.agent_latency_ms,
+            # Lands with `question_traced`, since it is counted off the trace.
+            # Without it here the count only appeared on the end-of-run reload,
+            # which is the one moment nobody is watching the list.
+            "llm_call_count": result.llm_call_count,
             "trace_ready": result.trace_ready,
             # The detail view refetches the trace when any of these change, so
             # the middle column follows a live question instead of freezing at

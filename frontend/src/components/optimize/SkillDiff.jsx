@@ -28,9 +28,16 @@ import DiffFileTree from "./DiffFileTree.jsx";
 // real longest common subsequence so the two cannot disagree — see the note at
 // the top of `src/diff.js`.
 
+// Whether long lines wrap. A reading preference rather than anything about the
+// run, so it is remembered across steps and across runs the same way the rail's
+// collapsed state is: someone who wants to compare indentation wants that on
+// every diff they open, not on this one.
+const WRAP_KEY = "skilldiff-wrap";
+
 export default function SkillDiff({ runId, stepNo, onBack }) {
   const toast = useToast();
   const [base, setBase] = useState("parent");
+  const [wrap, setWrap] = useState(() => localStorage.getItem(WRAP_KEY) !== "0");
   const [view, setView] = useState(null);
   const [error, setError] = useState(null);
   const [path, setPath] = useState(null);
@@ -196,14 +203,37 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
           />
         </Card>
         <Card padded={false} className="opt-skilldiff-pane">
-          <CardHeader title={file ? file.path : "—"} variant="data" />
+          <CardHeader
+            title={file ? file.path : "—"}
+            variant="data"
+            actions={
+              <SegmentedControl
+                value={wrap ? "wrap" : "nowrap"}
+                onChange={(next) => {
+                  const on = next === "wrap";
+                  localStorage.setItem(WRAP_KEY, on ? "1" : "0");
+                  setWrap(on);
+                }}
+                ariaLabel="Long line handling"
+                size="sm"
+                options={[
+                  { value: "wrap", label: "Wrap", title: "Fold long lines so the whole file fits the pane" },
+                  {
+                    value: "nowrap",
+                    label: "No wrap",
+                    title: "One source line per row, scrolling sideways — the only way to compare indentation",
+                  },
+                ]}
+              />
+            }
+          />
           {/* Rendered whether or not anything changed. A step that edited
               nothing used to replace this whole pane with one sentence, so the
               page's layout depended on the outcome — and the reader lost the
               ability to read the file at all on exactly the steps where "what
               does it say now?" is the question. Both sides are identical and
               every row is context, which is what "no change" looks like. */}
-          <DiffTable rows={rows} isLeak={leaked} />
+          <DiffTable rows={rows} isLeak={leaked} wrap={wrap} />
         </Card>
       </div>
     </div>
@@ -274,10 +304,10 @@ function Outcome({ view, rejected }) {
   );
 }
 
-function DiffTable({ rows, isLeak }) {
+function DiffTable({ rows, isLeak, wrap }) {
   return (
     <div className="opt-diff-scroll">
-      <table className="opt-diff">
+      <table className={wrap ? "opt-diff" : "opt-diff is-nowrap"}>
         <tbody>
           {rows.map((row, i) => {
             const leak = row.type !== "del" && isLeak(row.right);

@@ -128,7 +128,6 @@ export default function RunNameEditor({
             }
           }}
         />
-        {error && <span className="run-name-error">{error}</span>}
       </span>
       {/* The pencil, become a tick. Same place, same size — the control did not
           move, it changed what pressing it means. */}
@@ -145,6 +144,11 @@ export default function RunNameEditor({
         onClick={cancel}
         label="Cancel renaming"
       />
+      {/* A sibling of the field rather than a row inside it. As a second row it
+          made the field taller than the buttons beside it, and the buttons then
+          centred on a block they are not part of and sat visibly low. Here it
+          wraps onto its own line and leaves the row's height alone. */}
+      {error && <span className="run-name-error">{error}</span>}
     </span>
   );
 }

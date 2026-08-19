@@ -83,4 +83,36 @@ def span_to_out(span: Span) -> SpanOut:
         output=span.output_json if span.output_json is not None else span.output,
         token_usage=span.token_usage,
         status_message=span.status_message,
+        latency_ms=span.latency_ms,
     )
+
+
+def count_llm_calls(trace) -> int | None:
+    """How many of a trace's spans were model calls.
+
+    A trace interleaves two kinds of step: calls to the model, and the tool
+    invocations they ask for. Only the first kind costs tokens, and only the
+    first kind is what someone means by "how many LLM calls did this question
+    take" — a question that made one model call and eleven tool calls is a
+    different problem from one that made eleven of each.
+
+    **Token usage is the test.** A generation reports what it spent; a tool
+    invocation has nothing to report and so reports nothing. That is a property
+    of what the two things *are* rather than of any particular agent's naming, so
+    it survives instrumentation that labels every span `OpenAI Completion` —
+    which, per `span_label.js`, is the normal case rather than the broken one.
+
+    `None` for a trace we never got, which is not the same as a trace showing no
+    model calls: one is "we do not know", the other would be "the agent answered
+    without asking anything", and the second is a claim worth not making by
+    accident.
+    """
+    if trace is None or not trace.spans:
+        return None
+    return sum(1 for span in trace.spans if _spent_tokens(span))
+
+
+def _spent_tokens(span: Span) -> bool:
+    usage = span.token_usage or {}
+    return any(isinstance(usage.get(k), int) and usage[k] > 0
+               for k in ("input", "output", "total"))

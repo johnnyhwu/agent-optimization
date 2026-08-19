@@ -188,12 +188,32 @@
    field it opened has the caret. */
 .run-name { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
 .run-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-name .run-name-edit { opacity: 0; transition: opacity .12s ease; flex: none; }
+/* Sized against the name it sits beside, not against the toolbar buttons.
+   A 34px control next to a 19.5px line of text is a box two thirds of which is
+   empty, and the eye reads the icon as low because the padding below it is the
+   larger half of what surrounds it. At 28px the icon's centre lands on the text's
+   and the target is still comfortable. On the Optimize page the same control sits
+   beside a 20px heading, where the mismatch was small enough not to show — this
+   makes both correct rather than one of them lucky. */
+.run-name .run-name-edit {
+  opacity: 0; transition: opacity .12s ease; flex: none;
+  width: var(--ctl-h-sm); height: var(--ctl-h-sm);
+}
 .run-name:hover .run-name-edit,
 .run-name:focus-within .run-name-edit,
 .run-name.is-editing .run-name-edit { opacity: 1; }
-.run-name.is-editing { align-items: flex-start; }
-.run-name-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+/* The tick and the cross are one pair — commit and abandon, the two answers to
+   the open field — so they sit together and away from the field, rather than
+   evenly spaced across it. Two 34px boxes around 14px icons left ~24px of gap
+   between the glyphs, which read as three unrelated controls. */
+/* Wrapping, not a nested column. The field, the tick and the cross are one row
+   and stay centred on each other; the error message is pushed onto a line of its
+   own by `flex-basis: 100%`. It used to live *inside* the field as a second row,
+   which meant the row's height changed when a name was rejected and the buttons
+   drifted down to centre on a block they are not part of. */
+.run-name.is-editing { gap: 6px; flex-wrap: wrap; }
+.run-name.is-editing .run-name-edit + .run-name-edit { margin-left: -4px; }
+.run-name-field { min-width: 0; flex: 1; }
 .run-name-input {
   width: 100%; min-width: 0;
   padding: 2px var(--space-2);
@@ -203,7 +223,12 @@
 .run-name-input:focus-visible { outline: none; box-shadow: var(--ring); }
 /* Inline rather than a toast: the field that has to change is right here, and a
    toast about a name is read after the field it refers to has closed. */
-.run-name-error { font-size: var(--text-micro); font-weight: var(--fw-normal); color: var(--red); }
+/* `flex-basis: 100%` is what puts it on a line of its own under the field,
+   rather than competing with the tick and the cross for the first line. */
+.run-name-error {
+  flex-basis: 100%;
+  font-size: var(--text-micro); font-weight: var(--fw-normal); color: var(--red);
+}
 
 /* ---------------------------------------------------------------------------
    Badge
@@ -1239,10 +1264,15 @@
   padding: var(--space-2) var(--space-3);
   background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
   font: inherit; font-size: var(--text-body); font-weight: var(--fw-medium);
-  color: var(--muted); cursor: pointer;
+  /* The tab's own name at full strength, chosen or not. Both tabs used to be
+     `--muted` throughout, so a row whose entire job is to say "there are two of
+     these and you are looking at one" read as two grey labels over a grey line.
+     The gloss after the name stays muted via its own `.muted` — that is the
+     subtitle, not the tab. */
+  color: var(--text); cursor: pointer;
 }
 .opt-splittab:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
-.opt-splittab.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.opt-splittab.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); font-weight: var(--fw-semibold); }
 .opt-splittab:disabled { cursor: not-allowed; opacity: .55; }
 .opt-splittab:focus-visible { outline: none; box-shadow: var(--ring); }
 
@@ -1289,11 +1319,39 @@
 .opt-qrow.selected { background: var(--accent-soft); }
 .opt-qrow .opt-qtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-qscore { font-variant-numeric: tabular-nums; font-size: var(--text-micro); color: var(--muted); }
-.opt-mark { font-weight: var(--fw-bold); }
+/* The outcome mark on a rollout row. A fixed box, because the thing it replaced
+   was a text character and the font decided its size: `⚠` is missing from Inter,
+   fell through to the system emoji font, and came back 26×45.5px against its
+   18×19.5px siblings — one failed question made its row 26px taller than the
+   rest. Sizing the box here means every outcome occupies the same space whatever
+   the icon inside it turns out to be. */
+/* The box is stated in full — padding, border, background, margin included —
+   rather than only the parts that differ from nothing. `styles.css` carries a
+   global `.error` rule for error *banners* (red panel, 12px padding, vertical
+   margin), and `.opt-mark.error` was quietly inheriting the lot: the mark came
+   out 26px square and its row 74.5px tall against a 27.5px neighbour. A modifier
+   class shared with a component elsewhere in the app is not a hazard this file
+   can prevent, so the mark defines its own box completely and stops depending on
+   what else `.error` happens to mean. */
+.opt-mark {
+  display: inline-grid; place-items: center; flex: none;
+  width: 18px; height: 18px;
+  padding: 0; margin: 0; border: 0; background: none;
+}
+.opt-mark svg { display: block; }
 .opt-mark.correct { color: var(--green); }
 .opt-mark.partial { color: var(--amber); }
 .opt-mark.incorrect { color: var(--red); }
 .opt-mark.error, .opt-mark.pending { color: var(--muted); }
+
+/* Under the list header: what the two ambiguous marks mean, shown only when the
+   rollout contains them. */
+.opt-legend {
+  display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3);
+  margin: 0; padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--text-micro); color: var(--muted);
+}
+.opt-legend-item { display: inline-flex; align-items: center; gap: var(--space-1); }
 
 /* --- The analyst's input and output -------------------------------------- */
 .opt-reflector { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
@@ -1370,8 +1428,27 @@
 .opt-diff-scroll { overflow: auto; max-height: 72vh; }
 .opt-diff { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: var(--text-micro); }
 .opt-diff td { padding: 1px var(--space-2); vertical-align: top; white-space: pre-wrap; word-break: break-word; }
-.opt-diff-no { width: 1%; text-align: right; color: var(--muted); user-select: none; font-variant-numeric: tabular-nums; }
+/* The line-number gutter, which must never wrap. `word-break: break-word` above
+   is for source lines; applied to a number in a `width: 1%` column it broke
+   `10` into a `1` over a `0` and made that row 35px tall against 18.5px for its
+   neighbours — and the taller the file, the more rows it hit. `min-width` lets
+   the gutter grow with the line count instead of being squeezed to a digit. */
+/* Qualified with `td` deliberately: the rule it has to beat is `.opt-diff td`,
+   and a bare `.opt-diff-no` loses to it on specificity — which is how the first
+   attempt at this fix changed nothing at all. */
+.opt-diff td.opt-diff-no {
+  width: 1%; min-width: 3ch;
+  text-align: right; color: var(--muted); user-select: none;
+  white-space: nowrap; word-break: normal;
+  font-variant-numeric: tabular-nums;
+}
 .opt-diff-text { width: 49%; }
+/* Wrapping is a reading preference, not a property of the diff. Wrapped keeps
+   every line on screen and is right for prose-shaped skill files; unwrapped
+   keeps one source line on one row, which is the only way to compare indentation
+   or a long table. The scroller above already has `overflow: auto`, so turning
+   wrapping off costs nothing but the horizontal scrollbar it was suppressing. */
+.opt-diff.is-nowrap td { white-space: pre; word-break: normal; }
 .opt-diff tr.add td:nth-child(3), .opt-diff tr.add td:nth-child(4) { background: var(--green-soft); }
 .opt-diff tr.del td:nth-child(1), .opt-diff tr.del td:nth-child(2) { background: var(--red-soft); }
 .opt-diff tr.change td:nth-child(1), .opt-diff tr.change td:nth-child(2) { background: var(--red-soft); }

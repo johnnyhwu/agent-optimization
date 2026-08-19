@@ -128,6 +128,25 @@ def _structured(value: object) -> object | None:
 _EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _instant(raw: object) -> datetime | None:
+    """One Langfuse timestamp as an aware datetime, or None if it is not one.
+
+    Shared by the ordering key and the duration below rather than written twice:
+    they read the same two fields off the same payload, and a second copy of the
+    `Z` handling is a second thing to get wrong.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def started_at(obs: dict) -> datetime:
     """`startTime` as a comparable instant, for ordering the span list.
 
@@ -138,17 +157,23 @@ def started_at(obs: dict) -> datetime:
     as the order the agent did things in. A missing or unparseable timestamp
     sorts first, which is what the string comparison did with `""`.
     """
-    raw = obs.get("startTime")
-    if not isinstance(raw, str) or not raw.strip():
-        return _EARLIEST
-    text = raw.strip()
-    if text.endswith(("Z", "z")):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return _EARLIEST
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return _instant(obs.get("startTime")) or _EARLIEST
+
+
+def _latency_ms(obs: dict) -> int | None:
+    """How long one observation took, from the two ends the trace store gives.
+
+    Both ends or nothing: a start with no end is an observation still running (or
+    one whose client crashed), and the time since it started is not its duration.
+    Clamped at zero because clock skew between an agent process and the ingester
+    can put an end fractionally before its own start, and a negative millisecond
+    on screen reads as a bug in this page rather than in a clock somewhere.
+    """
+    start = _instant(obs.get("startTime"))
+    end = _instant(obs.get("endTime"))
+    if start is None or end is None:
+        return None
+    return max(int((end - start).total_seconds() * 1000), 0)
 
 
 def observation_to_span(obs: dict, index: int) -> Span:
@@ -163,6 +188,7 @@ def observation_to_span(obs: dict, index: int) -> Span:
         status_message=obs.get("statusMessage") or None,
         input_json=_structured(obs.get("input")),
         output_json=_structured(obs.get("output")),
+        latency_ms=_latency_ms(obs),
     )
 
 

@@ -15,8 +15,14 @@ apostrophe, which is where these scripts usually go wrong.
 The connection is READ-ONLY. Writes are refused by the database itself, so an
 accidental UPDATE cannot damage anything.
 
-Limits, so a runaway query cannot take the system down with it:
+Limits, so a runaway query cannot take the system down with it. These are the
+shipped defaults; the upload dialog prints what this deployment actually
+enforces, since every one of them is a setting an operator can move:
 
+  * 50 queries per run           -> raises (SCRIPT_MAX_QUERIES). Loop over rows
+                                    you already fetched rather than issuing a
+                                    query per row, which is what usually meets
+                                    this one first.
   * 50,000 rows per query        -> raises, so you never build an eval set from
                                     half the data without noticing
   * 600 seconds per statement    -> raises

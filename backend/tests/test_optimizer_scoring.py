@@ -146,6 +146,30 @@ def test_items_whose_activation_is_unknown_are_left_out_of_the_rate():
     assert summary.n_activated == 1
 
 
+def test_a_question_that_read_nothing_counts_against_the_rate():
+    """The symptom that sent us looking, written down so it stays fixed.
+
+    Ten validation questions, one of which never called a tool at all — it did
+    not read the skill by any route. The rate reported 100%, because that
+    question came back `activated=None` and `None` is excluded rather than
+    counted, and a rate that silently drops the very case it exists to detect is
+    worse than no rate.
+
+    Nothing here was wrong: the exclusion is right for a genuinely unobservable
+    item. What was wrong lived one layer up — pre-flight proved the detector
+    fires and never told the detector so, leaving every miss `None` forever
+    (`test_optimizer_engine.py`). With the flag set, a miss is a `False`, and a
+    `False` is in the denominator where it belongs.
+    """
+    rows = [ok(str(i), activated=True) for i in range(9)]
+    rows.append(ok("silent", activated=False))
+
+    summary = score(rows)
+
+    assert summary.n_activated == 9
+    assert summary.activation_rate == pytest.approx(0.9)
+
+
 def test_activation_rate_is_none_when_nothing_could_be_observed():
     """Better an empty figure than a confident 0%."""
     summary = score([ok("a", activated=None), ok("b", activated=None)])

@@ -50,6 +50,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+log = logging.getLogger(__name__)
+
 
 async def reap_interrupted_runs(session_factory=None) -> int:
     """Close out runs this process can no longer be executing.
@@ -83,8 +85,29 @@ async def reap_interrupted_runs(session_factory=None) -> int:
         return result.rowcount or 0
 
 
+def _log_script_limits() -> None:
+    """Print the eval-set script ceilings once, at boot.
+
+    They are settings an operator changes and then wants to confirm, and until
+    now there was no way to confirm one short of triggering it. Worse, a
+    misspelled `SCRIPT_*` in a `.env` is dropped without complaint — `Settings`
+    is `extra="ignore"` — so a raised limit that never arrived looked exactly
+    like a limit that was never raised. One line in the log answers it.
+    """
+    log.info(
+        "eval-set script limits: max_queries=%s rows_per_query=%s "
+        "statement_timeout_s=%s wall_clock_s=%s memory_mb=%s",
+        settings.script_max_queries,
+        settings.script_max_rows_per_query,
+        settings.script_statement_timeout_s,
+        settings.script_wall_clock_s,
+        settings.script_memory_mb,
+    )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    _log_script_limits()
     await reap_interrupted_runs()
     # Its own reaper, and a different verdict: an optimization run is
     # checkpointed per step, so a restart leaves something resumable rather than

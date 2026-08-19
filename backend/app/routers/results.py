@@ -121,6 +121,7 @@ async def list_results(
                 ),
                 error_message=rep.error_message, failure_kind=rep.failure_kind,
                 started_at=rep.started_at, agent_latency_ms=rep.agent_latency_ms,
+                llm_call_count=rep.llm_call_count,
                 trace_ready=rep.trace_ready, has_analysis=rep.id in analyses_qr,
                 is_incorrect=qpk in incorrect_set,
             )

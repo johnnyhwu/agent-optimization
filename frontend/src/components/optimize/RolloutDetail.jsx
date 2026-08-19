@@ -7,8 +7,17 @@ import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import SpanList from "../SpanList.jsx";
 import SpanDetail from "../SpanDetail.jsx";
-import { IconArrowLeft } from "../icons.jsx";
+import {
+  IconAlert,
+  IconArrowLeft,
+  IconCheck,
+  IconDot,
+  IconHalfCircle,
+  IconX,
+} from "../icons.jsx";
+import { secs } from "../../duration.js";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
+import Fact from "./Fact.jsx";
 import ReflectorIO from "./ReflectorIO.jsx";
 import StageCalls from "./StageCalls.jsx";
 
@@ -24,13 +33,51 @@ import StageCalls from "./StageCalls.jsx";
 // unchanged, because a trace looked at here and a trace looked at in Evaluation
 // have to be the same object for the two to be comparable at all.
 
+// The five outcomes, as icons rather than as text characters.
+//
+// They used to be the literal glyphs ✓ ◐ ✗ ⚠ ·, and four of the five were fine.
+// `⚠` (U+26A0) is not in Inter, so it fell through to the system emoji font and
+// rendered at 26×45.5px next to four 18×19.5px siblings — one failed question
+// added 26px to its row and threw the whole list out of alignment. Which font
+// answers for a glyph is not something a stylesheet can settle, so the mark is
+// an icon now, sized by us. `ScriptRunPanel` had already made this call for the
+// same reason; this was the last place still using characters.
+//
+// `label` is not decoration either. `◐` is the mark people ask about — it means
+// the judge gave partial credit to an answer it still called wrong, which is
+// precisely the gap between the hard and soft metrics — and nothing on the page
+// said so. Every mark now carries its meaning in a tooltip and in the
+// accessibility tree, and the list header spells the ambiguous ones out.
 const OUTCOME = {
-  correct: { mark: "✓", tone: "success" },
-  partial: { mark: "◐", tone: "warning" },
-  incorrect: { mark: "✗", tone: "danger" },
-  error: { mark: "⚠", tone: "neutral" },
-  pending: { mark: "·", tone: "neutral" },
+  correct: { Icon: IconCheck, tone: "success", label: "correct" },
+  partial: {
+    Icon: IconHalfCircle,
+    tone: "warning",
+    label: "partial credit — judged wrong, but scored above zero",
+  },
+  incorrect: { Icon: IconX, tone: "danger", label: "incorrect" },
+  error: { Icon: IconAlert, tone: "neutral", label: "never produced a score" },
+  pending: { Icon: IconDot, tone: "neutral", label: "not answered yet" },
 };
+
+// One mark, at a fixed size whatever the outcome. The wrapper carries the colour
+// and the name so the icon itself stays a plain shape.
+function OutcomeMark({ outcome }) {
+  const { Icon, label } = OUTCOME[outcome];
+  return (
+    // `role="img"` with a name, rather than a hidden text twin: the icon *is*
+    // the content of this cell, and without a role a bare labelled span is not
+    // reliably announced at all.
+    <span
+      className={`opt-mark ${outcome}`}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <Icon size={14} />
+    </span>
+  );
+}
 
 export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSplit, onOpenSkill }) {
   const [detail, setDetail] = useState(null);
@@ -95,9 +142,25 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
         <CardHeader
           title={`${detail.step_no === 0 ? "Baseline" : `Step ${detail.step_no}`} in detail`}
           actions={
-            <Button variant="ghost" icon={<IconArrowLeft size={15} />} onClick={onBack}>
-              Back to the run
-            </Button>
+            <>
+              {/* Which skill was rolled out, not which step ran it. On training
+                  these differ — the step measures the skill it inherited, then
+                  edits it — and a header that did not say so would make the two
+                  rollouts of a step look like a repeat measurement.
+
+                  Up here with the title rather than down among the figures: it
+                  is what the whole card is about, and standing in the metric row
+                  it competed with four numbers for the same glance. */}
+              <Badge tone="info" size="sm">
+                skill from step {detail.skill_step_no}
+                {split === "train" &&
+                  detail.skill_step_no !== detail.step_no &&
+                  " (before this step's edits)"}
+              </Badge>
+              <Button variant="ghost" icon={<IconArrowLeft size={15} />} onClick={onBack}>
+                Back to the run
+              </Button>
+            </>
           }
         />
 
@@ -143,36 +206,49 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
             </span>
           </button>
         </div>
-        <div className="opt-run-meta">
-          {/* Which skill was rolled out, not which step ran it. On training
-              these differ — the step measures the skill it inherited, then
-              edits it — and a header that did not say so would make the two
-              rollouts of a step look like a repeat measurement. */}
-          <Badge tone="info" size="sm">
-            skill from step {detail.skill_step_no}
-            {split === "train" && detail.skill_step_no !== detail.step_no && " (before this step's edits)"}
-          </Badge>
-          <span>accuracy {pct(detail.hard)}</span>
-          <span title="Mean / median / slowest time the agent took to answer one question">
-            latency {secs(detail.latency_mean_ms)} avg · {secs(detail.latency_p50_ms)} median ·{" "}
-            {secs(detail.latency_max_ms)} max
-          </span>
-          <span title="How often the agent was actually seen reading this skill">
-            activation {pct(detail.activation_rate)}
-          </span>
-          <span>
-            {detail.n_scored} of {detail.n_items} scored
-          </span>
-        </div>
-
-        {(detail.n_agent_error > 0 || detail.n_judge_error > 0) && (
-          <Banner tone="warning" title="Some questions never produced a score">
-            {detail.n_agent_error} agent · {detail.n_judge_error} judge. These are
-            excluded from every figure above — they are not counted wrong — but
-            they are still listed below, because a rollout that quietly measured
-            fewer questions than it set out to is the thing worth noticing.
-          </Banner>
-        )}
+        {/* The four figures this rollout produced, as a row of labelled figures
+            rather than as a sentence.
+            They used to be one wrapping line of same-sized grey text — a badge,
+            then `accuracy 88%`, then a three-part latency string that ate half
+            the width, then `activation 100%`, then `8 of 8 scored` — with no
+            labels and no hierarchy, so finding any one of them meant reading all
+            of them. The grid is the same one the run header above uses, which is
+            the point: two pages in this section both open on "the numbers for
+            the thing you just clicked", and they should not say it two ways. */}
+        <dl className="opt-runfacts">
+          <Fact
+            label="Accuracy"
+            value={pct(detail.hard)}
+            sub="hard verdicts"
+            title="The share of scored questions the judge called correct"
+          />
+          {/* Average first, because that is the figure people quote at each
+              other. The other two are what say whether it means anything: an
+              average well above the median is one question that hung. */}
+          <Fact
+            label="Latency"
+            value={secs(detail.latency_mean_ms)}
+            sub={`avg · median ${secs(detail.latency_p50_ms)} · max ${secs(detail.latency_max_ms)}`}
+            title="How long the agent took to answer one question"
+          />
+          <Fact
+            label="Activation"
+            value={pct(detail.activation_rate)}
+            sub={activationSub(detail)}
+            title="How often the agent was actually seen reading this skill"
+          />
+          {/* The denominator, as a figure of its own. A rollout that quietly
+              measured fewer questions than it set out to is the thing worth
+              noticing, and it used to be said twice — once here in grey and
+              again underneath as a warning banner, which is one fact wearing two
+              colours. */}
+          <Fact
+            label="Scored"
+            value={`${detail.n_scored} of ${detail.n_items}`}
+            sub={scoredSub(detail)}
+            title="Questions that produced a verdict. Failures are excluded from every figure here rather than counted wrong."
+          />
+        </dl>
         {detail.aborted && (
           <Banner tone="error" title="This rollout was abandoned">
             {detail.abort_reason || "too much of it failed to be worth scoring"}
@@ -222,6 +298,12 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
             title={split === "train" ? "By analyst call" : "Questions"}
             count={detail.results.length}
           />
+          {/* Only the two marks that need explaining. A tick and a cross are not
+              a legend anyone reads; `◐` and `⚠` are the two people stop on, and
+              the half-circle is the one that decides whether the soft metric
+              above makes sense. Rendered from the same OUTCOME table as the rows
+              so a mark can never mean one thing here and another there. */}
+          <Legend outcomes={legendFor(detail.results)} />
           <div className="opt-rollout-groups">
             {groups.map((group) => (
               <Group
@@ -270,6 +352,62 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
   );
 }
 
+// What the activation figure is a share *of*.
+//
+// The rate counts only the questions where activation could be observed at all:
+// a trace that never landed, or one showing no skill read by an agent we have
+// not established reads skills visibly, is unknown rather than a no — and
+// unknown is left out of the fraction rather than averaged in as a zero. That is
+// the right call and it was invisible, so `100%` read as "all ten questions" when
+// it could equally have been "the nine we could see, and one we could not".
+//
+// Counted from the rows rather than taken from the summary because the rows are
+// already here and carry `activated` each — one number derived in one place
+// cannot disagree with the list underneath it.
+function activationSub(detail) {
+  const results = detail.results || [];
+  const observed = results.filter((r) => r.activated != null).length;
+  if (!observed) return "not observable on this agent";
+  const unknown = results.length - observed;
+  return unknown
+    ? `of ${observed} observed · ${unknown} unknown`
+    : `of ${observed} observed`;
+}
+
+// The failures behind a short denominator, named. They are excluded from every
+// figure beside this one rather than counted wrong — an agent timeout is not the
+// skill being incorrect — so the exclusion has to be legible or the accuracy
+// above it is a number about a batch nobody can see the edges of.
+function scoredSub(detail) {
+  const parts = [];
+  if (detail.n_agent_error) parts.push(`${detail.n_agent_error} agent`);
+  if (detail.n_judge_error) parts.push(`${detail.n_judge_error} judge`);
+  if (!parts.length) return "all questions scored";
+  return `${parts.join(" · ")} excluded`;
+}
+
+// Which marks this rollout actually contains, of the two worth spelling out.
+// Explaining `partial` on a list with no partial answers in it is noise, and a
+// legend that is noise on most pages stops being read on the pages it matters.
+function legendFor(results) {
+  const present = new Set((results || []).map(outcomeOf));
+  return ["partial", "error"].filter((outcome) => present.has(outcome));
+}
+
+function Legend({ outcomes }) {
+  if (!outcomes.length) return null;
+  return (
+    <p className="opt-legend">
+      {outcomes.map((outcome) => (
+        <span key={outcome} className="opt-legend-item">
+          <OutcomeMark outcome={outcome} />
+          {OUTCOME[outcome].label}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function Group({ group, split, selection, onSelect }) {
   const { minibatch, counts } = group;
   const selected =
@@ -307,7 +445,7 @@ function Group({ group, split, selection, onSelect }) {
                 className={active ? "opt-qrow selected" : "opt-qrow"}
                 onClick={() => onSelect({ kind: "question", id: result.id })}
               >
-                <span className={`opt-mark ${outcome}`}>{OUTCOME[outcome].mark}</span>
+                <OutcomeMark outcome={outcome} />
                 <span className="opt-qtext">{result.question || result.item_key}</span>
                 <span className="opt-qscore">
                   {outcome === "error"
@@ -398,6 +536,3 @@ function pct(value) {
   return value == null ? "—" : `${Math.round(value * 100)}%`;
 }
 
-function secs(ms) {
-  return ms == null ? "—" : `${(ms / 1000).toFixed(1)}s`;
-}

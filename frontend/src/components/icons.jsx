@@ -278,3 +278,32 @@ export const IconInbox = (p) => (
     <path d="M5.4 5.5A2 2 0 0 1 7.2 4.5h9.6a2 2 0 0 1 1.8 1l3.4 7.5V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5z" />
   </S>
 );
+
+// --- Rollout outcome marks -------------------------------------------------
+// The five outcomes a rolled-out question can have. Four of them already had an
+// icon here; these two are the ones that were still literal characters in
+// `RolloutDetail`, which is why the whole set is listed together in that file's
+// OUTCOME table rather than each being reached for separately.
+//
+// The reason none of them may be a literal glyph: `⚠` (U+26A0) is not in Inter,
+// so it fell through to the system emoji font and rendered at 26×45.5px beside
+// four 18×19.5px siblings — a single failed question added 26px to its row and
+// pushed the list out of alignment. A glyph's size is the font's decision; an
+// icon's is ours.
+
+// Partial credit: the verdict was wrong, but the judge scored it above zero.
+// Half-filled rather than a different shape, because that is what it means —
+// the same circle as a whole answer, half of it earned.
+export const IconHalfCircle = (p) => (
+  <S {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none" />
+  </S>
+);
+// Not answered yet. Deliberately the quietest mark in the set: a row waiting its
+// turn is not news, and a list mid-rollout is mostly these.
+export const IconDot = (p) => (
+  <S {...p}>
+    <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+  </S>
+);

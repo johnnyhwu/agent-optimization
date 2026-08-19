@@ -78,6 +78,24 @@ class ScriptRunRequest(BaseModel):
     connection: ScriptTarget
 
 
+class ScriptLimitsOut(BaseModel):
+    """The ceilings a script run is actually held to, on this deployment.
+
+    Served because they are otherwise invisible until one of them fires, and a
+    limit you meet for the first time in an error message is a limit you have no
+    way to check you have configured. Every value here is a deployment setting
+    (`SCRIPT_*`, see `app/config.py`), so the answer to "I raised it and nothing
+    changed" is one page refresh rather than a code search.
+    """
+
+    max_rows_per_query: int
+    statement_timeout_s: int
+    wall_clock_s: int
+    max_queries: int
+    max_output_chars: int
+    memory_mb: int
+
+
 class ScriptCheckOut(BaseModel):
     id: str
     label: str
@@ -433,6 +451,10 @@ class QuestionResultOut(BaseModel):
     # timer for either, which beats inventing a duration for old runs.
     started_at: datetime | None = None
     agent_latency_ms: int | None = None
+    # How many model calls this question cost, counted from its trace as the run
+    # executed. NULL for runs that finished before it was recorded, and for a
+    # question whose trace never arrived — neither is "the agent made no calls".
+    llm_call_count: int | None = None
     trace_ready: bool
     has_analysis: bool
     is_incorrect: bool  # per the requested multi-run mode
@@ -454,6 +476,11 @@ class SpanOut(BaseModel):
     output: Any = ""
     token_usage: dict
     status_message: str | None = None  # Langfuse statusMessage on ERROR spans
+    # This one step's own duration, from the trace store's two ends. The
+    # question already reports how long it took in total; this is what says
+    # whether that was one slow model call or a tool that hung. None when the
+    # store gave only one end, or none.
+    latency_ms: int | None = None
 
 
 class SuspectOut(BaseModel):

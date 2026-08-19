@@ -509,9 +509,16 @@ def _answer(message, executor, limits: Limits, result: RunResult, queries: int) 
     param_count = len(params) if isinstance(params, (list, dict)) else 0
 
     if queries > limits.max_queries:
+        # The setting is named because this ceiling is a deployment choice, and
+        # the person meeting it is usually the person who can move it. Without
+        # the name it is a wall with no door: the value appears in no README and
+        # in no document, and a mistyped `SCRIPT_*` in a `.env` is discarded
+        # silently (`Settings` is `extra="ignore"`), so "I raised it and it did
+        # not change" had no thread to pull.
         note = (
-            f"This script ran more than {limits.max_queries} queries. Fetch what "
-            "you need in fewer, larger statements."
+            f"This script ran more than {limits.max_queries} queries "
+            "(the SCRIPT_MAX_QUERIES limit). Fetch what you need in fewer, "
+            "larger statements — or raise the limit for this deployment."
         )
         _note_limit(result, note)
         result.queries.append(QueryLog(sql, param_count, 0, 0, error=note))
