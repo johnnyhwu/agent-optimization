@@ -1398,8 +1398,27 @@
 .opt-diff-scroll { overflow: auto; max-height: 72vh; }
 .opt-diff { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: var(--text-micro); }
 .opt-diff td { padding: 1px var(--space-2); vertical-align: top; white-space: pre-wrap; word-break: break-word; }
-.opt-diff-no { width: 1%; text-align: right; color: var(--muted); user-select: none; font-variant-numeric: tabular-nums; }
+/* The line-number gutter, which must never wrap. `word-break: break-word` above
+   is for source lines; applied to a number in a `width: 1%` column it broke
+   `10` into a `1` over a `0` and made that row 35px tall against 18.5px for its
+   neighbours — and the taller the file, the more rows it hit. `min-width` lets
+   the gutter grow with the line count instead of being squeezed to a digit. */
+/* Qualified with `td` deliberately: the rule it has to beat is `.opt-diff td`,
+   and a bare `.opt-diff-no` loses to it on specificity — which is how the first
+   attempt at this fix changed nothing at all. */
+.opt-diff td.opt-diff-no {
+  width: 1%; min-width: 3ch;
+  text-align: right; color: var(--muted); user-select: none;
+  white-space: nowrap; word-break: normal;
+  font-variant-numeric: tabular-nums;
+}
 .opt-diff-text { width: 49%; }
+/* Wrapping is a reading preference, not a property of the diff. Wrapped keeps
+   every line on screen and is right for prose-shaped skill files; unwrapped
+   keeps one source line on one row, which is the only way to compare indentation
+   or a long table. The scroller above already has `overflow: auto`, so turning
+   wrapping off costs nothing but the horizontal scrollbar it was suppressing. */
+.opt-diff.is-nowrap td { white-space: pre; word-break: normal; }
 .opt-diff tr.add td:nth-child(3), .opt-diff tr.add td:nth-child(4) { background: var(--green-soft); }
 .opt-diff tr.del td:nth-child(1), .opt-diff tr.del td:nth-child(2) { background: var(--red-soft); }
 .opt-diff tr.change td:nth-child(1), .opt-diff tr.change td:nth-child(2) { background: var(--red-soft); }
