@@ -116,6 +116,11 @@ export default function RunDetail({
                     // itself rather than waiting for the end-of-run reload.
                     started_at: d.started_at ?? r.started_at,
                     agent_latency_ms: d.agent_latency_ms ?? r.agent_latency_ms,
+                    // Counted off the trace, so it lands with `question_traced`
+                    // — later than the verdict. `??` rather than a plain
+                    // assignment for the same reason as the two above: the
+                    // earlier events carry it as null and must not blank it.
+                    llm_call_count: d.llm_call_count ?? r.llm_call_count,
                     // Part of the open question's trace fingerprint, so the
                     // middle column follows the run instead of freezing.
                     has_analysis: d.has_analysis ?? r.has_analysis,

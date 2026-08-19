@@ -15,6 +15,7 @@ import {
   IconHalfCircle,
   IconX,
 } from "../icons.jsx";
+import { secs } from "../../duration.js";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
 import Fact from "./Fact.jsx";
 import ReflectorIO from "./ReflectorIO.jsx";
@@ -535,6 +536,3 @@ function pct(value) {
   return value == null ? "—" : `${Math.round(value * 100)}%`;
 }
 
-function secs(ms) {
-  return ms == null ? "—" : `${(ms / 1000).toFixed(1)}s`;
-}

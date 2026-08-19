@@ -433,6 +433,10 @@ class QuestionResultOut(BaseModel):
     # timer for either, which beats inventing a duration for old runs.
     started_at: datetime | None = None
     agent_latency_ms: int | None = None
+    # How many model calls this question cost, counted from its trace as the run
+    # executed. NULL for runs that finished before it was recorded, and for a
+    # question whose trace never arrived — neither is "the agent made no calls".
+    llm_call_count: int | None = None
     trace_ready: bool
     has_analysis: bool
     is_incorrect: bool  # per the requested multi-run mode
@@ -454,6 +458,11 @@ class SpanOut(BaseModel):
     output: Any = ""
     token_usage: dict
     status_message: str | None = None  # Langfuse statusMessage on ERROR spans
+    # This one step's own duration, from the trace store's two ends. The
+    # question already reports how long it took in total; this is what says
+    # whether that was one slow model call or a tool that hung. None when the
+    # store gave only one end, or none.
+    latency_ms: int | None = None
 
 
 class SuspectOut(BaseModel):

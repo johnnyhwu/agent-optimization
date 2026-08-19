@@ -207,6 +207,12 @@ def build_fake_trace(correlation_id: str) -> Trace:
                              "total": rng.randint(120, 700)},
                 input_json=request,
                 output_json=assistant,
+                # Spread wide enough that the column reads as a measurement
+                # rather than as five copies of the same number — the point of
+                # showing per-step latency is spotting the one step that took
+                # eight times as long as its neighbours, and a fake layer that
+                # never produces one cannot exercise that.
+                latency_ms=rng.randint(180, 2600),
             )
         )
 

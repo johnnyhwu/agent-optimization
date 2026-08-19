@@ -229,6 +229,14 @@ class QuestionResult(Base):
     # one failure the owner can actually fix.
     failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # How many model calls the agent spent on this question, counted from its
+    # trace while the run was executing. Two questions that both took nine
+    # seconds are not the same question if one made a single call and the other
+    # made eleven, and that is the first thing worth knowing when a run turns
+    # expensive. NULL on rows written before this column existed — the traces
+    # behind them are no longer ours to re-read, and a 0 would claim the agent
+    # called nothing rather than that nobody was counting.
+    llm_call_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # When this question's agent call went out — what the left column's timer
     # counts from. Distinct from `created_at` below, which is when the row was
     # written: the orchestrator creates every row for a run up front, so at

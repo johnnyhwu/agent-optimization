@@ -68,6 +68,13 @@ class Span:
     # prompt is built from them.
     input_json: object | None = None
     output_json: object | None = None
+    # How long this one observation took. The question-level `agent_latency_ms`
+    # says a question took nine seconds; only this says whether that was one slow
+    # model call or six quick ones and a tool that hung, which is the difference
+    # between a prompt problem and an infrastructure problem. `None` when the
+    # trace store did not give both ends — an unfinished observation, or a client
+    # that logs no `endTime`.
+    latency_ms: int | None = None
 
 
 @dataclass

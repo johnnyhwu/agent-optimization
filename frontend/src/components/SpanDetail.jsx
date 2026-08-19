@@ -4,6 +4,7 @@ import Payload from "./SpanPayload.jsx";
 import Badge from "./ui/Badge.jsx";
 import Card, { CardHeader } from "./ui/Card.jsx";
 import { InlineEmpty } from "./ui/EmptyState.jsx";
+import { secs } from "../duration.js";
 import { showRawName, spanLabel } from "../span_label.js";
 
 // Right column: upper = span input/output/token (≈ Langfuse span detail);
@@ -36,10 +37,19 @@ export default function SpanDetail({ span, suspect }) {
         {showRawName(span, derived) && (
           <div className="span-rawname">logged as <code>{span.tool_name}</code></div>
         )}
+        {/* What this one step cost, in both currencies.
+            Tokens were here from the start; time was not, and it is the half a
+            developer reaches for first — the question already says it took nine
+            seconds, and only this says whether that was one slow model call or a
+            tool that hung. Last in the row because it is the newest and because
+            the three token figures are a set. */}
         <div className="tokens">
           <div className="t">in: <strong>{span.token_usage.input ?? "—"}</strong></div>
           <div className="t">out: <strong>{span.token_usage.output ?? "—"}</strong></div>
           <div className="t">total: <strong>{span.token_usage.total ?? "—"}</strong></div>
+          <div className="t" title="How long this step took, from the trace store's own timestamps">
+            took: <strong>{secs(span.latency_ms)}</strong>
+          </div>
         </div>
 
         <Payload label="Input" value={span.input} />
