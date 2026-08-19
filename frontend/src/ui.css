@@ -188,12 +188,32 @@
    field it opened has the caret. */
 .run-name { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
 .run-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-name .run-name-edit { opacity: 0; transition: opacity .12s ease; flex: none; }
+/* Sized against the name it sits beside, not against the toolbar buttons.
+   A 34px control next to a 19.5px line of text is a box two thirds of which is
+   empty, and the eye reads the icon as low because the padding below it is the
+   larger half of what surrounds it. At 28px the icon's centre lands on the text's
+   and the target is still comfortable. On the Optimize page the same control sits
+   beside a 20px heading, where the mismatch was small enough not to show — this
+   makes both correct rather than one of them lucky. */
+.run-name .run-name-edit {
+  opacity: 0; transition: opacity .12s ease; flex: none;
+  width: var(--ctl-h-sm); height: var(--ctl-h-sm);
+}
 .run-name:hover .run-name-edit,
 .run-name:focus-within .run-name-edit,
 .run-name.is-editing .run-name-edit { opacity: 1; }
-.run-name.is-editing { align-items: flex-start; }
-.run-name-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+/* The tick and the cross are one pair — commit and abandon, the two answers to
+   the open field — so they sit together and away from the field, rather than
+   evenly spaced across it. Two 34px boxes around 14px icons left ~24px of gap
+   between the glyphs, which read as three unrelated controls. */
+/* Wrapping, not a nested column. The field, the tick and the cross are one row
+   and stay centred on each other; the error message is pushed onto a line of its
+   own by `flex-basis: 100%`. It used to live *inside* the field as a second row,
+   which meant the row's height changed when a name was rejected and the buttons
+   drifted down to centre on a block they are not part of. */
+.run-name.is-editing { gap: 6px; flex-wrap: wrap; }
+.run-name.is-editing .run-name-edit + .run-name-edit { margin-left: -4px; }
+.run-name-field { min-width: 0; flex: 1; }
 .run-name-input {
   width: 100%; min-width: 0;
   padding: 2px var(--space-2);
@@ -203,7 +223,12 @@
 .run-name-input:focus-visible { outline: none; box-shadow: var(--ring); }
 /* Inline rather than a toast: the field that has to change is right here, and a
    toast about a name is read after the field it refers to has closed. */
-.run-name-error { font-size: var(--text-micro); font-weight: var(--fw-normal); color: var(--red); }
+/* `flex-basis: 100%` is what puts it on a line of its own under the field,
+   rather than competing with the tick and the cross for the first line. */
+.run-name-error {
+  flex-basis: 100%;
+  font-size: var(--text-micro); font-weight: var(--fw-normal); color: var(--red);
+}
 
 /* ---------------------------------------------------------------------------
    Badge
