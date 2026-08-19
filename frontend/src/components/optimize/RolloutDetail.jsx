@@ -7,7 +7,14 @@ import Card, { CardHeader } from "../ui/Card.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import SpanList from "../SpanList.jsx";
 import SpanDetail from "../SpanDetail.jsx";
-import { IconArrowLeft } from "../icons.jsx";
+import {
+  IconAlert,
+  IconArrowLeft,
+  IconCheck,
+  IconDot,
+  IconHalfCircle,
+  IconX,
+} from "../icons.jsx";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
 import ReflectorIO from "./ReflectorIO.jsx";
 import StageCalls from "./StageCalls.jsx";
@@ -24,13 +31,51 @@ import StageCalls from "./StageCalls.jsx";
 // unchanged, because a trace looked at here and a trace looked at in Evaluation
 // have to be the same object for the two to be comparable at all.
 
+// The five outcomes, as icons rather than as text characters.
+//
+// They used to be the literal glyphs ✓ ◐ ✗ ⚠ ·, and four of the five were fine.
+// `⚠` (U+26A0) is not in Inter, so it fell through to the system emoji font and
+// rendered at 26×45.5px next to four 18×19.5px siblings — one failed question
+// added 26px to its row and threw the whole list out of alignment. Which font
+// answers for a glyph is not something a stylesheet can settle, so the mark is
+// an icon now, sized by us. `ScriptRunPanel` had already made this call for the
+// same reason; this was the last place still using characters.
+//
+// `label` is not decoration either. `◐` is the mark people ask about — it means
+// the judge gave partial credit to an answer it still called wrong, which is
+// precisely the gap between the hard and soft metrics — and nothing on the page
+// said so. Every mark now carries its meaning in a tooltip and in the
+// accessibility tree, and the list header spells the ambiguous ones out.
 const OUTCOME = {
-  correct: { mark: "✓", tone: "success" },
-  partial: { mark: "◐", tone: "warning" },
-  incorrect: { mark: "✗", tone: "danger" },
-  error: { mark: "⚠", tone: "neutral" },
-  pending: { mark: "·", tone: "neutral" },
+  correct: { Icon: IconCheck, tone: "success", label: "correct" },
+  partial: {
+    Icon: IconHalfCircle,
+    tone: "warning",
+    label: "partial credit — judged wrong, but scored above zero",
+  },
+  incorrect: { Icon: IconX, tone: "danger", label: "incorrect" },
+  error: { Icon: IconAlert, tone: "neutral", label: "never produced a score" },
+  pending: { Icon: IconDot, tone: "neutral", label: "not answered yet" },
 };
+
+// One mark, at a fixed size whatever the outcome. The wrapper carries the colour
+// and the name so the icon itself stays a plain shape.
+function OutcomeMark({ outcome }) {
+  const { Icon, label } = OUTCOME[outcome];
+  return (
+    // `role="img"` with a name, rather than a hidden text twin: the icon *is*
+    // the content of this cell, and without a role a bare labelled span is not
+    // reliably announced at all.
+    <span
+      className={`opt-mark ${outcome}`}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <Icon size={14} />
+    </span>
+  );
+}
 
 export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSplit, onOpenSkill }) {
   const [detail, setDetail] = useState(null);
@@ -222,6 +267,12 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
             title={split === "train" ? "By analyst call" : "Questions"}
             count={detail.results.length}
           />
+          {/* Only the two marks that need explaining. A tick and a cross are not
+              a legend anyone reads; `◐` and `⚠` are the two people stop on, and
+              the half-circle is the one that decides whether the soft metric
+              above makes sense. Rendered from the same OUTCOME table as the rows
+              so a mark can never mean one thing here and another there. */}
+          <Legend outcomes={legendFor(detail.results)} />
           <div className="opt-rollout-groups">
             {groups.map((group) => (
               <Group
@@ -270,6 +321,28 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
   );
 }
 
+// Which marks this rollout actually contains, of the two worth spelling out.
+// Explaining `partial` on a list with no partial answers in it is noise, and a
+// legend that is noise on most pages stops being read on the pages it matters.
+function legendFor(results) {
+  const present = new Set((results || []).map(outcomeOf));
+  return ["partial", "error"].filter((outcome) => present.has(outcome));
+}
+
+function Legend({ outcomes }) {
+  if (!outcomes.length) return null;
+  return (
+    <p className="opt-legend">
+      {outcomes.map((outcome) => (
+        <span key={outcome} className="opt-legend-item">
+          <OutcomeMark outcome={outcome} />
+          {OUTCOME[outcome].label}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function Group({ group, split, selection, onSelect }) {
   const { minibatch, counts } = group;
   const selected =
@@ -307,7 +380,7 @@ function Group({ group, split, selection, onSelect }) {
                 className={active ? "opt-qrow selected" : "opt-qrow"}
                 onClick={() => onSelect({ kind: "question", id: result.id })}
               >
-                <span className={`opt-mark ${outcome}`}>{OUTCOME[outcome].mark}</span>
+                <OutcomeMark outcome={outcome} />
                 <span className="opt-qtext">{result.question || result.item_key}</span>
                 <span className="opt-qscore">
                   {outcome === "error"

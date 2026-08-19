@@ -1289,11 +1289,39 @@
 .opt-qrow.selected { background: var(--accent-soft); }
 .opt-qrow .opt-qtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-qscore { font-variant-numeric: tabular-nums; font-size: var(--text-micro); color: var(--muted); }
-.opt-mark { font-weight: var(--fw-bold); }
+/* The outcome mark on a rollout row. A fixed box, because the thing it replaced
+   was a text character and the font decided its size: `⚠` is missing from Inter,
+   fell through to the system emoji font, and came back 26×45.5px against its
+   18×19.5px siblings — one failed question made its row 26px taller than the
+   rest. Sizing the box here means every outcome occupies the same space whatever
+   the icon inside it turns out to be. */
+/* The box is stated in full — padding, border, background, margin included —
+   rather than only the parts that differ from nothing. `styles.css` carries a
+   global `.error` rule for error *banners* (red panel, 12px padding, vertical
+   margin), and `.opt-mark.error` was quietly inheriting the lot: the mark came
+   out 26px square and its row 74.5px tall against a 27.5px neighbour. A modifier
+   class shared with a component elsewhere in the app is not a hazard this file
+   can prevent, so the mark defines its own box completely and stops depending on
+   what else `.error` happens to mean. */
+.opt-mark {
+  display: inline-grid; place-items: center; flex: none;
+  width: 18px; height: 18px;
+  padding: 0; margin: 0; border: 0; background: none;
+}
+.opt-mark svg { display: block; }
 .opt-mark.correct { color: var(--green); }
 .opt-mark.partial { color: var(--amber); }
 .opt-mark.incorrect { color: var(--red); }
 .opt-mark.error, .opt-mark.pending { color: var(--muted); }
+
+/* Under the list header: what the two ambiguous marks mean, shown only when the
+   rollout contains them. */
+.opt-legend {
+  display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3);
+  margin: 0; padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--text-micro); color: var(--muted);
+}
+.opt-legend-item { display: inline-flex; align-items: center; gap: var(--space-1); }
 
 /* --- The analyst's input and output -------------------------------------- */
 .opt-reflector { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
