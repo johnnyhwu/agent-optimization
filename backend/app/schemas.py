@@ -78,6 +78,24 @@ class ScriptRunRequest(BaseModel):
     connection: ScriptTarget
 
 
+class ScriptLimitsOut(BaseModel):
+    """The ceilings a script run is actually held to, on this deployment.
+
+    Served because they are otherwise invisible until one of them fires, and a
+    limit you meet for the first time in an error message is a limit you have no
+    way to check you have configured. Every value here is a deployment setting
+    (`SCRIPT_*`, see `app/config.py`), so the answer to "I raised it and nothing
+    changed" is one page refresh rather than a code search.
+    """
+
+    max_rows_per_query: int
+    statement_timeout_s: int
+    wall_clock_s: int
+    max_queries: int
+    max_output_chars: int
+    memory_mb: int
+
+
 class ScriptCheckOut(BaseModel):
     id: str
     label: str

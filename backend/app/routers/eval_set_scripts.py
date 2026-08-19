@@ -6,7 +6,7 @@ making them run it by hand, dump a file and upload the file, this runs it — in
 sandbox, against a database they nominate for that one request — and drops the
 result into the same preview the file upload fills.
 
-Three endpoints, and a deliberate split between the first two:
+Four endpoints, and a deliberate split between the first two:
 
 * `POST /eval-sets/script/validate` parses the file and reports what is wrong
   with its shape. No execution, no database, no credentials. The UI calls it the
@@ -16,6 +16,9 @@ Three endpoints, and a deliberate split between the first two:
 * `POST /eval-sets/script/run` executes it. Credentials arrive here, are used to
   open one connection, and are gone when the request ends: they are not stored,
   not logged, and not echoed back.
+* `GET /eval-sets/script/limits` reports the ceilings a run is held to, so that
+  a limit is something you can look up rather than something you meet as an
+  error naming a setting you cannot find.
 * `GET /eval-sets/templates/{kind}` hands out a working example of each of the
   three upload formats.
 
@@ -37,6 +40,7 @@ from app.auth import current_subject
 from app.config import settings
 from app.schemas import (
     ScriptCheckOut,
+    ScriptLimitsOut,
     ScriptRunOut,
     ScriptRunRequest,
     ScriptSource,
@@ -252,6 +256,37 @@ def _audit(subject: str, target: DbTarget, source: str, result) -> None:
             entry.param_count,
             entry.sql,
         )
+
+
+@router.get("/script/limits", response_model=ScriptLimitsOut)
+def script_limits() -> ScriptLimitsOut:
+    """What this deployment will actually let a script do.
+
+    These numbers were previously unknowable from outside the process. They are
+    not in the README, not in `docs/spec.md`, and the only place any of their
+    names appeared was one line of `docker-compose.yml` — so the first time
+    anyone met one was as an error, naming a ceiling they had no way to look up
+    and no way to confirm they had raised. `Settings` is `extra="ignore"`, which
+    means a misspelled `SCRIPT_*` in a `.env` is discarded in silence and the
+    limit simply stays where it was, with nothing anywhere reporting a problem.
+
+    Serving them turns that into a page refresh: the upload dialog prints these
+    beside the editor, so a raised limit that did not take effect is visible
+    before a script is ever run.
+    """
+    limits = _limits()
+    # Named one by one rather than splatted from the dataclass: `Limits` also
+    # carries containment knobs that are not a script author's business
+    # (`max_processes`), and a future field should reach this response because
+    # somebody decided it should, not because it happened to be added upstairs.
+    return ScriptLimitsOut(
+        max_rows_per_query=limits.max_rows_per_query,
+        statement_timeout_s=limits.statement_timeout_s,
+        wall_clock_s=limits.wall_clock_s,
+        max_queries=limits.max_queries,
+        max_output_chars=limits.max_output_chars,
+        memory_mb=limits.memory_mb,
+    )
 
 
 @router.get("/templates/{kind}")

@@ -288,6 +288,48 @@ def test_the_endpoint_takes_every_limit_from_settings():
     assert limits.memory_mb == settings.script_memory_mb
 
 
+def test_the_limits_endpoint_reports_what_is_actually_enforced():
+    """The ceilings, made answerable from outside the process.
+
+    They were not in the README, not in the spec, and the only place any of their
+    names appeared was one line of docker-compose — so the first time anyone met
+    one was as an error naming a setting they could not look up. Worse, the
+    backend's settings are `extra="ignore"`: a mistyped `SCRIPT_*` in a `.env` is
+    discarded without a warning and the limit stays put, which makes "I raised it
+    and it did not take" indistinguishable from "I never raised it".
+
+    Reported straight off `_limits()`, so this can never describe a run the
+    runner would not actually perform.
+    """
+    from app.config import settings
+
+    out = scripts_router.script_limits()
+
+    assert out.max_queries == settings.script_max_queries
+    assert out.max_rows_per_query == settings.script_max_rows_per_query
+    assert out.wall_clock_s == settings.script_wall_clock_s
+    assert out.statement_timeout_s == settings.script_statement_timeout_s
+    assert out.max_output_chars == settings.script_max_output_chars
+    assert out.memory_mb == settings.script_memory_mb
+
+
+def test_the_query_limit_message_names_the_setting_that_moves_it():
+    """A wall with no door is worse than a lower wall.
+
+    The person meeting this ceiling is usually the person who can raise it, and
+    the value appears in no document — so the message carries the variable name
+    rather than leaving them to search the source for the number they just read.
+    """
+    from app.services.script_runner import Limits, RunResult, _answer
+
+    result = RunResult()
+    reply = _answer({"sql": "SELECT 1"}, None, Limits(max_queries=2), result, 3)
+
+    assert reply["t"] == "qerr"
+    assert "SCRIPT_MAX_QUERIES" in reply["message"]
+    assert "more than 2 queries" in reply["message"]
+
+
 def test_a_statement_may_not_be_allowed_to_outlive_the_run():
     """A per-query timeout above the wall clock is one the database never applies.
 

@@ -138,6 +138,10 @@ export const api = {
   // what lets the dialog run this the moment a file is chosen and hold back the
   // credential prompt until the answer is yes.
   validateScript: (source) => req("POST", "/eval-sets/script/validate", { source }),
+  // What this deployment will actually let a script do. Read so the dialog can
+  // print the ceilings rather than leaving someone to discover one as an error
+  // naming a setting that appears in no document.
+  scriptLimits: () => req("GET", "/eval-sets/script/limits"),
   // Run the script against the caller's database and get preview rows back. The
   // connection (password included) is used for this one request and is never
   // stored; a script that fails comes back as 200 with `error` populated, since

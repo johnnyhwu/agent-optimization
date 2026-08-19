@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { COPY_OK, copyText } from "../clipboard.js";
 import { useToast } from "./Toast.jsx";
@@ -78,6 +78,22 @@ export default function FormatHelp({ onLoadSample }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("python");
   const [copied, setCopied] = useState(false);
+  const [limits, setLimits] = useState(null);
+
+  // Fetched when the panel opens, not on mount: most people never open this, and
+  // the numbers only mean anything next to the Python tab.
+  //
+  // A failure is silent and the row simply does not appear. This is reference
+  // material about someone else's deployment settings — an error banner over a
+  // code sample would be louder than the thing it failed to fetch.
+  useEffect(() => {
+    if (!open || limits) return;
+    let live = true;
+    api.scriptLimits().then((data) => live && setLimits(data)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [open, limits]);
 
   // Answered twice on purpose. The label flip is where the eyes already are —
   // on the button that was just pressed — but it is two words on a small
@@ -129,6 +145,25 @@ export default function FormatHelp({ onLoadSample }) {
       </div>
 
       <p className="hint format-help-note">{NOTES[tab]}</p>
+      {/* What this deployment actually enforces, rather than what the docs said
+          when they were written.
+          These ceilings were unknowable from outside the backend: none of them
+          is in the README or the spec, and the only place any of their names
+          appeared was one line of docker-compose. So the first time anyone met
+          one was as an error naming a setting they could not look up — and
+          because a misspelled `SCRIPT_*` in a `.env` is discarded in silence, a
+          limit that had been raised and a limit that had not looked identical.
+          Printing the live values makes that a glance. */}
+      {tab === "python" && limits && (
+        <p className="hint format-help-limits">
+          <strong>This deployment allows</strong> {fmt(limits.max_queries)} queries per
+          run · {fmt(limits.max_rows_per_query)} rows per query ·{" "}
+          {limits.statement_timeout_s}s per statement · {limits.wall_clock_s}s per run ·{" "}
+          {limits.memory_mb} MB. Each is a <code>SCRIPT_*</code> setting an operator
+          can change; if one of these is not the number you configured, the setting
+          did not reach the backend.
+        </p>
+      )}
       <pre className="format-help-code">{SNIPPETS[tab]}</pre>
 
       <div className="format-help-actions">
@@ -158,4 +193,10 @@ export default function FormatHelp({ onLoadSample }) {
       </p>
     </div>
   );
+}
+
+// Thousands separators, because `50000` and `500000` are the same shape at a
+// glance and this row exists to be glanced at.
+function fmt(n) {
+  return typeof n === "number" ? n.toLocaleString() : n;
 }
