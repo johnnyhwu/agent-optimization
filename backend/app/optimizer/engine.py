@@ -264,12 +264,36 @@ async def _preflight(
     so a silent detector there costs it one column in the UI and nothing else.
     Aborting isolated runs on this would lock out every agent whose traces do
     not happen to name skill file paths.
+
+    **A successful probe turns the detector's absence into evidence.** That is
+    what this function is for, and until now it was the one thing it did not do.
+    `detect_activation` will only answer `False` when the caller has said a
+    detector demonstrably works against this agent — otherwise "nothing was seen"
+    is `None`, unknown, and `score_rollout` leaves unknowns out of the fraction
+    rather than averaging them in as zeros. Both halves of that are right. What
+    was missing is the connection: the probe proved the detector fires, wrote
+    `preflight.ok` for the UI, and never set `detectable`, which is the flag the
+    detector actually reads. It therefore stayed `False` on every run ever
+    executed, and a question where the agent called no tool at all scored
+    `None` and dropped out of the denominator. Nine questions reading the skill
+    and one reading nothing reported 100%, which is exactly the number that
+    cannot be trusted — a rate is worthless if the questions it is quietly
+    excluding are the ones it exists to catch.
     """
     rows = await probe_activation(items, spec=spec, seams=seams, cancel_event=cancel_event)
     observed = [row for row in rows if getattr(row, "activated", None) is not None]
     ok = any(row.activated for row in observed)
     hit = rows[0].detector_hit if rows else "none"
     skills_read = (rows[0].skills_read or []) if rows else []
+
+    # In memory for the steps this process is about to run, and persisted below
+    # for the ones a restart will run — the probe is bought once, on a fresh
+    # start only, so a resumed run has to read this decision back rather than
+    # re-establish it.
+    detector = {**spec.detector}
+    if ok:
+        detector["detectable"] = True
+        spec.detector["detectable"] = True
 
     if ok:
         message = f"the agent read the skill ({hit})"
@@ -286,7 +310,7 @@ async def _preflight(
         )
 
     await store.finish_run(run_id, detector={
-        **spec.detector,
+        **detector,
         "preflight": {"ok": ok, "detector_hit": hit, "skills_read": skills_read,
                       "message": message},
     })

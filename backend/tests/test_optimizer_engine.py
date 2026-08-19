@@ -743,6 +743,67 @@ async def test_isolated_warns_about_a_silent_detector_and_carries_on(monkeypatch
     assert store.steps
 
 
+def _detector_of(store):
+    """The detector settings as the run last persisted them."""
+    return next(u["detector"] for u in reversed(store.run_updates) if "detector" in u)
+
+
+@pytest.mark.asyncio
+async def test_a_successful_probe_makes_the_detector_trusted(monkeypatch):
+    """The whole point of the probe, and for a long time the one thing it skipped.
+
+    `detect_activation` only answers "no" when the caller has established that a
+    detector *would* have fired against this agent; otherwise silence is
+    `None` — unknown — and `score_rollout` leaves unknowns out of the fraction
+    instead of averaging them in as zeros. Both halves are deliberate, and
+    together they are only correct if something ever flips the flag.
+
+    Nothing did. The probe proved the detector works, wrote `preflight.ok` for
+    the UI, and left `detectable` at its default, so every rollout treated "the
+    agent read nothing" as "we could not tell". A question that called no tool at
+    all fell out of the denominator, and nine questions reading the skill beside
+    one that ignored it reported 100% — the one number that had to be believable,
+    quietly excluding the case it exists to catch.
+    """
+    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
+                           make_items(2), make_items(2, "val"))
+    Scores({(0, "val"): (2, 1), (1, "train"): (2, 1), (1, "val"): (2, 2)}).install(
+        monkeypatch, store
+    )
+    install_preflight(monkeypatch, activated=True)
+    install_update(monkeypatch)
+
+    await run(store, monkeypatch)
+
+    assert _detector_of(store)["detectable"] is True
+    # And in memory, which is what the steps this process goes on to run read.
+    assert store.spec.detector["detectable"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_silent_probe_leaves_absence_meaning_nothing(monkeypatch):
+    """The other direction, and the reason the flag is not simply always on.
+
+    When nothing proved a detector fires here, "no skill read" is genuinely
+    unobservable rather than false — reporting 0% activation for an agent whose
+    skill loading we cannot see would condemn a run that is working fine. So an
+    isolated run carries on with the column reading 'unknown', and `detectable`
+    stays off.
+    """
+    store = RecordingStore(make_spec(mode="isolated", total_steps=1, steps_per_epoch=1),
+                           make_items(2), make_items(2, "val"))
+    Scores({(0, "val"): (2, 1), (1, "train"): (2, 1), (1, "val"): (2, 2)}).install(
+        monkeypatch, store
+    )
+    install_preflight(monkeypatch, activated=False)
+    install_update(monkeypatch)
+
+    await run(store, monkeypatch)
+
+    assert _detector_of(store).get("detectable") is not True
+    assert store.spec.detector.get("detectable") is not True
+
+
 # --- Batching ---------------------------------------------------------------
 
 
