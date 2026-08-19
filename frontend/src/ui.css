@@ -1264,10 +1264,15 @@
   padding: var(--space-2) var(--space-3);
   background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
   font: inherit; font-size: var(--text-body); font-weight: var(--fw-medium);
-  color: var(--muted); cursor: pointer;
+  /* The tab's own name at full strength, chosen or not. Both tabs used to be
+     `--muted` throughout, so a row whose entire job is to say "there are two of
+     these and you are looking at one" read as two grey labels over a grey line.
+     The gloss after the name stays muted via its own `.muted` — that is the
+     subtitle, not the tab. */
+  color: var(--text); cursor: pointer;
 }
 .opt-splittab:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
-.opt-splittab.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.opt-splittab.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); font-weight: var(--fw-semibold); }
 .opt-splittab:disabled { cursor: not-allowed; opacity: .55; }
 .opt-splittab:focus-visible { outline: none; box-shadow: var(--ring); }
 

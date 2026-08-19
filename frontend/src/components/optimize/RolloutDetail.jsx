@@ -16,6 +16,7 @@ import {
   IconX,
 } from "../icons.jsx";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
+import Fact from "./Fact.jsx";
 import ReflectorIO from "./ReflectorIO.jsx";
 import StageCalls from "./StageCalls.jsx";
 
@@ -140,9 +141,25 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
         <CardHeader
           title={`${detail.step_no === 0 ? "Baseline" : `Step ${detail.step_no}`} in detail`}
           actions={
-            <Button variant="ghost" icon={<IconArrowLeft size={15} />} onClick={onBack}>
-              Back to the run
-            </Button>
+            <>
+              {/* Which skill was rolled out, not which step ran it. On training
+                  these differ — the step measures the skill it inherited, then
+                  edits it — and a header that did not say so would make the two
+                  rollouts of a step look like a repeat measurement.
+
+                  Up here with the title rather than down among the figures: it
+                  is what the whole card is about, and standing in the metric row
+                  it competed with four numbers for the same glance. */}
+              <Badge tone="info" size="sm">
+                skill from step {detail.skill_step_no}
+                {split === "train" &&
+                  detail.skill_step_no !== detail.step_no &&
+                  " (before this step's edits)"}
+              </Badge>
+              <Button variant="ghost" icon={<IconArrowLeft size={15} />} onClick={onBack}>
+                Back to the run
+              </Button>
+            </>
           }
         />
 
@@ -188,36 +205,49 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
             </span>
           </button>
         </div>
-        <div className="opt-run-meta">
-          {/* Which skill was rolled out, not which step ran it. On training
-              these differ — the step measures the skill it inherited, then
-              edits it — and a header that did not say so would make the two
-              rollouts of a step look like a repeat measurement. */}
-          <Badge tone="info" size="sm">
-            skill from step {detail.skill_step_no}
-            {split === "train" && detail.skill_step_no !== detail.step_no && " (before this step's edits)"}
-          </Badge>
-          <span>accuracy {pct(detail.hard)}</span>
-          <span title="Mean / median / slowest time the agent took to answer one question">
-            latency {secs(detail.latency_mean_ms)} avg · {secs(detail.latency_p50_ms)} median ·{" "}
-            {secs(detail.latency_max_ms)} max
-          </span>
-          <span title="How often the agent was actually seen reading this skill">
-            activation {pct(detail.activation_rate)}
-          </span>
-          <span>
-            {detail.n_scored} of {detail.n_items} scored
-          </span>
-        </div>
-
-        {(detail.n_agent_error > 0 || detail.n_judge_error > 0) && (
-          <Banner tone="warning" title="Some questions never produced a score">
-            {detail.n_agent_error} agent · {detail.n_judge_error} judge. These are
-            excluded from every figure above — they are not counted wrong — but
-            they are still listed below, because a rollout that quietly measured
-            fewer questions than it set out to is the thing worth noticing.
-          </Banner>
-        )}
+        {/* The four figures this rollout produced, as a row of labelled figures
+            rather than as a sentence.
+            They used to be one wrapping line of same-sized grey text — a badge,
+            then `accuracy 88%`, then a three-part latency string that ate half
+            the width, then `activation 100%`, then `8 of 8 scored` — with no
+            labels and no hierarchy, so finding any one of them meant reading all
+            of them. The grid is the same one the run header above uses, which is
+            the point: two pages in this section both open on "the numbers for
+            the thing you just clicked", and they should not say it two ways. */}
+        <dl className="opt-runfacts">
+          <Fact
+            label="Accuracy"
+            value={pct(detail.hard)}
+            sub="hard verdicts"
+            title="The share of scored questions the judge called correct"
+          />
+          {/* Average first, because that is the figure people quote at each
+              other. The other two are what say whether it means anything: an
+              average well above the median is one question that hung. */}
+          <Fact
+            label="Latency"
+            value={secs(detail.latency_mean_ms)}
+            sub={`avg · median ${secs(detail.latency_p50_ms)} · max ${secs(detail.latency_max_ms)}`}
+            title="How long the agent took to answer one question"
+          />
+          <Fact
+            label="Activation"
+            value={pct(detail.activation_rate)}
+            sub={activationSub(detail)}
+            title="How often the agent was actually seen reading this skill"
+          />
+          {/* The denominator, as a figure of its own. A rollout that quietly
+              measured fewer questions than it set out to is the thing worth
+              noticing, and it used to be said twice — once here in grey and
+              again underneath as a warning banner, which is one fact wearing two
+              colours. */}
+          <Fact
+            label="Scored"
+            value={`${detail.n_scored} of ${detail.n_items}`}
+            sub={scoredSub(detail)}
+            title="Questions that produced a verdict. Failures are excluded from every figure here rather than counted wrong."
+          />
+        </dl>
         {detail.aborted && (
           <Banner tone="error" title="This rollout was abandoned">
             {detail.abort_reason || "too much of it failed to be worth scoring"}
@@ -319,6 +349,40 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
       </div>
     </div>
   );
+}
+
+// What the activation figure is a share *of*.
+//
+// The rate counts only the questions where activation could be observed at all:
+// a trace that never landed, or one showing no skill read by an agent we have
+// not established reads skills visibly, is unknown rather than a no — and
+// unknown is left out of the fraction rather than averaged in as a zero. That is
+// the right call and it was invisible, so `100%` read as "all ten questions" when
+// it could equally have been "the nine we could see, and one we could not".
+//
+// Counted from the rows rather than taken from the summary because the rows are
+// already here and carry `activated` each — one number derived in one place
+// cannot disagree with the list underneath it.
+function activationSub(detail) {
+  const results = detail.results || [];
+  const observed = results.filter((r) => r.activated != null).length;
+  if (!observed) return "not observable on this agent";
+  const unknown = results.length - observed;
+  return unknown
+    ? `of ${observed} observed · ${unknown} unknown`
+    : `of ${observed} observed`;
+}
+
+// The failures behind a short denominator, named. They are excluded from every
+// figure beside this one rather than counted wrong — an agent timeout is not the
+// skill being incorrect — so the exclusion has to be legible or the accuracy
+// above it is a number about a batch nobody can see the edges of.
+function scoredSub(detail) {
+  const parts = [];
+  if (detail.n_agent_error) parts.push(`${detail.n_agent_error} agent`);
+  if (detail.n_judge_error) parts.push(`${detail.n_judge_error} judge`);
+  if (!parts.length) return "all questions scored";
+  return `${parts.join(" · ")} excluded`;
 }
 
 // Which marks this rollout actually contains, of the two worth spelling out.
