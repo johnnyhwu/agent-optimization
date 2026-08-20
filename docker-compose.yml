@@ -144,6 +144,52 @@ services:
       # Playground attempts are held in memory (§10.3), so this caps how many
       # each user keeps before the oldest finished ones are dropped.
       PLAYGROUND_MAX_ATTEMPTS_PER_USER: ${PLAYGROUND_MAX_ATTEMPTS_PER_USER:-20}
+      # --- Optimization runs: what the "Run eval" wizard prefills ------------
+      # Each is a *default*, not a ceiling: the wizard shows these and the run
+      # stores whatever it was actually started with, so changing one here moves
+      # the starting point for new runs and leaves existing ones alone. They are
+      # listed because a deployment's answer to "how big is a step against this
+      # agent" belongs to the deployment — a site whose agent server takes four
+      # questions at a time should not retype the same numbers into every run.
+      # app/config.py holds the same defaults, so an unset variable here does not
+      # blank one out.
+      OPTIMIZER_NUM_EPOCHS: ${OPTIMIZER_NUM_EPOCHS:-1}
+      OPTIMIZER_BATCH_SIZE: ${OPTIMIZER_BATCH_SIZE:-8}
+      # How many trajectories one analyst call may carry — independent of
+      # OPTIMIZER_BATCH_SIZE, and the setting that decides whether that call fits
+      # in the optimizer model's context window at all.
+      OPTIMIZER_MINIBATCH_SIZE: ${OPTIMIZER_MINIBATCH_SIZE:-8}
+      OPTIMIZER_LEARNING_RATE: ${OPTIMIZER_LEARNING_RATE:-8}
+      OPTIMIZER_MIN_LEARNING_RATE: ${OPTIMIZER_MIN_LEARNING_RATE:-2}
+      OPTIMIZER_ANALYST_WORKERS: ${OPTIMIZER_ANALYST_WORKERS:-4}
+      OPTIMIZER_MERGE_BATCH_SIZE: ${OPTIMIZER_MERGE_BATCH_SIZE:-8}
+      # The shape choices rather than the sizes; most deployments never move
+      # them. See app/optimizer/hyperparams.py for what each one selects.
+      OPTIMIZER_SCHEDULER: ${OPTIMIZER_SCHEDULER:-constant}
+      OPTIMIZER_GATE_METRIC: ${OPTIMIZER_GATE_METRIC:-hard}
+      OPTIMIZER_MIXED_WEIGHT: ${OPTIMIZER_MIXED_WEIGHT:-0.5}
+      OPTIMIZER_FAILURE_ONLY: ${OPTIMIZER_FAILURE_ONLY:-false}
+      OPTIMIZER_SLOW_UPDATE: ${OPTIMIZER_SLOW_UPDATE:-false}
+      OPTIMIZER_META_SKILL: ${OPTIMIZER_META_SKILL:-false}
+
+      # --- Early stopping: four conditions, one mechanism ---------------------
+      # A *share* is what fraction of one split may fail before that split's
+      # numbers are refused; a *streak* is how many times in a row that may
+      # happen before the run stops. The pair belongs together — the share
+      # decides what counts as a bad rollout, the streak decides how many bad
+      # ones are a broken agent rather than a bad afternoon. Raise the shares on
+      # an agent server that is known to drop the occasional question, rather
+      # than watching runs stop on it. See app/optimizer/stopping.py.
+      EARLY_STOP_TRAIN_ERROR_SHARE: ${EARLY_STOP_TRAIN_ERROR_SHARE:-0.25}
+      EARLY_STOP_TRAIN_ERROR_STREAK: ${EARLY_STOP_TRAIN_ERROR_STREAK:-3}
+      EARLY_STOP_VAL_ERROR_SHARE: ${EARLY_STOP_VAL_ERROR_SHARE:-0.25}
+      EARLY_STOP_VAL_ERROR_STREAK: ${EARLY_STOP_VAL_ERROR_STREAK:-3}
+      # Steps without a new best before the run stops; 0 is off.
+      EARLY_STOP_PATIENCE: ${EARLY_STOP_PATIENCE:-0}
+      # Stop as soon as validation reaches this. Blank is off — `-` not `:-`,
+      # because an explicitly empty value has to survive to mean that.
+      EARLY_STOP_TARGET_SCORE: ${EARLY_STOP_TARGET_SCORE-}
+
       # An eval set can be built by uploading a Python script that queries a
       # business database. Every number below is a containment boundary rather
       # than a preference — see app/services/script_runner.py for what each one
