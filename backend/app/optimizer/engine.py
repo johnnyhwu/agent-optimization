@@ -43,7 +43,8 @@ from app.integrations import Seams
 from app.optimizer.adapter import run_rollout, score_rollout
 from app.optimizer.detector import DEFAULT_PATH_PATTERNS
 from app.optimizer.gating import decide_gate
-from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS, build_analyst_items
+from app.optimizer.hyperparams import resolve_algorithm
+from app.optimizer.reflection import build_analyst_items
 from app.optimizer.skillio import find_answer_leaks, per_file_stats, total_line_changes
 from app.optimizer.stopping import (
     STOP_FINISHED,
@@ -488,8 +489,8 @@ async def _epoch_boundary(
     current = state.parent_step_no if state.parent_step_no is not None else 0
     state.epoch_mark[epoch_no] = current
 
-    config = spec.config
-    wants = bool(config.get("slow_update")) or bool(config.get("meta_skill"))
+    params = resolve_algorithm(spec.config)
+    wants = params["slow_update"] or params["meta_skill"]
     if not wants or current == previous or seams.optimizer is None:
         return
 
@@ -504,8 +505,8 @@ async def _epoch_boundary(
         client=seams.optimizer,
         prev_slow_update_text=state.slow_update_text,
         prev_meta_skill_text=state.meta_skill_text,
-        slow_update=bool(config.get("slow_update")),
-        meta_skill=bool(config.get("meta_skill")),
+        slow_update=params["slow_update"],
+        meta_skill=params["meta_skill"],
     )
 
     state.meta_skill_text = outcome.meta_skill_text or state.meta_skill_text
@@ -593,6 +594,10 @@ async def _run_step(
     policy: StopPolicy,
 ) -> float | None:
     config = spec.config
+    # This run's algorithm settings, resolved once. Every value below used to be
+    # read as `config.get(k) or <literal>`, which is two copies of each default
+    # and cannot tell "not set" from a deliberate 0 — see `hyperparams.py`.
+    params = resolve_algorithm(config)
     steps_per_epoch = max(spec.steps_per_epoch, 1)
     epoch_no = (step_no - 1) // steps_per_epoch + 1
     step_in_epoch = (step_no - 1) % steps_per_epoch + 1
@@ -642,7 +647,7 @@ async def _run_step(
         train_summary.results,
         questions={item.item_key: item.question for item in batch},
         ground_truths={item.item_key: item.ground_truth_response for item in batch},
-        budget_chars=int(config.get("reflect_budget_chars") or DEFAULT_REFLECT_BUDGET_CHARS),
+        budget_chars=params["reflect_budget_chars"],
     )
     outcome = await asyncio.to_thread(
         run_update_stage,
@@ -652,10 +657,10 @@ async def _run_step(
         items=items,
         client=seams.optimizer,
         edit_budget=edit_budget,
-        minibatch_size=int(config.get("minibatch_size") or 8),
-        analyst_workers=int(config.get("analyst_workers") or 4),
-        merge_batch_size=int(config.get("merge_batch_size") or 8),
-        failure_only=bool(config.get("failure_only")),
+        minibatch_size=params["minibatch_size"],
+        analyst_workers=params["analyst_workers"],
+        merge_batch_size=params["merge_batch_size"],
+        failure_only=params["failure_only"],
         seed=config.get("seed"),
         truncation_by_item=ledger,
         meta_skill_context=state.meta_skill_text,
@@ -777,8 +782,8 @@ async def _run_step(
         cand_hard=hard, cand_soft=soft, cand_activation=activation,
         current_score=state.current_score, current_activation=state.current_activation,
         best_score=state.best_score, best_step=state.best_step,
-        metric=config.get("gate_metric") or "hard",
-        mixed_weight=float(config.get("mixed_weight") or 0.5),
+        metric=params["gate_metric"],
+        mixed_weight=params["mixed_weight"],
     )
 
     if gate.accepted:
@@ -933,19 +938,19 @@ def skill_hash(files) -> str:
 
 
 def _score_of(summary, spec: RunSpec) -> float:
+    params = resolve_algorithm(spec.config)
     return select_gate_score(
         summary.hard or 0.0, summary.soft or 0.0,
-        spec.config.get("gate_metric") or "hard",
-        float(spec.config.get("mixed_weight") or 0.5),
+        params["gate_metric"], params["mixed_weight"],
     )
 
 
 def _build_scheduler(spec: RunSpec):
-    config = spec.config
+    params = resolve_algorithm(spec.config)
     return build_scheduler(
-        mode=config.get("scheduler") or "constant",
-        max_lr=int(config.get("learning_rate") or 8),
-        min_lr=int(config.get("min_learning_rate") or 2),
+        mode=params["scheduler"],
+        max_lr=params["learning_rate"],
+        min_lr=params["min_learning_rate"],
         total_steps=max(spec.total_steps, 1),
     )
 

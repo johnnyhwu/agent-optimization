@@ -44,7 +44,7 @@ from app.models import (
     QuestionSkill,
     Run,
 )
-from app.optimizer import dataset
+from app.optimizer import dataset, hyperparams
 from app.routers import optimization as opt
 from app.schemas import ImportPreviewRequest, OptimizationRunCreate
 
@@ -501,6 +501,82 @@ async def test_a_runs_stop_conditions_are_stored_as_numbers_not_as_blanks(
     assert stored["early_stop_patience"] == 4
     assert stored["early_stop_val_error_share"] == settings.early_stop_val_error_share
     assert stored["early_stop_val_error_streak"] == settings.early_stop_val_error_streak
+
+
+async def test_a_run_records_every_algorithm_setting_it_ran_with(
+    session, monkeypatch
+):
+    """The stored config is the record of how a run was run.
+
+    Seven of these have no control in the wizard, so nothing sends them — and
+    before they were materialised here, the value that actually ran was a
+    literal in the engine. Change that literal and every finished run is
+    retroactively described wrong, silently.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject="alice", session=session
+    )
+
+    stored = (await session.get(OptimizationRun, run.id)).config
+    assert set(stored) >= set(hyperparams.algorithm_defaults())
+    assert stored["minibatch_size"] == settings.optimizer_minibatch_size
+    assert stored["gate_metric"] == settings.optimizer_gate_metric
+
+
+async def test_a_gate_weight_of_zero_is_stored_as_zero(session, monkeypatch):
+    """`mixed_weight: 0` means "hard accuracy alone", and `or` used to eat it.
+
+    It is the one falsy value in this config the schema actually allows, and
+    the gate compares a different number for the whole run when it is lost.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:], config={"gate_metric": "mixed", "mixed_weight": 0}),
+        subject="alice", session=session,
+    )
+
+    stored = (await session.get(OptimizationRun, run.id)).config
+    assert stored["mixed_weight"] == 0
+
+
+async def test_a_switch_the_caller_never_mentioned_takes_the_deployments_default(
+    session, monkeypatch
+):
+    """A `bool` that defaults to False cannot say "unset".
+
+    These three were typed that way, so every request arrived asking for False
+    and a deployment that wanted one of them on by default had no way to say so.
+    """
+    _stub_start(monkeypatch)
+    monkeypatch.setattr(settings, "optimizer_failure_only", True)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:]), subject="alice", session=session
+    )
+
+    stored = (await session.get(OptimizationRun, run.id)).config
+    assert stored["failure_only"] is True
+
+
+async def test_a_switch_turned_off_on_the_form_stays_off(session, monkeypatch):
+    """…and an explicit False must still beat the deployment's True."""
+    _stub_start(monkeypatch)
+    monkeypatch.setattr(settings, "optimizer_failure_only", True)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:], config={"failure_only": False}),
+        subject="alice", session=session,
+    )
+
+    stored = (await session.get(OptimizationRun, run.id)).config
+    assert stored["failure_only"] is False
 
 
 async def test_a_stop_condition_switched_off_stays_off(session, monkeypatch):

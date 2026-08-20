@@ -236,6 +236,16 @@ class Settings(BaseSettings):
     optimizer_min_learning_rate: int = 2
     optimizer_analyst_workers: int = 4
     optimizer_merge_batch_size: int = 8
+    # The shape choices rather than the sizes. Here for the same reason as the
+    # numbers above — one source, so the wizard's prefill and the value the
+    # engine actually uses cannot be two different answers — even though most
+    # deployments will never move them.
+    optimizer_scheduler: str = "constant"
+    optimizer_gate_metric: str = "hard"
+    optimizer_mixed_weight: float = 0.5
+    optimizer_failure_only: bool = False
+    optimizer_slow_update: bool = False
+    optimizer_meta_skill: bool = False
 
     # --- Early stopping ------------------------------------------------------
     # Four conditions, one mechanism. Two of them are about the agent server

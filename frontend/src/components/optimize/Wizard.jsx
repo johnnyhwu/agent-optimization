@@ -822,6 +822,10 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
   // the config — and it is the one place that conversion lives.
   const raw = (key) => hyper[key] ?? defaultText(key, defaults.defaults);
   const set = (key) => (e) => onHyper({ ...hyper, [key]: e.target.value });
+  // The same rule for the switches: untouched shows what the server would do,
+  // not a hard-coded off. A deployment that turns one of these on by default
+  // was previously shown an unticked box beside a run that would tick it.
+  const switchOn = (key) => Boolean(hyper[key] ?? defaults.defaults[key]);
 
   // Stated as calls rather than as money: the models are whatever base URL the
   // developer pointed this at, so their rates are theirs to know and a number
@@ -1044,7 +1048,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           <label className="opt-switch">
             <input
               type="checkbox"
-              checked={Boolean(hyper.slow_update)}
+              checked={switchOn("slow_update")}
               onChange={(e) => onHyper({ ...hyper, slow_update: e.target.checked })}
             />
             <span>Write epoch guidance into the skill</span>
@@ -1057,13 +1061,13 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           <label className="opt-switch">
             <input
               type="checkbox"
-              checked={Boolean(hyper.meta_skill)}
+              checked={switchOn("meta_skill")}
               onChange={(e) => onHyper({ ...hyper, meta_skill: e.target.checked })}
             />
             <span>Carry the optimizer's own notes between epochs</span>
           </label>
         </Field>
-        {epochs != null && epochs < 2 && (hyper.slow_update || hyper.meta_skill) && (
+        {epochs != null && epochs < 2 && (switchOn("slow_update") || switchOn("meta_skill")) && (
           <Banner tone="warning" title="One epoch has no boundary to compare across">
             Both passes compare one epoch with the previous one. With a single
             epoch there is no previous, so neither will run and neither will cost

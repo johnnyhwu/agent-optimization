@@ -957,14 +957,18 @@ class OptimizationConfig(BaseModel):
     scheduler: str = ""
     gate_metric: str = ""
     mixed_weight: float | None = Field(default=None, ge=0, le=1)
-    failure_only: bool = False
+    # `None`, not `False`: a bool that defaults to False cannot say "the caller
+    # did not mention this", so the deployment's own default could never apply —
+    # every request would arrive asking for False. The wizard sends these only
+    # once their control has been touched.
+    failure_only: bool | None = None
     # Upstream's two longitudinal passes, both off by default. They run once per
     # epoch boundary, not per step, and both cost a call on the optimizer model.
     # `slow_update` writes guidance into a protected block of SKILL.md that
     # step-level analysts cannot edit; `meta_skill` is optimizer-side memory
     # shown to later analysts and never written into the skill at all.
-    slow_update: bool = False
-    meta_skill: bool = False
+    slow_update: bool | None = None
+    meta_skill: bool | None = None
     analyst_workers: int | None = Field(default=None, ge=1)
     merge_batch_size: int | None = Field(default=None, ge=2)
     reflect_budget_chars: int | None = Field(default=None, ge=1000)
