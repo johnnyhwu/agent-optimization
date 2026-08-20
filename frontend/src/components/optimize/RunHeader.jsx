@@ -9,6 +9,7 @@ import { STATUS_TONE } from "./RunList.jsx";
 import { STEP_PHASES } from "../../optimize_steps.js";
 import { runStartedAt } from "../../optimize_run_label.js";
 import { formatSpan, runDuration } from "../../optimize_duration.js";
+import { stopConditions, stopSentence } from "../../optimize_stopping.js";
 import { plural } from "../../plural.js";
 
 // The run, at the top of its own page.
@@ -183,14 +184,44 @@ export default function RunHeader({
           </div>
         </div>
 
+        {/* What can end this run, and how close each one is. Beside the meter
+            rather than up in the facts row: the facts are what was configured
+            and never move, and these are conditions being tested against a run
+            that is still going. Until they were here, the only ending anyone
+            could see was the step counter — a run could also stop because its
+            rollouts kept failing, and that rule was invisible until it fired
+            and the run was marked failed. */}
+        <StopConditions run={run} steps={steps} running={running} />
+
         {running && <PhaseStrip activity={activity} />}
         {!running && (
           <p className="opt-runprogress-done">
-            {finishedSentence(run, steps)}
+            {stopSentence(run, steps) || finishedSentence(run, steps)}
           </p>
         )}
       </div>
     </div>
+  );
+}
+
+// The conditions that end this run, as a row of chips.
+//
+// Only the ones that are switched on: a chip reading "no new best: off" is a
+// condition the reader then waits for. And only while the run is live — once it
+// has stopped, the sentence underneath says which one fired, and a list of
+// conditions beside it would be asking the reader to work that out themselves.
+function StopConditions({ run, steps, running }) {
+  const conditions = stopConditions(run, steps);
+  if (!running || conditions.length < 2) return null;
+  return (
+    <dl className="opt-stopconds">
+      <dt>Stops when</dt>
+      {conditions.map((condition) => (
+        <dd key={condition.id} className={condition.met ? "is-met" : undefined}>
+          {condition.label} <span className="opt-stopconds-progress">{condition.progress}</span>
+        </dd>
+      ))}
+    </dl>
   );
 }
 

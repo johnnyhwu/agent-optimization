@@ -218,6 +218,48 @@ class Settings(BaseSettings):
     # How much of an exception message is kept in question_results.error_message.
     error_message_max_chars: int = 2000
 
+    # --- Optimization runs ---------------------------------------------------
+    # The wizard's prefilled hyperparameters. Here rather than as literals in the
+    # `/optimization/defaults` handler because they are a deployment's answer to
+    # "how big is a step on this agent", and the agent is what the deployment
+    # owns — a site whose agent server takes four questions at a time should not
+    # have to retype the same numbers into every run.
+    optimizer_num_epochs: int = 1
+    optimizer_batch_size: int = 8
+    # How many trajectories one analyst call may carry. Independent of
+    # `optimizer_batch_size` — a step answers a batch, then reflects on it in
+    # groups of this size, failures and successes grouped separately — and the
+    # setting that decides whether that call fits in the optimizer's context
+    # window at all.
+    optimizer_minibatch_size: int = 8
+    optimizer_learning_rate: int = 8
+    optimizer_min_learning_rate: int = 2
+    optimizer_analyst_workers: int = 4
+    optimizer_merge_batch_size: int = 8
+
+    # --- Early stopping ------------------------------------------------------
+    # Four conditions, one mechanism. Two of them are about the agent server
+    # falling over (a question that never came back is not the skill being
+    # wrong, and a split measured on the remainder is not a smaller measurement
+    # but an unrepresentative one); two are about the run having stopped being
+    # worth paying for. See `app/optimizer/stopping.py`, which owns the rules.
+    #
+    # A *share* is what fraction of one split may fail before that split's
+    # numbers are refused. A *streak* is how many times in a row that may happen
+    # before the run stops. Each pair belongs together: the share decides what
+    # counts as a bad rollout, the streak decides how many bad ones are a broken
+    # agent rather than a bad afternoon.
+    early_stop_train_error_share: float = 0.25
+    early_stop_train_error_streak: int = 3
+    early_stop_val_error_share: float = 0.25
+    early_stop_val_error_streak: int = 3
+    # Steps without a new best before the run stops. 0 is off — the default,
+    # because this one changes what a run produces rather than protecting it
+    # from an outage, and that is a decision for whoever starts the run.
+    early_stop_patience: int = 0
+    # Stop as soon as validation reaches this. None is off.
+    early_stop_target_score: float | None = None
+
     # --- Live progress streams ----------------------------------------------
     # How many events one subscriber's mailbox holds before the oldest are
     # dropped and the stream tells the client to resync (see app/sse.py). The
@@ -283,7 +325,7 @@ class Settings(BaseSettings):
     # can press Run at once before the rest queue — deliberately small.
     script_max_concurrent_runs: int = 2
 
-    @field_validator("judge_score_threshold", mode="before")
+    @field_validator("judge_score_threshold", "early_stop_target_score", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
         # docker-compose passes unset optional vars through as "", which would

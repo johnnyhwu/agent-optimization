@@ -11,6 +11,7 @@ import { SegmentedControl } from "../ui/Toolbar.jsx";
 import { useToast } from "../Toast.jsx";
 import { href, navigate } from "../../useHashRoute.js";
 import { runWarnings } from "../../optimize_warnings.js";
+import { gateLabel } from "../../optimize_gate_label.js";
 import { runTitle } from "../../optimize_run_label.js";
 import { plural } from "../../plural.js";
 import { setServerTime } from "../../useElapsed.js";
@@ -132,7 +133,6 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
       // apart and a rollout is the long half of that gap, so without this the
       // header had nothing to say for most of every step.
       "rollout_progress",
-      "rollout_retry",
       "reflect_done",
       "update_done",
       "gate_done",
@@ -411,15 +411,11 @@ function StepTable({ steps, pinned, onPick, metric }) {
             <td className="num">{pct(s[`train_${suffix}`])}</td>
             <td className="num">{pct(s[`val_${suffix}`])}</td>
             <td>
-              {s.gate_action ? (
-                <Badge tone={s.gate_action === "reject" ? "neutral" : "success"} size="sm">
-                  {s.gate_action === "reject"
-                    ? `rejected (${s.gate_reject_reason})`
-                    : s.gate_action.replace(/_/g, " ")}
-                </Badge>
-              ) : (
-                "—"
-              )}
+              {/* One wording, from `optimize_gate_label.js`. The full sentence
+                  is the cell's title, because "rejected · system errors" is the
+                  part that fits and "12 of 40 validation questions never came
+                  back" is the part that answers the next question. */}
+              <GateCell step={s} />
             </td>
             <td className="num">
               {s.lines_added != null ? `+${s.lines_added} / −${s.lines_removed}` : "—"}
@@ -433,6 +429,16 @@ function StepTable({ steps, pinned, onPick, metric }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+function GateCell({ step }) {
+  const verdict = gateLabel(step);
+  if (!step.gate_action) return <span className="muted">—</span>;
+  return (
+    <Badge tone={verdict.tone} size="sm" title={verdict.detail}>
+      {verdict.short}
+    </Badge>
   );
 }
 

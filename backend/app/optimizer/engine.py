@@ -40,11 +40,17 @@ from typing import Awaitable, Callable, Sequence
 
 from app.config import settings
 from app.integrations import Seams
-from app.optimizer.adapter import DEFAULT_ERROR_THRESHOLD, run_rollout, score_rollout
+from app.optimizer.adapter import run_rollout, score_rollout
 from app.optimizer.detector import DEFAULT_PATH_PATTERNS
 from app.optimizer.gating import decide_gate
 from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS, build_analyst_items
 from app.optimizer.skillio import find_answer_leaks, per_file_stats, total_line_changes
+from app.optimizer.stopping import (
+    STOP_FINISHED,
+    StopCounters,
+    StopPolicy,
+    decide_stop,
+)
 from app.optimizer.store import Item, OptimizationStore, ResumeState, RunSpec
 from app.optimizer.longitudinal import run_epoch_boundary
 from app.optimizer.update import run_update_stage
@@ -93,6 +99,11 @@ class _State:
     # The skill as each epoch ended, so a boundary can show the optimizer what
     # the previous epoch's version actually said.
     epoch_files: dict[int, dict[str, str]] = field(default_factory=dict)
+    # How many rollouts in a row this run has had to refuse, per split. Carried
+    # here rather than kept local to the loop because a resumed run rebuilds
+    # them from its step rows — a counter that reset on every restart is one a
+    # crash-looping agent server could never trip.
+    counters: StopCounters = field(default_factory=StopCounters)
 
 
 # --- Entry point ------------------------------------------------------------
@@ -117,26 +128,32 @@ async def run_optimization(
     publish = publish or _hub_publisher(run_id)
     cancel_event = cancel_event or asyncio.Event()
     state = _State(current_files={})
-    status, error_message = "completed", None
+    status, error_message, stop_reason = "completed", None, STOP_FINISHED
 
     try:
-        status, error_message = await _execute(
+        status, error_message, stop_reason = await _execute(
             run_id, store=store, seams=seams, publish=publish,
             cancel_event=cancel_event, state=state,
         )
     except RunAborted as exc:
-        status, error_message = "failed", clip(str(exc))
+        status, error_message, stop_reason = "failed", clip(str(exc)), "failed"
     except Exception as exc:  # noqa: BLE001 - last line of defence
         log.exception("optimization run %s failed", run_id)
         status, error_message = "failed", clip(f"{type(exc).__name__}: {exc}")
+        stop_reason = "failed"
     finally:
         await store.finish_run(
             run_id, status=status, error_message=error_message,
+            # Why it ended, which `status` cannot say: a run that stopped
+            # because validation hit its target and one that ran out of steps
+            # are both 'completed', and the difference is the whole result.
+            stop_reason=stop_reason,
             best_step=state.best_step, best_score=state.best_score,
             completed_at=datetime.now(timezone.utc),
         )
         await publish({
             "type": "run_completed", "status": status,
+            "stop_reason": stop_reason,
             "best_step": state.best_step, "best_score": state.best_score,
             "error_message": error_message,
         })
@@ -146,12 +163,13 @@ async def run_optimization(
 async def _execute(
     run_id: uuid.UUID, *, store: OptimizationStore, seams: Seams,
     publish: Publisher, cancel_event: asyncio.Event, state: _State,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, str]:
+    """The loop itself. Returns `(status, error_message, stop_reason)`."""
     spec = await store.load_run(run_id)
     if spec is None:
-        return "failed", "this optimization run no longer exists"
+        return "failed", "this optimization run no longer exists", "failed"
     if spec.mode not in ("isolated", "routing"):
-        return "failed", f"unknown optimization mode {spec.mode!r}"
+        return "failed", f"unknown optimization mode {spec.mode!r}", "failed"
 
     train = await store.load_items(run_id, "train")
     val = await store.load_items(run_id, "val")
@@ -159,6 +177,9 @@ async def _execute(
 
     _seed_state(state, spec, resume)
     start_step = 0 if resume is None or resume.last_step_no is None else resume.last_step_no + 1
+    # Resolved once, from what this run was started with. Every rule about when
+    # to stop early lives in `stopping.py`; the loop only asks.
+    policy = StopPolicy.from_config(spec.config)
 
     await store.set_status(run_id, "running")
     await publish({
@@ -177,10 +198,11 @@ async def _execute(
                 publish=publish, cancel_event=cancel_event,
             )
             if not ok and spec.mode == "routing":
-                return "failed", message
+                return "failed", message, "failed"
             await _baseline_step(
                 run_id, spec=spec, val=val, store=store, seams=seams,
                 publish=publish, cancel_event=cancel_event, state=state,
+                policy=policy,
             )
             start_step = 1
 
@@ -188,11 +210,24 @@ async def _execute(
         steps_per_epoch = max(spec.steps_per_epoch, 1)
         for step_no in range(start_step, spec.total_steps + 1):
             await _check_cancel(run_id, store, cancel_event)
-            await _step(
+            val_score = await _step(
                 run_id, step_no=step_no, spec=spec, train=train, val=val,
                 store=store, seams=seams, publish=publish, cancel_event=cancel_event,
-                state=state, edit_budget=scheduler.get_lr(step_no),
+                state=state, edit_budget=scheduler.get_lr(step_no), policy=policy,
             )
+            # Before the epoch boundary, not after: the boundary is a call on
+            # the largest model configured, and a run that has already decided
+            # to stop should not buy one.
+            reason = decide_stop(
+                policy, state.counters, step_no=step_no,
+                best_step=state.best_step, last_val_score=val_score,
+            )
+            if reason is not None:
+                # No event of its own: `run_completed` carries `stop_reason` and
+                # follows within the second, and a second event saying the same
+                # thing is a wire message every consumer has to learn to ignore.
+                log.info("optimization %s stopping early: %s", run_id, reason)
+                return "completed", None, reason
             # The epoch boundary, and the only place anything looks across steps.
             if step_no % steps_per_epoch == 0:
                 await _epoch_boundary(
@@ -201,11 +236,11 @@ async def _execute(
                     publish=publish, state=state,
                 )
     except _Cancelled:
-        return "cancelled", None
+        return "cancelled", None, "cancelled"
     except RunAborted:
         raise
 
-    return "completed", None
+    return "completed", None, STOP_FINISHED
 
 
 def _seed_state(state: _State, spec: RunSpec, resume: ResumeState | None) -> None:
@@ -217,6 +252,10 @@ def _seed_state(state: _State, spec: RunSpec, resume: ResumeState | None) -> Non
         state.best_step = resume.best_step
         state.parent_step_no = resume.parent_step_no
         state.score_cache = dict(resume.score_cache)
+        state.counters = StopCounters(
+            train_errors=resume.train_error_streak,
+            val_errors=resume.val_error_streak,
+        )
         return
     state.current_files = dict(spec.initial_skill)
     state.best_files = dict(spec.initial_skill)
@@ -327,23 +366,36 @@ async def _preflight(
 async def _baseline_step(
     run_id, *, spec: RunSpec, val, store: OptimizationStore, seams: Seams,
     publish: Publisher, cancel_event: asyncio.Event, state: _State,
+    policy: StopPolicy,
 ) -> None:
     """Step 0: the initial skill on held-out data, and nothing else.
 
     No training rollout, because there is no candidate to compare against yet —
     a batch of agent calls bought for a point the chart does not plot.
+
+    This is the one rollout whose failure still ends the run. Every later step
+    is refused and the loop carries on, because there is a candidate to throw
+    away and a next step to try — here there is neither, and every number the
+    run would go on to produce is a comparison against this one.
     """
     step_id = await store.start_step(
         run_id, step_no=0, epoch_no=0, step_in_epoch=0, parent_step_no=None
     )
     await publish({"type": "step_started", "step_no": 0, "epoch_no": 0, "phase": "baseline"})
 
-    summary, retried = await _rollout(
+    summary = await _rollout(
         val, spec=spec, skill_files=spec.initial_skill, split="val", skill_step_no=0,
         store=store, seams=seams, publish=publish, cancel_event=cancel_event, step_no=0,
+        error_share=policy.error_share("val"),
     )
     await store.record_rollout(step_id, summary)
     await _publish_rollout(publish, 0, summary)
+    if summary.aborted:
+        raise RunAborted(
+            f"the baseline could not be measured — {summary.abort_reason}. "
+            "Every later step is a comparison against this number, so a run "
+            "started from it would report improvements nobody measured."
+        )
 
     content_hash = skill_hash(spec.initial_skill)
     await store.record_skill(
@@ -360,7 +412,7 @@ async def _baseline_step(
     )
 
     await store.finish_step(
-        step_id, status="done", retried=retried, candidate_hash=content_hash,
+        step_id, status="done", candidate_hash=content_hash,
         # The baseline is a measurement too, and every later step is compared
         # against it — so a deploy between creating the run and running step 0
         # invalidates the whole chart rather than one point of it.
@@ -374,9 +426,14 @@ async def _baseline_step(
 async def _step(
     run_id, *, step_no: int, spec: RunSpec, train, val, store: OptimizationStore,
     seams: Seams, publish: Publisher, cancel_event: asyncio.Event, state: _State,
-    edit_budget: int,
-) -> None:
+    edit_budget: int, policy: StopPolicy,
+) -> float | None:
     """One turn of the loop, and a step row that is never left mid-flight.
+
+    Returns the candidate's validation score, or None when this step produced
+    no trustworthy one — a skipped step, or one whose validation split was
+    refused. That distinction is the caller's: a target of 90% must not be
+    reached by a step that measured nothing.
 
     A step interrupted between its two rollouts is genuinely incomplete — there
     is a candidate but no score for it — so it is closed as `aborted` rather
@@ -391,10 +448,10 @@ async def _step(
         parent_step_no=state.parent_step_no,
     )
     try:
-        await _run_step(
+        return await _run_step(
             run_id, step_id=step_id, step_no=step_no, spec=spec, train=train, val=val,
             store=store, seams=seams, publish=publish, cancel_event=cancel_event,
-            state=state, edit_budget=edit_budget,
+            state=state, edit_budget=edit_budget, policy=policy,
         )
     except _Cancelled:
         await store.finish_step(
@@ -504,11 +561,37 @@ async def _agent_version(seams: Seams) -> str | None:
         return None
 
 
+async def _finish_unscored_step(
+    store: OptimizationStore, step_id, *, seams: Seams, state: _State,
+    action: str, reason: str, **fields,
+) -> None:
+    """Close a step that produced no trustworthy validation score.
+
+    Two ways to get here, and they are told apart by `action`: `skip` means the
+    training batch never came back so no candidate exists, `reject` means one
+    exists and was dropped unjudged. Neither changes the skill in force, and
+    neither is a gate decision — the gate was never asked.
+
+    `current_score` and `best_score` are unchanged by definition and written
+    anyway: a resumed run rebuilds its working state by replaying these two
+    columns (`store.load_resume_state`), and a null on a finished step would
+    read as "this step lost the run's score".
+    """
+    await store.finish_step(
+        step_id, status="done", gate_action=action, gate_reject_reason=reason,
+        workspace_version=await _agent_version(seams),
+        current_score=state.current_score, best_score=state.best_score,
+        completed_at=datetime.now(timezone.utc),
+        **fields,
+    )
+
+
 async def _run_step(
     run_id, *, step_id, step_no: int, spec: RunSpec, train, val,
     store: OptimizationStore, seams: Seams, publish: Publisher,
     cancel_event: asyncio.Event, state: _State, edit_budget: int,
-) -> None:
+    policy: StopPolicy,
+) -> float | None:
     config = spec.config
     steps_per_epoch = max(spec.steps_per_epoch, 1)
     epoch_no = (step_no - 1) // steps_per_epoch + 1
@@ -524,13 +607,34 @@ async def _run_step(
         train, epoch_no=epoch_no, step_in_epoch=step_in_epoch,
         batch_size=spec.batch_size, seed=config.get("seed"),
     )
-    train_summary, retried = await _rollout(
+    train_summary = await _rollout(
         batch, spec=spec, skill_files=state.current_files, split="train",
         skill_step_no=state.parent_step_no or 0, store=store, seams=seams,
         publish=publish, cancel_event=cancel_event, step_no=step_no,
+        error_share=policy.error_share("train"),
     )
     await store.record_rollout(step_id, train_summary)
     await _publish_rollout(publish, step_no, train_summary)
+    state.counters.record("train", refused=train_summary.aborted)
+
+    if train_summary.aborted:
+        # Nothing to reflect on, so nothing else in this step is bought: no
+        # analyst calls, no candidate, and — the expensive half — no validation
+        # split. The alternative is an edit argued from whichever questions the
+        # outage happened to spare, which is a gradient pointing at a network
+        # problem, and then a whole validation rollout spent measuring it.
+        await _finish_unscored_step(
+            store, step_id, seams=seams, state=state,
+            action="skip", reason="train_errors",
+        )
+        await publish({
+            "type": "gate_done", "step_no": step_no, "action": "skip",
+            "reject_reason": "train_errors", "candidate_score": None,
+            "current_score": state.current_score, "best_score": state.best_score,
+            "from_cache": False,
+        })
+        return None
+
     await _check_cancel(run_id, store, cancel_event)
 
     # --- 2. reflect, aggregate, clip, apply ---------------------------------
@@ -615,15 +719,52 @@ async def _run_step(
     if cached is not None:
         hard, soft, activation = cached
         from_cache = True
+        # A cached score is one this run already measured and accepted as
+        # trustworthy — a refused split never reaches the cache — so it counts
+        # as a clean validation for the streak.
+        state.counters.record("val", refused=False)
     else:
-        val_summary, val_retried = await _rollout(
+        val_summary = await _rollout(
             val, spec=spec, skill_files=candidate, split="val", skill_step_no=step_no,
             store=store, seams=seams, publish=publish, cancel_event=cancel_event,
-            step_no=step_no,
+            step_no=step_no, error_share=policy.error_share("val"),
         )
-        retried = retried or val_retried
         await store.record_rollout(step_id, val_summary)
         await _publish_rollout(publish, step_no, val_summary)
+        state.counters.record("val", refused=val_summary.aborted)
+
+        if val_summary.aborted:
+            # The candidate is dropped without ever being judged, and the skill
+            # in force is untouched. There is no number to gate on: accepting an
+            # edit here would mean accepting it on the strength of whichever
+            # questions the agent server happened to answer, which is how a
+            # rollout failure turns into a permanent change to the skill.
+            await _finish_unscored_step(
+                store, step_id, seams=seams, state=state,
+                action="reject", reason="val_errors",
+                # The edits themselves are real and worth reading — the step's
+                # diff is how anyone finds out what was thrown away — so
+                # everything except the verdict is recorded exactly as an
+                # ordinary step records it.
+                edit_budget=edit_budget, candidate_hash=candidate_hash,
+                n_edits_merged=outcome.n_edits_merged,
+                n_edits_ranked=outcome.n_edits_ranked,
+                n_edits_applied=outcome.n_edits_applied,
+                n_edits_skipped=outcome.n_edits_skipped,
+                edit_reports=outcome.reports,
+                lines_added=lines_added, lines_removed=lines_removed,
+                files_touched=len(stats), n_answer_leaks=len(leaks),
+                skill_len=sum(len(text) for text in candidate.values()),
+                edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+            )
+            await publish({
+                "type": "gate_done", "step_no": step_no, "action": "reject",
+                "reject_reason": "val_errors", "candidate_score": None,
+                "current_score": state.current_score, "best_score": state.best_score,
+                "from_cache": False,
+            })
+            return None
+
         hard = val_summary.hard or 0.0
         soft = val_summary.soft or 0.0
         activation = val_summary.activation_rate
@@ -651,7 +792,7 @@ async def _run_step(
     state.best_step = gate.best_step
 
     await store.finish_step(
-        step_id, status="done", retried=retried, edit_budget=edit_budget,
+        step_id, status="done", edit_budget=edit_budget,
         workspace_version=await _agent_version(seams),
         gate_action=gate.action, gate_reject_reason=gate.reject_reason,
         candidate_hash=candidate_hash, candidate_from_cache=from_cache,
@@ -671,6 +812,7 @@ async def _run_step(
         "current_score": gate.current_score, "best_score": gate.best_score,
         "from_cache": from_cache,
     })
+    return gate.candidate_score
 
 
 # --- Rollouts ---------------------------------------------------------------
@@ -679,86 +821,72 @@ async def _run_step(
 async def _rollout(
     items, *, spec: RunSpec, skill_files, split: str, skill_step_no: int,
     store: OptimizationStore, seams: Seams, publish: Publisher,
-    cancel_event: asyncio.Event, step_no: int,
+    cancel_event: asyncio.Event, step_no: int, error_share: float,
 ):
-    """One split, measured once, with a single retry if too much of it failed.
+    """One split, answered and judged once.
 
-    `score_rollout` refuses to score a batch that mostly failed, and refusing is
-    right: a step measured on 60% of its questions is not a smaller measurement
-    but an unrepresentative one, and the gate cannot tell the difference.
+    `score_rollout` refuses to score a batch that too much of failed, and
+    refusing is right: a step measured on 60% of its questions is not a smaller
+    measurement but an unrepresentative one, and the gate cannot tell the
+    difference. What comes back then is a summary with counts and rows but no
+    scores, and the caller decides what that costs.
 
-    One retry, because the common cause is a thirty-second outage and losing an
-    entire run to that would be absurd. Not two, because twice in a row is not a
-    blip — and the alternative to stopping is writing skill edits derived from a
-    batch that did not run, which the developer would discover from a chart that
-    looks completely ordinary.
+    It used to buy the whole split a second time before giving up, and give up
+    by failing the entire run. Both halves were wrong. The retry was the most
+    expensive reaction available — a validation split is the priciest thing in
+    a step — and the next step is already a retry of the same agent server;
+    ending the run threw away an hour of finished, paid-for steps because the
+    last five minutes were an outage. A refused rollout now costs its own step,
+    and `stopping.py` decides when a run of them has become an outage worth
+    stopping for.
     """
     config = spec.config
-    threshold = float(config.get("error_threshold") or DEFAULT_ERROR_THRESHOLD)
-    retried = False
+    done = 0
+    total = len(items)
 
-    for attempt in (1, 2):
-        # Per-question progress, which is the difference between a page that
-        # says "step 3 · rollout" for six minutes and one that says how far
-        # through those six minutes it is. `rollout_done` fires once, when the
-        # whole split has been answered and judged; between the two there was
-        # nothing at all, on the longest-running part of every step.
-        #
-        # Counted here rather than derived from the rows: `run_rollout` fills a
-        # pre-sized list and the caller cannot see it until the gather returns.
-        done = 0
-        total = len(items)
+    # Per-question progress, which is the difference between a page that says
+    # "step 3 · rollout" for six minutes and one that says how far through those
+    # six minutes it is. `rollout_done` fires once, when the whole split has been
+    # answered and judged; between the two there was nothing at all, on the
+    # longest-running part of every step.
+    #
+    # Counted here rather than derived from the rows: `run_rollout` fills a
+    # pre-sized list and the caller cannot see it until the gather returns.
+    async def item_done(_row) -> None:
+        nonlocal done
+        done += 1
+        await publish({
+            "type": "rollout_progress", "step_no": step_no, "split": split,
+            "done": done, "total": total,
+        })
 
-        async def item_done(_row, _attempt=attempt) -> None:
-            nonlocal done
-            done += 1
-            await publish({
-                "type": "rollout_progress", "step_no": step_no, "split": split,
-                "done": done, "total": total,
-                # A retry restarts the count, and a bar that jumped backwards
-                # with no explanation would read as a bug in the page.
-                "attempt": _attempt,
-            })
-
-        rows = await run_rollout(
-            items,
-            skill_files=skill_files,
-            mode=spec.mode,
-            skill_name=spec.skill_name,
-            seams=seams,
-            config=config,
-            workspace_baseline=spec.workspace_baseline,
-            cancel_event=cancel_event,
-            concurrency=int(config.get("concurrency") or settings.run_concurrency),
-            detectable=bool(spec.detector.get("detectable")),
-            path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
-            on_progress=item_done,
-        )
-        summary = score_rollout(
-            rows, split=split, skill_step_no=skill_step_no, error_threshold=threshold
-        )
-        if not summary.aborted:
-            return summary, retried
-
-        # A batch that "failed" because the stop button was pressed is not a
-        # flaky agent, and retrying it would spend a second batch discovering
-        # that the run is still cancelled.
-        await _check_cancel(spec.id, store, cancel_event)
-
-        if attempt == 1:
-            retried = True
-            log.warning(
-                "optimization %s step %s %s rollout aborted (%s); retrying once",
-                spec.id, step_no, split, summary.abort_reason,
-            )
-            await publish({
-                "type": "rollout_retry", "step_no": step_no, "split": split,
-                "reason": summary.abort_reason,
-            })
-
-    raise RunAborted(
-        f"step {step_no}: the {split} rollout failed twice — {summary.abort_reason}"
+    rows = await run_rollout(
+        items,
+        skill_files=skill_files,
+        mode=spec.mode,
+        skill_name=spec.skill_name,
+        seams=seams,
+        config=config,
+        workspace_baseline=spec.workspace_baseline,
+        cancel_event=cancel_event,
+        concurrency=int(config.get("concurrency") or settings.run_concurrency),
+        detectable=bool(spec.detector.get("detectable")),
+        path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
+        on_progress=item_done,
     )
+    summary = score_rollout(
+        rows, split=split, skill_step_no=skill_step_no, error_threshold=error_share,
+    )
+    if summary.aborted:
+        # A split that "failed" because the stop button was pressed is not a
+        # flaky agent, and letting it count towards an outage streak would end a
+        # cancelled run with the wrong story on the page.
+        await _check_cancel(spec.id, store, cancel_event)
+        log.warning(
+            "optimization %s step %s %s rollout refused (%s)",
+            spec.id, step_no, split, summary.abort_reason,
+        )
+    return summary
 
 
 async def _publish_rollout(publish: Publisher, step_no: int, summary) -> None:

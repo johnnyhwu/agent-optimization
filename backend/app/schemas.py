@@ -812,6 +812,9 @@ class OptimizationRunOut(BaseModel):
     best_score: float | None = None
     cancel_requested: bool = False
     error_message: str | None = None
+    # Why the loop ended — `status` cannot say, because every early stop is also
+    # 'completed'. Null on runs that predate early stopping and on live ones.
+    stop_reason: str | None = None
     started_at: datetime
     completed_at: datetime | None = None
     # Which eval sets this run drew questions from, for the list row's subtitle.
@@ -965,8 +968,22 @@ class OptimizationConfig(BaseModel):
     analyst_workers: int | None = Field(default=None, ge=1)
     merge_batch_size: int | None = Field(default=None, ge=2)
     reflect_budget_chars: int | None = Field(default=None, ge=1000)
-    error_threshold: float | None = Field(default=None, ge=0, le=1)
     seed: int | None = None
+
+    # When the run stops before it has run out of steps (`optimizer/stopping.py`).
+    # The two error settings replace the old single `error_threshold`, which
+    # governed both splits at once and, past it, failed the whole run. A share
+    # and a streak belong together: the share says what fraction of one split
+    # may fail before its numbers are refused, the streak says how many refused
+    # rollouts in a row are an agent server that has stopped answering.
+    early_stop_train_error_share: float | None = Field(default=None, ge=0, le=1)
+    early_stop_train_error_streak: int | None = Field(default=None, ge=0)
+    early_stop_val_error_share: float | None = Field(default=None, ge=0, le=1)
+    early_stop_val_error_streak: int | None = Field(default=None, ge=0)
+    # 0 is off, and is the default: this one changes what a run produces rather
+    # than protecting it from an outage.
+    early_stop_patience: int | None = Field(default=None, ge=0)
+    early_stop_target_score: float | None = Field(default=None, ge=0, le=1)
 
 
 class OptimizationSecrets(BaseModel):

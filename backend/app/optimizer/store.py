@@ -152,6 +152,13 @@ class ResumeState:
     # skill hash → (hard, soft, activation), so a candidate already measured
     # before the restart does not cost a second validation split.
     score_cache: dict[str, tuple[float, float, float | None]] = field(default_factory=dict)
+    # How many rollouts in a row the run had already had to refuse when it was
+    # interrupted, per split (`optimizer/stopping.py`). Derived like everything
+    # else here rather than stored: a run that stops early because its agent
+    # server is down must reach that conclusion whether or not the backend
+    # restarted in the middle of the outage.
+    train_error_streak: int = 0
+    val_error_streak: int = 0
 
 
 class OptimizationStore(Protocol):
@@ -335,6 +342,8 @@ class DbOptimizationStore:
             if step.gate_action == "accept_new_best" and candidate is not None:
                 state.best_files = candidate
                 state.best_step = step.step_no
+        state.train_error_streak = _trailing_streak(steps, "train_errors")
+        state.val_error_streak = _trailing_streak(steps, "val_errors")
         return state
 
     async def set_status(self, run_id: uuid.UUID, status: str, **fields: Any) -> None:
@@ -528,3 +537,33 @@ class DbOptimizationStore:
         for key, value in fields.items():
             setattr(run, key, value)
         await self.session.commit()
+
+
+def _trailing_streak(steps, reason: str) -> int:
+    """How many of the last steps in a row were refused for *reason*.
+
+    The engine's counters, rebuilt from what is on disk. Trailing rather than
+    total, because that is what the counters mean: three refusals in a row are
+    an agent server that has stopped answering, three spread over a long run are
+    a flaky afternoon (`optimizer/stopping.py`).
+
+    A refused step carries the reason on `gate_reject_reason` — the same column
+    an ordinary rejection uses — so nothing new is stored to make this
+    derivable. What has to be got right is which steps a split's streak may
+    *skip*: a step whose training batch never came back never reaches its
+    validation rollout, so it says nothing either way about whether validation
+    is answering, and treating it as a clean validation would hand a broken
+    agent server a fresh three steps every time the training half failed too.
+    Step 0 has no training rollout at all, for the same reason.
+    """
+    streak = 0
+    for step in reversed(steps):
+        if step.gate_reject_reason == reason:
+            streak += 1
+        elif reason == "val_errors" and step.gate_reject_reason == "train_errors":
+            continue  # never got as far as a validation rollout
+        elif reason == "train_errors" and step.step_no == 0:
+            continue  # the baseline answers validation only
+        else:
+            break
+    return streak

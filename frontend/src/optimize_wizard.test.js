@@ -7,7 +7,9 @@ import {
   blockingReason,
   checkFor,
   cleanConfig,
+  configFrom,
   defaultSkill,
+  defaultText,
   extraConfig,
   furthestStep,
   hyperState,
@@ -420,4 +422,67 @@ test("a budget mid-edit has no estimate rather than an estimate of zero", () => 
   assert.equal(tokenEstimate(null), null);
   assert.equal(tokenEstimate(0), null);
   assert.equal(tokenEstimate(NaN), null);
+});
+
+// --- The stop conditions, and the units they are typed in --------------------
+//
+// Three of these six numbers mean "off" at 0 and two of them are percentages
+// stored as fractions. Both are ways to send the API something other than what
+// the form said: a 0 read as "unset" comes back as the environment's default,
+// and a percent sent unscaled asks for a quarter of a percent instead of a
+// quarter. Neither shows up on screen — the run simply ends for a reason
+// nobody chose.
+
+test("a share is typed as a percent and sent as a fraction", () => {
+  const { values } = hyperState({ early_stop_val_error_share: "25" }, {});
+
+  assert.equal(values.early_stop_val_error_share, 25);
+  assert.equal(configFrom(values).early_stop_val_error_share, 0.25);
+});
+
+test("the server's fraction is shown as a percent", () => {
+  assert.equal(defaultText("early_stop_val_error_share", { early_stop_val_error_share: 0.25 }), "25");
+});
+
+test("zero is a value these fields may take", () => {
+  const { values, errors } = hyperState({ early_stop_patience: "0" }, {});
+
+  assert.deepEqual(errors, {});
+  assert.equal(configFrom(values).early_stop_patience, 0);
+});
+
+test("a share above 100 percent is refused", () => {
+  const { errors } = hyperState({ early_stop_train_error_share: "120" }, {});
+
+  assert.ok(errors.early_stop_train_error_share);
+});
+
+test("the target may be left empty, and then it is not sent", () => {
+  const { values, errors } = hyperState({ early_stop_target_score: "" }, {});
+
+  assert.deepEqual(errors, {});
+  assert.equal("early_stop_target_score" in configFrom(values), false);
+});
+
+test("every field on the form reaches config except the two the body carries", () => {
+  const { values } = hyperState({}, {
+    num_epochs: 2, batch_size: 8, learning_rate: 8, concurrency: 4,
+    minibatch_size: 8, reflect_budget_chars: 200000,
+    early_stop_patience: 3,
+  });
+  const config = configFrom(values);
+
+  assert.equal("num_epochs" in config, false);
+  assert.equal("batch_size" in config, false);
+  assert.equal(config.learning_rate, 8);
+  assert.equal(config.concurrency, 4);
+  assert.equal(config.minibatch_size, 8);
+  assert.equal(config.reflect_budget_chars, 200000);
+  assert.equal(config.early_stop_patience, 3);
+});
+
+test("an analyst batch size is validated like every other number now", () => {
+  const { errors } = hyperState({ minibatch_size: "1x" }, {});
+
+  assert.ok(errors.minibatch_size);
 });

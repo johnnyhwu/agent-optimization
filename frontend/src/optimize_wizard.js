@@ -129,13 +129,44 @@ export const HYPER_FIELDS = {
   batch_size: { min: 1 },
   learning_rate: { min: 1 },
   concurrency: { min: 1, max: 32 },
+  // How many trajectories one analyst call carries. Separate from `batch_size`
+  // in the engine since the beginning and absent from this form since the
+  // beginning, which made them look like one number: a step answers its batch,
+  // then reflects on it in groups of *this* size — failures and successes
+  // grouped separately — so raising the batch without raising this one buys
+  // more analyst calls rather than bigger ones.
+  minibatch_size: { min: 1 },
   // How much trajectory text one analyst prompt may carry. Also not a
   // hyperparameter — it changes how much evidence the analyst sees, never the
   // algorithm — but it is the one setting that decides whether the call fits in
   // the optimizer model's context window at all, which is why it is on the form
   // rather than in the API only. The floor matches the API's own.
   reflect_budget_chars: { min: 1000 },
+  // When the run stops before it has run out of steps. Four conditions, and
+  // three of the six numbers are `0 = off` — which is the reason `parseCount`
+  // is given `min: 0` here rather than the 1 every other field takes, and the
+  // reason the server reads them with an explicit null check rather than the
+  // `x || default` idiom.
+  //
+  // The two shares are typed as whole percents and stored as fractions:
+  // "25" on the form, `0.25` in the config. `scale` is what does that, in both
+  // directions, so the form and the API cannot drift into disagreeing about
+  // whether 0.25 means a quarter or a quarter of a percent.
+  early_stop_train_error_share: { min: 0, max: 100, scale: 100 },
+  early_stop_train_error_streak: { min: 0 },
+  early_stop_val_error_share: { min: 0, max: 100, scale: 100 },
+  early_stop_val_error_streak: { min: 0 },
+  early_stop_patience: { min: 0 },
+  // The only field on the form that may be left empty and mean it: there is no
+  // number that stands for "no target", so blank has to.
+  early_stop_target_score: { min: 0, max: 100, scale: 100, optional: true },
 };
+
+// The two `HYPER_FIELDS` the API takes at the top level of the request rather
+// than inside `config`. Everything else goes to `config` by construction —
+// `start()` used to list each one by hand, so every field added to this form
+// was one more line to forget.
+export const BODY_FIELDS = ["num_epochs", "batch_size"];
 
 // A character count read as tokens, which is the unit a context window is sold
 // in. Deliberately a range rather than a figure: the ratio depends on the text,
@@ -171,7 +202,12 @@ export function hyperState(hyper, defaults) {
   for (const [key, spec] of Object.entries(HYPER_FIELDS)) {
     const raw = hyper?.[key];
     if (raw === undefined || raw === null) {
-      values[key] = defaults?.[key] ?? null;
+      // The server's default, in the units the field is typed in.
+      values[key] = toField(defaults?.[key], spec);
+      continue;
+    }
+    if (spec.optional && String(raw).trim() === "") {
+      values[key] = null;
       continue;
     }
     const { value, error } = parseCount(raw, spec);
@@ -179,6 +215,41 @@ export function hyperState(hyper, defaults) {
     else values[key] = value;
   }
   return { values, errors, ok: Object.keys(errors).length === 0 };
+}
+
+/** What one field shows when it has not been typed in: the server's default. */
+export function defaultText(key, defaults) {
+  const value = toField(defaults?.[key], HYPER_FIELDS[key] || {});
+  return value == null ? "" : String(value);
+}
+
+/** The validated hyperparameters as the request body's `config`.
+ *
+ * Everything in `HYPER_FIELDS` except the two the API takes at the top level,
+ * converted back out of the units the form types in. A field left blank is
+ * absent rather than null, which is how this API spells "use the server's
+ * environment".
+ */
+export function configFrom(values) {
+  const out = {};
+  for (const [key, spec] of Object.entries(HYPER_FIELDS)) {
+    if (BODY_FIELDS.includes(key)) continue;
+    const value = fromField(values?.[key], spec);
+    if (value == null) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+// A stored value in the units the form types in, and back. `0.25` ⇄ `25`.
+function toField(value, spec) {
+  if (value == null) return null;
+  return spec.scale ? Math.round(value * spec.scale) : value;
+}
+
+function fromField(value, spec) {
+  if (value == null) return null;
+  return spec.scale ? value / spec.scale : value;
 }
 
 // What goes in the request body's `config`. Everything in `HYPER_FIELDS` is sent

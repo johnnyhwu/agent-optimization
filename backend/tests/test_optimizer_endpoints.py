@@ -173,6 +173,26 @@ async def test_defaults_include_the_split_limits_the_wizard_enforces():
     assert payload["limits"]["min_val"] == dataset.MIN_VAL
 
 
+async def test_defaults_include_the_conditions_that_stop_a_run_early():
+    """The wizard cannot offer a setting whose default it has to guess.
+
+    All four conditions are environment-derived, so a deployment whose agent
+    server is flaky can loosen them once instead of asking every developer to
+    retype the same numbers — and the form shows what an untouched run would
+    actually do.
+    """
+    payload = await opt.optimization_defaults(subject="alice")
+
+    assert payload["defaults"]["early_stop_val_error_share"] == (
+        settings.early_stop_val_error_share
+    )
+    assert payload["defaults"]["early_stop_val_error_streak"] == (
+        settings.early_stop_val_error_streak
+    )
+    assert payload["defaults"]["early_stop_patience"] == settings.early_stop_patience
+    assert "early_stop_target_score" in payload["defaults"]
+
+
 # --- GET /optimization/skill-check ------------------------------------------
 
 
@@ -457,6 +477,44 @@ async def test_creating_a_run_snapshots_the_questions(session, monkeypatch):
     snapshot = next(i for i in items if i.item_key == keys[0])
     assert snapshot.question == "text of q0"
     assert snapshot.ground_truth_response == "gold q0"
+
+
+async def test_a_runs_stop_conditions_are_stored_as_numbers_not_as_blanks(
+    session, monkeypatch
+):
+    """The run's page shows the reader what will end this run.
+
+    A blank in the stored config would have to be explained by re-deriving the
+    server's defaults in the browser — and today's environment is no witness to
+    what it held when the run started, which is the same reason every other
+    setting here is materialised.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:], config={"early_stop_patience": 4}),
+        subject="alice", session=session,
+    )
+
+    stored = (await session.get(OptimizationRun, run.id)).config
+    assert stored["early_stop_patience"] == 4
+    assert stored["early_stop_val_error_share"] == settings.early_stop_val_error_share
+    assert stored["early_stop_val_error_streak"] == settings.early_stop_val_error_streak
+
+
+async def test_a_stop_condition_switched_off_stays_off(session, monkeypatch):
+    """0 means "never stop early", and it is one `or` away from meaning 3."""
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:], config={"early_stop_val_error_streak": 0}),
+        subject="alice", session=session,
+    )
+
+    stored = (await session.get(OptimizationRun, run.id)).config
+    assert stored["early_stop_val_error_streak"] == 0
 
 
 async def test_creating_a_run_computes_the_step_counts_the_engine_reads(

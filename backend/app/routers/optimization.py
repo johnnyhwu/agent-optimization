@@ -50,8 +50,7 @@ from app.models import (
     QuestionSkill,
     Run,
 )
-from app.optimizer import dataset, runner, skillio
-from app.optimizer.adapter import DEFAULT_ERROR_THRESHOLD
+from app.optimizer import dataset, runner, skillio, stopping
 from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS
 from app.schemas import (
     AnswerLeak,
@@ -201,6 +200,7 @@ def _run_out(run: OptimizationRun, splits, sources, steps_done) -> OptimizationR
         best_score=float(run.best_score) if run.best_score is not None else None,
         cancel_requested=run.cancel_requested,
         error_message=run.error_message,
+        stop_reason=run.stop_reason,
         started_at=run.started_at,
         completed_at=run.completed_at,
         source_eval_set_ids=sorted(sources, key=str),
@@ -234,23 +234,29 @@ async def optimization_defaults(subject: str = Depends(current_subject)):
         "defaults": {
             **run_config.defaults(),
             "optimizer_model": settings.optimizer_model,
-            # Hyperparameters, matching the engine's own fallbacks so the form
-            # shows what an untouched run would actually do.
-            "num_epochs": 1,
-            "batch_size": 8,
-            "minibatch_size": 8,
-            "learning_rate": 8,
-            "min_learning_rate": 2,
+            # Hyperparameters. The numbers come from the environment rather
+            # than from literals here: they are a deployment's answer to "how
+            # big is a step against this agent", and a site whose agent server
+            # takes four questions at a time should not have to retype them
+            # into every run. The shape choices below them (which scheduler,
+            # which metric) are the algorithm's, not the deployment's.
+            "num_epochs": settings.optimizer_num_epochs,
+            "batch_size": settings.optimizer_batch_size,
+            "minibatch_size": settings.optimizer_minibatch_size,
+            "learning_rate": settings.optimizer_learning_rate,
+            "min_learning_rate": settings.optimizer_min_learning_rate,
             "scheduler": "constant",
             "gate_metric": "hard",
             "mixed_weight": 0.5,
             "failure_only": False,
             "slow_update": False,
             "meta_skill": False,
-            "analyst_workers": 4,
-            "merge_batch_size": 8,
+            "analyst_workers": settings.optimizer_analyst_workers,
+            "merge_batch_size": settings.optimizer_merge_batch_size,
             "reflect_budget_chars": DEFAULT_REFLECT_BUDGET_CHARS,
-            "error_threshold": DEFAULT_ERROR_THRESHOLD,
+            # When the run stops early. One mechanism, four conditions — see
+            # `app/optimizer/stopping.py`, which is also what resolves these.
+            **stopping.StopPolicy.from_config({}).as_dict(),
             "train_share": dataset.DEFAULT_TRAIN_SHARE,
         },
         "judge_prompt": dict(zip(
@@ -566,6 +572,13 @@ def _resolve_optimization_config(config: OptimizationConfig) -> dict:
         if value is None:
             continue
         effective[key] = value
+
+    # The stop conditions, resolved to numbers. Every other blank in this config
+    # is filled from the environment for the reason above; these have a second
+    # reason, which is that the run's page shows the reader what will end this
+    # run, and a blank there would have to be explained by re-deriving the
+    # server's defaults in the browser.
+    effective.update(stopping.StopPolicy.from_config(effective).as_dict())
 
     system, user = judge_prompt.effective(
         config.judge_system_prompt, config.judge_user_prompt

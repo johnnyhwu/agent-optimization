@@ -66,7 +66,9 @@ def test_a_failed_item_is_excluded_from_accuracy_rather_than_scored_zero():
     the skill cannot fix, and the next step's analyst would go hunting for a rule
     to explain a network error.
     """
-    summary = score([ok("a"), ok("b"), agent_error("c")])
+    # A third of the batch failed, so the threshold has to be told this is
+    # tolerable — the subject here is the exclusion, not the refusal rule.
+    summary = score([ok("a"), ok("b"), agent_error("c")], error_threshold=0.5)
 
     assert summary.hard == 1.0
     assert summary.n_items == 3
@@ -96,7 +98,7 @@ def test_soft_score_uses_the_same_denominator_as_hard():
         ok("a", hard="correct", soft=1.0),
         ok("b", hard="incorrect", soft=0.4),
         agent_error("c"),
-    ])
+    ], error_threshold=0.5)
 
     assert summary.hard == 0.5
     assert summary.soft == pytest.approx(0.7)
@@ -111,7 +113,7 @@ def test_latency_statistics_exclude_failed_items():
     summary = score([
         ok("a", latency=100), ok("b", latency=200), ok("c", latency=300),
         agent_error("d", latency=120_000),
-    ])
+    ], error_threshold=0.5)
 
     assert (summary.latency_min_ms, summary.latency_p50_ms, summary.latency_max_ms) == (100, 200, 300)
 
@@ -126,7 +128,7 @@ def test_activation_rate_is_measured_over_scored_items_only():
     summary = score([
         ok("a", activated=True), ok("b", activated=True),
         ok("c", activated=False), agent_error("d"),
-    ])
+    ], error_threshold=0.5)
 
     assert summary.n_activated == 2
     assert summary.activation_rate == pytest.approx(2 / 3)
@@ -203,6 +205,39 @@ def test_a_step_is_aborted_when_too_much_of_the_batch_failed():
     assert summary.aborted is True
     assert summary.abort_reason
     assert "50" in summary.abort_reason or "0.5" in summary.abort_reason
+
+
+def test_a_refused_batch_carries_no_scores_at_all():
+    """"Refuses to score" has to mean the numbers are absent, not merely flagged.
+
+    A score left on this summary reaches three places that cannot tell it apart
+    from a real one: the chart plots it, the candidate cache keeps it under the
+    skill's hash, and the gate compares it. Each of those is a decision made on
+    a measurement of whichever questions the outage happened to spare.
+    """
+    rows = [ok("a"), ok("b"), agent_error("c"), agent_error("d")]
+
+    summary = score(rows, error_threshold=0.2)
+
+    assert summary.aborted is True
+    assert summary.hard is None and summary.soft is None
+    assert summary.activation_rate is None
+
+
+def test_a_refused_batch_still_says_what_happened_to_every_question():
+    """The counts and the rows are the whole point of keeping the summary.
+
+    The step is refused; the page still has to show which questions failed and
+    why, because that is what tells a developer whether to fix the agent server
+    or the eval set.
+    """
+    rows = [ok("a"), agent_error("b"), agent_error("c")]
+
+    summary = score(rows, error_threshold=0.2)
+
+    assert summary.n_items == 3 and summary.n_scored == 1
+    assert summary.n_agent_error == 2
+    assert [r.item_key for r in summary.results] == ["a", "b", "c"]
 
 
 def test_the_threshold_is_inclusive_so_exactly_at_the_limit_still_scores():

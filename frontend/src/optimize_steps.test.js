@@ -151,12 +151,16 @@ test("events after a refetch keep merging onto it", () => {
   assert.equal(stepList(after)[1].train_hard, 0.4);
 });
 
-test("a retried rollout keeps the flag that explains its noise", () => {
+test("a step dropped for unanswered questions arrives as a verdict like any other", () => {
+  // It used to arrive as `rollout_retry` and then, on the second failure, as a
+  // failed run. Now the step ends the way every other step ends — with a gate
+  // event — and the reason is what tells the table it was not a judgement.
   const state = feed(emptySteps(), [
-    ["rollout_retry", { step_no: 2, split: "val", reason: "too_many_errors" }],
     ["rollout_done", rollout(2, "val")],
+    ["gate_done", { step_no: 2, action: "reject", reject_reason: "val_errors" }],
   ]);
-  assert.equal(stepList(state)[0].retried, true);
+  assert.equal(stepList(state)[0].status, "done");
+  assert.equal(stepList(state)[0].gate_reject_reason, "val_errors");
 });
 
 test("an event with no step number changes no rows", () => {
@@ -204,22 +208,9 @@ test("a rollout reports how many of its questions are answered", () => {
     step_no: 2, split: "train", done: 3, total: 8, attempt: 1,
   });
   assert.deepEqual(
-    {
-      phase: state.activity.phase,
-      done: state.activity.done,
-      total: state.activity.total,
-      note: state.activity.note,
-    },
-    { phase: "rollout_train", done: 3, total: 8, note: null },
+    { phase: state.activity.phase, done: state.activity.done, total: state.activity.total },
+    { phase: "rollout_train", done: 3, total: 8 },
   );
-
-  // A retry restarts the count, so it says so rather than appearing to go
-  // backwards for no reason.
-  state = applyEvent(state, "rollout_progress", {
-    step_no: 2, split: "train", done: 1, total: 8, attempt: 2,
-  });
-  assert.equal(state.activity.done, 1);
-  assert.match(state.activity.note, /retrying/);
 
   // Progress carries no step fields, so it must not invent a row or disturb one.
   assert.equal(stepList(state).length, 1);

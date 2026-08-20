@@ -50,7 +50,7 @@ function subscribe() {
 
   on("snapshot", parse((d) => { state = replaceSteps(state, d.steps || []); }));
   for (const name of [
-    "step_started", "rollout_done", "rollout_progress", "rollout_retry",
+    "step_started", "rollout_done", "rollout_progress",
     "reflect_done", "update_done", "gate_done", "slow_update_done",
   ]) {
     on(name, parse((d) => { state = applyEvent(state, name, d); }));
