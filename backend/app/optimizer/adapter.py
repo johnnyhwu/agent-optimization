@@ -290,6 +290,10 @@ def score_rollout(
     Whatever it accepts on that basis contaminates every later step. So the batch
     is abandoned instead — the same call `docs/spec.md` makes about the upload
     path, where a set built from half the rows "looks normal but is wrong".
+    `aborted` says that happened and the score fields stay `None`; what the
+    caller does about it is `app/optimizer/stopping.py`'s decision, and the
+    threshold it passes in is that split's own (train and validation are
+    configured separately).
     """
     rows = list(results)
     n_items = len(rows)
@@ -319,6 +323,15 @@ def score_rollout(
                 f"({n_items - n_scored} of {n_items}); "
                 f"a gradient from the remainder would not represent this split"
             )
+            # And that is the end of it: no hard, no soft, no activation rate.
+            # "Refuses to score" has to mean the numbers are absent rather than
+            # present-and-not-to-be-trusted — an accuracy on this row would be
+            # plotted on the chart, cached against the candidate's hash, and
+            # read by the gate, and each of those is a decision made on a
+            # measurement of whichever questions the outage happened to spare.
+            # The rows themselves are kept, so the page can still show which
+            # questions failed and why.
+            return summary
 
     if not n_scored:
         return summary

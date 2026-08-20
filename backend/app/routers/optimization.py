@@ -50,9 +50,7 @@ from app.models import (
     QuestionSkill,
     Run,
 )
-from app.optimizer import dataset, runner, skillio
-from app.optimizer.adapter import DEFAULT_ERROR_THRESHOLD
-from app.optimizer.reflection import DEFAULT_REFLECT_BUDGET_CHARS
+from app.optimizer import dataset, hyperparams, runner, skillio, stopping
 from app.schemas import (
     AnswerLeak,
     EditReportOut,
@@ -201,6 +199,7 @@ def _run_out(run: OptimizationRun, splits, sources, steps_done) -> OptimizationR
         best_score=float(run.best_score) if run.best_score is not None else None,
         cancel_requested=run.cancel_requested,
         error_message=run.error_message,
+        stop_reason=run.stop_reason,
         started_at=run.started_at,
         completed_at=run.completed_at,
         source_eval_set_ids=sorted(sources, key=str),
@@ -234,23 +233,19 @@ async def optimization_defaults(subject: str = Depends(current_subject)):
         "defaults": {
             **run_config.defaults(),
             "optimizer_model": settings.optimizer_model,
-            # Hyperparameters, matching the engine's own fallbacks so the form
-            # shows what an untouched run would actually do.
-            "num_epochs": 1,
-            "batch_size": 8,
-            "minibatch_size": 8,
-            "learning_rate": 8,
-            "min_learning_rate": 2,
-            "scheduler": "constant",
-            "gate_metric": "hard",
-            "mixed_weight": 0.5,
-            "failure_only": False,
-            "slow_update": False,
-            "meta_skill": False,
-            "analyst_workers": 4,
-            "merge_batch_size": 8,
-            "reflect_budget_chars": DEFAULT_REFLECT_BUDGET_CHARS,
-            "error_threshold": DEFAULT_ERROR_THRESHOLD,
+            # Hyperparameters, from the environment rather than from literals
+            # here: they are a deployment's answer to "how big is a step against
+            # this agent", and a site whose agent server takes four questions at
+            # a time should not have to retype them into every run. The same
+            # function the engine reads the *run's* values through
+            # (`hyperparams.resolve_algorithm`), so the form cannot offer a
+            # default the loop would not honour.
+            "num_epochs": settings.optimizer_num_epochs,
+            "batch_size": settings.optimizer_batch_size,
+            **hyperparams.algorithm_defaults(),
+            # When the run stops early. One mechanism, four conditions — see
+            # `app/optimizer/stopping.py`, which is also what resolves these.
+            **stopping.StopPolicy.from_config({}).as_dict(),
             "train_share": dataset.DEFAULT_TRAIN_SHARE,
         },
         "judge_prompt": dict(zip(
@@ -566,6 +561,17 @@ def _resolve_optimization_config(config: OptimizationConfig) -> dict:
         if value is None:
             continue
         effective[key] = value
+
+    # The algorithm's own knobs and the stop conditions, resolved to values.
+    # The loop above only materialises what the caller sent, and seven of these
+    # have no control in the wizard — so without this the stored config was a
+    # half-written record whose other half was whatever literal the engine
+    # happened to carry that week. The stop conditions have a second reason:
+    # the run's page shows the reader what will end this run, and a blank there
+    # would have to be explained by re-deriving the server's defaults in the
+    # browser.
+    effective.update(hyperparams.resolve_algorithm(effective))
+    effective.update(stopping.StopPolicy.from_config(effective).as_dict())
 
     system, user = judge_prompt.effective(
         config.judge_system_prompt, config.judge_user_prompt

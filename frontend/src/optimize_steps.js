@@ -141,10 +141,6 @@ function patchFor(type, data) {
     return patch;
   }
 
-  // A rollout that had to be bought twice. The flag is why an accuracy on this
-  // row may be noisier than the ones around it, so it survives to the table.
-  if (type === "rollout_retry") return { retried: true };
-
   if (type === "update_done") {
     return {
       n_edits_applied: data.n_edits_applied,
@@ -201,11 +197,6 @@ function activityFor(type, data, previous) {
       return at(data.split === "train" ? "rollout_train" : "rollout_val", {
         done: data.done,
         total: data.total,
-        note: data.attempt > 1 ? "retrying after a failed rollout" : null,
-      });
-    case "rollout_retry":
-      return at(data.split === "train" ? "rollout_train" : "rollout_val", {
-        note: `retrying the ${data.split === "train" ? "training" : "validation"} rollout`,
       });
     case "rollout_done":
       // Train finishing hands over to reflection; validation finishing hands

@@ -10,6 +10,7 @@ import { IconArrowLeft, IconDownload } from "../icons.jsx";
 import { plural } from "../../plural.js";
 import { useToast } from "../Toast.jsx";
 import { diffRows } from "../../diff.js";
+import { gateLabel } from "../../optimize_gate_label.js";
 import DiffFileTree from "./DiffFileTree.jsx";
 
 // Part 2: what this step did to the skill.
@@ -95,6 +96,7 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
   if (!view) return <Skeleton variant="row" count={6} />;
 
   const rejected = view.gate_action === "reject";
+  const verdict = gateLabel(view);
 
   return (
     <div className="opt-skilldiff">
@@ -138,8 +140,11 @@ export default function SkillDiff({ runId, stepNo, onBack }) {
           }
         />
         <div className="opt-run-meta">
-          <Badge tone={rejected ? "neutral" : view.gate_action ? "success" : "info"} size="sm">
-            {view.gate_action ? view.gate_action.replace(/_/g, " ") : "no gate verdict"}
+          {/* The same words the chart, the step table and the step card use —
+              `optimize_gate_label.js`. This header used to print the raw action
+              ("accept new best"), which is a database value, not a sentence. */}
+          <Badge tone={verdict.tone} size="sm" title={verdict.detail}>
+            {view.gate_action ? verdict.short : "no gate verdict"}
           </Badge>
           {view.is_best && <Badge tone="success" size="sm">best by validation</Badge>}
           <span>
@@ -276,6 +281,18 @@ function Outcome({ view, rejected }) {
         table below says why for each one. The skill it produced is identical to{" "}
         {against}, which is also why no validation rollout was bought for it: that
         skill's score was already known.{fallback}
+      </Banner>
+    );
+  }
+
+  // Two different things wearing one word. A candidate the gate turned down was
+  // measured and lost; a candidate dropped because its validation split never
+  // came back was never judged at all, and telling someone their edit was
+  // rejected sends them to rewrite an edit that may have been fine.
+  if (view.gate_reject_reason === "val_errors" || view.gate_action === "skip") {
+    return (
+      <Banner tone="warning" title="These edits were never judged">
+        {gateLabel(view).detail} The run carried on from {against}.{fallback}
       </Banner>
     );
   }

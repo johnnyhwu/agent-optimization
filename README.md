@@ -609,11 +609,22 @@ Notes:
   patch it asked for, then — under *After the analysts* — the merge and ranking
   calls that decided which of those edits survived, each with the prompt it was
   sent one click away. An edit an analyst asked for and the skill does not have
-  was dropped in one of them. The wizard's **trajectory budget** caps what the
-  analyst is shown: a whole minibatch shares one system prompt and one tool
-  catalogue, so those are sent once, and the rest of the budget is shared
-  across the conversations. The field states the rule — the token estimate,
-  plus the skill, plus 16k for the reply, under your optimizer model's window.
+  was dropped in one of them. The wizard's **analyst batch size** and
+  **trajectory budget** decide how many analyst prompts a step sends and how big
+  each one gets: a step answers its training batch, then reflects on it in groups
+  of the analyst batch size (failures and successes grouped separately), and a
+  whole group shares one system prompt and one tool catalogue, so those are sent
+  once and the rest of the budget is shared across the conversations. The budget
+  field states the rule — the token estimate, plus the skill, plus 16k for the
+  reply, under your optimizer model's window.
+  **A run can also stop early**, and the wizard says under what: too much of a
+  training batch or a validation split coming back unanswered too many steps in
+  a row, too many steps without a new best, or validation reaching a target you
+  set. The defaults are environment variables (`EARLY_STOP_*`), the run's header
+  lists the conditions with a live count against each, and a stopped run says
+  which one fired. A split that mostly failed is never scored: an unanswered
+  question is the agent server, not the skill, so the step is dropped rather
+  than gated on whichever questions did answer.
   The
   output is a zip you put back on the agent server yourself; re-run it through
   Evaluation for an unbiased number. All seven seams are fake by default, so the

@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import Badge from "../ui/Badge.jsx";
 import { chartModel } from "../../optimize_chart.js";
+import { gateLabel } from "../../optimize_gate_label.js";
 
 // The run, as a picture. Hand-written SVG: this repo has no chart library, no
 // router and no state library, and a dependency whose whole job is to draw
@@ -23,11 +25,20 @@ import { chartModel } from "../../optimize_chart.js";
 //     rejected everything, clicking did nothing visible at all. The pin is now
 //     the column plus a marker line, which exist for every step.
 //
-// Hover shows numbers in a tooltip that floats over the plot rather than in a
-// line of text underneath: as a block in the flow it pushed the pinned card
-// down the page every time the pointer crossed the chart. Click pins the card,
-// which is where the buttons live — buttons inside a hover card are a known
-// trap, the pointer has to cross a gap to reach them and a keyboard never can.
+// Hover writes into a fixed-height readout *above* the plot, and this is the
+// third arrangement it has had. In the flow underneath, it pushed the pinned
+// card down the page every time the pointer crossed the chart. Floating over
+// the plot, it stopped moving the page and started covering the data: it was
+// pinned to the top of the canvas, which on any run worth reading is exactly
+// where the points are. A reserved row above the plot moves nothing, covers
+// nothing, and — being panel-wide rather than a small box — has room to say
+// what the gate actually decided instead of printing "reject". The keyboard
+// gets a readout for the first time as well; arrow keys pin a step, and a
+// pointer-only tooltip never showed them anything.
+//
+// Click still pins the card below, which is where the buttons live — buttons
+// inside a hover card are a known trap, the pointer has to cross a gap to reach
+// them and a keyboard never can.
 //
 // And three that were the reason a long run was hard to read at all:
 //
@@ -40,11 +51,22 @@ import { chartModel } from "../../optimize_chart.js";
 //   * **The legend switches series off.** Which is also how the fitted axis
 //     stops being dominated by a series the reader is not asking about.
 
-const HEIGHT = 280;
-// What the model is asked for. It hands back this width or a larger one, and
-// the larger one is what everything here must use — including the pointer
-// arithmetic, where a stale constant would report the wrong step.
-const PANEL_WIDTH = 720;
+// The canvas, in CSS pixels, and it stays that tall whatever the run does.
+//
+// It did not used to. The svg carried a `width` attribute and no `height`, with
+// `min-width: 100%; height: auto` in the stylesheet, so a short run's canvas
+// was stretched to the panel and its height scaled up with it — a 720-unit
+// chart in a 1100px panel rendered 428px tall, text and dots and all. A long
+// run's canvas is wider than the panel, nothing stretches, and it rendered at
+// its native height. The two states differed by half again, and because the
+// second is the one with the scrollbar, the scrollbar looked like the cause.
+//
+// Both attributes are set now and the model is asked for the panel's measured
+// width, so one viewBox unit is one CSS pixel in every case.
+const HEIGHT = 320;
+// Until the frame has been measured. Any positive number does; this one is what
+// the chart asked for before it could measure anything.
+const FALLBACK_WIDTH = 720;
 
 const SERIES = [
   { key: "train", label: "train (before the edit)" },
@@ -59,12 +81,27 @@ export default function ProgressChart({
   const svgRef = useRef(null);
   const frameRef = useRef(null);
   const [hover, setHover] = useState(null);
+  const [panelWidth, setPanelWidth] = useState(FALLBACK_WIDTH);
+
+  // The width the plot actually has. Only the width: the height is fixed, so
+  // observing both would let a re-render that changes the canvas feed back into
+  // the observer that caused it.
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width);
+      if (width > 0) setPanelWidth(width);
+    });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
 
   const model = useMemo(
     () => chartModel(steps, {
-      width: PANEL_WIDTH, height: HEIGHT, totalSteps, bestStep, metric, yMode, show,
+      width: panelWidth, height: HEIGHT, totalSteps, bestStep, metric, yMode, show,
     }),
-    [steps, totalSteps, bestStep, metric, yMode, show],
+    [steps, panelWidth, totalSteps, bestStep, metric, yMode, show],
   );
 
   // Keep the pinned step in view when it moves under the keyboard. Only when it
@@ -128,15 +165,30 @@ export default function ProgressChart({
   const hoverColumn = hover != null ? model.columns.find((c) => c.stepNo === hover) : null;
   const pinnedColumn = pinned != null ? model.columns.find((c) => c.stepNo === pinned) : null;
 
+  // What the readout is describing: the step under the pointer, else the pinned
+  // one, else the newest. Never nothing — the row is a fixed height whether or
+  // not the pointer is on the chart, so leaving it blank would be a band of
+  // empty space rather than a smaller page.
+  const readoutStep = hovered || (pinned != null ? steps.find((s) => s.step_no === pinned) : null)
+    || steps.at(-1);
+
   return (
     <div className="opt-chart">
-      {/* Scrolls when the model asked for more width than the panel has. The
-          svg keeps `min-width: 100%`, so a short run still fills the card. */}
+      <Readout
+        step={readoutStep}
+        metric={metric}
+        show={model.show}
+        source={hovered ? "hover" : pinned != null ? "pinned" : "latest"}
+      />
+      {/* Scrolls when the model asked for more width than the panel has: the
+          canvas grows so that every step stays big enough to click, and the
+          frame is what slides. Its height never changes — see `HEIGHT`. */}
       <div className="opt-chart-frame" ref={frameRef}>
         <svg
           ref={svgRef}
           viewBox={`0 0 ${model.width} ${HEIGHT}`}
           width={model.width}
+          height={HEIGHT}
           className="opt-chart-svg"
           role="img"
           tabIndex={0}
@@ -298,18 +350,21 @@ export default function ProgressChart({
           {model.val.map((p) => (
             <ValMarker key={p.stepNo} point={p} pinned={pinned === p.stepNo} />
           ))}
-        </svg>
 
-        {/* Absolutely positioned over the plot, so it can appear and disappear
-            without moving a single pixel of the page underneath it. */}
-        {hovered && hoverColumn && (
-          <HoverTip
-            step={hovered}
-            metric={metric}
-            show={model.show}
-            xPercent={(hoverColumn.cx / model.width) * 100}
-          />
-        )}
+          {/* The pointer's own line, over everything. The column highlight
+              alone is ambiguous once the columns are only a few pixels wide,
+              and this is the thing that ties the row of numbers above the plot
+              to the place in it they describe. */}
+          {hoverColumn && (
+            <line
+              x1={hoverColumn.cx}
+              x2={hoverColumn.cx}
+              y1={model.plot.top}
+              y2={model.plot.top + model.plot.height}
+              className="opt-chart-crosshair"
+            />
+          )}
+        </svg>
       </div>
 
       {/* The legend is the switch. Three lines over twenty steps is a thicket,
@@ -360,24 +415,40 @@ function ValMarker({ point, pinned }) {
   );
 }
 
-// Three numbers and a verdict — enough to compare two steps without clicking
-// either. Anything actionable, and anything that needs reading rather than
-// glancing at, belongs on the pinned card.
-function HoverTip({ step, metric, show, xPercent }) {
+// The readout: which step, what it scored, and what the gate did about it.
+//
+// A fixed-height row above the plot rather than a box floating over it. The box
+// was pinned to the top of the canvas, which is where the points are on any run
+// that works, so reading a number meant covering the two beside it. It was also
+// about twelve words wide, which is why the verdict in it read "reject" — and
+// "reject" is the one word on this page a reader has to act on. There is room
+// here to say which guard refused the candidate, or that no guard did and the
+// agent server simply stopped answering.
+function Readout({ step, metric, show, source }) {
   const suffix = metric === "soft" ? "soft" : "hard";
-  // Clamped so a tooltip on the first or last step does not hang off the panel.
-  const left = Math.min(88, Math.max(12, xPercent));
+  const verdict = gateLabel(step);
   return (
-    <div className="opt-chart-tip" style={{ left: `${left}%` }} aria-hidden="true">
-      <strong>{step.step_no === 0 ? "Baseline" : `Step ${step.step_no}`}</strong>
-      {/* A hidden series is not quoted here either. The tooltip is the reading
-          of what is on screen, and a number for a line the reader just turned
-          off is an answer to a question they stopped asking. */}
-      {show.train && <span><i className="swatch train" /> train {pct(step[`train_${suffix}`])}</span>}
-      {show.val && <span><i className="swatch val" /> validation {pct(step[`val_${suffix}`])}</span>}
-      {step.gate_action && (
-        <span className="verdict">
-          {step.gate_action === "reject" ? "rejected" : step.gate_action.replace(/_/g, " ")}
+    <div className="opt-chart-readout" aria-live="off">
+      <strong className="opt-chart-readout-step">
+        {step.step_no === 0 ? "Baseline" : `Step ${step.step_no}`}
+      </strong>
+      {show.train && (
+        <span className="opt-chart-readout-score">
+          <i className="swatch train" /> train {pct(step[`train_${suffix}`])}
+        </span>
+      )}
+      {show.val && (
+        <span className="opt-chart-readout-score">
+          <i className="swatch val" /> validation {pct(step[`val_${suffix}`])}
+        </span>
+      )}
+      <Badge tone={verdict.tone} size="sm">{verdict.short}</Badge>
+      <span className="opt-chart-readout-detail">{verdict.detail}</span>
+      {/* Which step this is, when it is not the one under the pointer. Without
+          it the row looks like a stale hover rather than a standing summary. */}
+      {source !== "hover" && (
+        <span className="opt-chart-readout-source">
+          {source === "pinned" ? "pinned" : "latest"}
         </span>
       )}
     </div>

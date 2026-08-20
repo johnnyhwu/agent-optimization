@@ -12,6 +12,26 @@
 // optimizer calls on the largest model available, with a whole minibatch of
 // truncated traces in each prompt.
 
+/** How many analyst calls one step buys, at worst.
+ *
+ * Reflect splits failures and successes into separate minibatches, so a batch
+ * produces one more group than dividing it once would suggest as soon as it
+ * contains one of each — which is the ordinary case, and stays true even when
+ * the minibatch size is larger than the whole batch. The worst case is the
+ * honest number: an estimate that undersells the model everything is billed on
+ * is the one that causes trouble.
+ *
+ * Exported because the wizard says it in words beside the field ("a batch of 16
+ * in groups of 8 is up to 3 calls"), and two implementations of the same
+ * sentence would eventually quote two different numbers on one screen.
+ */
+export function analystCallsPerStep(questionsPerStep, minibatchSize) {
+  const perStep = Math.max(0, count(questionsPerStep));
+  const group = Math.max(1, count(minibatchSize));
+  if (!perStep) return 0;
+  return Math.ceil(perStep / group) + (perStep >= 2 ? 1 : 0);
+}
+
 export function estimateRun({
   nTrain, nVal, epochs, batchSize, minibatchSize,
 } = {}) {
@@ -31,13 +51,7 @@ export function estimateRun({
   // it answers its batch and then the whole validation split again.
   const agentCalls = val + totalSteps * (perStep + val);
 
-  // Reflect splits failures and successes into separate minibatches, so a batch
-  // produces one more group than dividing it once would suggest as soon as it
-  // contains one of each — which is the ordinary case, and stays true even when
-  // the minibatch size is larger than the whole batch. The worst case is the
-  // honest number here: an estimate that undersells the model everything is
-  // billed on is the one that causes trouble.
-  const analystPerStep = Math.ceil(perStep / group) + (perStep >= 2 ? 1 : 0);
+  const analystPerStep = analystCallsPerStep(perStep, group);
   // Plus one merge (aggregate) and one ranking (clip) per step.
   const optimizerCallsMax = totalSteps * (analystPerStep + 2);
 
@@ -71,7 +85,7 @@ export function explainRun({
   const group = Math.max(1, count(minibatchSize));
   const e = estimateRun({ nTrain, nVal, epochs, batchSize, minibatchSize });
   const perStep = Math.min(batch, train);
-  const analystPerStep = Math.ceil(perStep / group) + (perStep >= 2 ? 1 : 0);
+  const analystPerStep = analystCallsPerStep(perStep, group);
 
   return {
     steps:

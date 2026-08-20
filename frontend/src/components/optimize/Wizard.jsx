@@ -12,13 +12,15 @@ import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
 import { counts, makeSplit } from "../../optimize_split.js";
-import { estimateRun, explainRun } from "../../optimize_cost.js";
+import { analystCallsPerStep, estimateRun, explainRun } from "../../optimize_cost.js";
 import {
   HYPER_FIELDS,
   STEPS,
   blockingReason,
   cleanConfig,
+  configFrom,
   defaultSkill,
+  defaultText,
   extraConfig,
   furthestStep,
   hyperState,
@@ -232,12 +234,14 @@ export default function Wizard() {
         // means "use the server's environment" when empty, and the API says
         // that by the key being absent — an empty string in a numeric field is
         // a 422.
+        // `configFrom` sends every validated field on the form except the two
+        // the body carries. Each one used to be listed here by hand, so a field
+        // added to the form and forgotten in this list was a setting the wizard
+        // showed, validated, and never sent.
         config: cleanConfig({
           ...config,
           ...extraConfig(hyper),
-          learning_rate: hyperValues.learning_rate,
-          concurrency: hyperValues.concurrency,
-          reflect_budget_chars: hyperValues.reflect_budget_chars,
+          ...configFrom(hyperValues),
         }),
         secrets,
         detector: {},
@@ -713,6 +717,80 @@ function SettingsStep({ defaults, config, onConfig, secrets, onSecrets }) {
   );
 }
 
+// The stop conditions are written as sentences with the numbers inside them, so
+// these are the two inputs that sit inline in one. Deliberately not `Field`s:
+// a label above each box is what made the share and the streak read as two
+// unrelated settings.
+const ERROR_FIELDS = [
+  "early_stop_train_error_share",
+  "early_stop_train_error_streak",
+  "early_stop_val_error_share",
+  "early_stop_val_error_streak",
+];
+
+function StopRule({ children }) {
+  return <p className="opt-stoprule">{children}</p>;
+}
+
+function PercentInput({ field, raw, set, errors, placeholder }) {
+  return (
+    <span className="opt-stoprule-input">
+      <input
+        type="number"
+        min={HYPER_FIELDS[field].min}
+        max={HYPER_FIELDS[field].max}
+        value={raw(field)}
+        onChange={set(field)}
+        placeholder={placeholder}
+        aria-label={ariaLabel(field)}
+        aria-invalid={errors[field] ? "true" : undefined}
+      />
+      %
+    </span>
+  );
+}
+
+function CountInput({ field, raw, set, errors }) {
+  return (
+    <span className="opt-stoprule-input">
+      <input
+        type="number"
+        min={HYPER_FIELDS[field].min}
+        value={raw(field)}
+        onChange={set(field)}
+        aria-label={ariaLabel(field)}
+        aria-invalid={errors[field] ? "true" : undefined}
+      />
+    </span>
+  );
+}
+
+// The sentence reads the number; a screen reader needs the field's name.
+function ariaLabel(field) {
+  return field.replace(/^early_stop_/, "").replace(/_/g, " ");
+}
+
+function firstError(errors, fields) {
+  return fields.map((field) => errors[field]).find(Boolean);
+}
+
+// What an analyst batch size buys, in the numbers on this form.
+//
+// The sentence exists because the two batch sizes look like one setting until
+// someone tells you otherwise: a step answers `batch` questions and then
+// reflects on them in groups of `minibatch`, failures apart from successes, so
+// lowering this one does not shrink what the step measures — it splits the
+// analyst's reading into more, smaller prompts, which is the fix when the
+// optimizer refuses a call for being too long.
+function analystHelp(batch, minibatch) {
+  const base =
+    "Trajectories per analyst call. Failures and successes are grouped separately, " +
+    "so a step makes one call per group of each.";
+  if (!batch || !minibatch) return base;
+  const calls = analystCallsPerStep(batch, minibatch);
+  return `${base} With ${plural(batch, "question")} per step this is up to ${plural(calls, "call")} a step.`;
+}
+
 // What a character budget means in the unit a context window is sold in. The
 // range is the honest form: the ratio depends on the text, and quoting one
 // number invites it to be treated as measured.
@@ -739,8 +817,15 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
   const batch = values.batch_size;
   // Raw, so the input renders exactly what was typed. Backing a number input
   // with `Number(raw)` is what made these fields impossible to clear.
-  const raw = (key) => hyper[key] ?? String(defaults.defaults[key] ?? "");
+  // `defaultText` rather than the bare default, because two of these fields are
+  // typed as whole percents and stored as fractions — 25 on the form, 0.25 in
+  // the config — and it is the one place that conversion lives.
+  const raw = (key) => hyper[key] ?? defaultText(key, defaults.defaults);
   const set = (key) => (e) => onHyper({ ...hyper, [key]: e.target.value });
+  // The same rule for the switches: untouched shows what the server would do,
+  // not a hard-coded off. A deployment that turns one of these on by default
+  // was previously shown an unticked box beside a run that would tick it.
+  const switchOn = (key) => Boolean(hyper[key] ?? defaults.defaults[key]);
 
   // Stated as calls rather than as money: the models are whatever base URL the
   // developer pointed this at, so their rates are theirs to know and a number
@@ -754,7 +839,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
     nVal: c.val,
     epochs,
     batchSize: batch,
-    minibatchSize: hyper.minibatch_size ?? defaults.defaults.minibatch_size,
+    minibatchSize: values.minibatch_size,
   };
   const estimate = estimable ? estimateRun(estimateInput) : null;
   // The derivation behind each number, for the `?` beside it. Generated from the
@@ -821,9 +906,9 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
             batch an afternoon. */}
         <Field
           label="Concurrency"
-          help={`How many questions are sent to the agent server at once. With a minibatch of ${
-            hyper.minibatch_size ?? defaults.defaults.minibatch_size
-          } and a concurrency of ${values.concurrency ?? "n"}, a step collects its rollouts ${
+          help={`How many questions are sent to the agent server at once. A step answers ${
+            batch ?? "n"
+          } training questions and then the whole validation split, ${
             values.concurrency ?? "n"
           } at a time. Raise it only as far as the agent server can take.`}
           error={errors.concurrency}
@@ -845,8 +930,27 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           adjust from anywhere you could see. */}
       <FormSection
         title="How much the analyst is shown"
-        description="Each step sends the optimizer one prompt per minibatch: the skill, then the trajectories of the questions in it. This caps the trajectory half."
+        description="Each step sends the optimizer one prompt per minibatch: the skill, then the trajectories of the questions in it. These two decide how many prompts there are and how big each one gets."
       >
+        {/* Separate from the training batch size in the engine since the
+            beginning, and absent from this form since the beginning — which
+            made them look like one number. A step answers `batch_size`
+            questions and then reflects on them in groups of this size, with
+            failures and successes grouped separately, so a batch of 16 with a
+            minibatch of 8 is up to four analyst calls rather than one. */}
+        <Field
+          label="Analyst batch size"
+          help={analystHelp(values.batch_size, values.minibatch_size)}
+          error={errors.minibatch_size}
+        >
+          <input
+            type="number"
+            min={HYPER_FIELDS.minibatch_size.min}
+            value={raw("minibatch_size")}
+            onChange={set("minibatch_size")}
+            aria-invalid={errors.minibatch_size ? "true" : undefined}
+          />
+        </Field>
         <Field
           label="Trajectory budget"
           help={budgetHelp(values.reflect_budget_chars)}
@@ -874,6 +978,61 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
         </Banner>
       </FormSection>
 
+      {/* When the run stops before it has run out of steps.
+          Two of these four conditions existed before and neither was visible:
+          a run stopped when its step counter ran out, or — invisibly, and
+          configurable only through the API — when a rollout failed twice in a
+          row, which failed the whole run. An hour of paid agent calls could end
+          because the agent server was down for the last five minutes of it,
+          and nothing on this screen had said that could happen.
+          Written as sentences with the numbers in them, because each condition
+          is a *pair*: a share of the split that may fail, and how many refused
+          rollouts in a row are an outage rather than a bad afternoon. Two
+          labelled boxes side by side would leave the reader to work out that
+          they belong together. */}
+      <FormSection
+        title="When it stops early"
+        description="A run always stops when it runs out of steps. These are the other four endings, and each is off when its number is 0 or blank."
+      >
+        <Field label="Unanswered questions" error={firstError(errors, ERROR_FIELDS)}>
+          <StopRule>
+            More than
+            <PercentInput field="early_stop_train_error_share" raw={raw} set={set} errors={errors} />
+            of a <strong>training</strong> batch coming back unanswered, for
+            <CountInput field="early_stop_train_error_streak" raw={raw} set={set} errors={errors} />
+            steps in a row.
+          </StopRule>
+          <StopRule>
+            More than
+            <PercentInput field="early_stop_val_error_share" raw={raw} set={set} errors={errors} />
+            of a <strong>validation</strong> split coming back unanswered, for
+            <CountInput field="early_stop_val_error_streak" raw={raw} set={set} errors={errors} />
+            steps in a row.
+          </StopRule>
+          <p className="opt-stoprule-note">
+            A question that never came back is not the skill being wrong, so it is
+            left out of the accuracy rather than counted as an error. Past the
+            share above, the split is not scored at all: a training batch that
+            far gone is skipped, and a validation split that far gone drops its
+            candidate unjudged rather than accepting an edit on whichever
+            questions did answer.
+          </p>
+        </Field>
+        <Field label="No progress" error={errors.early_stop_patience}>
+          <StopRule>
+            <CountInput field="early_stop_patience" raw={raw} set={set} errors={errors} />
+            steps in a row without beating the best validation score.
+          </StopRule>
+        </Field>
+        <Field label="Good enough" error={errors.early_stop_target_score}>
+          <StopRule>
+            Validation reaches
+            <PercentInput field="early_stop_target_score" raw={raw} set={set} errors={errors} placeholder="—" />
+            on the held-back questions.
+          </StopRule>
+        </Field>
+      </FormSection>
+
       {/* Upstream's two longitudinal passes. Off by default and stated as what
           they cost, because they are the only settings on this page that add
           calls on the *optimizer* model — the expensive one — and they do it
@@ -889,7 +1048,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           <label className="opt-switch">
             <input
               type="checkbox"
-              checked={Boolean(hyper.slow_update)}
+              checked={switchOn("slow_update")}
               onChange={(e) => onHyper({ ...hyper, slow_update: e.target.checked })}
             />
             <span>Write epoch guidance into the skill</span>
@@ -902,13 +1061,13 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           <label className="opt-switch">
             <input
               type="checkbox"
-              checked={Boolean(hyper.meta_skill)}
+              checked={switchOn("meta_skill")}
               onChange={(e) => onHyper({ ...hyper, meta_skill: e.target.checked })}
             />
             <span>Carry the optimizer's own notes between epochs</span>
           </label>
         </Field>
-        {epochs != null && epochs < 2 && (hyper.slow_update || hyper.meta_skill) && (
+        {epochs != null && epochs < 2 && (switchOn("slow_update") || switchOn("meta_skill")) && (
           <Banner tone="warning" title="One epoch has no boundary to compare across">
             Both passes compare one epoch with the previous one. With a single
             epoch there is no previous, so neither will run and neither will cost

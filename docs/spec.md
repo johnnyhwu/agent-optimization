@@ -186,8 +186,9 @@ Stage 4 補的是「手動驗證一個假設」，Stage 3 補的是**把那個�
 | 資料 | 七張 `optimization_*` 表（migration `0009`）。**不動任何既有資料表**，Optimize 指向 eval 資料，eval 資料從不指回來 |
 | 兩種模式 | `isolated`（只送目標 skill、優化 body、保護 frontmatter）與 `routing`（送全部 skill、優化 frontmatter description、保護 body）。gate 在 routing 模式多一道 activation 守門 |
 | 迴圈 | step 0 baseline → 每個 step：訓練 minibatch rollout → reflect → aggregate → clip 到 learning rate → apply → 驗證 rollout → gate。可取消、可續跑（backend 重啟後是 `interrupted` 而非 `failed`）|
+| 提前結束 | 四個條件、一套機制（`optimizer/stopping.py`）：訓練批次／驗證 split 的系統錯誤率連續超標、連續 N 步沒有新的最佳分數、驗證分數達標。預設值來自環境變數，wizard 可改，run 頁上以「Stops when」列出並附即時計數，結束後 `optimization_runs.stop_reason` 記下是哪一個。**系統錯誤只花掉那一個 step**：訓練批次超標就整步略過（不呼叫 analyst、不買驗證 rollout），驗證 split 超標就把候選原封不動丟掉（`gate_action='reject'`, `gate_reject_reason='val_errors'`）——沒有分數就沒有 gate 可言。超標的 rollout 不寫入任何 hard/soft，所以它既不會畫在圖上、不會進 skill hash 快取、也不會被 gate 讀到。唯一仍會讓整個 run `failed` 的是 baseline 量不準，因為之後每個數字都是跟它比較 |
 | activation 偵測 | 兩個策略（tool call 路徑 + skill 內容逐字比對），**不注入任何 token**；`activation = A OR B`，兩者都測不出來時回報「未知」而不是「否」|
-| 觀測 | 六步 wizard、逐 step 圖表、Part 1（rollout + 送給 analyst 的 prompt 與截斷帳本）、Part 2（並排 diff + 未套用的 edit + 答案硬編告警）。圖表的 y 軸預設貼合資料（最小跨度 20 個百分點，非全幅時軸標題註明 zoomed）、canvas 依 step 數加寬到每個 step 至少 20 單位、legend 可開關單一系列、方向鍵可釘住 step；header 另有這個 run 的總耗時 |
+| 觀測 | 六步 wizard、逐 step 圖表、Part 1（rollout + 送給 analyst 的 prompt 與截斷帳本）、Part 2（並排 diff + 未套用的 edit + 答案硬編告警）。圖表的 y 軸預設貼合資料（最小跨度 20 個百分點，非全幅時軸標題註明 zoomed）、canvas 依 step 數加寬到每個 step 至少 20 單位（畫布高度固定，出現水平捲軸不會改變圖的大小）、legend 可開關單一系列、方向鍵可釘住 step；滑鼠停留的讀數是圖上方一條固定高度的列（不浮在圖上、不遮資料點，也是鍵盤操作唯一看得到讀數的地方），gate 判定的用字只有 `optimize_gate_label.js` 一處；header 另有這個 run 的總耗時與結束條件 |
 | 產出 | zip（skill 目錄 + `manifest.json`，含 warnings），**人工放回 agent server** |
 | 刪除 | `DELETE /optimization/runs/{id}`，**只有建立者**（與 cancel / resume 同一條線），且 `running` / `pending` 一律 409——背景 task 已經啟動但還沒把狀態翻成 `running` 的那段窗口，刪掉會讓它拿著不存在的 id 繼續買 agent 呼叫。刪除走 `services/deletion.py` 的 bulk delete（最深的先刪），不走 ORM cascade：一個 run 的子列是萬級的 |
 

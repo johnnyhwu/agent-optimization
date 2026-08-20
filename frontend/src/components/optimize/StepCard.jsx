@@ -3,6 +3,7 @@ import Badge from "../ui/Badge.jsx";
 import Button from "../ui/Button.jsx";
 import { IconChevronRight, IconDownload, IconX } from "../icons.jsx";
 import { secs } from "../../duration.js";
+import { gateLabel } from "../../optimize_gate_label.js";
 import { plural } from "../../plural.js";
 
 // One step, pinned by clicking it on the chart. This is the half of the chart
@@ -237,22 +238,16 @@ function SplitTable({ step, isBaseline, valSkipped }) {
   );
 }
 
+// The verdict, from the one module that words it. Four panels used to word it
+// four ways — this one said "rejected · it did not beat the current skill", the
+// chart said "reject", the diff header said "accept new best" — so the same
+// step read as different outcomes depending on where you were standing.
 function GateVerdict({ step }) {
-  if (!step.gate_action) return <span className="muted">not judged</span>;
-  if (step.gate_action === "reject") {
-    return (
-      <span>
-        <Badge tone="neutral" size="sm">rejected</Badge>{" "}
-        {step.gate_reject_reason === "activation"
-          ? "the agent stopped reading the skill"
-          : "it did not beat the current skill on validation"}
-      </span>
-    );
-  }
+  const verdict = gateLabel(step);
   return (
     <span>
-      <Badge tone="success" size="sm">{step.gate_action.replace(/_/g, " ")}</Badge>{" "}
-      {step.gate_action === "accept_new_best" ? "a new best" : "kept, but not a new best"}
+      <Badge tone={verdict.tone} size="sm">{verdict.short}</Badge>{" "}
+      {verdict.detail}
     </span>
   );
 }

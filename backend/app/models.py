@@ -373,6 +373,14 @@ class OptimizationRun(Base):
         Boolean, nullable=False, server_default=text("false")
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why the loop ended, which `status` cannot say: finished | cancelled |
+    # failed | early_stop_train_errors | early_stop_val_errors |
+    # early_stop_patience | early_stop_target. A run that stopped because
+    # validation reached its target and one that ran out of steps are both
+    # 'completed', and the difference is the run's whole result. Null on runs
+    # that finished before early stopping existed, and on runs still going.
+    # See `app/optimizer/stopping.py`.
+    stop_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
@@ -469,8 +477,11 @@ class OptimizationStep(Base):
     parent_step_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     status: Mapped[str] = mapped_column(Text, nullable=False)  # running|done|aborted
-    # Set when the step was re-run after too many agent/judge failures. One retry
-    # absorbs a transient outage; a second failure ends the run.
+    # Historical. Runs made before early stopping bought a whole split a second
+    # time when too much of it failed, and this recorded that it had happened.
+    # Nothing writes it now — a refused rollout costs its step and the run
+    # carries on (`app/optimizer/stopping.py`) — but the rows that carry it are
+    # still explaining their own noise, so the column and its badge stay.
     retried: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

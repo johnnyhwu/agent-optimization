@@ -818,6 +818,39 @@
 .opt-meter { height: 6px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
 .opt-meter-fill { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s ease; }
 
+/* A stop condition, written as a sentence with its numbers inside it. The two
+   halves of one condition — what share of a split may fail, and how many
+   refused rollouts in a row are an outage — are meaningless apart, and as two
+   labelled boxes side by side they read as two unrelated settings. */
+.opt-stoprule {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 var(--space-2); font-size: var(--text-body); color: var(--text);
+  line-height: 1.9;
+}
+.opt-stoprule:last-of-type { margin-bottom: 0; }
+.opt-stoprule-input { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); }
+.opt-stoprule-input input {
+  width: 5.5rem; height: var(--ctl-h); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.opt-stoprule-note { margin: var(--space-2) 0 0; font-size: var(--text-caption); color: var(--muted); line-height: 1.5; }
+
+/* What will end this run. A row of chips beside the meter rather than another
+   entry in `.opt-runfacts`, because these are not settings being reported —
+   they are conditions being tested, and every one of them carries a count that
+   moves while you watch it. */
+.opt-stopconds {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2);
+  margin: 0; font-size: var(--text-micro); color: var(--muted);
+}
+.opt-stopconds dt { text-transform: uppercase; letter-spacing: .06em; }
+.opt-stopconds dd {
+  margin: 0; padding: 2px var(--space-2); border-radius: var(--radius-sm);
+  background: var(--panel-2); font-variant-numeric: tabular-nums;
+}
+.opt-stopconds dd.is-met { background: var(--amber-soft); color: var(--text); }
+.opt-stopconds-progress { color: var(--text); font-weight: var(--fw-semibold); }
+
 /* The stage strip. Five lamps in the order the engine performs them, which is
    the answer to "what is it doing" that "step 3 · rollout" could not give. */
 .opt-phases { display: flex; flex-direction: column; gap: var(--space-2); }
@@ -1149,10 +1182,17 @@
 .opt-chart { margin-top: var(--space-2); }
 /* Two controls where there was one, kept on the card header's single line. */
 .opt-chart-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
-/* `min-width`, not `width`: a short run's canvas is the panel's width and fills
-   it, while a long run's is wider than the panel and keeps its own size so that
-   every step stays big enough to hit. The frame scrolls the difference. */
-.opt-chart-svg { min-width: 100%; height: auto; display: block; cursor: pointer; }
+/* No `min-width` and no `height: auto`. Both were here to make a short run fill
+   the card, and between them they scaled the whole drawing: the svg carries a
+   pixel `width` from the model, so stretching it to the panel scaled the height
+   to match — a 720-unit canvas in a 1100px panel rendered 428px tall, text and
+   dots included, while a long run (whose canvas is already wider than the
+   panel) rendered at its native 320. The two states differed by half again, and
+   since the scrollbar appears in exactly the second one, it looked like the
+   scrollbar was squashing the chart. The component measures the panel and asks
+   the model for that width instead, so one viewBox unit is one CSS pixel and a
+   short run fills the card without anything being scaled. */
+.opt-chart-svg { display: block; cursor: pointer; }
 /* The chart is focusable — arrow keys pin a step — so it needs to say so. */
 .opt-chart-svg:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm); }
 /* Invisible, and not a decoration: these are what `scrollIntoView` targets when
@@ -1207,25 +1247,36 @@
    normal grey one is not a difference anyone would notice. */
 .opt-chart-legend-item.is-off { text-decoration: line-through; opacity: .55; }
 .opt-chart-legend-item.is-off .swatch { opacity: .35; }
-/* The hover readout floats over the plot instead of sitting in the flow under
-   it. As a block it was laid out, which pushed the pinned card and everything
-   below it down the page every time the pointer crossed the chart.
-   `overflow-x` is here rather than on `.opt-chart`, because the tooltip is
-   positioned against this box and a scrolling ancestor is what keeps the two
-   moving together. */
-.opt-chart-frame { position: relative; overflow-x: auto; }
-.opt-chart-tip {
-  position: absolute; top: var(--space-3); transform: translateX(-50%);
-  display: flex; flex-direction: column; gap: 2px;
-  padding: var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  background: var(--panel); box-shadow: var(--shadow-2);
-  font-size: var(--text-micro); font-variant-numeric: tabular-nums;
-  white-space: nowrap; pointer-events: none; z-index: 2;
+/* `scrollbar-gutter` so that the row of pixels a scrollbar occupies is reserved
+   whether or not there is one: without it, a run that grows past the panel's
+   width mid-afternoon shifts the whole card as the bar appears. */
+.opt-chart-frame { position: relative; overflow-x: auto; scrollbar-gutter: stable; }
+
+/* The hover readout, above the plot rather than floating over it. It has had
+   all three positions: in the flow underneath, where it pushed the pinned card
+   down the page every time the pointer crossed the chart; floating over the
+   canvas, where it stopped moving the page and started covering the data
+   (pinned to the top, which is where the points are on any run worth reading);
+   and here, where it moves nothing and covers nothing. `min-height` is the
+   whole trick — the row is the same height empty or full, so a pointer crossing
+   the chart cannot reflow the page. */
+.opt-chart-readout {
+  display: flex; align-items: center; flex-wrap: nowrap; gap: var(--space-2);
+  min-height: 28px; padding: 0 var(--space-1) var(--space-1);
+  font-size: var(--text-micro); color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.opt-chart-tip .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
-.opt-chart-tip .swatch.train { background: var(--muted); }
-.opt-chart-tip .swatch.val { background: var(--accent); }
-.opt-chart-tip .verdict { color: var(--muted); }
+.opt-chart-readout-step { color: var(--text); white-space: nowrap; }
+.opt-chart-readout-score { white-space: nowrap; }
+/* The one part allowed to run out of room. Everything to its left is a number
+   or a verdict and must stay whole; this is the sentence explaining them. */
+.opt-chart-readout-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt-chart-readout-source { margin-left: auto; white-space: nowrap; opacity: .7; }
+.opt-chart-readout .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.opt-chart-readout .swatch.train { background: var(--muted); }
+.opt-chart-readout .swatch.val { background: var(--accent); }
+/* Ties the numbers above the plot to the place in it they describe. */
+.opt-chart-crosshair { stroke: var(--text); stroke-width: 1; opacity: .25; pointer-events: none; }
 
 /* --- The pinned step ----------------------------------------------------- */
 .opt-stepcard { border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--panel-2); margin-top: var(--space-3); }

@@ -17,6 +17,7 @@ import {
 } from "../icons.jsx";
 import { secs } from "../../duration.js";
 import { groupResults, outcomeOf } from "../../optimize_rollout.js";
+import { gateLabel } from "../../optimize_gate_label.js";
 import Fact from "./Fact.jsx";
 import ReflectorIO from "./ReflectorIO.jsx";
 import StageCalls from "./StageCalls.jsx";
@@ -257,19 +258,17 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
         {split === "val" && detail.gate_action && (
           <Banner
             tone={detail.gate_action === "reject" ? "warning" : "success"}
-            title={
-              detail.gate_action === "reject"
-                ? `The gate rejected this candidate (${detail.gate_reject_reason})`
-                : `The gate accepted this candidate (${detail.gate_action.replace(/_/g, " ")})`
-            }
+            title={gateLabel(detail).detail}
           >
             {/* The numbers above are what the gate compared. The analyst's
                 sentence about its patch used to be dropped in here as the
                 banner's whole body, unattributed, so it read as the gate's
-                explanation of its own verdict — which it is not. */}
-            These are the numbers the gate compared: this candidate's accuracy on
-            the held-back questions, against the best a candidate has scored so
-            far.
+                explanation of its own verdict — which it is not.
+                A candidate dropped because its split never came back was not
+                compared with anything, so this sentence would be a lie there. */}
+            {detail.gate_reject_reason === "val_errors"
+              ? "The gate was never asked: without a trustworthy accuracy there is nothing to compare against the best score so far."
+              : "These are the numbers the gate compared: this candidate's accuracy on the held-back questions, against the best a candidate has scored so far."}
             {detail.edit_summary && (
               <div className="ui-banner-note">
                 The analyst described its patch as: “{detail.edit_summary}”

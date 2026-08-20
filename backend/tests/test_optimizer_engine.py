@@ -27,7 +27,7 @@ import uuid
 import pytest
 
 from app.optimizer import engine
-from app.optimizer.store import Item, ResultRow, RolloutSummary, RunSpec
+from app.optimizer.store import Item, ResultRow, RolloutSummary, ResumeState, RunSpec
 from app.optimizer.update import MinibatchRecord, UpdateOutcome
 from app.optimizer.vendor.slow_update import SLOW_UPDATE_END, SLOW_UPDATE_START
 
@@ -180,12 +180,22 @@ def make_rows(n, *, correct: int, activated=True):
     return rows
 
 
+def failed_rows(n, *, kind="agent"):
+    """A rollout where nothing came back — the agent server is down."""
+    return [
+        ResultRow(item_key=f"k{i}", correlation_id=f"c{i}", status="failed",
+                  failure_kind=kind)
+        for i in range(n)
+    ]
+
+
 class Scores:
     """Scripts what each rollout returns, keyed by `(step_no, split)`.
 
     Every test here is really a statement about which skill was measured when,
     so the script is the test's premise and the assertions are about what the
-    loop did with it.
+    loop did with it. A script entry of `"fail"` is the other premise available:
+    that split's questions never came back at all.
     """
 
     def __init__(self, script: dict, *, default=(4, 2)):
@@ -203,7 +213,10 @@ class Scores:
                 "step_no": step_no, "split": split,
                 "skill_files": dict(skill_files), "n_items": len(items),
             })
-            n, correct = self.script.get((step_no, split), self.default)
+            scripted = self.script.get((step_no, split), self.default)
+            if scripted == "fail":
+                return failed_rows(len(items))
+            n, correct = scripted
             return make_rows(n, correct=correct)
 
         monkeypatch.setattr(engine, "run_rollout", fake_rollout)
@@ -634,63 +647,267 @@ async def test_the_terminal_event_goes_out_even_when_the_loop_raises(monkeypatch
 
 
 # --- Refusing to score a batch that mostly failed ---------------------------
+#
+# A question that never came back is not the skill being wrong, and a split
+# measured on the questions that happened to answer is not a smaller
+# measurement but an unrepresentative one. These tests are about what that
+# costs. It used to cost the whole run: the split was bought a second time and
+# a second failure raised, so an outage in the last five minutes of an hour
+# threw away every finished step. It now costs the step it happened in, and
+# `stopping.py` decides when a run of them has become an outage worth stopping
+# for.
 
 
 @pytest.mark.asyncio
-async def test_a_batch_that_mostly_failed_is_retried_once(monkeypatch):
-    """One retry absorbs a blip; scoring the remainder would poison the run.
+async def test_a_training_batch_that_never_came_back_costs_its_step_not_the_run(monkeypatch):
+    """No trajectories, no candidate, and — the expensive half — no validation.
 
-    A step measured on 60% of its batch is not a smaller measurement, it is an
-    unrepresentative one, and the gate cannot tell. Retrying once is what makes
-    a thirty-second outage cost a step instead of a run.
+    Reflecting on whichever questions the outage spared would argue a skill edit
+    from a network problem, and then a whole validation split would be spent
+    measuring it.
     """
-    store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
-                           make_items(2), make_items(4, "val"))
-    attempts = []
+    store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=2),
+                           make_items(4), make_items(4, "val"))
+    scores = Scores({(1, "train"): "fail"})
+    scores.install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    update = install_update(monkeypatch)
+    called = []
+    monkeypatch.setattr(
+        engine, "run_update_stage",
+        lambda **kwargs: called.append(kwargs) or update(**kwargs),
+    )
 
-    async def flaky(items, *, skill_files, mode, skill_name, seams, config, **kwargs):
-        attempts.append(1)
-        if len(attempts) == 1:
-            failed = [ResultRow(item_key=f"k{i}", correlation_id=f"c{i}",
-                                status="failed", failure_kind="agent") for i in range(4)]
-            return failed
-        return make_rows(4, correct=2)
+    status, _ = await run(store, monkeypatch)
 
-    monkeypatch.setattr(engine, "run_rollout", flaky)
+    assert status == "completed"
+    assert store.step(1)["gate_action"] == "skip"
+    assert store.step(1)["gate_reject_reason"] == "train_errors"
+    assert store.splits_of(1) == ["train"]
+    # One update stage for the whole run: step 2's. Step 1 never called it.
+    assert len(called) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_step_leaves_the_skill_and_the_scores_alone(monkeypatch):
+    """It produced nothing, so it must change nothing.
+
+    Including the two score columns, which a resumed run replays to rebuild its
+    working state — a null there would read as the run having lost its score.
+    """
+    store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=2),
+                           make_items(4), make_items(4, "val"))
+    scores = Scores({(1, "train"): "fail"})
+    scores.install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["current_score"] == store.step(0)["current_score"]
+    assert store.step(1)["best_score"] == store.step(0)["best_score"]
+    # Step 2 trains on the skill the baseline measured, not on some half-edited
+    # candidate the skipped step left behind.
+    assert scores.skill_used(2, "train") == SKILL
+
+
+@pytest.mark.asyncio
+async def test_a_refused_validation_split_drops_the_candidate_without_gating_it(monkeypatch):
+    """There is no number to gate on, so nothing may be accepted.
+
+    Accepting here would mean accepting an edit on the strength of whichever
+    questions the agent server happened to answer — which is how a rollout
+    failure turns into a permanent change to the skill.
+    """
+    store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=2),
+                           make_items(4), make_items(4, "val"))
+    scores = Scores({(1, "val"): "fail"})
+    scores.install(monkeypatch, store)
     install_preflight(monkeypatch)
     install_update(monkeypatch)
 
     status, _ = await run(store, monkeypatch)
 
-    assert len(attempts) >= 2
-    assert store.step(0)["retried"] is True
-    assert status != "failed"
+    assert status == "completed"
+    assert store.step(1)["gate_action"] == "reject"
+    assert store.step(1)["gate_reject_reason"] == "val_errors"
+    # The edits are still recorded — the diff is how anyone finds out what was
+    # thrown away — but the skill in force is the one the step started from.
+    assert store.step(1)["lines_added"] == 1
+    assert scores.skill_used(2, "train") == SKILL
 
 
 @pytest.mark.asyncio
-async def test_a_second_failed_attempt_ends_the_run_rather_than_guessing(monkeypatch):
-    """Twice in a row is not a blip, and there is nothing useful left to do.
+async def test_a_refused_validation_score_never_reaches_the_candidate_cache(monkeypatch):
+    """The cache is keyed by the skill's hash and read for the rest of the run.
 
-    Continuing would mean writing skill edits derived from a batch that mostly
-    did not run — and the developer would find out from a chart that looks
-    ordinary.
+    A refused score in it would be handed to the gate on some later step as
+    though it had been measured, with nothing on screen to say otherwise.
     """
     store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=2),
                            make_items(4), make_items(4, "val"))
+    scores = Scores({(1, "val"): "fail"})
+    scores.install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    # Both steps produce the identical candidate, so a cached score would show
+    # up as step 2 skipping its validation rollout.
+    install_update(monkeypatch)
 
-    async def always_failing(items, **kwargs):
-        return [ResultRow(item_key=f"k{i}", correlation_id=f"c{i}",
-                          status="failed", failure_kind="agent") for i in range(4)]
+    await run(store, monkeypatch)
 
-    monkeypatch.setattr(engine, "run_rollout", always_failing)
+    assert store.splits_of(1) == ["train", "val"]
+    assert store.splits_of(2) == ["train", "val"]
+
+
+@pytest.mark.asyncio
+async def test_the_baseline_failing_still_ends_the_run(monkeypatch):
+    """The one rollout whose failure is fatal, because nothing survives it.
+
+    Every later number is a comparison against the baseline, so a run that
+    started from an unmeasured one would report improvements over nothing.
+    """
+    store = RecordingStore(make_spec(total_steps=2, steps_per_epoch=2),
+                           make_items(4), make_items(4, "val"))
+    Scores({(0, "val"): "fail"}).install(monkeypatch, store)
     install_preflight(monkeypatch)
     install_update(monkeypatch)
 
     status, events = await run(store, monkeypatch)
 
     assert status == "failed"
-    assert store.final["error_message"]
+    assert "baseline" in store.final["error_message"]
     assert events[-1]["type"] == "run_completed"
+
+
+# --- Stopping early ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refusals_in_a_row_stop_the_run_and_say_why(monkeypatch):
+    store = RecordingStore(
+        make_spec(total_steps=4, steps_per_epoch=4,
+                  config={"seed": 3, "early_stop_val_error_streak": 2}),
+        make_items(8), make_items(4, "val"),
+    )
+    Scores({(1, "val"): "fail", (2, "val"): "fail"}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    status, events = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert store.final["stop_reason"] == "early_stop_val_errors"
+    # Steps 3 and 4 were never bought.
+    assert [s["step_no"] for s in store.steps] == [0, 1, 2]
+    assert events[-1]["stop_reason"] == "early_stop_val_errors"
+
+
+@pytest.mark.asyncio
+async def test_one_split_that_answers_clears_the_streak(monkeypatch):
+    """Consecutive, not cumulative.
+
+    Three bad rollouts spread over a run is a flaky afternoon; only three in a
+    row are an agent server that has stopped answering.
+    """
+    store = RecordingStore(
+        make_spec(total_steps=3, steps_per_epoch=3,
+                  config={"seed": 3, "early_stop_val_error_streak": 2}),
+        make_items(6), make_items(4, "val"),
+    )
+    Scores({(1, "val"): "fail", (3, "val"): "fail"}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    status, _ = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert store.final["stop_reason"] == "finished"
+    assert [s["step_no"] for s in store.steps] == [0, 1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_has_stopped_improving_runs_out_of_patience(monkeypatch):
+    store = RecordingStore(
+        make_spec(total_steps=5, steps_per_epoch=5,
+                  config={"seed": 3, "early_stop_patience": 2}),
+        make_items(10), make_items(4, "val"),
+    )
+    # The baseline scores 50% and nothing beats it.
+    Scores({}, default=(4, 2)).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    status, _ = await run(store, monkeypatch)
+
+    assert store.final["stop_reason"] == "early_stop_patience"
+    assert [s["step_no"] for s in store.steps] == [0, 1, 2]
+    assert status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_reaching_the_target_ends_the_run_as_a_success(monkeypatch):
+    store = RecordingStore(
+        make_spec(total_steps=4, steps_per_epoch=4,
+                  config={"seed": 3, "early_stop_target_score": 0.75}),
+        make_items(8), make_items(4, "val"),
+    )
+    Scores({(0, "val"): (4, 2), (1, "val"): (4, 3)}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    status, _ = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert store.final["stop_reason"] == "early_stop_target"
+    assert [s["step_no"] for s in store.steps] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_step_that_measured_nothing_cannot_reach_the_target(monkeypatch):
+    """A refused split has no score, and None is not a high one.
+
+    Otherwise an outage would end a run by declaring it a success.
+    """
+    store = RecordingStore(
+        make_spec(total_steps=1, steps_per_epoch=1,
+                  config={"seed": 3, "early_stop_target_score": 0.0}),
+        make_items(4), make_items(4, "val"),
+    )
+    Scores({(0, "val"): (4, 0), (1, "val"): "fail"}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    await run(store, monkeypatch)
+
+    assert store.final["stop_reason"] == "finished"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_run_keeps_counting_refusals_from_before_the_restart(monkeypatch):
+    """A counter that resets on every restart is one a crash loop never trips.
+
+    The streak is rebuilt from the step rows (`store.load_resume_state`), so a
+    run whose agent server went down before the backend did stops on the step
+    the policy says rather than three steps later.
+    """
+    resume = ResumeState(
+        last_step_no=2, current_files=dict(SKILL), current_score=0.5,
+        best_files=dict(SKILL), best_score=0.5, best_step=0, parent_step_no=None,
+        val_error_streak=1,
+    )
+    store = RecordingStore(
+        make_spec(total_steps=6, steps_per_epoch=6,
+                  config={"seed": 3, "early_stop_val_error_streak": 2}),
+        make_items(12), make_items(4, "val"), resume=resume,
+    )
+    Scores({(3, "val"): "fail"}).install(monkeypatch, store)
+    install_preflight(monkeypatch)
+    install_update(monkeypatch)
+
+    await run(store, monkeypatch)
+
+    assert store.final["stop_reason"] == "early_stop_val_errors"
+    assert [s["step_no"] for s in store.steps] == [3]
 
 
 # --- Pre-flight -------------------------------------------------------------
