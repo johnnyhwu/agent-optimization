@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
-import RunConfigFields, { servicesSummary } from "./RunConfigFields.jsx";
+import RunConfigFields, {
+  DiagnosisModelField,
+  servicesSummary,
+} from "./RunConfigFields.jsx";
 import RunPicker from "./RunPicker.jsx";
 import Button from "./ui/Button.jsx";
 import Field, { Disclosure, FormSection } from "./ui/Field.jsx";
@@ -163,8 +166,48 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               setSecrets={setSecrets}
               impls={impls}
               kept={kept}
+              showDiagnosisModel={false}
             />
           </Disclosure>
+
+          {/* Outside the disclosure on purpose. Everything inside it answers
+              "which services does this talk to"; this answers "what will this
+              run spend", which is a decision rather than a connection detail —
+              and one taken by exactly the person who would otherwise press the
+              button without opening anything.
+
+              The two lines of explanation are the whole reason the switch is
+              safe to offer. Turning off something called "trace diagnosis" is
+              not a decision anyone can make from its name; knowing it costs one
+              model call per wrong answer, and what that call reads and returns,
+              is. */}
+          <FormSection
+            title="Trace diagnosis"
+            description="What to do with the questions this run gets wrong."
+          >
+            <label className="ui-switch">
+              <input
+                type="checkbox"
+                checked={form.diagnosis_enabled !== false}
+                onChange={(e) => set("diagnosis_enabled", e.target.checked)}
+              />
+              <span>Diagnose wrong answers as the run goes</span>
+            </label>
+            <div className="hint" style={{ marginTop: 6 }}>
+              One extra model call per wrong answer. It reads the question’s
+              expected reasoning process, the agent’s trace (every step, long
+              bodies shortened) and the grader’s verdict, and returns a short
+              summary plus the steps that look most suspect — a clue, not a
+              verdict. Turn it off and the run only produces verdicts; any single
+              question can still be diagnosed afterwards from its own page.
+            </div>
+            <DiagnosisModelField
+              value={form.diagnosis_model}
+              onChange={(v) => set("diagnosis_model", v)}
+              simulated={impls.diagnosis === "fake"}
+              disabled={form.diagnosis_enabled === false || impls.diagnosis === "fake"}
+            />
+          </FormSection>
 
           {/* One line, not two textareas. The grading criteria belong to the
               eval set (only its owner may change them), so this dialog states

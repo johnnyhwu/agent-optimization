@@ -162,6 +162,16 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     judge_model: str = "Qwen3.6-27B"
     diagnosis_model: str = "Qwen3.6-27B"
+    # Whether a run diagnoses its wrong answers unless told otherwise. This is
+    # the *default* the "Run eval" dialog prefills, not a master switch: the
+    # choice is per run and recorded in the run's config, because it is a
+    # question about one afternoon's spending rather than about the deployment.
+    #
+    # On by default, which is what it has always done. Turning it off costs one
+    # LLM call per wrong answer and leaves manual re-diagnose available, so a
+    # site that mostly wants pass rates can flip this and still diagnose the
+    # questions it cares about, one at a time.
+    diagnosis_enabled: bool = True
     # Deliberately the same default as the other two, and deliberately separate:
     # this is the call that has to reason about a whole minibatch of traces at
     # once, so it is the one people will want to point at a stronger model.

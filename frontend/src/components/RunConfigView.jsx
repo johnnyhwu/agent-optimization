@@ -26,6 +26,11 @@ const SECTIONS = [
     ["llm_base_url", "Base URL"],
     ["judge_model", "Judge Model"],
     ["diagnosis_model", "Diagnosis Model"],
+    // Without this row, "why does this run have no diagnoses?" has no answer
+    // anywhere — a run started with the box unticked looks exactly like one
+    // whose diagnosis model was down. Runs from before the switch existed show
+    // "not set", which is the truth: it was not a choice anyone made.
+    ["diagnosis_enabled", "Diagnose Wrong Answers"],
   ]],
 ];
 
@@ -42,7 +47,9 @@ function Row({ label, value }) {
     <div className="cfg-row">
       <span className="cfg-label">{label}</span>
       <span className={`cfg-value ${empty ? "empty" : ""}`}>
-        {empty ? "not set" : String(value)}
+        {/* "on"/"off" rather than "true"/"false": this reads as a setting
+            somebody chose, and that is what a boolean here always is. */}
+        {empty ? "not set" : typeof value === "boolean" ? (value ? "on" : "off") : String(value)}
       </span>
     </div>
   );

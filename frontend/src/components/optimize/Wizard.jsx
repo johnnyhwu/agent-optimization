@@ -1045,7 +1045,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           label="Slow update"
           help="Writes free-form guidance into a protected block of SKILL.md that step-level edits cannot touch. Needs at least two epochs to have anything to compare."
         >
-          <label className="opt-switch">
+          <label className="ui-switch">
             <input
               type="checkbox"
               checked={switchOn("slow_update")}
@@ -1058,7 +1058,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           label="Meta skill"
           help="Optimizer-side memory: what the last epoch taught it about its own editing, shown to the analyst on later steps. Never written into the skill itself."
         >
-          <label className="opt-switch">
+          <label className="ui-switch">
             <input
               type="checkbox"
               checked={switchOn("meta_skill")}

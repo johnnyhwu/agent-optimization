@@ -124,6 +124,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       JUDGE_MODEL: ${JUDGE_MODEL:-Qwen3.6-27B}
       DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-Qwen3.6-27B}
+      # The default state of the "Run eval" dialog's diagnosis checkbox, not a
+      # master switch: each run records the choice it was started with.
+      DIAGNOSIS_ENABLED: ${DIAGNOSIS_ENABLED:-true}
       SYNTHESIS_MODEL: ${SYNTHESIS_MODEL:-Qwen3.6-27B}
       # Separate from the other three on purpose: this is the call that reasons
       # about a whole minibatch of traces at once, so it is the one people point

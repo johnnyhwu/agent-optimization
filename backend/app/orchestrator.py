@@ -105,6 +105,15 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     config = run.config or {}
     seams = seams or build_seams(config, run.secrets or {})
     agent_timeout_s = config.get("agent_timeout_s") or settings.agent_timeout_s
+    # Whether this run diagnoses its wrong answers (§6.9). Deliberately not the
+    # `x or default` idiom every line around it uses: `False` is falsy and is
+    # also the whole point of the setting, so `or` would quietly re-enable the
+    # thing the developer just unticked. Only an absent value — a run predating
+    # this feature — falls back to the environment.
+    diagnosis_choice = config.get("diagnosis_enabled")
+    diagnose = (
+        settings.diagnosis_enabled if diagnosis_choice is None else bool(diagnosis_choice)
+    )
 
     # Snapshot the question set at run start (§6.15) — later edits don't affect
     # this run.
@@ -160,7 +169,7 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
         async with semaphore:
             await _process_question(
                 session, run_id, item, total, state, lock, user_id, tags,
-                seams, agent_timeout_s, cancel_event,
+                seams, agent_timeout_s, cancel_event, diagnose,
             )
 
     # return_exceptions=True: one unexpected per-question error must not cancel
@@ -199,7 +208,7 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
 
 async def _process_question(session, run_id, item, total, state, lock, user_id, tags,
                             seams: Seams, agent_timeout_s: float,
-                            cancel_event: asyncio.Event) -> None:
+                            cancel_event: asyncio.Event, diagnose: bool = True) -> None:
     result: QuestionResult = item["result"]
     correlation_id = result.correlation_id
 
@@ -363,7 +372,17 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     #    A diagnosis failure leaves the question intact and undiagnosed; the
     #    reason is stored so the UI can explain the absence, and the owner can
     #    retry from the UI via re-diagnose.
-    if verdict.verdict == "incorrect" and trace is not None and not cancel_event.is_set():
+    #    `diagnose` is the run's own choice (see `_execute_run`). Switched off,
+    #    the question keeps everything else it earned — answer, verdict, trace,
+    #    call count — and simply has no analysis. Note there is no
+    #    `diagnosis_error` to write: nobody asked, so there is nothing to
+    #    explain, and an error here would read as a model that had failed.
+    if (
+        diagnose
+        and verdict.verdict == "incorrect"
+        and trace is not None
+        and not cancel_event.is_set()
+    ):
         try:
             diag = await run_diagnosis(seams, trace, item["reasoning"], verdict)
         except Exception as exc:  # noqa: BLE001

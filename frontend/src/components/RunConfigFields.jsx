@@ -26,6 +26,28 @@ import Badge from "./ui/Badge.jsx";
 // heading. That is a deployment detail leaking through the glass — it names a
 // variable the reader cannot see, cannot set from here, and did not ask about.
 // The state is real and worth showing; the variable name is not.
+// The diagnosis model, as one field rather than as two copies of one.
+//
+// It has to appear in two places that group it differently: the run dialog puts
+// it under its Trace diagnosis section, beside the checkbox that decides whether
+// the model is called at all, while the playground has no such choice and keeps
+// it with the other model settings. Sharing the field is what stops "simulated"
+// being marked in one place and not the other the next time this is touched.
+//
+// `disabled` is the caller's to decide, because the reasons differ: the seam
+// being fake here, the checkbox being unticked there.
+export function DiagnosisModelField({ value, onChange, simulated, disabled }) {
+  return (
+    <Field label="Diagnosis model" hint={simulated ? "simulated" : undefined}>
+      <input
+        value={value}
+        disabled={disabled ?? simulated}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </Field>
+  );
+}
+
 export function SimulatedBadge() {
   return (
     <Badge tone="neutral" title="Simulated for this environment — these settings are not used">
@@ -44,6 +66,7 @@ export default function RunConfigFields({
   kept = () => "",
   showAgent = true,
   showConcurrency = true,
+  showDiagnosisModel = true,
 }) {
   const fake = (seam) => impls[seam] === "fake";
   const simulatedNote = "Simulated in this environment, so what you enter here has no effect.";
@@ -128,14 +151,22 @@ export default function RunConfigFields({
         </Field>
       </FormSection>
 
+      {/* Titled by what it actually holds. The run dialog moves the diagnosis
+          model out to sit beside the switch that decides whether it is used at
+          all, and a section still called "Grading & diagnosis models" would then
+          be naming a field one screen away. */}
       <FormSection
-        title="Grading & diagnosis models"
+        title={showDiagnosisModel ? "Grading & diagnosis models" : "Grading model"}
         description={
-          fake("judge") && fake("diagnosis")
+          fake("judge") && (fake("diagnosis") || !showDiagnosisModel)
             ? simulatedNote
-            : "The models that grade each answer and explain the wrong ones."
+            : showDiagnosisModel
+              ? "The models that grade each answer and explain the wrong ones."
+              : "The model that grades each answer."
         }
-        aside={fake("judge") && fake("diagnosis") && <SimulatedBadge />}
+        aside={
+          fake("judge") && (fake("diagnosis") || !showDiagnosisModel) && <SimulatedBadge />
+        }
       >
         <Field label="LLM base URL">
           <input value={form.llm_base_url} onChange={(e) => set("llm_base_url", e.target.value)} />
@@ -155,13 +186,13 @@ export default function RunConfigFields({
             onChange={(e) => set("judge_model", e.target.value)}
           />
         </Field>
-        <Field label="Diagnosis model" hint={fake("diagnosis") ? "simulated" : undefined}>
-          <input
+        {showDiagnosisModel && (
+          <DiagnosisModelField
             value={form.diagnosis_model}
-            disabled={fake("diagnosis")}
-            onChange={(e) => set("diagnosis_model", e.target.value)}
+            onChange={(v) => set("diagnosis_model", v)}
+            simulated={fake("diagnosis")}
           />
-        </Field>
+        )}
       </FormSection>
     </>
   );

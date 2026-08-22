@@ -306,6 +306,15 @@ class RunConfig(BaseModel):
     llm_base_url: str = ""
     judge_model: str = ""
     diagnosis_model: str = ""
+    # Whether wrong answers are diagnosed during the run (§6.9). `None` means
+    # "use the environment", as a blank string does for the fields above — but
+    # `False` is a real answer and must survive: see `run_config._supplied`,
+    # which is the rule that keeps the two apart.
+    #
+    # Off does not mean undiagnosable. The per-question re-diagnose is still
+    # there, so this decides what a run spends unprompted, not what can ever be
+    # asked.
+    diagnosis_enabled: bool | None = None
     # How many questions are sent to the agent at once.
     concurrency: int | None = Field(default=None, ge=1)
     # The grading criteria this run used, frozen at trigger time. Present on the

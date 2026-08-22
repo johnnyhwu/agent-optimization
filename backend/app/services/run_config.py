@@ -1,6 +1,6 @@
 """The non-secret settings a run is triggered with (§9.2 seams).
 
-One place owns the nine fields and their environment-derived defaults, because
+One place owns the fields and their environment-derived defaults, because
 two callers need to agree on them exactly: `GET /run-config/defaults`, which
 prefills the "Run eval" dialog, and `trigger_run`, which records what the run
 actually used. If those drifted apart the UI would show one thing and the run
@@ -31,6 +31,7 @@ def defaults() -> dict[str, Any]:
         "llm_base_url": settings.llm_base_url,
         "judge_model": settings.judge_model,
         "diagnosis_model": settings.diagnosis_model,
+        "diagnosis_enabled": settings.diagnosis_enabled,
         "concurrency": settings.run_concurrency,
     }
 

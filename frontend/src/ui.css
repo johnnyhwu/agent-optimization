@@ -1511,5 +1511,5 @@
 @media (max-width: 1100px) {
   .opt-skilldiff-body { grid-template-columns: 1fr; }
 }
-.opt-switch { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-body); cursor: pointer; }
-.opt-switch input { margin: 0; }
+.ui-switch { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-body); cursor: pointer; }
+.ui-switch input { margin: 0; }
