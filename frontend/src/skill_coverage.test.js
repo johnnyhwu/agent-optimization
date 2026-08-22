@@ -1,7 +1,7 @@
 // Run with: pnpm test  (node --test)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { skillCoverage, coverageNote } from "./skill_coverage.js";
+import { skillCoverage, coverageWarning } from "./skill_coverage.js";
 
 const set = (...names) => names.map((skill_name) => ({ skill_name, question_count: 1 }));
 
@@ -70,26 +70,53 @@ test("missing input is treated as nothing known, never as a failure", () => {
   assert.equal(skillCoverage(undefined, ["billing"]).ok, true);
 });
 
-// --- The sentence under the warning -----------------------------------------
+// --- The warning: heading and body come from one place ----------------------
+//
+// They are produced together because they were once produced apart, and a
+// heading that overstates its body is worse than no heading: an eval set with no
+// tags at all, against a perfectly healthy agent, was told "Some questions need
+// skills this agent does not have" — a claim about the agent, made on evidence
+// that says nothing about the agent. A warning that cries wolf once is read as
+// noise from then on.
 
-test("the note names the skill and what depends on it", () => {
-  const note = coverageNote(
+test("the warning names the skill and what depends on it", () => {
+  const w = coverageWarning(
     skillCoverage([{ skill_name: "refunds", question_count: 3 }], ["billing"]),
     0
   );
-  assert.match(note, /refunds/);
-  assert.match(note, /3 questions/);
+  assert.match(w.title, /does not have/);
+  assert.match(w.text, /refunds/);
+  assert.match(w.text, /3 questions/);
 });
 
 test("a case mismatch says what the agent actually calls it", () => {
-  const note = coverageNote(skillCoverage(set("Billing"), ["billing"]), 0);
-  assert.match(note, /billing/);
+  const w = coverageWarning(skillCoverage(set("Billing"), ["billing"]), 0);
+  assert.match(w.text, /billing/);
 });
 
-test("untagged questions are reported as a count, and only when there are some", () => {
+test("untagged questions alone are not a claim about the agent", () => {
   const covered = skillCoverage(set("billing"), ["billing"]);
-  assert.equal(coverageNote(covered, 0), null);
-  assert.match(coverageNote(covered, 4), /4 questions have no skill tag/);
-  // Singular reads as English, not as "1 questions".
-  assert.match(coverageNote(covered, 1), /1 question has no skill tag/);
+  const w = coverageWarning(covered, 4);
+  assert.match(w.text, /4 questions have no skill tag/);
+  // The heading has to be about what was *not checked*, not about the agent
+  // lacking something — nothing here says it does.
+  assert.doesNotMatch(w.title, /does not have/);
+  assert.match(w.title, /not checked|could not be checked/i);
+});
+
+test("nothing missing and nothing untagged is no warning at all", () => {
+  assert.equal(coverageWarning(skillCoverage(set("billing"), ["billing"]), 0), null);
+});
+
+test("a real miss keeps its heading even when there are untagged questions too", () => {
+  // The more serious claim wins the heading; both sentences survive in the body.
+  const w = coverageWarning(skillCoverage(set("refunds"), ["billing"]), 2);
+  assert.match(w.title, /does not have/);
+  assert.match(w.text, /refunds/);
+  assert.match(w.text, /2 questions have no skill tag/);
+});
+
+test("singular reads as English, not as \"1 questions\"", () => {
+  const w = coverageWarning(skillCoverage(set("billing"), ["billing"]), 1);
+  assert.match(w.text, /1 question has no skill tag/);
 });

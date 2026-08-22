@@ -55,12 +55,34 @@ export function skillCoverage(evalSetSkills, agentSkills) {
 }
 
 /**
- * The sentence under the warning, or `null` when there is nothing to say.
+ * The whole warning — heading and body — or `null` when there is nothing to say.
  *
- * `untagged` is counted separately by the server rather than derived here: a
- * question may carry two tags, so "questions minus tags" is not it.
+ * **The two are produced here together, deliberately.** They were briefly
+ * produced apart, with the heading hardcoded at the call site, and that let the
+ * heading make a claim the body did not support: an eval set with no tags at
+ * all, against a perfectly healthy agent, was told "Some questions need skills
+ * this agent does not have" — an accusation about the agent, on evidence that
+ * says nothing about the agent. A warning that overstates itself once is read as
+ * noise from then on, including on the run where it is right.
+ *
+ * `untagged` is counted by the server rather than derived here: a question may
+ * carry two tags, so "questions minus tags" is not it.
  */
-export function coverageNote(coverage, untagged = 0) {
+export function coverageWarning(coverage, untagged = 0) {
+  const missing = coverage?.missing || [];
+  const text = coverageText(coverage, untagged);
+  if (!text) return null;
+  return {
+    // The more serious claim wins the heading when both apply; the body still
+    // carries both sentences.
+    title: missing.length
+      ? "Some questions need skills this agent does not have"
+      : "Some questions could not be checked",
+    text,
+  };
+}
+
+function coverageText(coverage, untagged) {
   const parts = [];
 
   for (const miss of coverage?.missing || []) {

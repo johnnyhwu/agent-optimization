@@ -48,7 +48,7 @@ import { plural } from "../plural.js";
 //
 // The coverage warning is a separate claim and reads as one: the connection
 // succeeded, and *then* there is something about this eval set worth knowing.
-export function AgentProbe({ probe, coverageNote, onRetry }) {
+export function AgentProbe({ probe, coverage, onRetry }) {
   // Nothing to report about a seam that is not being asked: the section's
   // `simulated` badge has already said so, and a tick here would be claiming a
   // connection that was never made.
@@ -82,9 +82,11 @@ export function AgentProbe({ probe, coverageNote, onRetry }) {
         <IconCheck size={13} /> Connected · {plural(probe.skills.length, "skill")}
         {probe.version ? <code className="agent-version">{probe.version}</code> : null}
       </div>
-      {coverageNote && (
-        <Banner tone="warning" title="Some questions need skills this agent does not have">
-          {coverageNote}
+      {/* Heading and body both come from `coverageWarning`, so the heading
+          cannot make a claim the sentence under it does not support. */}
+      {coverage && (
+        <Banner tone="warning" title={coverage.title}>
+          {coverage.text}
         </Banner>
       )}
     </div>
@@ -135,7 +137,7 @@ export default function RunConfigFields({
   // The pre-flight's result, owned by the host (only the run dialog runs one).
   // Absent in the playground, which has a connection bar of its own.
   probe = null,
-  coverageNote = null,
+  coverage = null,
   onRetryProbe = null,
 }) {
   const fake = (seam) => impls[seam] === "fake";
@@ -158,7 +160,7 @@ export default function RunConfigFields({
             />
           </Field>
           {probe && (
-            <AgentProbe probe={probe} coverageNote={coverageNote} onRetry={onRetryProbe} />
+            <AgentProbe probe={probe} coverage={coverage} onRetry={onRetryProbe} />
           )}
           <Field label="Timeout" hint="seconds">
             <input

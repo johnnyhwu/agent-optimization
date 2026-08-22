@@ -11,7 +11,7 @@ import Field, { Disclosure, FormSection } from "./ui/Field.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
 import { IconAlert, IconGear, IconPlay } from "./icons.jsx";
 import { useDebounced } from "../useDebounced.js";
-import { coverageNote, skillCoverage } from "../skill_coverage.js";
+import { coverageWarning, skillCoverage } from "../skill_coverage.js";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
 // the deployment's environment. Prefilled from GET /run-config/defaults so the
@@ -119,7 +119,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // arrive first; this recomputes when either does, without another round trip.
   const coverage = useMemo(() => {
     if (probe?.state !== "connected" || !evalSetSkills) return null;
-    return coverageNote(
+    return coverageWarning(
       skillCoverage(evalSetSkills.skills, probe.skills),
       evalSetSkills.untagged_question_count || 0
     );
@@ -290,7 +290,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               kept={kept}
               showDiagnosisModel={false}
               probe={probe}
-              coverageNote={coverage}
+              coverage={coverage}
               onRetryProbe={() => setProbeNonce((n) => n + 1)}
             />
           </Disclosure>
