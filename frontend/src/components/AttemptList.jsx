@@ -4,6 +4,7 @@ import { IconClock, IconCopy, IconPanelLeft, IconPlus, IconStop, IconTrash } fro
 import { overrideCounts } from "../workspace_util.js";
 import ElapsedTimer from "./ElapsedTimer.jsx";
 import { isTimeout } from "../failure.js";
+import { plural } from "../plural.js";
 
 // Left column of the playground: this session's attempts, newest first.
 //
@@ -138,6 +139,17 @@ export default function AttemptList({
                 // what "the agent never answered" looks like.
                 running={a.status === "running"}
               />
+              {/* What the answer cost, beside how long it took — the same pair,
+                  in the same order, as a run's question row (QuestionList).
+                  These two lists are the same design and were showing different
+                  facts. Absent rather than zero when there is no trace to count
+                  from: "no calls" is a claim, and it would be a false one. */}
+              {a.llm_call_count != null && (
+                <span title="Model calls the agent made answering this question">
+                  {" · "}
+                  {plural(a.llm_call_count, "call")}
+                </span>
+              )}
             </div>
             <div className="attempt-tags">
               {a.workspace_overridden ? (

@@ -688,6 +688,9 @@ class PlaygroundAttemptOut(BaseModel):
     # take", from one server-side clock rather than the browser's.
     agent_started_at: datetime | None = None
     agent_latency_ms: int | None = None
+    # Model calls the agent made, counted off this attempt's trace. `None` means
+    # there is no trace to count — not that nothing was called.
+    llm_call_count: int | None = None
     error_message: str | None = None
     # Which step failed, in the same vocabulary a run's results use, so the
     # attempt list can mark a timeout without parsing the message.

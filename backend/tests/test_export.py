@@ -263,6 +263,55 @@ def test_result_rows_keep_every_run_not_one_representative_per_question():
     assert rows[0]["phase"] == "judged"
 
 
+def test_result_rows_carry_what_a_question_cost_and_how_it_failed():
+    """Three figures the screen has and the spreadsheet did not.
+
+    `llm_call_count` is what makes "this run got expensive" answerable per
+    question; `started_at` is the other end of a latency that was exported
+    without one; `failure_kind` is how "half of these timed out" stops being a
+    substring search over prose — the left column already reads it rather than
+    the message, for exactly that reason.
+    """
+    es = make_eval_set()
+    q = make_question(es, "q_aaa")
+    run = make_run(es)
+    result = make_result(run, q, verdict="incorrect", status="failed")
+    result.llm_call_count = 7
+    result.started_at = datetime(2026, 3, 1, 9, 30, tzinfo=timezone.utc)
+    result.failure_kind = "agent_timeout"
+    result.error_message = "The agent did not answer within 2 minutes."
+
+    row = export_service.result_rows(es, [run], [result], {q.id: q})[0]
+
+    assert row["llm_call_count"] == 7
+    assert row["started_at"] == "2026-03-01T09:30:00+00:00"
+    assert row["failure_kind"] == "agent_timeout"
+    # And they are actually written out, not merely computed.
+    assert {"llm_call_count", "started_at", "failure_kind"} <= set(
+        export_service.RESULT_FIELDS
+    )
+
+
+def test_an_uncounted_question_exports_blank_rather_than_zero():
+    """`None` survives to the file. A question whose trace never arrived did not
+    make zero model calls — nobody knows how many it made, and a `0` in a
+    spreadsheet is a number people average."""
+    es = make_eval_set()
+    q = make_question(es, "q_aaa")
+    run = make_run(es)
+    result = make_result(run, q)
+    result.llm_call_count = None
+
+    rows = export_service.result_rows(es, [run], [result], {q.id: q})
+    assert rows[0]["llm_call_count"] is None
+
+    # Read back with a real parser: the row ahead of this column holds the
+    # question text, which is quoted and full of commas.
+    csv_text = export_service.to_csv(rows, export_service.RESULT_FIELDS)
+    parsed = list(csv.DictReader(io.StringIO(csv_text.lstrip("﻿"))))
+    assert parsed[0]["llm_call_count"] == ""
+
+
 def test_result_rows_skip_results_whose_question_is_gone():
     es = make_eval_set()
     q = make_question(es, "q_aaa")

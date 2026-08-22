@@ -96,7 +96,22 @@ RESULT_FIELDS = (
     "status",
     "phase",
     "error_message",
+    # Which step failed and how, in the vocabulary the UI already reads rather
+    # than the prose beside it: 'agent_timeout' | 'agent' | 'judge' |
+    # 'judge_timeout' | 'judge_invalid'. Without it, "how many of these timed
+    # out" is a substring search over `error_message`, which is a sentence that
+    # is allowed to change wording.
+    "failure_kind",
+    # Both ends of the agent call. The latency was exported without the moment
+    # it started, which is the column anyone lining a run up against an incident
+    # timeline actually needs.
+    "started_at",
     "agent_latency_ms",
+    # Model calls the agent made answering this question, as counted off the
+    # trace at run time. Blank — never 0 — for a question whose trace never
+    # arrived: nobody knows what it cost, and a 0 in a spreadsheet is a number
+    # people average.
+    "llm_call_count",
     "correlation_id",
     "trace_ready",
 )
@@ -205,7 +220,10 @@ def result_rows(
                         r.status, r.agent_response, r.verdict, r.failure_kind
                     ),
                     "error_message": r.error_message,
+                    "failure_kind": r.failure_kind,
+                    "started_at": _iso(r.started_at),
                     "agent_latency_ms": r.agent_latency_ms,
+                    "llm_call_count": r.llm_call_count,
                     "correlation_id": r.correlation_id,
                     "trace_ready": r.trace_ready,
                 }

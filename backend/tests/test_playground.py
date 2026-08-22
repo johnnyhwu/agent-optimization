@@ -542,6 +542,54 @@ async def test_cancel_while_judging_keeps_the_answer(monkeypatch):
     assert attempt.verdict is None
 
 
+# --- Model calls per attempt ------------------------------------------------
+#
+# The evaluation page's left column carries this figure per question; the
+# playground's left column is the same design and did not. Counted through the
+# same `services.trace_view.count_llm_calls` the run path uses, so the two
+# screens cannot come to different answers about what a model call is.
+
+def _counted_trace(*usages) -> Trace:
+    return Trace(
+        correlation_id="c",
+        spans=[
+            Span(index=i, tool_name="step", status="success", input="i", output="o",
+                 token_usage=usage)
+            for i, usage in enumerate(usages)
+        ],
+    )
+
+
+async def test_an_attempts_model_calls_are_counted_from_its_trace(seams, monkeypatch):
+    # Two generations and a tool call between them: only the generations spent
+    # tokens, and only they are what anyone means by "model calls".
+    seams.trace = StubTrace(
+        _counted_trace({"input": 90, "output": 40, "total": 130}, {},
+                       {"input": 20, "output": 10, "total": 30})
+    )
+    attempt = make_attempt()
+    await execute(attempt, seams, monkeypatch)
+
+    assert playground.event_for(attempt, "attempt_completed")["llm_call_count"] == 2
+    assert playground_router._out(attempt).llm_call_count == 2
+
+
+async def test_an_attempt_with_no_trace_reports_no_count(seams, monkeypatch):
+    """`null`, never `0`.
+
+    "We never got the trace" and "the agent answered without asking a model
+    anything" are different claims, and the second one is worth not making by
+    accident — the same rule `count_llm_calls` already applies on the run path.
+    """
+    seams.trace = StubTrace(exc=RuntimeError("langfuse down"))
+    attempt = make_attempt()
+    await execute(attempt, seams, monkeypatch)
+
+    assert attempt.trace is None
+    assert playground.event_for(attempt, "attempt_completed")["llm_call_count"] is None
+    assert playground_router._out(attempt).llm_call_count is None
+
+
 # --- Progress events --------------------------------------------------------
 
 async def test_events_cover_every_stage_and_carry_the_fingerprint(seams, monkeypatch):

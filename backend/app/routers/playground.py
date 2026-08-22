@@ -43,7 +43,7 @@ from app.schemas import (
 )
 from app.services import judge_prompt as judge_prompt_service
 from app.services import run_config
-from app.services.trace_view import span_to_out
+from app.services.trace_view import count_llm_calls, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
 router = APIRouter(prefix="/playground", tags=["playground"])
@@ -166,6 +166,7 @@ def _out(attempt: PlaygroundAttempt) -> PlaygroundAttemptOut:
         judge_score=attempt.judge_score,
         agent_started_at=attempt.agent_started_at,
         agent_latency_ms=attempt.agent_latency_ms,
+        llm_call_count=count_llm_calls(attempt.trace),
         error_message=attempt.error_message,
         failure_kind=attempt.failure_kind,
         config=RunConfig(**(attempt.config or {})),
