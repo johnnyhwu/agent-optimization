@@ -328,6 +328,9 @@ select { cursor: pointer; }
 .avatar {
   width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
   font-size: var(--text-micro); font-weight: 700; color: #fff; text-transform: uppercase; flex: none;
+  /* The anchor for `.avatar-dot`, which is how "there is something on your
+     settings page" reaches a user who is not on that page. */
+  position: relative;
 }
 .usermenu-trigger {
   display: flex; align-items: center; gap: var(--space-2);
@@ -1793,6 +1796,102 @@ pre.prompt-text {
   max-height: 200px; overflow: auto;
 }
 
+/* Settings — personal defaults
+   ---------------------------------------------------------------------------
+   Reached from the user menu, so it gets the page area but not a rail entry.
+   Its own left column because the column is the promise: the next thing that
+   belongs to the person rather than to an eval set sits beside "Defaults". */
+.settings {
+  display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--space-6);
+  /* No width, margin or padding of its own: `.page` already centres at
+     --page-max and applies the gutter. Repeating `margin: 0 auto` here was worse
+     than redundant — `.page` is a column flex container, and an auto cross-axis
+     margin cancels the stretch, so this sized to its content and floated in the
+     middle of the page instead of starting at the gutter like every other
+     section. */
+  align-items: start;
+}
+.settings-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.settings-nav-item {
+  display: grid; grid-template-columns: 1fr auto; gap: 0 var(--space-2);
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+  color: var(--text); text-decoration: none; border: 1px solid transparent;
+}
+.settings-nav-item:hover { background: var(--panel-2); }
+.settings-nav-item.active { background: var(--accent-soft); border-color: var(--border); }
+.settings-nav-label { font-size: var(--text-ui); font-weight: var(--fw-medium); }
+.settings-nav-desc {
+  grid-column: 1 / -1; font-size: var(--text-caption); color: var(--muted);
+}
+.settings-nav-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center;
+}
+.settings-body { min-width: 0; }
+.settings-panel {
+  display: grid; gap: var(--space-5);
+  /* A form column, not a page column. The fields here are single values, and a
+     1100px-wide box for a model name is harder to read than a narrow one, not
+     easier. */
+  max-width: 780px;
+}
+.settings-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--space-4); flex-wrap: wrap;
+}
+.settings-head h2 {
+  margin: 0 0 var(--space-1); font-family: var(--font-display);
+  font-size: var(--text-section); font-weight: var(--fw-semibold);
+}
+.settings-head p { margin: 0; max-width: 60ch; }
+.settings-actions { display: flex; align-items: center; gap: var(--space-3); }
+
+/* A key added since this developer last opened the page. Deliberately quiet:
+   the thing is already working on the deployment's value, so this is news
+   rather than a problem. */
+.setting-new {
+  margin-left: var(--space-2); padding: 1px 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: var(--text-micro); font-weight: var(--fw-medium); letter-spacing: 0.02em;
+}
+
+/* Three positions, for the controls whose "blank" is already spoken for: a
+   checkbox has no empty state, and the target score's blank already means "aim
+   at nothing". */
+.setting-seg-wrap { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.setting-seg {
+  display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--panel-2);
+}
+.setting-seg-btn {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  padding: 0 var(--ctl-px); height: var(--ctl-h-sm); color: var(--muted);
+  font-family: inherit; font-size: var(--text-caption); white-space: nowrap;
+}
+.setting-seg-btn + .setting-seg-btn { border-left: 1px solid var(--border); }
+.setting-seg-btn:hover { color: var(--text); }
+.setting-seg-btn.is-on { background: var(--panel); color: var(--text); font-weight: var(--fw-medium); }
+.setting-seg-value { max-width: 120px; }
+.setting-seg-unit { color: var(--muted); font-size: var(--text-caption); }
+
+/* A credential saves on its own button because it goes to its own endpoint. */
+.secret-row { display: flex; align-items: center; gap: var(--space-2); }
+.secret-row input { flex: 1 1 auto; min-width: 0; }
+
+/* The dot that says there is something on the settings page worth a look. */
+.avatar-dot {
+  position: absolute; top: -2px; right: -2px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
+}
+.menu-dot {
+  margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+}
+
+/* The one line each prefilled form shows in place of a marker per field. */
+.defaults-notice {
+  font-size: var(--text-caption); color: var(--muted);
+  padding: var(--space-2) 0;
+}
+
 /* Under ~900px the two panes stop being two panes. */
 @media (max-width: 900px) {
   .pane-editor { grid-template-columns: minmax(0, 1fr); }
@@ -1803,4 +1902,6 @@ pre.prompt-text {
   .script-conn-grid { grid-template-columns: minmax(0, 1fr) 90px; }
   .script-conn-host { grid-column: 1 / -1; }
   .script-conn-port { grid-column: 1; }
+  /* The settings column stacks above its panel rather than squeezing it. */
+  .settings { grid-template-columns: minmax(0, 1fr); }
 }

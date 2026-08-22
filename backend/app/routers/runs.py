@@ -18,16 +18,19 @@ from app.db import SessionLocal, get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import run_eval
 from app.schemas import RunConfig, RunCreate, RunOut, RunPage, RunRename
-from app.services import judge_prompt, run_config
+from app import settings_catalog
+from app.services import judge_prompt, run_config, user_secrets, user_settings
 from app.services.deletion import delete_run as delete_run_rows
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
 # A credential and the endpoint it authenticates against, for the reuse rule
 # below: {secret key in runs.secrets: endpoint key in runs.config}.
-_SECRET_ENDPOINTS = {
-    "llm_api_key": "llm_base_url",
-    "langfuse_secret_key": "langfuse_host",
-}
+#
+# Read from the catalogue rather than written out again. The same pairing now
+# governs a *saved* credential (services/user_secrets.py), and two copies of
+# "which URL does this key authenticate against" is one copy too many — the one
+# that fell behind would be the one deciding where a credential gets sent.
+_SECRET_ENDPOINTS = dict(settings_catalog.SECRET_ENDPOINTS)
 
 # The same credentials as UI-facing slot names. Only these names are ever sent
 # outward — the values behind them stay in the database.
@@ -126,18 +129,22 @@ async def _resolve_secrets(
     eval_set_id: uuid.UUID,
     body: RunCreate,
     config: dict,
+    subject: str | None = None,
 ) -> dict:
-    """The credentials this run executes with: what was typed, plus anything
-    borrowed from an earlier run.
+    """The credentials this run executes with, highest precedence first: what was
+    typed into this request, then anything borrowed from an earlier run, then the
+    caller's own saved default.
 
-    A borrowed credential is only carried over when the endpoint it authenticates
-    against is unchanged. Without that rule a user could reuse a stored key while
-    pointing the base URL at a server they control, and the backend would happily
-    send someone else's credential there.
+    A credential from either of the last two is only carried over when the
+    endpoint it authenticates against is unchanged. Without that rule a user
+    could reuse a stored key while pointing the base URL at a server they
+    control, and the backend would happily send someone else's credential there.
+    The saved default obeys the same rule for the same reason, enforced in
+    `services/user_secrets.inject`.
     """
     secrets = {k: v for k, v in body.secrets.model_dump().items() if v}
     if body.reuse_secrets_from_run_id is None:
-        return secrets
+        return await _with_saved_defaults(session, subject, config, secrets)
 
     source = await session.get(Run, body.reuse_secrets_from_run_id)
     # Same eval set only — the caller has already been authorized for this one.
@@ -156,7 +163,22 @@ async def _resolve_secrets(
         if (config.get(endpoint_key) or "") != (source_config.get(endpoint_key) or ""):
             continue  # endpoint changed — the user must re-enter this credential
         secrets[secret_key] = stored
-    return secrets
+    return await _with_saved_defaults(session, subject, config, secrets)
+
+
+async def _with_saved_defaults(
+    session: AsyncSession, subject: str | None, config: dict, secrets: dict
+) -> dict:
+    """Fill any credential still missing from the caller's saved defaults.
+
+    Last in the order deliberately: something typed into this request, or
+    borrowed from the run being copied, is a more specific statement of intent
+    than a preference set weeks ago.
+    """
+    if not subject or not user_secrets.available():
+        return secrets
+    stored = await user_settings.stored_secrets(session, subject)
+    return user_secrets.inject(stored, config, secrets)
 
 
 @router.post("", response_model=RunOut, status_code=201)
@@ -184,7 +206,7 @@ async def trigger_run(
         body.config,
         judge_prompt=(system, user, judge_prompt.fingerprint(system, user)),
     )
-    secrets = await _resolve_secrets(session, eval_set_id, body, config)
+    secrets = await _resolve_secrets(session, eval_set_id, body, config, subject)
 
     run = Run(
         eval_set_id=eval_set_id, triggered_by=subject, status="running",

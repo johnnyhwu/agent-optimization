@@ -1,9 +1,10 @@
 import React from "react";
 import { isKeycloak } from "../app_config.js";
 import { logout } from "../auth.js";
+import { href, navigate } from "../useHashRoute.js";
 import ThemeToggle from "./ThemeToggle.jsx";
 import Menu, { MenuItem, MenuSeparator } from "./ui/Menu.jsx";
-import { IconChevronDown, IconUsers } from "./icons.jsx";
+import { IconChevronDown, IconGear, IconUsers } from "./icons.jsx";
 
 // Who is signed in, and the two things you can do about it.
 //
@@ -16,6 +17,14 @@ import { IconChevronDown, IconUsers } from "./icons.jsx";
 // The user switcher only exists in the demo identity mode, where there is a
 // directory to switch between; against a real identity provider the endpoint
 // returns nothing and there is only a name and a way out.
+//
+// Settings is here rather than in the side rail, and in both identity modes.
+// The rail lists what the product does; a page of one developer's own defaults
+// is about the person signed in, and a fourth entry there would have read as a
+// fourth section. `attention` is the count of things on that page worth a look —
+// settings added since they last visited, and overrides whose deployment value
+// has moved underneath them — shown as a dot rather than a number, because the
+// number is not the point and the page will say it properly.
 const AVATAR_COLORS = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"];
 
 export function avatarColor(name) {
@@ -24,7 +33,7 @@ export function avatarColor(name) {
   return AVATAR_COLORS[h];
 }
 
-export default function UserMenu({ subject, users, onSwitchUser }) {
+export default function UserMenu({ subject, users, onSwitchUser, attention = 0 }) {
   const canSwitch = !isKeycloak && users.length > 1;
 
   return (
@@ -37,6 +46,7 @@ export default function UserMenu({ subject, users, onSwitchUser }) {
           <button className="usermenu-trigger" title={`Signed in as ${subject}`}>
             <span className="avatar" style={{ background: avatarColor(subject) }}>
               {subject.slice(0, 1)}
+              {attention > 0 && <span className="avatar-dot" aria-hidden="true" />}
             </span>
             <span className="usermenu-name">{subject}</span>
             <IconChevronDown size={14} className="usermenu-chev" />
@@ -50,6 +60,11 @@ export default function UserMenu({ subject, users, onSwitchUser }) {
           </div>
         </div>
         <MenuSeparator />
+
+        <MenuItem onClick={() => navigate(href.settings())}>
+          <IconGear size={13} /> Settings
+          {attention > 0 && <span className="menu-dot" aria-hidden="true" />}
+        </MenuItem>
 
         {canSwitch && (
           <>

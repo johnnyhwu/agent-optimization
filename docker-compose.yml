@@ -68,6 +68,10 @@ services:
       # `-` not `:-`: an explicitly empty value must survive, because blank is
       # how the audience check is switched off.
       KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE-ai4bi-public}
+      # Turns on the credential half of the personal settings page. `-` not `:-`:
+      # blank is how the feature is switched off, and an explicitly empty value
+      # has to survive rather than be replaced by a default.
+      SETTINGS_SECRET_KEY: ${SETTINGS_SECRET_KEY-}
       # Employee directory behind the share picker.
       HR_API_BASE_URL: ${HR_API_BASE_URL:-https://cpochatproxyservice.cpoap-dev.dev.tsmc.com/proxy/employees}
       HR_API_VERIFY_SSL: ${HR_API_VERIFY_SSL:-false}

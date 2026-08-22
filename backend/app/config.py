@@ -78,6 +78,21 @@ class Settings(BaseSettings):
     # the employee lookup below.
     known_users: list[str] = ["alice", "bob", "carol", "dave"]
 
+    # --- Personal defaults (app/settings_catalog.py) -------------------------
+    # A Fernet key, and the switch that turns the credential half of the settings
+    # page on. Blank disables storing credentials entirely — there is deliberately
+    # no plaintext fallback, because that failure is silent, permanent, and
+    # discovered by someone else.
+    #
+    # A run's credentials (`runs.secrets`) are plaintext in JSONB and that is
+    # defensible: one afternoon's key, typed by the person using it. A saved
+    # default is the same key with no expiry, reachable by every run anyone
+    # starts. Same value, an order of magnitude more blast radius.
+    #
+    # Generate one with:
+    #     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    settings_secret_key: str = ""
+
     # --- Keycloak (auth_mode="keycloak") ------------------------------------
     # Base URL *including* any relative path the deployment is served under —
     # Keycloak dropped the historical /auth prefix in 17, but a deployment can

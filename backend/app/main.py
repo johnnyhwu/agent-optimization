@@ -27,9 +27,10 @@ from app.routers import (
     questions,
     results,
     runs,
+    user_settings as user_settings_router,
     users,
 )
-from app.services import run_config
+from app.services import run_config, user_settings
 
 # Give the application's own loggers somewhere to go.
 #
@@ -159,6 +160,7 @@ app.include_router(export.router)
 app.include_router(diagnosis.router)
 app.include_router(playground.router)
 app.include_router(optimization.router)
+app.include_router(user_settings_router.router)
 
 
 @app.get("/health")
@@ -193,7 +195,10 @@ async def redoc(subject: str = Depends(current_subject)):
 
 
 @app.get("/run-config/defaults")
-async def run_config_defaults(subject: str = Depends(current_subject)):
+async def run_config_defaults(
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
     """Prefill values for the run-config dialog, plus which seams are live.
 
     Only the non-secret settings — credentials are write-only, so the form starts
@@ -201,9 +206,20 @@ async def run_config_defaults(subject: str = Depends(current_subject)):
     `impls` lets the dialog grey out the seams still set to `fake`, whose
     connection settings would have no effect. The playground's config panel is
     the same form and reads the same values.
+
+    The defaults are this deployment's, with the caller's own saved settings laid
+    over them (`services/user_settings.py`). **That overlay happens here and not
+    in `run_config.defaults()`**, which `resolve()` also calls: prefilling a form
+    is a convenience, and what a run executes with must not depend on who
+    triggered it. `system` is sent alongside so the settings page's link can say
+    whether anything was actually overridden.
     """
     return {
-        "defaults": run_config.defaults(),
+        "defaults": await user_settings.effective_run_defaults(session, subject),
+        # What this deployment would have used. The dialog compares the two to
+        # decide whether to say "prefilled from your defaults"; without it the
+        # browser would have to keep its own copy of the environment to notice.
+        "system_defaults": run_config.defaults(),
         # Deployment-level, and it overrides the verdict a judge prompt returns
         # (integrations/real/judge.py). Surfaced so the prompt editor can say so
         # — rewriting what "score" means while a threshold silently reinterprets
