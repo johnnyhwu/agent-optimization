@@ -1,6 +1,10 @@
 import React from "react";
 import Field, { FormSection } from "./ui/Field.jsx";
 import Badge from "./ui/Badge.jsx";
+import Banner from "./ui/Banner.jsx";
+import Button from "./ui/Button.jsx";
+import { IconAlert, IconCheck, IconRefresh } from "./icons.jsx";
+import { plural } from "../plural.js";
 
 // The three connection sections shared by "Run eval" (RunConfigDialog) and the
 // playground's config panel. Extracted rather than copied: the parts worth
@@ -26,6 +30,67 @@ import Badge from "./ui/Badge.jsx";
 // heading. That is a deployment detail leaking through the glass — it names a
 // variable the reader cannot see, cannot set from here, and did not ask about.
 // The state is real and worth showing; the variable name is not.
+
+// What the pre-flight found, under the URL that caused it.
+//
+// Three states and they are not interchangeable:
+//
+//   checking    the Start button is disabled and this says why. Without a line
+//               here, a button that will not depress reads as a broken dialog.
+//   connected   the agent answered. The skill count is the evidence — a tick on
+//               its own is a claim; "6 skills" is the thing that was read.
+//   failed      the agent server's own words, verbatim. "This agent has no
+//               skills" and "your URL is wrong" have to stay distinguishable,
+//               and only the reason it gave can tell them apart. It stays on
+//               screen rather than passing as a toast, because it is a state to
+//               fix, not news — the same rule the playground's connection bar
+//               follows.
+//
+// The coverage warning is a separate claim and reads as one: the connection
+// succeeded, and *then* there is something about this eval set worth knowing.
+export function AgentProbe({ probe, coverageNote, onRetry }) {
+  // Nothing to report about a seam that is not being asked: the section's
+  // `simulated` badge has already said so, and a tick here would be claiming a
+  // connection that was never made.
+  if (probe.state === "simulated") return null;
+
+  if (probe.state === "checking") {
+    return (
+      <div className="cfg-probe hint">Checking the agent…</div>
+    );
+  }
+
+  if (probe.state === "failed") {
+    return (
+      <div className="cfg-probe">
+        <div className="error-text">
+          <IconAlert size={13} /> Could not reach this agent.
+        </div>
+        <div className="hint cfg-probe-detail">{probe.error}</div>
+        {onRetry && (
+          <Button size="sm" icon={<IconRefresh size={13} />} onClick={onRetry}>
+            Try again
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="cfg-probe">
+      <div className="ok-text">
+        <IconCheck size={13} /> Connected · {plural(probe.skills.length, "skill")}
+        {probe.version ? <code className="agent-version">{probe.version}</code> : null}
+      </div>
+      {coverageNote && (
+        <Banner tone="warning" title="Some questions need skills this agent does not have">
+          {coverageNote}
+        </Banner>
+      )}
+    </div>
+  );
+}
+
 // The diagnosis model, as one field rather than as two copies of one.
 //
 // It has to appear in two places that group it differently: the run dialog puts
@@ -67,6 +132,11 @@ export default function RunConfigFields({
   showAgent = true,
   showConcurrency = true,
   showDiagnosisModel = true,
+  // The pre-flight's result, owned by the host (only the run dialog runs one).
+  // Absent in the playground, which has a connection bar of its own.
+  probe = null,
+  coverageNote = null,
+  onRetryProbe = null,
 }) {
   const fake = (seam) => impls[seam] === "fake";
   const simulatedNote = "Simulated in this environment, so what you enter here has no effect.";
@@ -87,6 +157,9 @@ export default function RunConfigFields({
               onChange={(e) => set("agent_base_url", e.target.value)}
             />
           </Field>
+          {probe && (
+            <AgentProbe probe={probe} coverageNote={coverageNote} onRetry={onRetryProbe} />
+          )}
           <Field label="Timeout" hint="seconds">
             <input
               type="number" min="1"

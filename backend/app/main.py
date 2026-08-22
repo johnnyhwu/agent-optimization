@@ -17,6 +17,7 @@ from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
 from app.optimizer.runner import reap_interrupted_optimization_runs
 from app.routers import (
+    agent,
     diagnosis,
     eval_set_scripts,
     eval_sets,
@@ -147,6 +148,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
+app.include_router(agent.router)
 app.include_router(users.router)
 app.include_router(eval_sets.router)
 app.include_router(eval_set_scripts.router)

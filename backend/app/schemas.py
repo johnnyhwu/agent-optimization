@@ -910,6 +910,41 @@ class ImportPreview(BaseModel):
     sources: list[PreviewSource] = Field(default_factory=list)
 
 
+class AgentSkillsOut(BaseModel):
+    """What the "Run eval" dialog's pre-flight learned about one agent server.
+
+    Reaching this at all is the connection check; the list is what the coverage
+    warning is computed against. There is deliberately no `ok` field and no
+    `error` — a failure is a 503 carrying the agent's own words, because an
+    envelope with `ok: false` inside a 200 invites a client to render an empty
+    skill list as "this agent has no skills".
+    """
+
+    # The agent this actually asked, resolved the way a run resolves it, so the
+    # dialog can name the server that answered rather than the box left blank.
+    agent_base_url: str
+    version: str = ""
+    skills: list[str] = Field(default_factory=list)
+
+
+class EvalSetSkill(BaseModel):
+    skill_name: str
+    question_count: int
+
+
+class EvalSetSkills(BaseModel):
+    """The skills this eval set's questions depend on.
+
+    `untagged_question_count` is not a leftover: the dialog says how many
+    questions the coverage check could say nothing about, and without it a set
+    where only two of sixty questions carry tags would report "everything is
+    present" in perfect good faith.
+    """
+
+    skills: list[EvalSetSkill] = Field(default_factory=list)
+    untagged_question_count: int = 0
+
+
 class SkillCheck(BaseModel):
     """Whether the agent has the skill the questions are tagged with."""
 

@@ -65,9 +65,15 @@ export function FormSection({ title, description, aside, children, className = "
 // statement of what will happen, not a label: "Advanced settings" alone tells a
 // developer nothing about whether they need to open it, whereas "Using the
 // environment defaults" tells them they don't.
+// `aside` is the closed state's escape hatch: something inside needs attention
+// and the reader has no reason to open it. Named and placed like FormSection's
+// `aside` — same word, same corner — so a badge means the same thing wherever it
+// turns up. It renders open or closed, because a mark that vanished on opening
+// would take the explanation of *why you opened this* with it.
 export function Disclosure({
   summary,
   detail,
+  aside,
   defaultOpen = false,
   icon,
   children,
@@ -86,6 +92,7 @@ export function Disclosure({
         {icon}
         <span className="ui-disclosure-summary">{summary}</span>
         {detail && <span className="ui-disclosure-detail">{detail}</span>}
+        {aside && <span className="ui-disclosure-aside">{aside}</span>}
       </button>
       {open && <div className="ui-disclosure-body">{children}</div>}
     </div>

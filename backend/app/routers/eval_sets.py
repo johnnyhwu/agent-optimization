@@ -27,6 +27,8 @@ from app.schemas import (
     EvalSetFromShortlist,
     EvalSetFromShortlistOut,
     EvalSetPage,
+    EvalSetSkill,
+    EvalSetSkills,
     EvalSetUpdate,
     JudgePromptOut,
     JudgePromptVerifyCase,
@@ -790,6 +792,66 @@ async def update_roles(
         session.add(EvalSetRole(eval_set_id=eval_set_id, user_subject=subj, role=role))
     await session.commit()
     return await _build_card(session, es, subject)
+
+
+@router.get("/{eval_set_id}/skills", response_model=EvalSetSkills)
+async def list_eval_set_skills(
+    eval_set_id: uuid.UUID,
+    subject: str = Depends(require_reader),
+    session: AsyncSession = Depends(get_session),
+):
+    """Which skills this set's questions depend on, and how many need each.
+
+    Read by the "Run eval" dialog, which holds this list against the skills the
+    target agent actually has (`GET /agent/skills`) and warns before the run is
+    started. Decision 6 treats a question's tag and the agent's directory name as
+    the same name, so a one-character typo is otherwise invisible until every
+    question carrying it has come back wrong for a reason the trace does not
+    explain.
+
+    Its own endpoint rather than a pass over `GET .../questions` in the browser:
+    that would pull every question's text and ground truth across the wire to
+    read a handful of tags, on a screen whose whole job is to be quick.
+
+    A question with two tags counts under both. The optimizer's grouping keeps
+    only single-tagged questions, deliberately, but the question here is "does
+    the agent have this skill" — and a question depending on two of them depends
+    on both being present.
+
+    `require_reader`, not `require_owner`: anyone who may start a run (§6.16) may
+    see why the dialog is warning them about it.
+    """
+    counts = (
+        await session.execute(
+            select(QuestionSkill.skill_name, func.count(func.distinct(Question.id)))
+            .join(Question, Question.id == QuestionSkill.question_pk)
+            .where(Question.eval_set_id == eval_set_id)
+            .group_by(QuestionSkill.skill_name)
+            .order_by(QuestionSkill.skill_name.asc())
+        )
+    ).all()
+
+    # Counted rather than inferred from the difference between question count and
+    # tag count, which two-tag questions would make wrong. Without this number a
+    # set where only two of sixty questions carry tags reports "everything is
+    # present" in perfect good faith.
+    untagged = (
+        await session.scalar(
+            select(func.count())
+            .select_from(Question)
+            .where(
+                Question.eval_set_id == eval_set_id,
+                ~select(QuestionSkill.question_pk)
+                .where(QuestionSkill.question_pk == Question.id)
+                .exists(),
+            )
+        )
+    ) or 0
+
+    return EvalSetSkills(
+        skills=[EvalSetSkill(skill_name=name, question_count=n) for name, n in counts],
+        untagged_question_count=untagged,
+    )
 
 
 @router.get("/{eval_set_id}/questions", response_model=list[QuestionOut])

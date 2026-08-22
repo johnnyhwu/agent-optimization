@@ -129,6 +129,17 @@ export const api = {
   // directory could not be reached, which is a different answer (see
   // ShareEditor).
   lookupUser: (username) => req("GET", `/users/lookup${qs({ username })}`),
+
+  // The "Run eval" dialog's pre-flight: can we reach this agent, and what skills
+  // does it have? Reaching it at all is the connection check — the same call the
+  // playground connects with — so there is no separate ping to keep in step.
+  //
+  // A failure is a 503 carrying the agent server's own words, which is what the
+  // dialog shows: "this agent has no skills" and "your URL is wrong" have to
+  // stay distinguishable. No timeout parameter: the probe has a short budget of
+  // its own on the server, because the Start button waits for it.
+  agentSkills: (agentBaseUrl) =>
+    req("GET", `/agent/skills${qs({ agent_base_url: agentBaseUrl })}`),
   // Returns a page: { items, total, has_more }.
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
@@ -177,6 +188,10 @@ export const api = {
   downloadExport: (id, params, fallbackName) =>
     download(`/eval-sets/${id}/export${exportQuery(params)}`, fallbackName),
   listQuestions: (id) => req("GET", `/eval-sets/${id}/questions`),
+  // Just the tags, with a count each. Its own endpoint rather than a pass over
+  // `listQuestions`, which would pull every question's text and ground truth
+  // across the wire to read a handful of names.
+  evalSetSkills: (id) => req("GET", `/eval-sets/${id}/skills`),
   updateQuestion: (id, qpk, payload) =>
     req("PATCH", `/eval-sets/${id}/questions/${qpk}`, payload),
   // Returns a page: { items, total, has_more }.

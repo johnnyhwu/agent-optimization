@@ -154,6 +154,14 @@ class Settings(BaseSettings):
     agent_base_url: str = ""
     agent_timeout_s: float = 120.0
     agent_max_retries: int = 2
+    # How long the "Run eval" dialog's pre-flight waits for the agent server
+    # before calling it unreachable. Emphatically *not* `agent_timeout_s`: that
+    # is the budget for answering a question, and the Start button stays
+    # disabled until this check answers — so borrowing two minutes would let one
+    # hung agent make the dialog unusable. Short on purpose; a server that
+    # cannot say what skills it has within a few seconds is not one a run should
+    # be started against unnoticed.
+    agent_probe_timeout_s: float = 5.0
 
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
     llm_base_url: str = "http://litellm-ai4bi.cpoap-dev.dev.tsmc.com"

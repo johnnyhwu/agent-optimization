@@ -814,6 +814,22 @@ select { cursor: pointer; }
 }
 .cfg-value.empty { color: var(--muted); font-style: italic; font-family: inherit; }
 
+/* The agent pre-flight, directly under the URL that caused it — the same rule
+   the share editor's directory answer follows. As a loose line at the bottom of
+   the section it would read as a statement about the whole connection block. */
+.cfg-probe {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: var(--space-2); margin: -2px 0 var(--space-3);
+}
+.cfg-probe .error-text, .cfg-probe .ok-text {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--text-caption);
+}
+/* The agent server's own words, which can be long and are worth reading in
+   full — wrapped rather than ellipsed, since the useful part of "connection
+   refused to http://…:8080" is at the end. */
+.cfg-probe-detail { word-break: break-word; }
+
 /* ---- share editor ---- */
 /* ---- share with ----
    One bordered list rather than loose rows: "who can see this" is a single

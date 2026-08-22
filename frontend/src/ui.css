@@ -328,6 +328,11 @@
 .ui-disclosure-chev { color: var(--muted); flex: none; transition: transform 0.18s var(--ease); }
 .ui-disclosure.is-open .ui-disclosure-chev { transform: rotate(180deg); }
 .ui-disclosure-detail { margin-left: auto; font-size: var(--text-caption); color: var(--muted); font-weight: var(--fw-normal); }
+/* The closed state's "look in here". Pushed right on its own; when a detail
+   line is already holding that corner, it sits just after it rather than
+   splitting the free space with it. */
+.ui-disclosure-aside { margin-left: auto; display: inline-flex; align-items: center; flex: none; }
+.ui-disclosure-detail + .ui-disclosure-aside { margin-left: var(--space-2); }
 .ui-disclosure-body {
   padding: var(--space-4) var(--space-3) var(--space-3);
   border-top: 1px solid var(--border);
