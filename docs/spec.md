@@ -468,6 +468,16 @@ Stage 1 **不做** step 拆解軟對齊；直接把整段 `ground_truth_reasonin
   > 「生成診斷」不可與判分同時發，否則會偶發性地存進空診斷。
 - **Stage 1 的重算觸發只有一個**：開發者手動點「重新診斷」。
   > trace 是 immutable 的一次執行，自動重算幾乎不會發生。（人工重標 span 是 Stage 2。）
+- **是否自動診斷，由每個 run 自己決定**（`runs.config.diagnosis_enabled`，預設值來自
+  `DIAGNOSIS_ENABLED`）。答錯一題就是一次額外的 LLM 呼叫，只想看 pass rate 的 run
+  沒有理由付這筆錢。
+  > 三個細節是設計的重點：**`False` 是選擇而不是留白**——其他欄位用空字串表示「沒選」，
+  > 布林值若沿用同一條規則，取消勾選會被環境變數的 `True` 蓋掉；**config 裡沒有這個 key 的
+  > run 照樣診斷**，否則這個功能上線的當下，整個既有歷史會安靜地停止診斷，而畫面上看起來
+  > 會像診斷模型壞了；**關掉不等於不能診斷**，單題的手動重新診斷不受影響，所以這個開關決定
+  > 的是「不主動花這筆錢」，不是「永遠不能問」。
+- 關掉診斷的 run，題目頁會明說「這個 run 關閉了 trace diagnosis」，與「診斷失敗」
+  （`diagnosis_error`）是兩種不同的訊息——只有其中一種值得重試。
 
 ### 4.6 `question_id`：跨 run 對齊的地基
 
@@ -499,6 +509,23 @@ Stage 1 **不做** step 拆解軟對齊；直接把整段 `ground_truth_reasonin
   必須重新輸入。
 - `*_IMPL=fake` 的區塊在對話框中**變灰並標示不會生效**。
   > 否則填了半天卻跑出假資料，是最容易踩的坑。
+- **對話框在按下按鈕前就先探測 agent server**（`GET /agent/skills`，內部就是 playground
+  連線用的那支 `get_workspace`）。連線設定預設是收合的，所以「不打開就直接按 Run」是常態路徑，
+  而一個打錯的 base URL 過去要花掉一筆 run row、一整組 `question_results` 和每題一次
+  agent 呼叫才會被發現。
+  > 探測期間與失敗時，Start 按鈕是 disabled 的，收合列上會出現一個紅色驚嘆號指向錯誤訊息。
+  > 這件事之所以安全，是因為探測有自己的 `AGENT_PROBE_TIMEOUT_S`（預設 5 秒）——
+  > 借用 `AGENT_TIMEOUT_S`（120 秒，那是答一題的預算）會讓一台卡住的 agent 把對話框鎖住兩分鐘。
+  > 網址輸入採 debounce（與分享對話框查員工目錄同一個 hook），「檢查中」的狀態立刻顯示、
+  > 請求才等打字停下來。
+- 探測成功時順手拿到 agent 上的 skill 清單，**與這個 eval set 的 skill tag 比對**
+  （`GET /eval-sets/{id}/skills`）。決策 6 把 tag 與 agent 上的目錄名當成同一個名字，
+  比對是精確比對；只差大小寫的情況會被單獨點名，因為那是唯一一種「看起來完全正確」的失誤。
+  > 這只是**警告，不擋 Start**：tag 缺漏有合法情境（agent 用別的名字路由、set 只標了一半），
+  > 而「連不上」是確定性的錯誤。沒有 tag 的題數另外報，否則一個只標了兩題的 set 會誠實地
+  > 回報「全部齊備」。
+  > `AGENT_IMPL` 或 `WORKSPACE_IMPL` 任一為 fake 時，讀到的 skill 是罐頭資料，此時整個探測
+  > 標示為 simulated：不做覆蓋率警告，也絕不擋 Start。
 
 ### 4.8 Playground 完全不落庫
 
@@ -1172,6 +1199,7 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /users/lookup?username=` | — | 分享前對員工目錄查核（§11.3）。查無此人 → **404**；目錄連不上 → **200 但 `verified:false`**，前端警告卻放行 |
 | `GET /me` | — | 目前 subject 與其在各 eval set 的角色。**UI 不用它 gate 權限**（§11.4）——每個 eval set 的 payload 自己就帶 `my_role` |
 | `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **`*_IMPL` 現況** |
+| `GET /agent/skills?agent_base_url=` | — | run config 對話框的**起飛前檢查**：內部就是 playground 連線用的 `get_workspace`，回得來就代表 agent 在、講得通契約，並帶回 skill 清單供覆蓋率比對。失敗是 **503 帶 agent server 的原話**，絕不是空清單——「這台沒有 skill」與「你的 URL 打錯」必須分得開。用自己的 `AGENT_PROBE_TIMEOUT_S`，不借用答題的 120 秒 |
 | `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares`；`source_format='python'` 時可帶 `script`（provenance，**無 password 欄位**，多帶會被拒）|
 | `POST /eval-sets/script/validate` | — | 上傳 `.py` 的**靜態**檢查（有無 `main`、參數）；不執行、不連 DB、不需憑證 |
 | `POST /eval-sets/script/run` | — | 在 sandbox 中執行 script，回傳預覽 row + warning + 上限告知 + stdout/stderr。**script 失敗回 200 帶 `error`**，不是 4xx——traceback 與 print 輸出正是呼叫它的目的。憑證用完即忘 |
@@ -1185,6 +1213,7 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `DELETE /eval-sets/{id}` | O | 刪整個 set（含所有 run / 結果 / 診斷）；底下有 running run → 409（先中止）|
 | `PUT /eval-sets/{id}/roles` | O | **整批覆寫**分享名單（操作者本人永遠保留 owner）|
 | `GET /eval-sets/{id}/questions` | R | 題目清單 |
+| `GET /eval-sets/{id}/skills` | R | 本 set 的 skill tag 與各自的題數，外加沒有 tag 的題數。run config 對話框拿它與 agent 上的 skill 比對（§4.7）。自成一支而非在前端掃 `questions`：後者要為了幾個名字把每題的題幹與 ground truth 全部拉過來 |
 | `PATCH /eval-sets/{id}/questions/{qpk}` | O | 改題（樂觀鎖 → 409；`question_id` 不變）|
 | `POST /eval-sets/{id}/runs` | R | 觸發 run；body 帶 `name` / `config` / `secrets` / `reuse_secrets_from_run_id`，全部可省略 |
 | `GET /eval-sets/{id}/runs` | R | run 列表（含 `incorrect_count` / `judge_invalid_count` / `config` / `credentials_set` / `cancel_requested`）；分頁 `?limit&offset&q` |

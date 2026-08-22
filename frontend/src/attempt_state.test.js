@@ -10,7 +10,7 @@ import { adoptFetched, mergeAttempt, pruneById } from "./attempt_state.js";
 const row = (over = {}) => ({
   id: "a1", question: "q", phase: "pending", status: "running",
   verdict: null, error_message: null,
-  agent_started_at: null, agent_latency_ms: null, ...over,
+  agent_started_at: null, agent_latency_ms: null, llm_call_count: null, ...over,
 });
 
 const event = (over = {}) => ({
@@ -37,6 +37,17 @@ test("a field the event omits keeps the value the row had", () => {
   assert.equal(merged.question, "keep me");
   assert.equal(merged.agent_started_at, "2026-08-08T10:00:00+00:00");
   assert.equal(merged.agent_latency_ms, 8400);
+});
+
+test("the call count lands with the trace and is not blanked before it", () => {
+  // It is counted off the trace, so every event before `attempt_traced` carries
+  // it as null. A plain assignment would wipe the number back out on the very
+  // next event — the same trap `agent_latency_ms` above is guarded against.
+  const traced = mergeAttempt(row(), event({ phase: "traced", llm_call_count: 6 }));
+  assert.equal(traced.llm_call_count, 6);
+
+  const later = mergeAttempt(traced, event({ phase: "diagnosed", llm_call_count: null }));
+  assert.equal(later.llm_call_count, 6);
 });
 
 test("no event leaves the row untouched", () => {

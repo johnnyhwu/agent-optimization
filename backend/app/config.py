@@ -154,6 +154,14 @@ class Settings(BaseSettings):
     agent_base_url: str = ""
     agent_timeout_s: float = 120.0
     agent_max_retries: int = 2
+    # How long the "Run eval" dialog's pre-flight waits for the agent server
+    # before calling it unreachable. Emphatically *not* `agent_timeout_s`: that
+    # is the budget for answering a question, and the Start button stays
+    # disabled until this check answers — so borrowing two minutes would let one
+    # hung agent make the dialog unusable. Short on purpose; a server that
+    # cannot say what skills it has within a few seconds is not one a run should
+    # be started against unnoticed.
+    agent_probe_timeout_s: float = 5.0
 
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
     llm_base_url: str = "http://litellm-ai4bi.cpoap-dev.dev.tsmc.com"
@@ -162,6 +170,16 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     judge_model: str = "Qwen3.6-27B"
     diagnosis_model: str = "Qwen3.6-27B"
+    # Whether a run diagnoses its wrong answers unless told otherwise. This is
+    # the *default* the "Run eval" dialog prefills, not a master switch: the
+    # choice is per run and recorded in the run's config, because it is a
+    # question about one afternoon's spending rather than about the deployment.
+    #
+    # On by default, which is what it has always done. Turning it off costs one
+    # LLM call per wrong answer and leaves manual re-diagnose available, so a
+    # site that mostly wants pass rates can flip this and still diagnose the
+    # questions it cares about, one at a time.
+    diagnosis_enabled: bool = True
     # Deliberately the same default as the other two, and deliberately separate:
     # this is the call that has to reason about a whole minibatch of traces at
     # once, so it is the one people will want to point at a stronger model.

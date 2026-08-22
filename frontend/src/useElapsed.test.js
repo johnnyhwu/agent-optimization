@@ -55,8 +55,18 @@ test("a browser clock that runs fast is corrected, not believed", () => {
 test("a clock that runs slow never produces a negative duration", () => {
   // Server ahead of this machine: a just-started question would otherwise
   // subtract to a minus sign.
+  //
+  // Asserted as "not negative, and still essentially zero" rather than as
+  // exactly 0. Four `Date.now()` readings go into this — two building the
+  // timestamps, one inside `setServerTime`, one inside `elapsedSince` — and the
+  // arithmetic cancels them only while all four land in the same millisecond.
+  // Under a loaded test run they do not, and `assert.equal(…, 0)` failed on a
+  // 1ms result that is not negative and is not a defect: the clamp is what this
+  // test is named for, and 1ms renders as "0.0s" either way.
   setServerTime(new Date(Date.now() + 30_000).toISOString());
-  assert.equal(elapsedSince(new Date(Date.now() + 30_000).toISOString()), 0);
+  const elapsed = elapsedSince(new Date(Date.now() + 30_000).toISOString());
+  assert.ok(elapsed >= 0, `expected no negative duration, got ${elapsed}`);
+  assert.ok(elapsed <= 50, `expected a just-started question to read as ~0, got ${elapsed}`);
 });
 
 test("an unusable server time leaves the previous correction alone", () => {

@@ -306,6 +306,89 @@ async def test_diagnosis_is_stored_for_incorrect_answers(seams):
     assert analysis.model_used == "stub-model"
 
 
+def _diagnosable(seams, spans=None):
+    """Wire the stubs so the next run reaches step 4 with something to diagnose."""
+
+    async def wrong(question, response, ground_truth):
+        return Verdict(verdict="incorrect", score=0.2, comment="nope")
+
+    async def ready(correlation_id):
+        return Trace(
+            correlation_id=correlation_id,
+            spans=spans if spans is not None else [],
+        )
+
+    seams.judge, seams.trace = wrong, ready
+
+
+async def test_diagnosis_off_skips_the_model_without_touching_the_verdict(seams):
+    """The toggle removes the extra LLM call and nothing else.
+
+    Everything before step 4 is a property of the run rather than of the
+    diagnosis — the answer, the verdict, the trace poll and the call count are
+    all still owed to whoever started it. A gate that quietly took the trace with
+    it would turn "don't spend this" into "show me less", which is not what was
+    asked for.
+    """
+    asked = []
+
+    async def record(trace, reasoning, verdict):
+        asked.append(trace)
+        return {"overall_diagnosis": "d", "suspects": [], "caveat": None}
+
+    spans = [
+        Span(index=0, tool_name="gen", status="success", input="i", output="o",
+             token_usage={"input": 10, "output": 5, "total": 15}),
+    ]
+    _diagnosable(seams, spans)
+    seams.diagnosis = record
+
+    run, questions = make_run(), [make_question()]
+    run.config = {"diagnosis_enabled": False}
+    session = StubSession(run, questions)
+    await orchestrator._execute_run(session, run)
+
+    result = next(o for o in session.added if isinstance(o, QuestionResult))
+    assert asked == []  # the model was never asked
+    assert not any(isinstance(o, SpanAnalysis) for o in session.added)
+    # Not an error: nobody asked, so there is nothing to explain.
+    assert result.diagnosis_error is None
+    # The rest of the question is untouched.
+    assert result.verdict == "incorrect"
+    assert result.status == "done"
+    assert result.trace_ready is True
+    assert result.llm_call_count == 1
+
+
+async def test_diagnosis_on_is_the_behaviour_it_always_had(seams):
+    _diagnosable(seams)
+    run, questions = make_run(), [make_question()]
+    run.config = {"diagnosis_enabled": True}
+    session = StubSession(run, questions)
+    await orchestrator._execute_run(session, run)
+
+    analysis = next(o for o in session.added if isinstance(o, SpanAnalysis))
+    assert analysis.model_used == "stub-model"
+
+
+async def test_a_config_without_the_flag_still_diagnoses(seams):
+    """The regression guard for every run already in the database.
+
+    `diagnosis_enabled` is read off a run's stored config, and no run written
+    before this feature has the key. Defaulting a missing key to off would
+    silently stop diagnosing the entire existing history the moment this shipped
+    — and it would look like the diagnosis model had broken, not like a default
+    had changed.
+    """
+    _diagnosable(seams)
+    run, questions = make_run(), [make_question()]
+    run.config = {"agent_base_url": "https://agent.test"}  # a real config, no flag
+    session = StubSession(run, questions)
+    await orchestrator._execute_run(session, run)
+
+    assert any(isinstance(o, SpanAnalysis) for o in session.added)
+
+
 async def test_the_diagnosis_waits_for_the_trace_to_stop_growing(seams, configure):
     """A run diagnoses the trace it polled for, so a half-ingested read is what
     the LLM compares against the expected process (§6.9 / §6.12a).

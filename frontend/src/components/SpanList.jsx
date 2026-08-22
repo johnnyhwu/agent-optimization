@@ -154,7 +154,7 @@ function Section({ title, count, children }) {
 // verdict would both be false there.
 export default function SpanList({
   trace, refreshing, activeSpan, onPickSpan, canReDiagnose, onReDiagnose, reDiagnosing,
-  onRetryTrace, playground = false, emptyHint, question,
+  onRetryTrace, playground = false, emptyHint, question, diagnosisDisabled = false,
 }) {
   if (!trace) {
     return (
@@ -198,6 +198,18 @@ export default function SpanList({
     );
   } else if (trace.verdict === "correct") {
     diagnosis = <Banner tone="info">Correct answer — nothing to diagnose.</Banner>;
+  } else if (diagnosisDisabled) {
+    // Distinguished from "not diagnosed yet" for the same reason
+    // `diagnosis_error` is: an absence with a cause the reader can act on is not
+    // the same news as an absence. Here the cause is a decision someone made
+    // when the run was started, and the button beside it is how to change the
+    // answer for this one question without re-running anything.
+    diagnosis = (
+      <Banner tone="info" title="Diagnosis was turned off for this run." actions={reDiagnoseButton}>
+        This run was started with trace diagnosis unticked, so its wrong answers
+        were never sent to the diagnosis model.
+      </Banner>
+    );
   } else if (playground) {
     // In the playground the switch is the expected reasoning process, not the
     // verdict: with one supplied there is a diagnosis, without one there is

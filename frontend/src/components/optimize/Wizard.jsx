@@ -196,11 +196,11 @@ export default function Wizard() {
   // The agent is part of the key as well as the skill names. A check answers
   // "does *this* server have it", so changing the server on step 1 and coming
   // back has to re-ask rather than keep showing what a different one said.
-  const groupNames = (preview?.groups || []).map((g) => g.skill_name).join(" ");
-  const agentKey = `${agentConfig.agent_base_url} ${agentConfig.agent_timeout_s}`;
+  const groupNames = (preview?.groups || []).map((g) => g.skill_name).join("\0");
+  const agentKey = `${agentConfig.agent_base_url}\0${agentConfig.agent_timeout_s}`;
   useEffect(() => {
     if (!groupNames) return;
-    groupNames.split(" ").forEach((name) => runSkillCheck(name));
+    groupNames.split("\0").forEach((name) => runSkillCheck(name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupNames, agentKey]);
 
@@ -1045,7 +1045,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           label="Slow update"
           help="Writes free-form guidance into a protected block of SKILL.md that step-level edits cannot touch. Needs at least two epochs to have anything to compare."
         >
-          <label className="opt-switch">
+          <label className="ui-switch">
             <input
               type="checkbox"
               checked={switchOn("slow_update")}
@@ -1058,7 +1058,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
           label="Meta skill"
           help="Optimizer-side memory: what the last epoch taught it about its own editing, shown to the analyst on later steps. Never written into the skill itself."
         >
-          <label className="opt-switch">
+          <label className="ui-switch">
             <input
               type="checkbox"
               checked={switchOn("meta_skill")}

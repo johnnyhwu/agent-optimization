@@ -141,6 +141,27 @@ def test_resolve_always_returns_every_field():
     assert set(out) == set(RunConfig.model_fields)
 
 
+def test_switching_diagnosis_off_survives_resolve(configure):
+    """`False` is a choice, not a blank.
+
+    Every other field here spells "I didn't choose" as an empty string, and
+    `_supplied` is what tells the two apart. A boolean walks straight into that
+    rule: if `False` were treated the way `""` is, unticking the box would be
+    overwritten by the environment's `True` and the run would diagnose anyway —
+    silently, and only visible on the bill.
+    """
+    with configure(diagnosis_enabled=True):
+        out = run_config.resolve(RunConfig(diagnosis_enabled=False))
+    assert out["diagnosis_enabled"] is False
+
+
+def test_leaving_diagnosis_unset_takes_the_environments_answer(configure):
+    with configure(diagnosis_enabled=False):
+        assert run_config.resolve(RunConfig())["diagnosis_enabled"] is False
+    with configure(diagnosis_enabled=True):
+        assert run_config.resolve(RunConfig())["diagnosis_enabled"] is True
+
+
 # --- The judge prompt belongs to the eval set, not to the caller ------------
 
 def test_resolve_freezes_the_eval_sets_judge_prompt_into_the_run():

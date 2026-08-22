@@ -81,6 +81,30 @@ RUN_VERDICTS = [
 ]
 
 
+# What each seeded question "cost": (agent latency in ms, model calls made).
+#
+# Seeded results are written straight into the database rather than produced by
+# the orchestrator, so every figure a real run measures has to be supplied here
+# or the demo shows a blank where the product's own screens promise a number —
+# which is exactly what happened to these three columns until now.
+#
+# Deliberately spread, and deliberately containing one outlier. The whole reason
+# the left column carries a call count is that two questions taking nine seconds
+# are not the same question if one made a single model call and the other made
+# eleven; a fake set where every row reads "4 calls" cannot demonstrate the one
+# thing the column is for. Same argument the fake trace layer makes for spreading
+# span latencies (see `integrations/fake.py`).
+QUESTION_COST = {
+    "q_acme001": (4_100, 4),
+    "q_churn02": (9_400, 5),
+    "q_emea03": (3_200, 3),
+    # The expensive one: a question that went round the loop far more times than
+    # its neighbours and took four times as long doing it.
+    "q_march04": (38_600, 14),
+    "q_refund05": (2_700, 3),
+}
+
+
 def _suspect_index(correlation_id: str) -> int:
     trace = build_fake_trace(correlation_id)
     return min(3, len(trace.spans) - 1)
@@ -167,7 +191,7 @@ async def seed() -> None:
             session.add(run)
             await session.flush()
 
-            for qid, is_correct in verdicts.items():
+            for question_no, (qid, is_correct) in enumerate(verdicts.items()):
                 verdict = "correct" if is_correct else "incorrect"
                 # Newest run's Q3 demonstrates the trace-not-ready "generating" UI.
                 generating = (run_no == len(RUN_VERDICTS) - 1 and qid == "q_emea03")
@@ -176,6 +200,7 @@ async def seed() -> None:
                 # question stuck in "generating" for the demo.
                 cid = f"seed-{NOT_READY_MARKER}-{run_no}-{qid}" if generating \
                     else f"seed-{run_no}-{qid}"
+                latency_ms, calls = QUESTION_COST[qid]
                 qr = QuestionResult(
                     run_id=run.id, question_pk=qmap[qid].id, correlation_id=cid,
                     verdict=verdict,
@@ -184,6 +209,16 @@ async def seed() -> None:
                                    else "Missing key facts vs expected."),
                     status="done",
                     trace_ready=not generating,
+                    # Staggered inside the run's own window, so the left column's
+                    # timers settle on real-looking durations instead of showing
+                    # nothing at all.
+                    started_at=started + timedelta(seconds=20 * question_no),
+                    agent_latency_ms=latency_ms,
+                    # None for the question whose trace never arrives: the count
+                    # is read off the trace, so "we never saw it" has to stay
+                    # distinguishable from "it made no calls". The demo shows
+                    # both states because the product has both.
+                    llm_call_count=None if generating else calls,
                 )
                 session.add(qr)
                 await session.flush()

@@ -51,6 +51,7 @@ from app.models import (
     Run,
 )
 from app.optimizer import dataset, hyperparams, runner, skillio, stopping
+from app.services.agent_skills import top_level_skills
 from app.schemas import (
     AnswerLeak,
     EditReportOut,
@@ -380,7 +381,7 @@ async def skill_check(
         path: text for path, text in workspace.skills.items()
         if path == skill_name or path.startswith(f"{skill_name}/")
     }
-    available = sorted({path.split("/", 1)[0] for path in workspace.skills})
+    available = top_level_skills(workspace.skills)
 
     if not files:
         return SkillCheck(
@@ -458,7 +459,7 @@ async def create_optimization_run(
         if path == body.skill_name or path.startswith(f"{body.skill_name}/")
     }
     if not initial:
-        available = sorted({p.split("/", 1)[0] for p in workspace.skills})
+        available = top_level_skills(workspace.skills)
         raise HTTPException(
             status_code=400,
             detail=(

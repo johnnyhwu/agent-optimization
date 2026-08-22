@@ -52,6 +52,7 @@ from app.pipeline import (
     wait_for_trace,
 )
 from app.services.failure_text import describe_failure
+from app.services.trace_view import count_llm_calls
 from app.sse import hub
 
 log = logging.getLogger(__name__)
@@ -258,6 +259,13 @@ def event_for(attempt: PlaygroundAttempt, event_type: str) -> dict:
             attempt.agent_started_at.isoformat() if attempt.agent_started_at else None
         ),
         "agent_latency_ms": attempt.agent_latency_ms,
+        # Beside the latency, as it is on a run's question row. Computed rather
+        # than stored: unlike a run's result this attempt is holding its whole
+        # trace in memory already, so there is nothing to persist and no field to
+        # keep in step — but it goes through the same `count_llm_calls` the run
+        # path uses, because two answers to "what is a model call" would show up
+        # as two screens disagreeing about the same trace.
+        "llm_call_count": count_llm_calls(attempt.trace),
     }
 
 

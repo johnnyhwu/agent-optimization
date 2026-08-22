@@ -1,12 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
-import RunConfigFields, { servicesSummary } from "./RunConfigFields.jsx";
+import RunConfigFields, {
+  DiagnosisModelField,
+  servicesSummary,
+} from "./RunConfigFields.jsx";
 import RunPicker from "./RunPicker.jsx";
 import Button from "./ui/Button.jsx";
 import Field, { Disclosure, FormSection } from "./ui/Field.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
-import { IconGear, IconPlay } from "./icons.jsx";
+import { IconAlert, IconGear, IconPlay } from "./icons.jsx";
+import { useDebounced } from "../useDebounced.js";
+import { coverageWarning, skillCoverage } from "../skill_coverage.js";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
 // the deployment's environment. Prefilled from GET /run-config/defaults so the
@@ -33,6 +38,12 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   const [source, setSource] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // The pre-flight. `null` until the defaults have arrived and there is a URL to
+  // check; then "checking" -> "connected" | "failed" | "simulated".
+  const [probe, setProbe] = useState(null);
+  // Bumped by "Try again", so a retry re-runs the effect on an unchanged URL.
+  const [probeNonce, setProbeNonce] = useState(0);
+  const [evalSetSkills, setEvalSetSkills] = useState(null);
 
   useEffect(() => {
     api
@@ -44,6 +55,82 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       })
       .catch((e) => setError(e.message));
   }, []);
+
+  // This set's tags, fetched once. Needed only to interpret a successful probe,
+  // so a failure here is silent: it costs the coverage warning, not the check.
+  useEffect(() => {
+    api
+      .evalSetSkills(evalSetId)
+      .then(setEvalSetSkills)
+      .catch(() => setEvalSetSkills(null));
+  }, [evalSetId]);
+
+  // Debounced so this fires when typing stops rather than on every keystroke —
+  // the same hook the share editor's directory lookup uses. The first value is
+  // returned immediately, which is what makes the dialog check the URL it opened
+  // with the moment it opens.
+  const agentUrl = useDebounced(form?.agent_base_url ?? "", 400);
+
+  // Whether the probe can say anything at all. With either seam faked, the
+  // workspace it would read is canned: the skills are make-believe, so a
+  // coverage warning would be about nothing and a failure could not happen. The
+  // section already says "simulated"; the run must not be blocked on a check
+  // that is not being made.
+  const simulated = impls.agent === "fake" || impls.workspace === "fake";
+
+  // "Checking" the moment the URL changes; the request itself waits for the
+  // typing to stop. Splitting the two is what keeps the Start button honest
+  // while someone is halfway through editing the URL — the last answer was
+  // about a different agent, and treating it as current would let a run start
+  // against an address nothing has verified.
+  useEffect(() => {
+    if (!form) return;
+    setProbe(simulated ? { state: "simulated" } : { state: "checking" });
+  }, [Boolean(form), form?.agent_base_url, simulated, probeNonce]);
+
+  useEffect(() => {
+    if (!form || simulated) return undefined;
+    // Still settling — the debounced value is a URL the field no longer shows.
+    // Skipping here is also what stops the probe firing once against the empty
+    // string before the defaults have landed.
+    if (agentUrl !== (form.agent_base_url ?? "")) return undefined;
+    let cancelled = false;
+    api
+      .agentSkills(agentUrl)
+      .then((r) => {
+        if (cancelled) return;
+        setProbe({ state: "connected", skills: r.skills, version: r.version });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // The agent server's own words. A summary here would flatten "no such
+        // host" and "401 from the agent" into the same unhelpful sentence.
+        setProbe({ state: "failed", error: e.message });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately *not* keyed on the eval set's tags. They decide what the
+    // answer means, not what is asked — and the two requests race on open, so
+    // having them here fired the probe a second time the moment the tags landed.
+  }, [Boolean(form), simulated, agentUrl, form?.agent_base_url, probeNonce]);
+
+  // The reading of that answer, kept apart from the asking. Either input can
+  // arrive first; this recomputes when either does, without another round trip.
+  const coverage = useMemo(() => {
+    if (probe?.state !== "connected" || !evalSetSkills) return null;
+    return coverageWarning(
+      skillCoverage(evalSetSkills.skills, probe.skills),
+      evalSetSkills.untagged_question_count || 0
+    );
+  }, [probe, evalSetSkills]);
+
+  // Nothing may be started while the target is unknown or unreachable. Waiting
+  // out the check is the whole point — a run against an agent that is not there
+  // costs a run row, a full set of result rows and one agent call per question
+  // to discover a typo. The wait is bounded by the server's own probe timeout,
+  // which is deliberately short for exactly this reason.
+  const blocked = probe?.state === "checking" || probe?.state === "failed";
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   // A cleared number input parses to 0/NaN, which the backend would reject
@@ -114,8 +201,28 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" icon={<IconPlay size={14} />} disabled={!form} loading={busy} onClick={submit}>
-            {busy ? "Starting…" : "Run eval"}
+          <Button
+            variant="primary"
+            icon={<IconPlay size={14} />}
+            disabled={!form || blocked}
+            loading={busy}
+            onClick={submit}
+            // The button explains its own disabled state. Without this, a
+            // button that will not depress reads as a broken dialog rather than
+            // as a check in progress or a target that is not there.
+            title={
+              probe?.state === "checking"
+                ? "Checking the agent server…"
+                : probe?.state === "failed"
+                  ? "This agent server could not be reached — see Connection settings"
+                  : undefined
+            }
+          >
+            {busy
+              ? "Starting…"
+              : probe?.state === "checking"
+                ? "Checking agent…"
+                : "Run eval"}
           </Button>
         </>
       }
@@ -154,6 +261,24 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
             summary="Connection settings"
             detail={servicesSummary(impls)}
             icon={<IconGear size={14} />}
+            // The mark that makes a closed panel worth opening. Deliberately a
+            // mark rather than opening the panel for them: the probe resolves
+            // after the dialog is already on screen, so auto-opening would make
+            // the form jump under the cursor — and would re-open a panel someone
+            // had just closed. Everything else
+            // in this dialog can be ignored by someone who only wants to press
+            // the button; an agent that is not there cannot be.
+            aside={
+              probe?.state === "failed" ? (
+                <span className="error-text" title="This agent server could not be reached">
+                  <IconAlert size={14} />
+                </span>
+              ) : probe?.state === "connected" && coverage ? (
+                <span className="amber-text" title="Some questions need skills this agent does not have">
+                  <IconAlert size={14} />
+                </span>
+              ) : null
+            }
           >
             <RunConfigFields
               form={form}
@@ -163,8 +288,50 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               setSecrets={setSecrets}
               impls={impls}
               kept={kept}
+              showDiagnosisModel={false}
+              probe={probe}
+              coverage={coverage}
+              onRetryProbe={() => setProbeNonce((n) => n + 1)}
             />
           </Disclosure>
+
+          {/* Outside the disclosure on purpose. Everything inside it answers
+              "which services does this talk to"; this answers "what will this
+              run spend", which is a decision rather than a connection detail —
+              and one taken by exactly the person who would otherwise press the
+              button without opening anything.
+
+              The two lines of explanation are the whole reason the switch is
+              safe to offer. Turning off something called "trace diagnosis" is
+              not a decision anyone can make from its name; knowing it costs one
+              model call per wrong answer, and what that call reads and returns,
+              is. */}
+          <FormSection
+            title="Trace diagnosis"
+            description="What to do with the questions this run gets wrong."
+          >
+            <label className="ui-switch">
+              <input
+                type="checkbox"
+                checked={form.diagnosis_enabled !== false}
+                onChange={(e) => set("diagnosis_enabled", e.target.checked)}
+              />
+              <span>Diagnose wrong answers as the run goes</span>
+            </label>
+            <div className="hint" style={{ marginTop: 6, marginBottom: 14 }}>
+              One extra model call per wrong answer. It reads the question’s
+              expected reasoning process, the agent’s trace and the grader’s
+              verdict, and returns a short summary plus the steps that look most
+              suspect. Off, the run produces verdicts only — a single question
+              can still be diagnosed later from its own page.
+            </div>
+            <DiagnosisModelField
+              value={form.diagnosis_model}
+              onChange={(v) => set("diagnosis_model", v)}
+              simulated={impls.diagnosis === "fake"}
+              disabled={form.diagnosis_enabled === false || impls.diagnosis === "fake"}
+            />
+          </FormSection>
 
           {/* One line, not two textareas. The grading criteria belong to the
               eval set (only its owner may change them), so this dialog states

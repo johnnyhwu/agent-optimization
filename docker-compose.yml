@@ -120,10 +120,16 @@ services:
       # app/config.py so an unset variable here doesn't blank out its default.
       AGENT_BASE_URL: ${AGENT_BASE_URL:-}
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
+      # The run dialog's pre-flight budget, not a question's. Short on purpose:
+      # the Start button waits for this check before it can be pressed.
+      AGENT_PROBE_TIMEOUT_S: ${AGENT_PROBE_TIMEOUT_S:-5}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm-ai4bi.cpoap-dev.dev.tsmc.com}
       LLM_API_KEY: ${LLM_API_KEY:-}
       JUDGE_MODEL: ${JUDGE_MODEL:-Qwen3.6-27B}
       DIAGNOSIS_MODEL: ${DIAGNOSIS_MODEL:-Qwen3.6-27B}
+      # The default state of the "Run eval" dialog's diagnosis checkbox, not a
+      # master switch: each run records the choice it was started with.
+      DIAGNOSIS_ENABLED: ${DIAGNOSIS_ENABLED:-true}
       SYNTHESIS_MODEL: ${SYNTHESIS_MODEL:-Qwen3.6-27B}
       # Separate from the other three on purpose: this is the call that reasons
       # about a whole minibatch of traces at once, so it is the one people point

@@ -41,6 +41,11 @@ export function mergeAttempt(row, event) {
     // learn how long the agent took.
     agent_started_at: event.agent_started_at ?? row.agent_started_at,
     agent_latency_ms: event.agent_latency_ms ?? row.agent_latency_ms,
+    // Counted off the trace, so it lands with `attempt_traced` — later than the
+    // verdict, and null on every event before it. `??` for the same reason as
+    // the two above: a plain assignment would blank the number on the next
+    // event to arrive.
+    llm_call_count: event.llm_call_count ?? row.llm_call_count,
   };
 }
 

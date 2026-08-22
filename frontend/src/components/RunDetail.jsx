@@ -366,6 +366,10 @@ export default function RunDetail({
           canReDiagnose={canReDiagnose}
           onReDiagnose={reDiagnose}
           reDiagnosing={reDiagnosing}
+          // Only for a single run: the multi-run modes put one representative
+          // result on screen and the runs behind it may have been started with
+          // different answers to this, so "this run" would name nothing.
+          diagnosisDisabled={Boolean(liveRunId) && runConfig?.diagnosis_enabled === false}
           onRetryTrace={() => setTraceNonce((n) => n + 1)}
         />
         <SpanDetail span={activeSpanObj} suspect={activeSpanObj ? suspectByIndex[activeSpanObj.index] : null} />

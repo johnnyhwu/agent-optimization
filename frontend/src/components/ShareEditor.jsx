@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import { useDebounced } from "../useDebounced.js";
 import { IconCheck, IconPlus, IconX } from "./icons.jsx";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
@@ -41,43 +42,46 @@ export default function ShareEditor({ shares, setShares, currentUser }) {
   // so the same normalisation has to happen on both sides of the wire.
   const typed = freeText.trim().toLowerCase();
 
+  // "Checking…" appears on the keystroke; only the request waits. Splitting the
+  // two is the point of the hook rather than an accident of it — deriving this
+  // state from the debounced value as well would leave the field silent for the
+  // 300ms in which someone is looking at it.
   useEffect(() => {
-    if (!typed || taken.has(typed)) {
-      setCheck(IDLE);
-      return undefined;
-    }
+    setCheck(!typed || taken.has(typed) ? IDLE : { state: "checking" });
+  }, [typed, taken]);
+
+  // Debounced: this fires between keystrokes, and the directory is a network hop
+  // away. Same hook as the run dialog's agent check — see `useDebounced.js`.
+  const settled = useDebounced(typed, 300);
+
+  useEffect(() => {
+    if (!settled || taken.has(settled) || settled !== typed) return undefined;
     let cancelled = false;
-    setCheck({ state: "checking" });
-    // Debounced: this fires between keystrokes, and the directory is a network
-    // hop away.
-    const t = setTimeout(() => {
-      api
-        .lookupUser(typed)
-        .then((r) => {
-          if (cancelled) return;
-          setCheck(
-            r.verified
-              ? { state: "found", name: r.employee_name }
-              : { state: "unverified", reason: r.reason }
-          );
-        })
-        .catch((e) => {
-          if (cancelled) return;
-          // 404 is the directory answering "no such person" — the one case worth
-          // blocking on. Anything else is this app or the network failing, and
-          // holding sharing hostage to that would be the worse outcome.
-          setCheck(
-            e.status === 404
-              ? { state: "missing" }
-              : { state: "unverified", reason: e.message }
-          );
-        });
-    }, 300);
+    api
+      .lookupUser(settled)
+      .then((r) => {
+        if (cancelled) return;
+        setCheck(
+          r.verified
+            ? { state: "found", name: r.employee_name }
+            : { state: "unverified", reason: r.reason }
+        );
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // 404 is the directory answering "no such person" — the one case worth
+        // blocking on. Anything else is this app or the network failing, and
+        // holding sharing hostage to that would be the worse outcome.
+        setCheck(
+          e.status === 404
+            ? { state: "missing" }
+            : { state: "unverified", reason: e.message }
+        );
+      });
     return () => {
       cancelled = true;
-      clearTimeout(t);
     };
-  }, [typed, taken]);
+  }, [settled, typed, taken]);
 
   const canAdd = typed && !taken.has(typed) && check.state !== "missing" && check.state !== "checking";
 

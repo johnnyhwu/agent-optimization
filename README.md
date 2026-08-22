@@ -759,8 +759,9 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 | Group | Endpoints |
 |---|---|
 | Session | `GET /health`, `/users`, `/users/lookup?username=`, `/me`, `/run-config/defaults` |
+| Agent | `GET /agent/skills?agent_base_url=` — the "Run eval" dialog's pre-flight: reaching it proves the agent server is there and hands back its skill list |
 | Eval sets | `POST /eval-sets`, `GET /eval-sets` (paged + filtered), `GET·PATCH·DELETE /eval-sets/{id}`, `PUT /eval-sets/{id}/roles`, `GET /eval-sets/metadata/keys`, `POST .../judge-prompt/verify`, `POST .../judge-prompt/reviewed` |
-| Questions | `GET /eval-sets/{id}/questions`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
+| Questions | `GET /eval-sets/{id}/questions`, `GET /eval-sets/{id}/skills`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |
 | Results | `GET /eval-sets/{id}/results`, `GET .../results/{rid}/trace`, `POST .../results/{rid}/re-diagnose` |
 | Export | `GET /eval-sets/{id}/export/preview`, `GET /eval-sets/{id}/export` — see [Download](#download-export) |
@@ -1020,7 +1021,7 @@ file you get.
 |---|---|
 | `questions.{csv,jsonl}` | one row per question — **re-uploadable**, see below |
 | `runs.{csv,jsonl}` | one row per run: status, pass rate, timings, resolved non-secret config |
-| `results.{csv,jsonl}` | one row per **(run × question)**: agent answer, verdict, judge score/comment, latency |
+| `results.{csv,jsonl}` | one row per **(run × question)**: agent answer, verdict, judge score/comment, and what the question cost — `started_at`, `agent_latency_ms`, `llm_call_count`, plus `failure_kind` |
 | `traces.json` | agent spans + stored diagnosis per question; always JSON, off by default |
 | `manifest.json` | source set, export time, what's included, question-id policy |
 
@@ -1051,6 +1052,15 @@ which rule produced the file.
 which has no credential fields and drops unknown keys, so a secret mis-stored in
 `config` still cannot be exported. Only slot names appear, via
 `credentials_set`. Share lists are user subjects and are never exported.
+
+**A blank cell is not a zero.** `llm_call_count` is counted off the trace, so a
+question whose trace never arrived exports as empty rather than as `0` — it did
+not make zero model calls; nobody knows how many it made, and a 0 in a
+spreadsheet is a number people average. `failure_kind` is the machine-readable
+half of a failure (`agent_timeout`, `judge_invalid`, …), so "how many of these
+timed out" is a filter rather than a substring search over `error_message`.
+Per-*span* latency and token usage live in `traces.json`, not here: they are
+span-level facts and belong in the span-level file.
 
 Notes:
 - **Viewers can download.** A viewer can already read every row an export
