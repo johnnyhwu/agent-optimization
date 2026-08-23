@@ -1,6 +1,7 @@
 import React from "react";
 import Field from "../ui/Field.jsx";
 import { OFF, SET, SYSTEM, placeholder } from "../../settings_fields.js";
+import { isOverridden } from "../../settings_view.js";
 
 // One setting, in the only two shapes it can take.
 //
@@ -15,7 +16,27 @@ import { OFF, SET, SYSTEM, placeholder } from "../../settings_fields.js";
 // different reason — blank already means "aim at nothing", so it cannot also
 // mean "no opinion". Both get a segmented control instead, which is the same
 // idea drawn honestly rather than a checkbox that quietly loses one answer.
+//
+// Two things the legend above did not cover, and a page of twenty-five rows
+// needs both:
+//
+//   *Which* rows are yours has to survive a scan. Grey-versus-black is a real
+//   distinction when you are looking at one field and no distinction at all
+//   when you are looking for one among twenty-five, so an overridden row also
+//   carries a rule down its left edge — the same accent the jump list counts
+//   with, so the two agree.
+//
+//   "Clearing the box is the reset" is true and undiscoverable. Selecting a URL
+//   and deleting it is not something anyone tries in order to find out what
+//   happens. The row says so, once, on the rows where it applies: `Reset` is
+//   offered only when there is something to reset, and only on the typed
+//   fields, because a segmented control's first position is already a visible
+//   way back.
 export default function SettingRow({ spec, entry, system, error, isNew, onChange }) {
+  const id = `setting-${spec.key}`;
+  const overridden = isOverridden(spec, entry);
+  const className = `setting-row${overridden ? " is-overridden" : ""}`;
+
   const label = (
     <>
       {spec.label}
@@ -29,20 +50,47 @@ export default function SettingRow({ spec, entry, system, error, isNew, onChange
 
   if (spec.kind === "bool" || spec.optional) {
     return (
-      <Field label={label} help={spec.help} error={error}>
+      <Field label={label} help={spec.help} error={error} className={className}>
         <Segmented spec={spec} entry={entry} system={system} onChange={onChange} />
       </Field>
     );
   }
 
+  const unit = unitFor(spec);
+  const hint = (unit || overridden) && (
+    <>
+      {unit}
+      {overridden && (
+        <button
+          type="button"
+          className="setting-reset"
+          onClick={() => onChange({ mode: SYSTEM, raw: "" })}
+        >
+          Reset
+        </button>
+      )}
+    </>
+  );
+
   return (
-    <Field label={label} help={spec.help} error={error} hint={hintFor(spec)}>
+    <Field
+      label={label}
+      htmlFor={id}
+      help={spec.help}
+      error={error}
+      hint={hint}
+      className={className}
+    >
       <input
+        id={id}
         type="text"
         inputMode={spec.kind === "text" ? undefined : "decimal"}
         value={entry.raw}
         placeholder={placeholder(spec, system)}
         aria-invalid={error ? "true" : undefined}
+        aria-describedby={
+          error ? `${id}-error` : spec.help ? `${id}-help` : undefined
+        }
         onChange={(e) => {
           const raw = e.target.value;
           // Cleared is not "set to empty" — it is the override going away. The
@@ -55,7 +103,7 @@ export default function SettingRow({ spec, entry, system, error, isNew, onChange
   );
 }
 
-function hintFor(spec) {
+function unitFor(spec) {
   if (spec.kind === "fraction") return "%";
   if (spec.key.endsWith("_s")) return "seconds";
   return undefined;
@@ -81,7 +129,10 @@ function Segmented({ spec, entry, system, onChange }) {
 
   return (
     <div className="setting-seg-wrap">
-      <div className="setting-seg" role="group">
+      {/* Named, because "group" with no name is a landmark a screen reader
+          announces as nothing at all — and out of the label's earshot these
+          three buttons read as a bare "System, On, Off". */}
+      <div className="setting-seg" role="group" aria-label={spec.label}>
         {options.map((option, index) => (
           <button
             key={option.label}
@@ -99,6 +150,7 @@ function Segmented({ spec, entry, system, onChange }) {
           type="text"
           inputMode="decimal"
           className="setting-seg-value"
+          aria-label={`${spec.label} value`}
           value={entry.raw}
           placeholder={placeholder(spec, system)}
           onChange={(e) => onChange({ mode: SET, raw: e.target.value })}
