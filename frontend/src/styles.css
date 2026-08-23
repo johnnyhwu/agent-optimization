@@ -1811,6 +1811,13 @@ pre.prompt-text {
      section. */
   align-items: start;
 }
+.settings-nav {
+  /* Follows the reader down a form six groups long. `.settings` is
+     `align-items: start`, which is what leaves this free to stick rather than
+     being stretched to the panel's height. The offset clears the sticky top
+     bar, which is what `--topbar-h` exists to be subtracted from. */
+  position: sticky; top: calc(var(--topbar-h) + var(--space-3));
+}
 .settings-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
 .settings-nav-item {
   display: grid; grid-template-columns: 1fr auto; gap: 0 var(--space-2);
@@ -1826,6 +1833,33 @@ pre.prompt-text {
 .settings-nav-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center;
 }
+
+/* The groups inside the open panel. Indented under it and hung off a hairline,
+   because they are parts of that page rather than siblings of it — the same
+   relationship a table of contents draws, and for the same reason: the page is
+   longer than the window and there is otherwise no way to see its shape. */
+.settings-nav .settings-jump {
+  margin: var(--space-1) 0 0 var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border);
+  gap: 0;
+}
+.settings-jump-item {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 5px var(--space-2); border-radius: var(--radius-sm);
+  font-size: var(--text-caption); color: var(--muted); text-decoration: none;
+}
+.settings-jump-item:hover { background: var(--panel-2); color: var(--text); }
+.settings-jump-item.active { color: var(--text); font-weight: var(--fw-medium); }
+.settings-jump-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* How many of that group are this developer's. The same accent as the rule down
+   an overridden row, so "mine" is one colour on this page rather than two. */
+.settings-jump-count {
+  margin-left: auto; padding: 0 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: var(--text-micro); font-weight: var(--fw-medium);
+}
+
 .settings-body { min-width: 0; }
 .settings-panel {
   display: grid; gap: var(--space-5);
@@ -1843,7 +1877,63 @@ pre.prompt-text {
   font-size: var(--text-section); font-weight: var(--fw-semibold);
 }
 .settings-head p { margin: 0; max-width: 60ch; }
-.settings-actions { display: flex; align-items: center; gap: var(--space-3); }
+
+/* Search. Twenty-five rows is past the point where reading them all is how you
+   find one, and the names people search by are not always the labels — an admin
+   holding a deployment's environment beside this page types `LLM_BASE_URL`, so
+   the key is matched too. */
+.settings-search { position: relative; display: flex; align-items: center; }
+.settings-search input {
+  width: 100%; height: var(--ctl-h);
+  padding-left: 32px; padding-right: 32px;
+}
+.settings-search input::-webkit-search-cancel-button { display: none; }
+.settings-search-icon {
+  position: absolute; left: 10px; color: var(--muted); pointer-events: none;
+}
+.settings-search-clear {
+  position: absolute; right: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: var(--radius-sm); background: transparent;
+  color: var(--muted); cursor: pointer;
+}
+.settings-search-clear:hover { background: var(--panel-2); color: var(--text); }
+.settings-search-clear:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* A group heading is a scroll target, and the app's top bar is sticky, so the
+   jump has to stop short of it or it lands on the heading it was aimed at. */
+.settings-group { scroll-margin-top: calc(var(--topbar-h) + var(--space-4)); }
+.settings-empty {
+  display: grid; justify-items: start; gap: var(--space-3);
+  padding: var(--space-6); border: 1px dashed var(--border-strong);
+  border-radius: var(--radius); color: var(--muted);
+}
+.settings-empty p { margin: 0; }
+
+/* The commit, at the edge the eye ends on rather than in the heading above six
+   groups of fields. Sticky to the bottom of the scroll container, so it is in
+   reach from the last row as well as the first, and solid rather than
+   translucent — the rows scroll underneath it and a half-transparent bar would
+   put two lines of text through each other. */
+.settings-bar {
+  position: sticky; bottom: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-4); flex-wrap: wrap;
+  margin-top: calc(var(--space-2) * -1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+}
+/* Unsaved work is the one state on this page worth colouring. It is a border
+   rather than a fill: the bar holds the primary button, and a tinted bar behind
+   a filled button is two competing surfaces saying one thing. */
+.settings-bar.is-dirty { border-color: var(--accent); }
+.settings-bar-status { font-size: var(--text-caption); color: var(--muted); }
+.settings-bar.is-dirty .settings-bar-status { color: var(--text); font-weight: var(--fw-medium); }
+.settings-bar-actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
 
 /* A key added since this developer last opened the page. Deliberately quiet:
    the thing is already working on the deployment's value, so this is news
@@ -1853,6 +1943,24 @@ pre.prompt-text {
   background: var(--accent-soft); color: var(--accent);
   font-size: var(--text-micro); font-weight: var(--fw-medium); letter-spacing: 0.02em;
 }
+
+/* A row this developer has an opinion about. Grey-versus-black placeholder text
+   answers "is this mine" for the field you are reading and answers nothing at
+   all for the twenty-four you are scanning past, so the row is also ruled down
+   its left edge — in the accent the jump list counts in, so both mean "mine". */
+.setting-row.is-overridden {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent);
+}
+.setting-row .ui-field-hint { display: inline-flex; align-items: center; gap: var(--space-2); }
+/* "Clearing the box is the reset" was true and undiscoverable. */
+.setting-reset {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: var(--text-caption); font-weight: var(--fw-medium);
+  color: var(--accent);
+}
+.setting-reset:hover { text-decoration: underline; }
+.setting-reset:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm); }
 
 /* Three positions, for the controls whose "blank" is already spoken for: a
    checkbox has no empty state, and the target score's blank already means "aim
@@ -1870,6 +1978,7 @@ pre.prompt-text {
 .setting-seg-btn + .setting-seg-btn { border-left: 1px solid var(--border); }
 .setting-seg-btn:hover { color: var(--text); }
 .setting-seg-btn.is-on { background: var(--panel); color: var(--text); font-weight: var(--fw-medium); }
+.setting-seg-btn:focus-visible { outline: none; box-shadow: var(--ring); }
 .setting-seg-value { max-width: 120px; }
 .setting-seg-unit { color: var(--muted); font-size: var(--text-caption); }
 
@@ -1902,6 +2011,34 @@ pre.prompt-text {
   .script-conn-grid { grid-template-columns: minmax(0, 1fr) 90px; }
   .script-conn-host { grid-column: 1 / -1; }
   .script-conn-port { grid-column: 1; }
-  /* The settings column stacks above its panel rather than squeezing it. */
+  /* The settings column stacks above its panel rather than squeezing it — and
+     stops following the reader, because stuck to the top of a narrow window it
+     would be a table of contents permanently covering the form it indexes. */
   .settings { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav { position: static; }
+  /* Stacked, the group list was a screenful of links standing between the page
+     heading and the first field. Laid across instead it is a strip of chips you
+     swipe — the same six targets, in one row instead of six. */
+  /* The strip scrolls, so it must not be allowed to size its own column: an
+     auto grid track is max-content wide, and max-content here is all six chips
+     laid end to end — which is how a scrolling strip becomes a page that
+     scrolls sideways instead. */
+  .settings-nav > ul { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav > ul > li { min-width: 0; }
+  .settings-nav .settings-jump {
+    display: flex; gap: var(--space-2);
+    margin: var(--space-2) 0 0; padding: 0 0 var(--space-1);
+    border-left: 0; overflow-x: auto; scrollbar-width: none;
+  }
+  .settings-nav .settings-jump::-webkit-scrollbar { display: none; }
+  /* The flex items are the list items, not the links inside them — a chip held
+     back from shrinking by its anchor alone still collapses, and the labels
+     ellipsise to "A…", "S…", "Tra…". */
+  .settings-nav .settings-jump > li { flex: none; }
+  .settings-jump-item {
+    white-space: nowrap;
+    border: 1px solid var(--border); background: var(--panel);
+  }
+  .settings-jump-item.active { border-color: var(--accent); color: var(--accent); }
+  .settings-jump-count { margin-left: 0; }
 }

@@ -35,18 +35,32 @@ export default function Field({
         </label>
       )}
       <div className="ui-field-control">{children}</div>
-      {/* Help sits under the control and stays there. Placeholder-only guidance
-          disappears exactly when the user starts typing, which is when they were
-          reading it. */}
-      {help && !error && <p className="ui-field-help">{help}</p>}
-      {error && <p className="ui-field-error">{error}</p>}
+      {/* Help sits under the control and stays there.
+          Both carry an id derived from the control's, so a caller that gave one
+          can point `aria-describedby` at them: help under a box is read by
+          anyone who can see it and by nobody who cannot, unless it is wired up.
+          Placeholder-only guidance disappears exactly when the user starts
+          typing, which is when they were reading it. */}
+      {help && !error && (
+        <p className="ui-field-help" id={htmlFor ? `${htmlFor}-help` : undefined}>
+          {help}
+        </p>
+      )}
+      {error && (
+        <p className="ui-field-error" id={htmlFor ? `${htmlFor}-error` : undefined}>
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
-export function FormSection({ title, description, aside, children, className = "" }) {
+export function FormSection({ id, title, description, aside, children, className = "" }) {
   return (
-    <section className={`ui-form-section ${className}`.trim()}>
+    // `id` so a long form can be jumped into. A section that is a scroll target
+    // needs `scroll-margin-top` at its call site, or a sticky top bar lands on
+    // top of the heading the jump was aimed at.
+    <section id={id} className={`ui-form-section ${className}`.trim()}>
       {(title || aside) && (
         <div className="ui-form-section-head">
           <div>
