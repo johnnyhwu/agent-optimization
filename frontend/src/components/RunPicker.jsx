@@ -72,7 +72,7 @@ export default function RunPicker({ evalSetId, value, onChange }) {
     ? selected
       ? label(selected)
       : "Selected run"
-    : "Start from the defaults";
+    : "Your defaults";
 
   // Hands back the run object, not just its id: a choice can only ever come from
   // what is on screen, so the caller never has to re-fetch a run this component
@@ -160,7 +160,12 @@ export default function RunPicker({ evalSetId, value, onChange }) {
               onMouseEnter={() => setCursor(-1)}
               onClick={() => choose(null)}
             >
-              <div className="rp-name">Start from the defaults</div>
+              {/* Not just the opening state — it is also the way back out of
+                  a chosen run, which is why it stays in the list rather than
+                  being implied by "nothing selected". The label says whose
+                  defaults, because since the settings page these are the
+                  developer's own where they have set any. */}
+              <div className="rp-name">Your defaults</div>
             </div>
             {runs.map((r, i) => (
               <div

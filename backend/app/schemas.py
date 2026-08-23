@@ -1292,3 +1292,38 @@ class OptimizationSkillDiff(BaseModel):
     lines_removed: int = 0
     answer_leaks: list[AnswerLeak] = Field(default_factory=list)
     edit_reports: list[EditReportOut] = Field(default_factory=list)
+
+
+# --- Personal defaults (app/settings_catalog.py) ----------------------------
+
+
+class UserSettingsIn(BaseModel):
+    """Body of PUT /user-settings: the whole set of a user's overrides.
+
+    Deliberately `dict[str, Any]` rather than a field per setting. The catalogue
+    is the list of what may be set and the only place a new key is added; a
+    mirrored model here would be a second list to keep in step, and the one that
+    fell behind would silently refuse a setting the page was already showing.
+    Validation happens against the catalogue in `services/user_settings.py`.
+    """
+
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class UserSecretIn(BaseModel):
+    """Body of PUT /user-settings/secrets/{key}. Write-only, like every other
+    credential in this product.
+
+    `endpoint` travels with the value because the binding is to the address the
+    user was looking at when they typed it — not to whatever the environment
+    says at injection time.
+    """
+
+    value: str
+    endpoint: str = ""
+
+
+class SeenIn(BaseModel):
+    """Body of POST /user-settings/seen."""
+
+    keys: list[str] = Field(default_factory=list)

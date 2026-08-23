@@ -11,6 +11,13 @@
 // environment that ships an AGENT_BASE_URL default connects to that on its own,
 // because refusing to would make every existing single-agent deployment press a
 // button to get back to where it already was.
+//
+// A developer's saved default from the settings page arrives through that same
+// exception, and belongs in it: the defaults endpoint hands it over as
+// `agent_base_url` exactly as the environment's would, so the playground
+// connects to it on open. That is not the leftover this file refuses to act on
+// — a leftover is the last address that happened to be typed, and this one was
+// chosen on a page whose whole subject is which address to use.
 
 const KEY = "playground-agents";
 const LIMIT = 5;

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 import { href, navigate } from "../../useHashRoute.js";
 import Banner from "../ui/Banner.jsx";
+import DefaultsNotice from "../settings/DefaultsNotice.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Field, { FormSection } from "../ui/Field.jsx";
@@ -271,6 +272,11 @@ export default function Wizard() {
   return (
     <div className="opt-wizard">
       <StepBar steps={STEPS} current={stepIndex} onGo={setStepIndex} furthest={reachable} />
+
+      <DefaultsNotice
+        defaults={defaults.defaults}
+        systemDefaults={defaults.system_defaults}
+      />
 
       {error && (
         <Banner tone="error" title="That did not work">

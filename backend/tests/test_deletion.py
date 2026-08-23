@@ -211,6 +211,12 @@ def test_every_child_table_is_covered():
         "optimization_minibatches",
         "optimization_stage_calls",
         "optimization_skills",
+        # Personal defaults belong to a person, not to an eval set. Nothing
+        # references them and they reference nothing: deleting a set, a run or an
+        # optimization run must leave a developer's own settings exactly where
+        # they were. They go when the person does, which is not a thing this
+        # product does yet.
+        "user_settings",
     }
     from app.db import Base
 

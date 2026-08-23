@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 //   #/evaluation/{esId}/runs/{id,id}?mode=&n=       the three-column detail
 //   #/playground
 //   #/optimize
+//   #/settings/{panel}                              personal defaults
 //
 // Everything the detail view needs is in the URL, so "look at this failing run"
 // is a link you can paste to someone, and Back walks back up the tiers.
@@ -30,6 +31,9 @@ export const href = {
   },
   playground: () => "#/playground",
   optimize: () => "#/optimize",
+  // Reached from the user menu rather than the side rail: it is about the person
+  // signed in, not about a fourth thing the product does.
+  settings: (panel = "defaults") => `#/settings/${panel}`,
   optimizeNew: () => "#/optimize/new",
   optimizeRun: (runId) => `#/optimize/${runId}`,
   optimizeRollout: (runId, stepNo, split) =>
@@ -56,6 +60,10 @@ export function parseHash(hash) {
   const q = new URLSearchParams(search || "");
 
   if (parts[0] === "playground") return { section: "playground" };
+  // The settings page's own left column is a route rather than component state,
+  // for the same reason every other tier here is one: it survives a reload and
+  // it is a link somebody can send.
+  if (parts[0] === "settings") return { section: "settings", panel: parts[1] || "defaults" };
   if (parts[0] === "optimize") {
     // `new` is a reserved id rather than a query flag: the wizard is a whole
     // page, and a page deserves an address someone can link to.

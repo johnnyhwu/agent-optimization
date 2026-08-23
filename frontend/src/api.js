@@ -197,7 +197,10 @@ export const api = {
   // Returns a page: { items, total, has_more }.
   listRuns: (id, params = {}) => req("GET", `/eval-sets/${id}/runs${qs(params)}`),
   getRun: (id, runId) => req("GET", `/eval-sets/${id}/runs/${runId}`),
-  // Env-derived prefill for the run-config dialog + which seams are live.
+  // Prefill for the run-config dialog + which seams are live. `defaults` is this
+  // deployment's values with the signed-in developer's own laid over them;
+  // `system_defaults` is the deployment's alone, which is the only way the page
+  // can tell whether anything came from the settings page.
   runConfigDefaults: () => req("GET", "/run-config/defaults"),
   triggerRun: (id, payload) => req("POST", `/eval-sets/${id}/runs`, payload),
   cancelRun: (id, runId) => req("POST", `/eval-sets/${id}/runs/${runId}/cancel`),
@@ -206,6 +209,25 @@ export const api = {
   renameRun: (id, runId, name) =>
     req("PATCH", `/eval-sets/${id}/runs/${runId}`, { name }),
   deleteRun: (id, runId) => req("DELETE", `/eval-sets/${id}/runs/${runId}`),
+
+  // --- The settings page ----------------------------------------------------
+  //
+  // Personal defaults for every value the three sections' forms prefill. The
+  // whole set goes back on every save: a key the form no longer carries is a
+  // field the developer cleared, and clearing is how an override is undone.
+  //
+  // Credentials have their own two calls rather than a field in `values`, so a
+  // secret never shares a request body with something safe to log — and nothing
+  // reads one back, because nothing can.
+  userSettings: () => req("GET", "/user-settings"),
+  saveUserSettings: (values) => req("PUT", "/user-settings", { values }),
+  saveUserSecret: (key, value, endpoint) =>
+    req("PUT", `/user-settings/secrets/${key}`, { value, endpoint }),
+  deleteUserSecret: (key) => req("DELETE", `/user-settings/secrets/${key}`),
+  markSettingsSeen: (keys) => req("POST", "/user-settings/seen", { keys }),
+  // Two counts, for the dot on the user menu. Its own endpoint because every
+  // page asks and none of them wants the catalogue.
+  userSettingsStatus: () => req("GET", "/user-settings/status"),
   results: (id, runIds, mode, lastN) => {
     const qs = new URLSearchParams();
     runIds.forEach((r) => qs.append("run_ids", r));

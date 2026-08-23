@@ -527,6 +527,102 @@ Stage 1 **不做** step 拆解軟對齊；直接把整段 `ground_truth_reasonin
   > `AGENT_IMPL` 或 `WORKSPACE_IMPL` 任一為 fake 時，讀到的 skill 是罐頭資料，此時整個探測
   > 標示為 simulated：不做覆蓋率警告，也絕不擋 Start。
 
+### 4.7a 個人預設值（user global settings）
+
+§4.7 講的是「一個 run 自己的設定」。這一節講它的**起點**是誰決定的。
+
+在此之前，三個頁面的每一張表單都從 `.env` 開始。這對一個部署是對的，對一個人是錯的——
+每個 run 都指向自己 agent server 的人，一天要重打同一個位址十幾次，而「Run eval」對話框
+對昨天沒有記憶。右上角使用者選單裡的設定頁就是他把這件事說一次的地方。
+
+**哪些 key 進得來：兩個條件同時成立。**
+`config.py` 裡有對應的環境變數，**而且**前端目前已經有控制項可以為單一 run 覆寫它。
+兩半都必要，而且互相推不出來——
+`OPTIMIZER_SCHEDULER` 有環境變數但沒有任何畫面提供它（設了也看不到作用）；
+wizard 的「Trajectory budget」有控制項但預設值是 `reflection.py` 的常數（等於從後門發明一個部署設定）。
+目前 25 個：連線/模型 10 個、金鑰 2 個、Optimize 13 個。
+清單與**每一個排除項的理由字串**都在 `app/settings_catalog.py`。
+
+> 排除清單和進來的清單一樣重要。`SCRIPT_MAX_QUERIES` 那一組是**圍堵邊界而不是偏好**，
+> 使用者能自己調高的沙箱限制就不是限制。半年後沒有理由字串就分不出「還沒做」和「不該做」。
+
+**三層，而且疊合只發生在一個地方。**
+
+```
+系統值 (.env → Settings)  ⊕  使用者值 (user_settings)  →  /defaults 端點  →  表單帶入  →  明確送出
+                                                          ↑ 只有這裡
+```
+
+`run_config.defaults()`、`hyperparams.algorithm_defaults()`、`StopPolicy.from_config()`
+**三個函式絕對不可以知道呼叫者是誰**。它們看起來是疊合的自然位置——第一個就是對話框的預填來源——
+但 `resolve()` 也呼叫它，而 `resolve()` 決定一個 run 實際跑什麼；`resolve_algorithm()` 呼叫第二個；
+optimizer engine 每一步呼叫第三個。把 subject 塞進任何一個，同一個 POST 就會因為誰送的而產生不同的 run，
+而且是在一個沒人會想到要打開的檔案裡決定的，現有測試還會全綠。
+疊合因此住在 `services/user_settings.py`，只有兩支 `/defaults` 端點呼叫它。
+`tests/test_user_settings_isolation.py` 從三個角度釘住這件事：函式簽名不得長出 subject、
+那三個模組的原始碼不得出現 `user_settings`、空的 request 仍然解析成環境值。
+
+**疊合看 key 在不在，不看真假值。**
+`diagnosis_enabled=False`、`early_stop_patience=0`（「永不早停」）、
+`early_stop_target_score=None`（「不設目標」）全都是使用者可以做的選擇。
+`if value:` 會吃掉四種，`if value is not None:` 會吃掉三種——
+`hyperparams.py` 和 `stopping.py` 各自為了同一個 bug 被改寫過一次。
+
+> 最細的一個：`stopping._number` 把 `None` 讀成「未設定，用環境的值」。對一個 **run 的 config** 是對的，
+> 對一個**使用者的預設**是錯的——部署瞄準 0.9 的話，使用者就永遠無法把自己的預設設成「不瞄準」。
+> 所以環境先解析成一個普通 dict，使用者的值再按 key 存在疊上去，永遠不經過 `StopPolicy.from_config`。
+
+**讀寬鬆，寫嚴格。** 存進去時合法的值，可能因為之後改版而變不合法。
+存檔用 400 拒絕；讀取則丟掉那個 key、回報在 `invalid` 裡、繼續——
+因為讀的這支端點是**每一個頁面都會載入的**，一個過期的偏好該讓使用者少一個欄位，而不是少一個畫面。
+
+**金鑰走另一條路，而且沒有選擇。**
+金鑰永不回傳給瀏覽器，所以表單一定送空值，一定由後端注入。這條線就是 `runs.config` / `runs.secrets`
+既有的分欄線。四條規則（`services/user_secrets.py`）：
+
+- **加密儲存，fail closed。** `SETTINGS_SECRET_KEY` 沒設就整個關閉，絕不退化成明文。
+  （`runs.secrets` 是明文，那是可以接受的：一個下午的 key。一個**沒有到期日**的預設是另一種爆炸半徑。）
+- **端點綁定。** 存的時候連同當下的 `llm_base_url` / `langfuse_host` 一起存；注入時比對這次 run 的端點，
+  不同就不注入。沒有這條，在對話框裡把 base URL 改成別的位址，後端就會把使用者的 key 送過去。
+  §4.7 的「沿用舊 run 的金鑰」早就有這條規則，這裡是同一條規則套用到一個活得更久的儲存。
+  **代價是刻意的摩擦**：改了端點就要重打，這是功能不是缺陷。
+- **`AUTH_MODE=fake` 硬性停用。** 那個模式的身分是呼叫者自己設的 header。存與注入兩端都擋，
+  不是只在 UI 隱藏——從 keycloak 切回 fake 的部署，資料列還在，必須停止使用。
+- **解密失敗不是故障。** 輪替或遺失金鑰降級成「沒有這把金鑰」並在設定頁說明；
+  丟例外會讓每個頁面都載入的那支端點掛掉。
+
+三個建立路徑（`runs.py`、`playground.py`、`optimization.py`）呼叫**同一個** `user_secrets.inject`，
+所以端點綁定不會在兩個畫面成立、第三個不成立。
+
+**介面：空白就是「沒有意見」。**
+設定頁的欄位預設是空的，灰色 placeholder 是這個部署的值。打字＝覆寫，清空＝還原。
+不需要三態標記，也不需要 reset 按鈕——「有沒有字」就是狀態。
+兩種欄位做不到這件事，所以改用三段式控制：勾選框沒有空狀態（`diagnosis_enabled` 等三個），
+而 `early_stop_target_score` 的空白已經是「不瞄準」。
+三個功能頁**沒有**任何逐欄標記，只有一行「已帶入你的預設值 · 編輯」，而且只在真的有覆寫時出現。
+
+**兩種提示，都不是錯誤。**
+`seen_keys` 記錄這個使用者看過哪些 key；「新的」必須是「你沒看過」而不是「你沒設過」，
+否則第一次進來就是 25 個徽章，等於沒有提示。資料列**在第一次打開設定頁時建立**，
+當下所有 key 一次寫進 `seen_keys` 當基準線——所以只有之後新增的才會是新的，
+而從沒打開過設定頁的人沒有資料列，也沒有小紅點。
+`system_at_set` 記錄每個覆寫在**當時**的系統值；管理員換掉 `LLM_BASE_URL` 之後，
+覆寫過它的人會安靜地繼續打向那台已經消失的機器，而畫面上沒有任何東西解釋為什麼只有他壞掉。
+這是兩種提示裡真正會咬人的那一種。
+
+**未來新增 key 不會被忘記，由三道測試保證。**
+
+| 方向 | 位置 | 抓什麼 |
+|---|---|---|
+| A | `backend/tests/test_settings_catalog.py` | `Settings` 上每個欄位、三個 defaults dict 的每個 key，都必須在 `CATALOG` 或帶理由的排除表裡 |
+| B | `frontend/src/settings_catalog.test.js` | 表單上每個欄位名都必須在 catalogue 或帶理由的 `NOT_A_SETTING` 裡；**反向**也查：catalogue 提供的每個 key 都必須真的有控制項 |
+| C | 同 A 檔 | catalogue 的每個 key 都要在 `.env.example` 裡有變數（抓「加了欄位卻沒有環境變數」） |
+
+catalogue 以產生的 JSON（`frontend/src/settings_catalog.json`）送到瀏覽器，
+另有一個後端測試斷言該 JSON 與 `CATALOG` 同步——兩邊任一改了另一邊會紅。
+
+**完全向後相容。** `user_settings` 是空的時候，每一張表單開出來的值與這個功能存在之前逐欄相同。
+
 ### 4.8 Playground 完全不落庫
 
 **attempt 是一次拋棄式實驗；run 是一筆歷史紀錄。** 不落庫換到三件事——

@@ -59,6 +59,10 @@ services:
       # the other way, and KEYCLOAK_URL becomes required instead of optional.
       AUTH_MODE: ${AUTH_MODE:-keycloak}
       KEYCLOAK_URL: ${KEYCLOAK_URL:?set KEYCLOAK_URL}
+      # Turns on the credential half of the personal settings page. `-` not `:-`:
+      # blank is how the feature is switched off, and an explicitly empty value
+      # has to survive rather than be replaced by a default.
+      SETTINGS_SECRET_KEY: ${SETTINGS_SECRET_KEY-}
       # nginx strips /api before forwarding; this keeps the generated /docs and
       # /openapi.json URLs pointing back through the prefix.
       ROOT_PATH: /api

@@ -76,7 +76,7 @@ from app.schemas import (
     SkillGroup,
     TraceView,
 )
-from app.services import deletion, judge_prompt, run_config
+from app.services import deletion, judge_prompt, run_config, user_secrets, user_settings
 from app.services.trace_view import resolve_trace_spans, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
@@ -218,7 +218,10 @@ PRIOR_RUNS_WINDOW = 10
 
 
 @router.get("/defaults")
-async def optimization_defaults(subject: str = Depends(current_subject)):
+async def optimization_defaults(
+    subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
+):
     """Prefill values for the wizard, plus the rules it has to enforce.
 
     The limits come from here rather than being written into the browser bundle
@@ -230,25 +233,26 @@ async def optimization_defaults(subject: str = Depends(current_subject)):
     safe to render into a page; a secret among them would be sent to everyone who
     opens the wizard, and would look like a conveniently prefilled field.
     """
+    # This deployment's values with the caller's own laid over them. Assembled by
+    # `user_settings`, which builds the same dictionary the block below
+    # describes — one function, so the wizard's prefill and the settings page
+    # cannot disagree about what an untouched run would do. The overlay is
+    # deliberately *not* inside `run_config.defaults()` or
+    # `hyperparams.algorithm_defaults()`: those are on the path a run executes
+    # through, and what a run does must not depend on who started it.
+    effective = await user_settings.effective_optimization_defaults(session, subject)
     return {
         "defaults": {
-            **run_config.defaults(),
-            "optimizer_model": settings.optimizer_model,
-            # Hyperparameters, from the environment rather than from literals
-            # here: they are a deployment's answer to "how big is a step against
-            # this agent", and a site whose agent server takes four questions at
-            # a time should not have to retype them into every run. The same
-            # function the engine reads the *run's* values through
-            # (`hyperparams.resolve_algorithm`), so the form cannot offer a
-            # default the loop would not honour.
-            "num_epochs": settings.optimizer_num_epochs,
-            "batch_size": settings.optimizer_batch_size,
-            **hyperparams.algorithm_defaults(),
-            # When the run stops early. One mechanism, four conditions — see
-            # `app/optimizer/stopping.py`, which is also what resolves these.
-            **stopping.StopPolicy.from_config({}).as_dict(),
+            **effective,
+            # Not in the catalogue and so not in `effective`: this one's default
+            # is a literal in `optimizer/dataset.py` rather than an environment
+            # variable, and a personal default is only offered where a
+            # deployment can already configure one.
             "train_share": dataset.DEFAULT_TRAIN_SHARE,
         },
+        # What this deployment would have used, so the wizard can say whether
+        # anything above came from the caller's own settings.
+        "system_defaults": user_settings.optimization_defaults({}),
         "judge_prompt": dict(zip(
             ("system", "user"), judge_prompt.effective(None, None)
         )),
@@ -491,7 +495,15 @@ async def create_optimization_run(
         mode=body.mode,
         skill_name=body.skill_name,
         config=config,
-        secrets={k: v for k, v in body.secrets.model_dump().items() if v},
+        # Typed into this request, else this developer's saved default for the
+        # endpoint this run is actually pointed at. Same `inject` as the eval and
+        # playground paths — one implementation, so the endpoint binding cannot
+        # hold on two screens and not the third.
+        secrets=user_secrets.inject(
+            await user_settings.stored_secrets(session, subject),
+            config,
+            body.secrets.model_dump(),
+        ),
         workspace_version=workspace.version,
         initial_skill=initial,
         # Routing sends the whole workspace, so the *other* skills are part of

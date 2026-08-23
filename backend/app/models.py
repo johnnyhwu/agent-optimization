@@ -808,3 +808,63 @@ class OptimizationSkill(Base):
     )
 
     run: Mapped["OptimizationRun"] = relationship(back_populates="skills")
+
+
+# --- Personal defaults ------------------------------------------------------
+
+
+class UserSettings(Base):
+    """One developer's own defaults for the forms in this product.
+
+    Keyed by subject, and by the *normalised* subject — `auth.normalize_subject`,
+    the same casefold `eval_set_roles` is written with. Without that, `Alice` and
+    `alice` would be two people with two sets of defaults, one of which looks
+    empty for no reason the user can see.
+
+    `values` and `secrets` are separate columns for the reason `runs` splits
+    them: no response model reads `secrets`, so "credentials never leave the
+    server" is a property of the schema rather than of somebody remembering.
+    Unlike `runs.secrets`, these are encrypted at rest as well — see
+    `services/user_secrets.py` for why a saved default is a different risk from
+    one run's key.
+
+    **`values` is keyed on presence, never on truthiness.** A key that is absent
+    means "no opinion, use the environment". A key that is present means the user
+    chose that value, and `False`, `0`, `""` and `null` are all values they can
+    choose. Reading this column with `or`, or with a falsiness test, silently
+    turns four legitimate answers back into the deployment's default — the exact
+    bug `optimizer/hyperparams.py` and `optimizer/stopping.py` were each rewritten
+    to remove.
+    """
+
+    __tablename__ = "user_settings"
+
+    subject: Mapped[str] = mapped_column(Text, primary_key=True)
+    values: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # What the environment said for each overridden key at the moment it was
+    # overridden. The point is the day someone edits `.env`: a user who
+    # overrode that key keeps winning, silently, possibly pointing at an
+    # endpoint that no longer exists. Comparing this against today's value is
+    # what lets the settings page say so.
+    system_at_set: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    secrets: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Which settings this user has already been shown. "New" has to mean "you
+    # have not seen this", not "you have not set this" — otherwise a first visit
+    # is twenty-five badges and the signal is worthless on day one. The row is
+    # created on that first visit with every current key already in here, so
+    # only keys introduced afterwards are ever new.
+    seen_keys: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )

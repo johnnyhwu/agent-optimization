@@ -6,6 +6,7 @@ import Modal from "./Modal.jsx";
 import ShortlistDialog from "./ShortlistDialog.jsx";
 import PhaseSteps from "./PhaseSteps.jsx";
 import PlaygroundComposer from "./PlaygroundComposer.jsx";
+import DefaultsNotice from "./settings/DefaultsNotice.jsx";
 import SpanDetail from "./SpanDetail.jsx";
 import SpanList from "./SpanList.jsx";
 import { useToast } from "./Toast.jsx";
@@ -118,6 +119,12 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // is, so both agree about what a blank field means.
   const [form, setForm] = useState(null);
   const [impls, setImpls] = useState({});
+  // What this screen opened with, and what it would have opened with on the
+  // deployment's settings alone. Kept apart from `form`, which the developer
+  // edits: the line below is about where the prefill came from, and comparing
+  // live form state instead would turn it into "you have typed something".
+  const [opened, setOpened] = useState(null);
+  const [systemDefaults, setSystemDefaults] = useState(null);
   const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
 
   // Which agent this screen is about: "disconnected" | "connecting" |
@@ -162,6 +169,8 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         const impls = r.impls || {};
         setImpls(impls);
         setForm(r.defaults);
+        setOpened(r.defaults);
+        setSystemDefaults(r.system_defaults);
         if (impls.workspace === "fake") {
           setConn("fake");
           // The canned workspace cannot really fail, but a rejection here would
@@ -799,6 +808,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
             Dismiss
           </Button>
         </div>
+      )}
+
+      {form && (
+        <DefaultsNotice defaults={opened} systemDefaults={systemDefaults} />
       )}
 
       {form && (

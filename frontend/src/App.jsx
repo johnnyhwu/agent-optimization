@@ -8,6 +8,7 @@ import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
 import Playground from "./components/Playground.jsx";
 import OptimizeSection from "./components/optimize/OptimizeSection.jsx";
+import SettingsSection from "./components/settings/SettingsSection.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
@@ -34,6 +35,13 @@ export default function App() {
   // A question handed over from the three-column view, to prefill the composer.
   // Deliberately not in the URL: it is a one-shot handoff, not a location.
   const [playgroundSeed, setPlaygroundSeed] = useState(null);
+  // How many things on the settings page are worth a look: settings added since
+  // this developer last opened it, and overrides whose deployment value has
+  // since moved. Its own tiny endpoint rather than a field on the defaults
+  // payload, because it is asked once per session and the defaults are asked by
+  // every page. Zero for anyone who has never opened the page — see
+  // `services/user_settings.ensure_row` on why that has to be the answer.
+  const [settingsAttention, setSettingsAttention] = useState(0);
 
   // Only fake mode has a directory to switch between; against Keycloak the
   // endpoint returns an empty list and the switcher is not rendered at all.
@@ -41,6 +49,15 @@ export default function App() {
     if (isKeycloak) return;
     api.users().then((r) => setUsers(r.users)).catch(() => {});
   }, []);
+
+  // Re-asked when the identity changes, because in demo mode it can, and the
+  // dot belongs to whoever is signed in now. A failure is silent: this is a dot.
+  useEffect(() => {
+    api
+      .userSettingsStatus()
+      .then((r) => setSettingsAttention((r.unseen || 0) + (r.drifted || 0)))
+      .catch(() => setSettingsAttention(0));
+  }, [subject, route.section]);
 
   // Resolve the route's eval-set id. Opening a set from the list hands the
   // object over directly (see onOpen below), so this only actually fetches when
@@ -106,7 +123,12 @@ export default function App() {
           <header className="topbar">
             <div className="topbar-inner">
               <div className="topbar-title">{sectionTitle(route.section)}</div>
-              <UserMenu subject={subject} users={users} onSwitchUser={switchUser} />
+              <UserMenu
+                subject={subject}
+                users={users}
+                onSwitchUser={switchUser}
+                attention={settingsAttention}
+              />
             </div>
           </header>
 
@@ -118,7 +140,8 @@ export default function App() {
             <ErrorBoundary
               where={sectionTitle(route.section)}
               resetKey={[
-                route.section, route.tier, route.esId, route.runId, route.stepNo, route.split,
+                route.section, route.tier, route.esId, route.runId, route.stepNo,
+                route.split, route.panel,
               ].join("|")}
             >
             {route.section === "evaluation" && (
@@ -190,6 +213,10 @@ export default function App() {
             {route.section === "optimize" && (
               <OptimizeSection route={route} subject={subject} />
             )}
+
+            {route.section === "settings" && (
+              <SettingsSection key={subject} route={route} unseen={settingsAttention} />
+            )}
             </ErrorBoundary>
           </div>
         </div>
@@ -201,6 +228,7 @@ export default function App() {
 function sectionTitle(section) {
   if (section === "playground") return "Playground";
   if (section === "optimize") return "Optimize";
+  if (section === "settings") return "Settings";
   return "Evaluation";
 }
 

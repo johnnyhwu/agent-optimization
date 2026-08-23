@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app import cancellation, playground
 from app.auth import current_subject
 from app.integrations import build_seams
@@ -41,8 +43,9 @@ from app.schemas import (
     WorkspaceOverrideIn,
     WorkspaceVersionOut,
 )
+from app.db import get_session
 from app.services import judge_prompt as judge_prompt_service
-from app.services import run_config
+from app.services import run_config, user_secrets, user_settings
 from app.services.trace_view import count_llm_calls, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
@@ -257,6 +260,7 @@ def _load(attempt_id: uuid.UUID, subject: str) -> PlaygroundAttempt:
 async def create_attempt(
     body: PlaygroundCreate,
     subject: str = Depends(current_subject),
+    session: AsyncSession = Depends(get_session),
 ):
     override = None
     if body.workspace is not None and not body.workspace.is_empty:
@@ -319,7 +323,15 @@ async def create_attempt(
                 ),
             ),
         ),
-        secrets={k: v for k, v in body.secrets.model_dump().items() if v},
+        # Typed into this request, else this developer's saved default for the
+        # very endpoint named above. The same `inject` the eval and optimize
+        # paths use, so a credential cannot be bound to its endpoint on two
+        # screens and not on the third.
+        secrets=user_secrets.inject(
+            await user_settings.stored_secrets(session, subject),
+            body.config.model_dump(),
+            body.secrets.model_dump(),
+        ),
         correlation_id=uuid.uuid4().hex,
     )
     playground.start(attempt)

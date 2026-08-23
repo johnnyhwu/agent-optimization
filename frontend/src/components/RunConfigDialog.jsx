@@ -6,6 +6,7 @@ import RunConfigFields, {
   servicesSummary,
 } from "./RunConfigFields.jsx";
 import RunPicker from "./RunPicker.jsx";
+import DefaultsNotice from "./settings/DefaultsNotice.jsx";
 import Button from "./ui/Button.jsx";
 import Field, { Disclosure, FormSection } from "./ui/Field.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
@@ -29,6 +30,9 @@ const SECRET_PAIRS = [
 
 export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) {
   const [defaults, setDefaults] = useState(null);
+  // What the deployment alone would have prefilled. Only used to decide whether
+  // to say the values came from the developer's own settings.
+  const [systemDefaults, setSystemDefaults] = useState(null);
   const [impls, setImpls] = useState({});
   const [form, setForm] = useState(null);
   const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
@@ -50,6 +54,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       .runConfigDefaults()
       .then((r) => {
         setDefaults(r.defaults);
+        setSystemDefaults(r.system_defaults);
         setImpls(r.impls || {});
         setForm({ name: new Date().toLocaleString(), ...r.defaults });
       })
@@ -232,6 +237,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
 
       {form && (
         <>
+          <DefaultsNotice defaults={defaults} systemDefaults={systemDefaults} />
           <Field label="Run name" help="Shown in the run history. Leave the timestamp if you have nothing better.">
             <input value={form.name} onChange={(e) => set("name", e.target.value)} autoFocus />
           </Field>
