@@ -246,11 +246,11 @@ select { cursor: pointer; }
   color: var(--text); text-decoration: none;
 }
 .rail-brand:hover { text-decoration: none; }
+/* The brand mark draws its own tile, so this sets the box it sits in and
+   nothing else — no background, no type. It used to be a gradient square with
+   the initials in it, which is why the shadow and radius are still here. */
 .rail-brand .logo {
   width: 28px; height: 28px; border-radius: var(--radius-sm); flex: none;
-  background: linear-gradient(135deg, var(--accent), #22d3ee);
-  display: grid; place-items: center; color: #fff;
-  font-family: var(--font-display); font-weight: var(--fw-bold); font-size: var(--text-ui);
   box-shadow: 0 4px 12px var(--accent-soft);
 }
 .rail-brand-name {

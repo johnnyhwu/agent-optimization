@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
 # fixes is the generated OpenAPI/docs URLs, which would otherwise point above the
 # prefix and 404. Empty by default, so running the backend directly is unchanged.
 app = FastAPI(
-    title="Agent Eval — Stage 1 POC",
+    title="Skill Studio",
     root_path=settings.root_path,
     lifespan=lifespan,
     # The built-in doc routes are unauthenticated; these are re-added below with

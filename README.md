@@ -1,22 +1,29 @@
-# Agent Eval — Stage 1 POC + Playground
+# Skill Studio
 
-A runnable end-to-end demo of **Stage 1** from
-[`docs/spec.md`](docs/spec.md): upload an eval set, run an eval through a
-platform-owned orchestrator, and for wrong answers show an LLM **clue-style
-diagnosis** that jumps the UI straight to the suspect span with its
-input/output/token detail.
+> Formerly **Agent Eval** — renamed once the product outgrew its first feature.
 
-Plus the **Playground** (Stage 4) — a second section where one ad-hoc question
-goes to the agent with an **editable copy of its config and skill files**, so the
-hypothesis you form while reading a failed trace can be tested without editing an
-eval set and running the whole thing — and the questions worth keeping can be
-promoted into a new eval set. See [The playground](#the-playground).
+Where a domain agent's **skills** get measured, tried and trained. Three
+sections, all runnable end to end; the design record is
+[`docs/spec.md`](docs/spec.md).
+
+- **Evaluation** — upload an eval set, run it through a platform-owned
+  orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
+  jumps the UI straight to the suspect span with its input/output/token detail.
+- **Playground** — one ad-hoc question goes to the agent with an **editable copy
+  of its config and skill files**, so the hypothesis you form while reading a
+  failed trace can be tested without editing an eval set and running the whole
+  thing; the questions worth keeping get promoted into a new eval set. See
+  [The playground](#the-playground).
+- **Optimize** — train a skill against your eval questions the way you would
+  train a model: epochs, steps, a learning rate capping how many edits one step
+  may apply, and a validation gate that throws away the ones that did not help.
+  The output is a zip you put back on the agent server yourself.
 
 Every external dependency sits behind a swappable interface with **two
 implementations**: a fake one with realistic latency, and a real one (HTTP agent
 server, LLM judge, LLM diagnosis, LLM synthesis, Langfuse trace fetch, the agent's
-own workspace).
-All six default to fake, so the demo runs on nothing but Docker; each can be
+own workspace, the optimizer model).
+All seven default to fake, so the demo runs on nothing but Docker; each can be
 switched to real independently — see
 [Going from fake to real](#going-from-fake-to-real). The app DB schema is the
 real thing, created by Alembic migrations.
@@ -27,10 +34,11 @@ runs real OIDC against a Keycloak realm — see [Signing in](#signing-in). And t
 stack has two shapes: `./scripts/dev.sh` for development, `./scripts/prod.sh` for
 a deployed build behind nginx — see [Deploying it](#deploying-it).
 
-> **Out of scope (Stage 2/3):** per-span probability/heatmap, manual span
-> re-labeling, SkillOpt, skill write-back, annotation score sync,
-> multi-tenant isolation. Writing back to Langfuse (verdicts as Scores) is
-> also not done — the trace seam reads only.
+> **Out of scope (Stage 2):** per-span probability/heatmap, manual span
+> re-labeling, annotation score sync, multi-tenant isolation. Skill write-back
+> is not done either — Optimize hands you a zip and you install it yourself.
+> Writing back to Langfuse (verdicts as Scores) is also not done — the trace
+> seam reads only.
 
 **Contents** — [The problem](#the-problem) · [How it works](#how-it-works) ·
 [Life of a run](#life-of-a-run) · [The playground](#the-playground) · [Stack](#stack) ·

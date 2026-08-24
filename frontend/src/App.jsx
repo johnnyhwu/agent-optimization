@@ -232,14 +232,14 @@ function sectionTitle(section) {
   return "Evaluation";
 }
 
-// The browser tab said "Agent Eval" no matter where you were, so two tabs open on
-// two different eval sets were indistinguishable — and this is a tool people keep
-// several tabs of.
+// The browser tab said the product name and nothing else no matter where you
+// were, so two tabs open on two different eval sets were indistinguishable —
+// and this is a tool people keep several tabs of.
 function useDocumentTitle(route, evalSet) {
   useEffect(() => {
     const where =
       route.section === "evaluation" && evalSet ? evalSet.name : sectionTitle(route.section);
-    document.title = `${where} · Agent Eval`;
+    document.title = `${where} · Skill Studio`;
   }, [route.section, route.tier, evalSet?.name]);
 }
 
