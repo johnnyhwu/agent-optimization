@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { href } from "../useHashRoute.js";
+import BrandMark from "./BrandMark.jsx";
 import {
   IconBeaker,
   IconPanelLeft,
@@ -38,9 +39,12 @@ export function useRailCollapsed() {
 export default function SideRail({ section, collapsed, onToggle }) {
   return (
     <nav className="rail" aria-label="Sections">
-      <a className="rail-brand" href={href.evaluation()}>
-        <span className="logo">AE</span>
-        <span className="rail-brand-name">Agent Eval</span>
+      {/* The name is on the link, not on the mark: collapsing the rail hides
+          `.rail-brand-name`, and without this the only home link in the app
+          would announce as nothing. */}
+      <a className="rail-brand" href={href.evaluation()} aria-label="Skill Studio">
+        <BrandMark className="logo" size={28} />
+        <span className="rail-brand-name">Skill Studio</span>
       </a>
 
       <ul className="rail-list">
