@@ -1,4 +1,4 @@
-# Agent Eval 平台 — 系統規格與實作現況
+# Skill Studio — 系統規格與實作現況
 
 > **這份文件是什麼**：本專案唯一的權威技術文件。它同時交代三件事——
 > **① 這個系統要解決什麼問題、② 為什麼是這樣設計的、③ 現在到底做了什麼、哪些沒做。**
@@ -199,6 +199,22 @@ Stage 4 補的是「手動驗證一個假設」，Stage 3 補的是**把那個�
 > held-out validation split（結構性防線）、以及 diff 上的逐字比對告警——後者的計數在候選寫入時
 > 就算好並存在 step 列上，因為 run 總覽頁在跑的時候會反覆重載，讀取時才算等於每次重載都做一輪
 > 全 run 的 diff。
+
+### 2.4 產品邊界：skill 是唯一的一級受詞
+
+動詞可以一直加——量（Evaluation）、試（Playground）、練（Optimize）、削（Compaction）、
+餵（Data Curation）——但**受詞永遠是 skill**。
+
+任何功能提案先問一句：**它的受詞是 skill 嗎？** 是就進來，不是就該去別的系統。
+Data Curation 通過這一題（eval set 是 skill 優化時的訓練資料，只是從另一端接近同一個受詞）；
+優化 prompt、tool description、memory 則不通過——那是另一個系統。
+
+這條界線目前守得住：`routing` 模式優化的是 frontmatter 的 description，那仍在 `SKILL.md` 裡面。
+會第一個把它撐破的，是「優化 agent 怎麼選 skill」再往外走一步的需求——真的走到那一步時，
+要改的是這一節，不是默默讓它失效。
+
+> 這條約束是產品名的來源：本系統對外叫 **Skill Studio**，與部門既有的 **Skill Marketplace**
+> 配對——工作室做，市集賣。名字綁的是受詞，所以動詞增加時名字不會過期。
 
 ---
 
@@ -2299,6 +2315,19 @@ time curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: a
 > ⚠️ **兩件事要分清楚。** 上面 7–8 做完，你會得到一個**部署得起來的** production 系統；
 > 1–5 做完，才會知道它**是不是有用的**。§14.3 那張表裡 agent server、LLM 端點、
 > workspace 三項仍然只用 mock 驗過，而**診斷品質完全未知**——後者才是這個專案的核心賭注。
+
+**兩件已經想過、但刻意還沒決定的事**（寫在這裡是為了不讓它們默默飄掉）：
+
+- **Data Curation 與 Compaction 的先後。** 傾向 Curation 優先：optimize 的品質上限被 eval set
+  的品質鎖死——train / validation split 從那批題目切出來、§15.1 記載
+  **還沒有 test split**，而「答案硬編」最結構性的那道防線正是 held-out validation。
+  換句話說，**資料品質是目前整個 optimize 迴圈裡最沒有被管理的變數**，
+  而 compaction 是在既有品質之上做效率優化。尚未拍板，決定前先看 §14.3 的真實資料。
+- **側邊欄的命名一致性與分組。** 現在是 `Evaluation` / `Playground` / `Optimize`，
+  兩個名詞夾一個動詞。**觸發條件是加入第四個 section 的那一刻**：屆時一次收成全動詞，
+  並考慮分成 Prepare（Data · Evaluation）與 Improve（Playground · Optimize · Compact）兩組，
+  而不是繼續往下長成五個平排的項目。現在三個還很舒服，**不要提前動**——
+  提前動的代價是每加一個就重排一次。
 
 **如果你要修改程式碼，先讀這四段**：§4（設計決策的理由）、§6.2（失敗策略）、
 §10.2（三個前端機制）、§14.3（哪些沒被證明）。
