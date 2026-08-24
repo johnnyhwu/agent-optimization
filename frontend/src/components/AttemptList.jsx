@@ -17,14 +17,11 @@ import { plural } from "../plural.js";
 // backend restart. The footer says so rather than letting an empty list look like
 // a bug.
 
-// Counts, not names: what matters in a list row is that this attempt differed
-// from the agent's own workspace. The paths themselves are the tooltip.
+// A count, not names: what matters in a list row is that this attempt differed
+// from the agent's own skill files. The paths themselves are the tooltip.
 function overrideLabel(a) {
-  const { configs, files } = overrideCounts(a);
-  const parts = [];
-  if (configs) parts.push(`${configs} config`);
-  if (files) parts.push(`${files} file${files === 1 ? "" : "s"}`);
-  return parts.length ? `edited: ${parts.join(", ")}` : "workspace override";
+  const { files } = overrideCounts(a);
+  return files ? `edited: ${files} file${files === 1 ? "" : "s"}` : "skill override";
 }
 
 function relative(iso) {
@@ -155,13 +152,13 @@ export default function AttemptList({
               {a.workspace_overridden ? (
                 <span
                   className="ui-badge ui-badge-neutral"
-                  title={[...(a.config_overrides || []), ...(a.edited_skill_files || [])]
-                    .join("\n") || "A workspace override was sent with this call"}
+                  title={(a.edited_skill_files || []).join("\n")
+                    || "A skill override was sent with this call"}
                 >
                   {overrideLabel(a)}
                 </span>
               ) : (
-                <span className="ui-badge ui-badge-neutral">agent's own workspace</span>
+                <span className="ui-badge ui-badge-neutral">agent's own skills</span>
               )}
               {!a.has_expected_answer && <span className="ui-badge ui-badge-neutral">not judged</span>}
             </div>

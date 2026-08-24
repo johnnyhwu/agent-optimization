@@ -753,3 +753,129 @@ async def test_diagnosis_failure_travels_on_the_stream(seams):
     collector.close()
     assert done["has_analysis"] is False
     assert "diagnosis model is down" in done["diagnosis_error"]
+
+
+# --- Agent drift across a run -----------------------------------------------
+#
+# A run is a measurement, and a pass rate is compared against other runs of the
+# same eval set — the card's sparkline and the regression summary both do it. If
+# the agent is redeployed halfway through, the questions before and after that
+# moment measured two different systems, and nothing else about the run would
+# ever say so: the only symptom is the number moving, which is exactly what the
+# comparison is for.
+#
+# Optimize has recorded this per step since it existed. Evaluation recorded
+# nothing at all, which is the gap these close.
+
+
+class _Workspace:
+    def __init__(self, version):
+        self.version = version
+
+    async def get_version(self):
+        return self.version
+
+
+def install_workspace(monkeypatch, version, *, base=None):
+    """A workspace seam whose version the run will read on the way out."""
+    real = orchestrator.build_seams
+
+    def build(config=None, secrets=None, include_workspace=False):
+        if include_workspace:
+            class Seams:
+                workspace = _Workspace(version)
+            return Seams()
+        return real(config, secrets)
+
+    monkeypatch.setattr(orchestrator, "build_seams", build)
+
+
+async def test_a_run_records_the_agent_version_it_finished_against(seams, monkeypatch):
+    run, questions = make_run(), [make_question()]
+    run.workspace_version = "cfg-1"
+    install_workspace(monkeypatch, "cfg-1")
+
+    await orchestrator._execute_run(StubSession(run, questions), run)
+
+    assert run.workspace_version_end == "cfg-1"
+
+
+async def test_a_redeploy_mid_run_leaves_both_versions_on_the_row(seams, monkeypatch):
+    """The two together are the whole signal — one alone says nothing."""
+    run, questions = make_run(), [make_question()]
+    run.workspace_version = "cfg-1"
+    install_workspace(monkeypatch, "cfg-2")
+
+    await orchestrator._execute_run(StubSession(run, questions), run)
+
+    assert run.workspace_version == "cfg-1"
+    assert run.workspace_version_end == "cfg-2"
+
+
+async def test_an_unreadable_version_does_not_fail_the_run(seams, monkeypatch):
+    """Every question is already paid for by the time this runs. Losing a
+    caveat is cheaper than losing the measurement it is a caveat about."""
+    class Broken:
+        async def get_version(self):
+            raise RuntimeError("agent server is gone")
+
+    real = orchestrator.build_seams
+
+    def build(config=None, secrets=None, include_workspace=False):
+        if include_workspace:
+            class Seams:
+                workspace = Broken()
+            return Seams()
+        return real(config, secrets)
+
+    monkeypatch.setattr(orchestrator, "build_seams", build)
+    run, questions = make_run(), [make_question()]
+    run.workspace_version = "cfg-1"
+
+    await orchestrator._execute_run(StubSession(run, questions), run)
+
+    assert run.status == "completed"
+    assert run.workspace_version_end is None
+
+
+async def test_no_workspace_seam_means_no_version_and_no_complaint(seams):
+    """The default `seams` fixture patches `build_seams` with a factory that
+    takes no `include_workspace`, i.e. exactly the shape of a deployment where
+    the probe cannot be built. It must be silent."""
+    run, questions = make_run(), [make_question()]
+
+    await orchestrator._execute_run(StubSession(run, questions), run)
+
+    assert run.status == "completed"
+    assert run.workspace_version_end is None
+
+
+async def test_the_version_probe_uses_its_own_short_timeout(monkeypatch, configure):
+    """Never the agent's answering budget, which is two minutes by default.
+
+    This probe sits on two hot paths: in front of `POST /runs` (the Start button
+    waits for it) and at the end of every run. Borrowing `AGENT_TIMEOUT_S` would
+    let one hung agent hold the Start button for two minutes and add the same
+    again to every run's completion — for a caveat, not a result.
+    """
+    seen = {}
+
+    def build(config=None, secrets=None, include_workspace=False):
+        seen.update(config or {})
+
+        class Seams:
+            workspace = _Workspace("cfg-1")
+
+        return Seams()
+
+    monkeypatch.setattr(orchestrator, "build_seams", build)
+    with configure(agent_timeout_s=120.0, agent_probe_timeout_s=5.0):
+        version = await orchestrator.agent_version(
+            {"agent_timeout_s": 120.0, "agent_base_url": "http://agent-b:8080"}
+        )
+
+    assert version == "cfg-1"
+    assert seen["agent_timeout_s"] == 5.0
+    # Only the timeout is replaced: the version has to come from the agent this
+    # run is actually pointed at, or it describes a different server entirely.
+    assert seen["agent_base_url"] == "http://agent-b:8080"

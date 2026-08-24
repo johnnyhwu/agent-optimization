@@ -133,13 +133,6 @@ class PlaygroundAttempt:
         return bool((self.ground_truth_reasoning or "").strip())
 
     @property
-    def config_overrides(self) -> list[str]:
-        """Dotted config paths this attempt overrode, for the list's summary."""
-        if self.workspace is None:
-            return []
-        return self.workspace.edited_config_paths
-
-    @property
     def edited_skill_files(self) -> list[str]:
         """Skill files this attempt changed, deleted, or added.
 

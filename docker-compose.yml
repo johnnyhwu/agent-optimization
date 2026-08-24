@@ -108,8 +108,8 @@ services:
       # Drafts an expected reasoning process from a trace, on the shortlist's
       # button. Shares the LLM endpoint with the judge and the diagnosis.
       SYNTHESIS_IMPL: ${SYNTHESIS_IMPL:-fake}
-      # The playground's view of the agent's config + skills; reads
-      # {AGENT_BASE_URL}/get_workspace.
+      # The agent's skill files; reads {AGENT_BASE_URL}/skills. Gates the
+      # Run-eval Start button and the playground's Connect.
       WORKSPACE_IMPL: ${WORKSPACE_IMPL:-fake}
       # The model that turns scored rollouts into skill edits. Its own seam, and
       # it was the one seam missing from this list: `OPTIMIZER_IMPL=real` set on

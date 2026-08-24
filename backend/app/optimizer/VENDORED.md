@@ -136,7 +136,7 @@ and nothing else about the update stage differs:
 3. **`path` is validated** (`_normalise_path`). It is model output that becomes
    a key in the workspace override sent to the agent server, so `../`, absolute
    paths, Windows drive letters and anything outside the skill directory are
-   rejected as `skipped_invalid_path`. `docs/spec.md` §17 makes the same demand
+   rejected as `skipped_invalid_path`. `docs/agent-server-api.md` §5 makes the same demand
    of the agent server; there is no reason for this end to author one either.
    An emptied `SKILL.md` is rejected for the same reason
    (`skipped_would_empty_entry_point`) — it is deletion by another name.

@@ -18,7 +18,8 @@ them separately; past a threshold it refuses to score the batch at all. See its
 docstring for why refusing beats scoring a fraction.
 
 The skill under test reaches the agent as a per-request workspace override — the
-same mechanism the playground uses (`WorkspaceOverride`, spec §17.4), so nothing
+same mechanism the playground uses (`WorkspaceOverride`, docs/agent-server-api.md
+§4), so nothing
 is written back to the agent server and a run cannot disturb the deployed agent.
 """
 from __future__ import annotations
@@ -33,8 +34,9 @@ from typing import Iterable, Mapping, Sequence
 
 from app.config import settings
 from app.integrations import Seams
-from app.integrations.base import LlmOutputError, WorkspaceOverride
-from app.optimizer.detector import DEFAULT_PATH_PATTERNS, detect_activation
+from app.integrations.base import LlmOutputError, Trace, WorkspaceOverride
+from app.optimizer.detector import DEFAULT_PATH_PATTERNS, detect_activation, payload_text
+from app.optimizer.skillio import frontmatter_span
 from app.optimizer.store import Item, ResultRow, RolloutSummary
 from app.pipeline import RunCancelled, call_agent, call_judge, clip, wait_for_trace
 from app.services.failure_text import describe_failure
@@ -73,6 +75,69 @@ def build_workspace_skills(
     return dict(skill_files)
 
 
+
+# --- Proving the override was applied ---------------------------------------
+#
+# `detect_activation` answers "was this skill loaded?". It cannot answer "was
+# *our copy* of it loaded?", because a candidate is usually a light edit of the
+# agent's deployed file and both leave the same evidence — the same directory
+# name in a tool call, the same long body lines in the payload. So an agent
+# server that ignored `metadata.skills` would look perfect: full activation, a
+# passing pre-flight, and an accuracy curve that never moves because every step
+# measured the same unchanging deployed text.
+#
+# The marker closes that gap by making one copy distinguishable. It goes only
+# into the pre-flight's copy — a scored rollout must carry the candidate text
+# and nothing else — and it is an HTML comment so that a model reading the
+# skill sees noise rather than an instruction.
+
+PROBE_MARKER_TEMPLATE = "<!-- {marker}: platform override check, ignore this line -->"
+
+
+def make_probe_marker() -> str:
+    """A token this run alone will look for, so traces cannot cross-validate."""
+    return f"probe-{uuid.uuid4().hex[:12]}"
+
+
+def inject_probe_marker(
+    skill_files: Mapping[str, str], skill_name: str, marker: str
+) -> dict[str, str]:
+    """A copy of `skill_files` whose entry point carries `marker`.
+
+    **After the frontmatter, not at the end of the file.** Two reasons, and they
+    pull in the same direction: routing mode optimises the description inside
+    the frontmatter and `skillio.frontmatter_span` finds it by the leading
+    `---`, so nothing may be inserted above it; and an agent's read tool may cap
+    how much of a long file it returns, in which case the end is what is lost.
+    The first line of the body satisfies both.
+
+    A skill with no entry point is returned unchanged — there is nowhere to put
+    the marker, which costs us the check rather than the run.
+    """
+    entry = f"{skill_name}/SKILL.md"
+    text = skill_files.get(entry)
+    if text is None:
+        return dict(skill_files)
+
+    line = PROBE_MARKER_TEMPLATE.format(marker=marker)
+    span = frontmatter_span(text)
+    at = span[1] if span else 0
+    marked = f"{text[:at]}{line}\n{text[at:]}"
+    return {**skill_files, entry: marked}
+
+
+def verify_probe_marker(trace: Trace | None, marker: str | None) -> bool | None:
+    """Did the marker reach the model? True / False / None for "cannot tell".
+
+    `None` for a missing or empty trace is the load-bearing case. Langfuse
+    ingestion lags and sometimes fails outright, and reading that as "the agent
+    ignored us" would stop runs over a trace store hiccup.
+    """
+    if marker is None or trace is None or not trace.spans:
+        return None
+    return marker in payload_text(trace)
+
+
 async def run_rollout(
     items: Sequence[Item],
     *,
@@ -86,6 +151,7 @@ async def run_rollout(
     concurrency: int = 4,
     detectable: bool = False,
     path_patterns: Iterable[str] = DEFAULT_PATH_PATTERNS,
+    probe_marker: str | None = None,
     on_progress=None,
 ) -> list[ResultRow]:
     """Answer and judge every item once, with `skill_files` in the agent's hands.
@@ -99,10 +165,12 @@ async def run_rollout(
     """
     cancel_event = cancel_event or asyncio.Event()
     skills = build_workspace_skills(mode, skill_files, workspace_baseline)
-    # `config=None`, deliberately: the agent keeps its own configuration. We are
-    # measuring a skill, and quietly shipping a config overlay alongside it would
-    # put a second variable into every rollout.
-    override = WorkspaceOverride(config=None, skills=skills)
+    if probe_marker is not None:
+        # Only the pre-flight passes one. `detect_activation` below still runs
+        # against the *unmarked* `skill_files`, so the marker cannot become one
+        # of the body markers it matches on and inflate activation.
+        skills = inject_probe_marker(skills, skill_name, probe_marker)
+    override = WorkspaceOverride(skills=skills)
     timeout_s = config.get("agent_timeout_s") or settings.agent_timeout_s
     semaphore = asyncio.Semaphore(max(concurrency, 1))
     rows: list[ResultRow] = [None] * len(items)  # type: ignore[list-item]
@@ -119,6 +187,7 @@ async def run_rollout(
                 cancel_event=cancel_event,
                 detectable=detectable,
                 path_patterns=path_patterns,
+                probe_marker=probe_marker,
             )
         if on_progress is not None:
             await on_progress(rows[position])
@@ -153,6 +222,7 @@ async def _run_item(
     cancel_event: asyncio.Event,
     detectable: bool,
     path_patterns: Iterable[str],
+    probe_marker: str | None = None,
 ) -> ResultRow:
     correlation_id = uuid.uuid4().hex
     row = ResultRow(
@@ -261,6 +331,7 @@ async def _run_item(
         row.activated = activation.activated
         row.skills_read = activation.skills_read
         row.detector_hit = activation.hit
+        row.override_verified = verify_probe_marker(trace, probe_marker)
 
     return row
 

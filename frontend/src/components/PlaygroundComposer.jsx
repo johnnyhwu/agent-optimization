@@ -4,9 +4,9 @@ import WorkspaceEditor from "./WorkspaceEditor.jsx";
 import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
 import PanelDialog from "./ui/PanelDialog.jsx";
-import { diffConfig, editedFiles, flattenLeaves } from "../workspace_util.js";
+import { editedFiles } from "../workspace_util.js";
 import {
-  IconAlert, IconBeaker, IconFileText, IconGear, IconSend, IconTarget,
+  IconAlert, IconBeaker, IconFileText, IconSend, IconTarget,
 } from "./icons.jsx";
 
 // What gets sent: a question, optionally an edited copy of the agent's config and
@@ -31,24 +31,17 @@ import {
 // in the button row instead of on a row of its own.
 //
 // **The button row is a readout, not a tab strip.** Each toggle carries the
-// state of what it holds — how many config values and skill files are overridden,
-// whether a ground truth is set — so the row answers "what will the next question
+// state of what it holds — how many skill files are overridden, whether a
+// ground truth is set — so the row answers "what will the next question
 // actually run with" without opening anything. That is why the edit counts are
 // amber and stay on screen whatever is open.
 //
 // `connected` gates exactly the two things that need an agent — asking a
-// question, and the two panels whose content is *read from* that agent. The
-// ground truths and the LLM/Langfuse settings stay open: they are local text and
+// question, and the panel whose content is *read from* that agent. The ground
+// truths and the LLM/Langfuse settings stay open: they are local text and
 // downstream endpoints, and there is no reason to make someone connect before
 // they are allowed to think about the question they want to ask.
 const PANELS = {
-  config: {
-    label: "Agent config",
-    title: "Agent config",
-    subtitle: "The agent's own config.json, applied to this question only. Nothing is written back.",
-    icon: <IconGear size={13} />,
-    needsAgent: true,
-  },
   skills: {
     label: "Skill files",
     title: "Skill files",
@@ -77,7 +70,7 @@ export default function PlaygroundComposer({
   onReloadWorkspace,
   status,
 }) {
-  // null | "config" | "skills" | "truth" | "endpoints"
+  // null | "skills" | "truth" | "endpoints"
   const [panel, setPanel] = useState(null);
   const questionRef = useRef(null);
 
@@ -104,17 +97,12 @@ export default function PlaygroundComposer({
     onSend();
   };
 
-  // Counts stay on the toolbar so an edit is visible from the closed state.
-  // Otherwise closing a panel hides the fact that the next question will not run
-  // against the agent's own workspace.
-  const configCount =
-    workspace && workspaceEdit
-      ? flattenLeaves(diffConfig(workspace.config, workspaceEdit.config) || {}).length
-      : 0;
-  const fileCount =
+  // The count stays on the toolbar so an edit is visible from the closed state.
+  // Otherwise closing the panel hides the fact that the next question will not
+  // run against the agent's own skill files.
+  const edits =
     workspace && workspaceEdit ? editedFiles(workspace.skills, workspaceEdit.skills).length : 0;
   const truthSet = Boolean(draft.ground_truth_response || draft.ground_truth_reasoning);
-  const edits = configCount + fileCount;
 
   return (
     <div className="composer">
@@ -144,17 +132,9 @@ export default function PlaygroundComposer({
 
       <div className="composer-toggles">
         <Toggle
-          name="config"
-          active={panel === "config"}
-          count={configCount}
-          disabled={!connected}
-          onClick={setPanel}
-          hint={connected ? undefined : "Connect to an agent to read its config"}
-        />
-        <Toggle
           name="skills"
           active={panel === "skills"}
-          count={fileCount}
+          count={edits}
           disabled={!connected}
           onClick={setPanel}
           hint={connected ? undefined : "Connect to an agent to read its skill files"}
@@ -168,7 +148,7 @@ export default function PlaygroundComposer({
         {status}
         {edits > 0 && (
           <Badge tone="warning" title="The next question will run against your edited workspace">
-            {edits} workspace edit{edits === 1 ? "" : "s"}
+            {edits} skill file edit{edits === 1 ? "" : "s"}
           </Badge>
         )}
         <Button
@@ -189,9 +169,9 @@ export default function PlaygroundComposer({
           reported twice reads as two failures. */}
       {connected && workspaceError && (
         <div className="hint error-text composer-alert">
-          <IconAlert size={13} /> Could not read the agent's workspace — open{" "}
-          <button className="ui-btn ui-btn-link" onClick={() => setPanel("config")}>
-            Agent config
+          <IconAlert size={13} /> Could not read the agent's skill files — open{" "}
+          <button className="ui-btn ui-btn-link" onClick={() => setPanel("skills")}>
+            Skill files
           </button>{" "}
           for the reason.
         </div>
@@ -202,9 +182,9 @@ export default function PlaygroundComposer({
         title={panel ? PANELS[panel].title : ""}
         subtitle={panel ? PANELS[panel].subtitle : ""}
         onClose={() => setPanel(null)}
-        // The two-pane panels need room for a file list beside a file; the two
-        // form panels do not.
-        width={panel === "config" || panel === "skills" ? 1080 : 880}
+        // The two-pane skills panel needs room for a file list beside a file;
+        // the form panels do not.
+        width={panel === "skills" ? 1080 : 880}
         footer={
           <>
             {/* Says what is missing rather than leaving a dead button with no
@@ -234,15 +214,11 @@ export default function PlaygroundComposer({
           </>
         }
       >
-        {/* All four render whenever any has been opened, so switching between
+        {/* All three render whenever any has been opened, so switching between
             them — and closing the dialog — never discards what is half-typed in
-            another. WorkspaceEditor in particular holds not-yet-valid JSON. */}
-        <div
-          className="panel-fill"
-          hidden={panel !== "config" && panel !== "skills"}
-        >
+            another. */}
+        <div className="panel-fill" hidden={panel !== "skills"}>
           <WorkspaceEditor
-            tab={panel === "skills" ? "skills" : "config"}
             snapshot={workspace}
             edit={workspaceEdit}
             onChange={onWorkspaceEdit}

@@ -49,15 +49,6 @@ _workspace_overrides: dict[str, WorkspaceOverride] = {}
 NOT_READY_MARKER = "notready"
 
 
-def _at_path(node: dict, path: str):
-    """The value a dotted config path points at, or None."""
-    for part in path.split("."):
-        if not isinstance(node, dict):
-            return None
-        node = node.get(part)
-    return node
-
-
 def _rng(seed: str) -> random.Random:
     h = int(hashlib.sha256(seed.encode()).hexdigest(), 16)
     return random.Random(h)
@@ -146,12 +137,6 @@ def build_fake_trace(correlation_id: str) -> Trace:
         # is the only way a developer can confirm the agent used the candidate
         # workspace rather than its own (§10.7). The fake agent puts it where a
         # real one would — in the system prompt of every generation.
-        if override.config:
-            settings_line = ", ".join(
-                f"{path}={_at_path(override.config, path)!r}"
-                for path in override.edited_config_paths
-            )
-            system += f"\n\n# Config (overridden for this call)\n{settings_line}"
         for path, content in (override.skills or {}).items():
             system += f"\n\n# {path} (overridden for this call)\n{content}"
 
@@ -350,30 +335,13 @@ class FakeDiagnosisClient:
         }
 
 
-# The workspace the fake agent "has", shaped like a real one: a nested config
-# with its secrets already stripped, and skills as a flat map of file paths.
+# The workspace the fake agent "has", shaped like a real one: skills as a flat
+# map of file paths.
 # Two of the skill directories match the skill tags the seeded eval set uses
 # (billing / reporting), so "open an incorrect question in the playground" lands
 # on a skill that actually exists in fake mode. `billing` carries a reference
 # file because a skill being a *directory* is exactly what the flat-string model
 # could not express — the fake has to exercise that too.
-_FAKE_CONFIG: dict = {
-    "agents": {
-        "defaults": {
-            "model": "Qwen3.6-27B",
-            "temperature": 0.2,
-            "max_iterations": 8,
-        },
-        "enabled_skills": ["billing", "reporting", "escalation"],
-    },
-    "tools": {"sql_query": {"enabled": True}, "vector_search": {"enabled": True}},
-    "log_level": "info",
-}
-
-# What a real agent server removes before answering. Listed rather than dropped
-# so the UI can show the field as present-but-hidden (§10.2).
-_FAKE_REDACTED_PATHS: list[str] = ["agents.defaults.api_key", "langfuse.secret_key"]
-
 _FAKE_SKILL_FILES: dict[str, str] = {
     "billing/SKILL.md": (
         "# Billing skill\n"
@@ -432,8 +400,7 @@ class FakeSynthesisClient:
 
 
 class FakeWorkspaceClient:
-    # REPLACE WITH REAL IMPL: GET {agent}/get_workspace and
-    # GET {agent}/get_config_version from the agent server (§10.2 / §10.7).
+    # REPLACE WITH REAL IMPL: GET {agent}/skills from the agent server.
     async def get_workspace(self) -> Workspace:
         await asyncio.sleep(fc.SKILL_FETCH_LATENCY_S)
         return Workspace(
@@ -441,8 +408,6 @@ class FakeWorkspaceClient:
             # Copied, so an edit made through the API can never mutate the
             # fake's own workspace — the real seam gets a fresh parse per call
             # and the fake must not be quietly more stateful than that.
-            config=json.loads(json.dumps(_FAKE_CONFIG)),
-            redacted_paths=list(_FAKE_REDACTED_PATHS),
             skills=dict(_FAKE_SKILL_FILES),
         )
 
@@ -457,10 +422,11 @@ class FakeWorkspaceClient:
         Which means the staleness check is exercised rather than bypassed in
         fake mode: it agrees with itself now, and would disagree the moment the
         canned workspace above changed.
+
+        Its own prefix rather than `derived_version`'s, so a fake-mode version
+        is never mistaken for a real agent that simply declined to supply one.
         """
-        payload = json.dumps(
-            [_FAKE_CONFIG, _FAKE_SKILL_FILES], sort_keys=True
-        ).encode()
+        payload = json.dumps(_FAKE_SKILL_FILES, sort_keys=True).encode()
         return f"fake.{hashlib.sha256(payload).hexdigest()[:7]}"
 
 

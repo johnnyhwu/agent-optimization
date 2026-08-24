@@ -8,7 +8,7 @@ import { useToast } from "./Toast.jsx";
 import { setServerTime } from "../useElapsed.js";
 import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
-import { IconSend } from "./icons.jsx";
+import { IconAlert, IconSend } from "./icons.jsx";
 
 // Bottom tier (§6.13): three columns. Left = question list (per-mode incorrect),
 // middle = trace + diagnosis + caveat, right = span detail. Clicking a question
@@ -55,6 +55,9 @@ export default function RunDetail({
   // The run's own settings, so a question handed to the playground is retried
   // against the endpoints it actually ran against rather than today's defaults.
   const [runConfig, setRunConfig] = useState(null);
+  // The agent's version at the run's start and end. Only ever read together:
+  // one alone says nothing, and the pair disagreeing is the whole signal.
+  const [drift, setDrift] = useState(null);
   const subject = getSubject();
 
   const activeResult = results?.find((r) => r.id === activeResultId) || null;
@@ -86,6 +89,13 @@ export default function RunDetail({
         setTriggeredBy(run.triggered_by);
         setRunConfig(run.config || null);
         setCancelling(Boolean(run.cancel_requested));
+        setDrift(
+          run.workspace_version &&
+            run.workspace_version_end &&
+            run.workspace_version !== run.workspace_version_end
+            ? { from: run.workspace_version, to: run.workspace_version_end }
+            : null
+        );
       })
       .catch(() => {});
   }, [evalSet.id, liveRunId]);
@@ -305,6 +315,21 @@ export default function RunDetail({
           onCancel={cancelRun}
           canCancel={myRole === "owner" || triggeredBy === subject}
         />
+      )}
+      {/* A run is a measurement, and its pass rate gets compared against other
+          runs of this set — the card's sparkline and the regression summary
+          both do it. A deploy to the agent halfway through makes the questions
+          either side of it readings of two different systems, and the only
+          other symptom is the number moving, which is what the comparison is
+          for. Said once, here, rather than on every row: it is a fact about the
+          run, not about any one question. */}
+      {drift && runIds.length === 1 && (
+        <div className="hint warn-text detail-drift">
+          <IconAlert size={13} /> The agent changed while this run was going —
+          from <code>{drift.from}</code> to <code>{drift.to}</code>. Questions
+          either side of that ran against different agents, so this run's pass
+          rate is not comparable with the runs around it.
+        </div>
       )}
       <div className="detail-meta">
         <div className="detail-meta-facts">

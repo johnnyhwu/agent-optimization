@@ -25,7 +25,8 @@
 > 本文件是設計與實作紀錄，兩者互補不重複。
 >
 > **`docs/` 底下只有這一份。** 原本另有一份寫給 agent server 團隊的端點契約
-> （`agent_server_stage4_endpoints.md`），已收進 [§17](#17-對-agent-server-端的相依需求) 並刪除——
+> （`agent_server_stage4_endpoints.md`）。給 agent server 實作者的端點契約現在是
+> [`docs/agent-server-api.md`](./agent-server-api.md)（英文、自包含、唯一來源），[§17](#17-對-agent-server-端的相依需求) 只留摘要與指標——
 > 兩份文件描述同一組端點時，遲早會有一份先過期，而讀者無從得知是哪一份。
 
 **目錄**
@@ -292,7 +293,7 @@ Data Curation 通過這一題（eval set 是 skill 優化時的訓練資料，�
 | `TraceClient` | `fetch_trace(correlation_id) -> Trace \| NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | Langfuse，**兩條讀取策略依序嘗試**（見 §3.5） |
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, judge_verdict \| None) -> dict` | 睡 2–4s，回 §8.2 的 JSON | §8.2 四段式 prompt + 輸出驗證 + span_index 越界剔除 |
 | `SynthesisClient` | `synthesize(trace, question, agent_response) -> str` | 依假 trace 生出編號步驟 | §8.3 的 prompt，**與 judge/diagnosis 共用同一個 LLM client** |
-| `WorkspaceClient` | `get_workspace()`、`get_version()` | 罐頭 config + 四個 skill 檔 | `GET {base}/get_workspace`、`GET {base}/get_config_version` |
+| `WorkspaceClient` | `get_workspace()`、`get_version()` | 罐頭的四個 skill 檔 | `GET {base}/skills`（`get_version()` 走同一支，只取 `version`）|
 | `OptimizerClient` | `chat(system, user, ...) -> (text, usage)` | 依 `failure_summary` 生出確定性的 patch，走得到 accept / reject / 多檔 diff 三條路徑 | OpenAI 相容端點；vendored 的 reflect / aggregate / clip 全部只透過這一支呼叫模型 |
 
 > **為什麼是 `WorkspaceClient` 而不是 `SkillClient`**：skill 在 agent server 上**是一個目錄**
@@ -352,7 +353,7 @@ Data Curation 通過這一題（eval set 是 skill 優化時的訓練資料，�
 - `trace_id` 與 `session_id` **是同一個值**：每題都是自己的 correlation 單位，
   所以也是自己的 Langfuse session。
 - `tags` 在 eval run 是 `["eval_<eval set 名稱>"]`，在 Playground 是 `["playground"]`。
-- **`metadata.timeout_s` 是給 agent server 的執行預算**（每次呼叫都送，契約見 [§17](#17-對-agent-server-端的相依需求) 第 6 項）。
+- **`metadata.timeout_s` 是給 agent server 的執行預算**（每次呼叫都送，契約見 [`docs/agent-server-api.md`](./agent-server-api.md)）。
   它是這次呼叫的 `AGENT_TIMEOUT_S` **減掉一個固定的 5 秒 margin**（`SERVER_TIMEOUT_MARGIN_S`，
   寫在 `integrations/real/agent.py`——它是機制常數，不是逐環境的旋鈕），
   平台自己的等待上限（httpx timeout 與 §6.2 的 `wait_for`）仍然是完整的 `AGENT_TIMEOUT_S`。
@@ -360,14 +361,12 @@ Data Curation 通過這一題（eval set 是 skill 優化時的訓練資料，�
   > 平台的設定，它就只會用內建預設值——這正是「在 UI 把 timeout 調大卻沒有任何效果」的原因。
   > 但送**一樣**的值只是把「誰先放棄」變成 race，而兩種結果差很多：server 超時是一個
   > **帶原因的回應**，平台超時只是一條被切斷的連線。所以刻意讓 server 先到期。
-- **`metadata.workspace` 只在 Playground 改過 agent 的 config 或 skill 檔時才出現**；
-  eval run 的 request body 與 Stage 4 出現之前**完全相同**（連 key 都不會多）。
-  兩半各自可省略：只改 config 就不送 `skills`，反之亦然。
-- **兩半在 agent server 上的套用方式刻意不同**（完整契約見 [§17](#17-對-agent-server-端的相依需求)）：
-  - `config` 是**稀疏 overlay**，deep merge 到 agent 自己的 `config.json` 上。
-    非如此不可——平台拿到的快照已經把機密拿掉了，整份取代會讓 agent 沒有 API key。
-  - `skills` 是**這次呼叫的完整檔案集**，整份取代 agent 的目錄。
-    只有取代表達得出「把某個 reference 檔刪掉試試看」。
+- **`metadata.skills` 只在 Playground 改過 skill 檔、或 Optimize 在跑 rollout 時才出現**；
+  eval run 的 request body 連這個 key 都不會多。
+- **`skills` 是這次呼叫的完整檔案集**，整份取代 agent 的目錄，不是 patch
+  （完整契約見 [`docs/agent-server-api.md`](./agent-server-api.md)）。
+  只有取代表達得出「把某個 reference 檔刪掉試試看」——也因此 `{}`（這次不用任何 skill）
+  與 key 不存在（用你自己的）是兩件不同的事。
 - 回應：`{"content": "<agent 的回答>"}`。client 對回應寬容——裸 JSON 字串或純文字都接受；
   空回答視為失敗（判一個空字串會產生毫無意義的 incorrect，反而蓋住真正的問題）。
 
@@ -668,7 +667,7 @@ catalogue 以產生的 JSON（`frontend/src/settings_catalog.json`）送到瀏�
 Playground 的編輯器同時握著**兩份東西**：agent server 給的快照，與開發者改出來的工作副本。
 兩份都留才回答得了「這個欄位還原成什麼」與「我到底改了什麼」。
 
-**送出前會先問一次版本**（`GET {base}/get_config_version`）。與快照不同時跳對話框，
+**送出前會先問一次版本**（同一支 `GET {base}/skills`，只取 `version`）。與快照不同時跳對話框，
 讓開發者選「重新讀取（丟掉編輯）」或「照樣送出」。
 > 拿一份中途被別人改掉的 skill 去問問題，得到的結論不能信——**而且事後看不出來**。
 > 版本檢查失敗（agent server 沒回應）不擋送出：那只損失檢查，不該損失實驗。
@@ -944,7 +943,7 @@ trace 物件 / 診斷 / 三個錯誤欄位。
 **其他執行控制**
 - **timeout**：agent 呼叫包 `asyncio.wait_for`（`AGENT_TIMEOUT_S`），client 自身另有 httpx timeout。
   **同一個預算也會隨 request 送給 agent server**（`metadata.timeout_s`，比平台自己少
-  固定 5 秒，見 §3.3 / §17 第 6 項）——否則 agent server 只會用它內建的
+  固定 5 秒，見 §3.3）——否則 agent server 只會用它內建的
   上限，平台這邊把 timeout 調大就毫無作用。**server 超時應回 5xx**，而 5xx 走的是
   `AgentHttpError`、**不在重試名單裡**，所以該題直接判 failed，不會再燒兩次同樣的時間。
 - **重試**：對暫時性錯誤（timeout / 連線錯誤 / OSError）做**有上限的指數退避**重試
@@ -1071,20 +1070,18 @@ prompt 的第四塊**照樣存在**，只是改寫成
   `AGENT_BASE_URL`。三個地方共用這個答案，少一個就會錯：workspace 快照、送出前的版本檢查、
   以及 `create_attempt` 算「改了哪些檔案」用的 baseline。留白才 fallback 到 env。
 - **從哪來**：`WorkspaceClient` 一次讀完整份（`WORKSPACE_IMPL=real` 打
-  `GET {base}/get_workspace`），或一份罐頭 workspace（`fake`；skill 目錄名對齊 seed 的
+  `GET {base}/skills`），或一份罐頭 workspace（`fake`；skill 目錄名對齊 seed 的
   skill tag，且 `billing` 帶一個 `references/` 檔，因為「skill 是一個目錄」正是舊模型表達不出
-  的東西）。回傳四樣：`version` / `config`（已移除機密）/ `redacted_paths` / `skills`
-  （扁平的 `{相對路徑: 檔案內容}`）。
+  的東西）。回傳 `skills`（扁平的 `{相對路徑: 檔案內容}`）與選填的 `version`；
+  `version` 缺席時平台改用 skill 檔的 hash 推導（前綴 `sha256.`），UI 會標示那是推導來的。
 - **讀不到要大聲**：讀失敗回 **503 + 原因**，絕不回一份空 workspace。
   > 「這個 agent 沒有 skill」與「你的 URL 錯了」長得一樣的話，開發者會默默地憑記憶重打一份 skill，
   > 然後測到錯的文字。空 workspace 本身是合法答案；**形狀不對**才是失敗。
-- **機密**：agent server 自己的 API key 不會送過來，但**路徑會**（`redacted_paths`）。
-  UI 因此把該欄位畫成「存在但隱藏、不可編輯」，而不是讓它憑空消失。
-  > 消失的欄位會誘使人自己補一個同名 key，把真的金鑰蓋掉。
-  > 前端另外會把落在這些路徑上的值從送出的 overlay 濾掉——萬一某個 agent server 是用
-  > `"***"` 遮罩而不是刪除，這道防護會擋下「把真金鑰設成三個星號」。
-- **override 怎麼傳**：`metadata.workspace = {config?, skills?}`（見 §3.3），
-  config 稀疏 merge、skills 整份取代。
+- **agent 沒有任何 skill 是合法狀態**：Evaluation 照常跑（題目有 skill tag 時出現覆蓋率提醒），
+  Playground 照常連得上，skill 面板是一個可以直接新增檔案的空清單。
+  只有 Optimize 會擋——沒有 skill 就沒有東西可以優化。
+- **override 怎麼傳**：`metadata.skills`（見 §3.3），整份取代，
+  且 `{}`（這次不用任何 skill）與 key 不存在（用 agent 自己的）是兩件不同的事。
 - **怎麼確認生效**：見 §4.10。
 
 ### 7.5 權限
@@ -1362,10 +1359,9 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
   > **Playground 的 attempt detail 沿用同一個 payload 形狀**——這是整個整合最省的一步：
   > 前端的中欄與右欄元件零修改就能渲染。
 - **金鑰永不外流**，owner 也一樣。只透過 `credentials_set`（slot 名稱 `llm` / `langfuse`）
-  顯示某個 slot 有沒有值。**agent server 自己的金鑰也一樣**：`GET /playground/workspace` 只帶
-  `redacted_paths`，不帶值。
-- `GET /playground/attempts` 每筆回 `workspace_overridden` / `config_overrides`（點路徑陣列）/
-  `edited_skill_files`（相對路徑陣列），讓清單一眼看出這次不是跑在 agent 自己的 workspace 上。
+  顯示某個 slot 有沒有值。**agent server 自己的金鑰根本不會經過這裡**：契約不再回傳 config。
+- `GET /playground/attempts` 每筆回 `workspace_overridden` /
+  `edited_skill_files`（相對路徑陣列），讓清單一眼看出這次不是跑在 agent 自己的 skill 上。
 - `POST /eval-sets/from-shortlist` 回 `{id, question_count, duplicates_skipped}`。
 - **匯出（§6.13 卡片動作）**：`questions.*` 的欄位名是**上傳的那一組**
   （`ground_truth_reasoning_process_description`、單數的 `skill`），不是 API 的
@@ -1420,7 +1416,7 @@ Evaluation（三層下鑽）              Playground                        Opti
 
 編輯區之上有一條常駐的 **Target agent** bar：填 `Agent Base URL` 與 `Agent Timeout`、按
 **Connect**，Playground 才會動。**Connect 這個動作就是 `GET /playground/workspace`**——
-一次呼叫同時證明「連得到」「講的是 §17.3 的契約」並取回 `version` / `config` / `skills`，
+一次呼叫同時證明「連得到」「講的是 `GET /skills` 的契約」並取回 `version` / `skills`，
 所以不需要另一支 health 端點（多一支就是多一份會過期的東西）。
 
 **為什麼 agent 不能只是 `Endpoints & keys` 裡的兩個欄位**：LLM base URL、judge model 這些是
@@ -1799,7 +1795,7 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | `ERROR_MESSAGE_MAX_CHARS` | `2000` | 落庫錯誤訊息的長度上限 |
 | `SPAN_BODY_MAX_CHARS` | `800` | §4.4 單一 span body 截斷門檻（**只用於診斷 prompt**）|
 | **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SYNTHESIS_IMPL`** / **`WORKSPACE_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
-| `AGENT_BASE_URL` | 空 | agent server base URL；client 打 `{base}/execute`、`{base}/get_workspace`、`{base}/get_config_version` |
+| `AGENT_BASE_URL` | 空 | agent server base URL；client 打 `{base}/execute` 與 `{base}/skills` |
 | `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | |
 | `LLM_BASE_URL` / `LLM_API_KEY` | （內部 litellm 端點）/ 空 | **OpenAI 相容**端點，可指向 self-hosted |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |
@@ -1857,7 +1853,7 @@ SEED=1 ./scripts/dev.sh    # build image → 起 Postgres → migrate → seed �
 | 3 | 加 `TRACE_IMPL=real` + `LANGFUSE_*` | 點錯題看得到真實 span（**前提是 agent server 已套用 correlation_id**）|
 | 4 | 加 `DIAGNOSIS_IMPL=real` + `DIAGNOSIS_MODEL` | 診斷、caveat、可疑 span 都由真 LLM 產生 |
 | 5 | 加 `SYNTHESIS_IMPL=real` + `SYNTHESIS_MODEL` | shortlist 的「Draft from trace」產出真實的步驟草稿 |
-| 6 | agent server 支援 `metadata.workspace` | 注入的 skill 文字與 config 值出現在真實 trace 第一個 span 的 system message 裡 |
+| 6 | agent server 支援 `metadata.skills` | 注入的 skill 文字出現在真實 trace 裡；Optimize 的 pre-flight 哨兵句判定為「生效」而不是擋下 run |
 
 **前置檢查**：`make preflight` 會逐一 ping 設為 `real` 的 seam，回報每個 OK / FAIL 與原因。
 > 設定打錯時，這比跑一次 eval 才發現快得多。
@@ -1932,11 +1928,11 @@ LLM 路徑以 monkeypatch）。剩下 28 個（`test_pagination.py` 與 `test_st
 
 | 檔案 | 數量 | 涵蓋 |
 |---|---|---|
-| `test_agent_client.py` | 20 | request body 的 `message` + `metadata.trace_data`；**`metadata.timeout_s` 每次都送、值是 `timeout_s − margin`（逐 run 的 timeout 也會反映進去），且下限是 `timeout_s / 2`——margin 比 timeout 還大時不會送出 0 或負數**；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.workspace` 出現、沒有時整個 key 不存在**；只改一半時另一半整個省略（`config` 缺席 ≠ `config: null`）；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」）|
+| `test_agent_client.py` | 20 | request body 的 `message` + `metadata.trace_data`；**`metadata.timeout_s` 每次都送、值是 `timeout_s − margin`（逐 run 的 timeout 也會反映進去），且下限是 `timeout_s / 2`——margin 比 timeout 還大時不會送出 0 或負數**；`{"content": str}` 回應解析（含裸 JSON 字串與純文字 fallback）；空回答視為失敗；307 redirect 會被 follow（實測撞到過）；5xx raise vs 4xx 直接失敗；逐 run base URL / timeout 覆寫；**有 override 時 `metadata.skills` 出現在 metadata 頂層、沒有時整個 key 不存在**；`skills: {}` 會被送出（它的意思是「這次不要任何 skill」，而 `{}` 是 falsy——這一條擋的就是真值判斷）；**開頭是 `<` 的 body 不會被當成答案**（200 的 HTML 錯誤頁若被接受，judge 會去評分那段 markup）|
 | `test_langfuse_client.py` | 27 | 空頁 → NotReady；時間排序與重新編號（**含混用有／無小數秒的 ISO 時間**——字串比較會把 `…:00.500Z` 排在 `…:00Z` 前面；時間讀不懂的 span 仍然保留；同時間以 id 打破平手，使重讀不會重排）；observation 型別過濾；分頁；Basic auth；`usageDetails` 與舊版 `usage` 兩種 token 欄位；ERROR level 映射；401 / 連線失敗 → `TraceFetchError` 且訊息含 host 與狀態碼；**兩條讀取策略**（兩者映出的 span 完全相同、404 → NotReady、auto 命中第一條時不會多打第二條、第一條壞掉會 fallback、**全失敗時兩條的原因都在訊息裡**）|
 | `test_judge_and_diagnosis.py` | 24 | verdict 正規化與非法值；門檻覆寫兩個方向；**§4.4 截斷保留所有 span**；越界 `span_index` 剔除；§8.2 四段 prompt 的順序；JSON 修復重試（成功與放棄各一）；**§8.1a 的純函式**——空值回落到內建預設、指紋只跟文字走、佔位符缺漏逐一點名、`{"verdict"...}` 這種 JSON 大括號不會被 `str.format` 吃掉、eval set 的 prompt 真的傳進 judge client |
 | `test_orchestrator.py` | 21 | agent 例外只讓該題失敗而 run 仍完成；agent 自報失敗保留原因；**judge 失敗不被當成 correct**、且 `failure_kind` 分得出是哪一步；**judge 回覆 parse 不出來時記成 `judge_invalid`**——不算 pass、仍留在分母、舊資料（NULL）照樣畫成 `failed`；診斷失敗不影響 verdict 且原因落庫；trace store 出錯不讓題目失敗；非預期例外把 run 收成 failed 並送出 SSE 終止事件；重試上限；併發；第一次呼叫 agent 前所有 result 列已建好；中止前未開始的題目留 pending；**中止會放棄進行中的 agent 呼叫**；已判分的結果在中止後保留；五個事件依序送出且帶齊指紋欄位；**送去診斷的是 settle 過的 trace**（§6.1a——落庫的診斷沒有第二次機會）|
-| `test_playground.py` | 50 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；workspace override 傳到 agent；**編輯過的檔案是對著送出當下的快照算的**（沒有基準的話每個檔案都會被算成改過）；空 override 不送出；baseline 跟 agent server 要而不是信瀏覽器；agent 連不上時只損失摘要不損失 attempt；**override 的文字出現在假 trace 第一個 span 的 system message**、沒有 override 的 attempt 則乾淨；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷；**最後一個 span 還在 ingest 時會等它**（§6.1a），診斷拿到的也是那份完整的，而 trace 本來就完整時只多一次確認讀取 |
+| `test_playground.py` | 50 | 四階段依序推進；**沒填期望答案 → judge 呼叫次數為 0**、**沒填期望流程 → diagnosis 呼叫次數為 0**；`judge_verdict=None` 時 prompt 第四塊說「未判分」且四塊順序不變；skill override 傳到 agent；**編輯過的檔案是對著送出當下的快照算的**（沒有基準的話每個檔案都會被算成改過）；空 override 不送出；baseline 跟 agent server 要而不是信瀏覽器；agent 連不上時只損失摘要不損失 attempt；**override 的文字出現在假 trace 第一個 span 的 system message**、沒有 override 的 attempt 則乾淨；四種失敗政策；**中止放棄進行中的呼叫**（30s stub + 2s `wait_for` 斷言）；中止保留已拿到的答案；SSE 事件與指紋；store 上限淘汰最舊**但不淘汰還在跑的**；跨 subject 404；**金鑰不外流的值層級斷言**；五種 trace_state；檢視路徑不截斷；**最後一個 span 還在 ingest 時會等它**（§6.1a），診斷拿到的也是那份完整的，而 trace 本來就完整時只多一次確認讀取 |
 | `test_judge_prompt.py` | 14（**全部需 DB**）| **viewer 送的 judge prompt 被丟掉而 run 記下 owner 的**（這個功能的整個權限故事）；`require_owner` 擋改、`require_reader` 仍放行讀與觸發；set 改了之後 run 仍記著當時的全文與指紋；存回預設文字不會把預設釘死；編輯清掉 verified 徽章；Verify 兩個方向都對才算過、**「什麼都判 correct」的 prompt 驗不過**、驗未存檔的編輯不蓋徽章、**缺 `{ground_truth}` 時兩筆都如預期也仍算失敗**；`JUDGE_IMPL=fake` → 409；別的 set 的題目 → 404；manifest 帶著判準 |
 | `test_run_config.py` | 22 | `build_seams` 空設定等同純環境變數行為；**三個 judge-prompt 欄位是 eval set 的，`resolve` 一律丟掉 body 送來的值**（有沒有帶 eval set 的 prompt 都一樣）；`defaults()` 刻意不含它們（它們沒有 env 來源），但 `resolve()` 仍然吐出每一個欄位；`*_IMPL` 仍是主開關；逐 run 值覆寫 env；空白欄位退回 env；judge 與 diagnosis 共用同一個 LLM client；`resolve()` 把留白寫死；金鑰沿用的端點配對規則；**金鑰不外流的值層級斷言**（序列化一個帶哨兵金鑰的 model，斷言哨兵不出現在 payload 任何位置——比檢查欄位名可靠）|
 | `test_workspace_client.py` | 13 | 整份 workspace 讀取；**config 保持巢狀不被攤平**；空 workspace 合法 vs 形狀不對則失敗；沒有 version 仍可用（只是失去過期檢查）；skills 不是 `{路徑: 文字}` 時報錯並指名是哪一筆；4xx/5xx 帶狀態碼與 body；非 JSON body 不猜；transport 錯誤帶 host；版本端點沒有 version 時報錯（**回空字串會被讀成「沒變」而讓檢查失效**）|
@@ -2024,8 +2020,8 @@ shortlist：加入 → `Draft from trace` → 勾一個既有 set → 建立 →
 | **nginx 部署形態** | ❌ **尚未在真環境跑過**。單元層面驗過 compose 疊加後的變數解析、`prod.sh` 的前置檢查兩條路徑、`/config.js` 注入鏈；但 **build、啟動、以及 SSE 有沒有被 nginx 緩衝**都還沒實測。§13.3 的 `curl -N` 是第一件該做的事 |
 | **agent server（`/execute`）** | ❌ **只用自建 mock 驗過**。證明不了貴方的 `/execute` 是否真的回 `{"content": str}`。client 刻意寫得寬容，但真接上去仍可能需要微調 |
 | **LLM 端點（judge / diagnosis）** | ❌ **只用 mock 驗過**。證明不了貴方端點是否支援 `response_format: json_object`（被拒會自動退回，但仍未實測）|
-| **agent workspace（`/get_workspace`、`/get_config_version`）** | ⚠️ **平台這一側只有 respx 單元測試**。agent server 那一側已依 §17 的契約實作，但兩邊**尚未在本文件更新時完成對接驗證** |
-| **`metadata.workspace`** | ⚠️ 同上。特別要在真環境確認的是 **config 是 deep merge 而不是整份取代**——取代會讓 agent 沒有 API key，而那是一個很晚才會發現的失敗 |
+| **agent skills（`GET /skills`）** | ⚠️ **平台這一側只有 respx 單元測試**，兩邊**尚未完成對接驗證**。契約在本次改版中換了路徑與形狀，agent server 側需要跟著改（見 [`docs/agent-server-api.md`](./agent-server-api.md)）|
+| **`metadata.skills`** | ⚠️ 同上。真環境要確認的是它**真的被套用**而不是被接受後丟掉——Optimize 的 pre-flight 會自己驗這一項（§17.2），Playground 則只能靠 trace 裡看得到注入的文字 |
 | **synthesis（`SYNTHESIS_IMPL=real`）** | ❌ **只用假層驗過**。真模型產出的顆粒度（會不會貼整段 SQL、會不會寫成十五步）需要真資料才知道，prompt 大概率要調 |
 | **診斷品質本身** | ❌ **完全未知**。診斷準確度只能在真實資料上跑起來後觀察——而那正是決定要不要投入 Stage 2 的依據 |
 | **`LLM_TIMEOUT_S` 的逐 run 版本** | ❌ 未做。`AGENT_TIMEOUT_S` 與 `LANGFUSE_TIMEOUT_S` 都能逐次調整，唯獨 LLM 的 timeout 仍是全域設定 |
@@ -2086,7 +2082,7 @@ per-span 機率 / 熱點著色、人工重標 span、多租戶隔離
 | 4 | **correct/incorrect 的判準**：LLM judge 可能給連續分數或「部分正確」，二元化門檻要定義 | ✅ **已定案**：LLM 同時吐 verdict + score；另有可選的 `JUDGE_SCORE_THRESHOLD` 由分數推導。🟡「部分正確」的分級**未做** |
 | 5 | **skill-selection 錯誤沒被涵蓋**：題目標了「該用 skill X」，但 agent 可能**讀錯 skill**（常見 bug）。若錯在選錯 skill，錯誤歸因與優化對象都會指錯 | 🟡 **未專門處理**。Stage 1 只能靠 `caveat` 粗略承接。原設計建議：額外比對「agent 實際讀的 skill」vs「題目標註的 skill」，不一致時把讀 skill 的那個 span 標為高機率錯誤來源 |
 | 6 | **SkillOpt 的施力點假設過強**：假設「錯 → 優化 skill 就能修」，但錯誤可能在 SQL tool、base model 或 skill 以外 | 🟡 **已用 caveat 預先承接**（§4.2）：有 caveat 的題目在 Stage 3 預設不納入樣本 |
-| 7 | **重跑實驗需要 agent server 端的新能力**：per-request workspace override | ✅ **平台側已做**（Stage 4）。✅ **agent server 側也已依契約實作**，但兩邊尚未完成對接驗證（§14.3、§17）|
+| 7 | **重跑實驗需要 agent server 端的新能力**：per-request skill override | ✅ **平台側已做**。契約在本次改版中換了形狀（`metadata.skills`），agent server 側需要跟著改；Optimize 的 pre-flight 現在會**主動驗證** override 有沒有生效並在沒生效時擋下 run（§17.2）|
 | 8 | **非決定性讓「trace 是否不同」不可靠**：LLM 有溫度，重跑幾乎必然有差異 | ✅ **設計上承認**：Playground 不做「一按跑 N 次取多數」，也不做自動的改善判定；由開發者自己多按幾次。Stage 3 若要自動驗證改善，應以 score / outcome 比較（甚至重跑 N 次取多數），**而非比對 raw trace diff** |
 | 9 | **「存回 agent server」是新平台對 agent server 的寫入耦合**：需要 skill 更新 API + 版本控制 / rollback | 🔴 **Stage 3，未做** |
 | 10 | **成本 / 規模**：把整條 trace 餵給 LLM 做錯誤定位，token 成本可能很高 | ✅ **已處理**：只截 body 不砍 span（§4.4）；診斷生成一次就落庫、只有手動才重算（§4.5）|
@@ -2106,177 +2102,52 @@ per-span 機率 / 熱點著色、人工重標 span、多租戶隔離
 ## 17. 對 agent server 端的相依需求
 
 **這些都在本 repo 之外，需要 agent server 團隊配合。**
-本節是**自包含的契約**——agent server 的實作者只要讀這一節就能動手，不需要知道這個平台的存在。
 
-> 這份契約原本是獨立的 `docs/agent_server_stage4_endpoints.md`。那份文件已刪除、內容收進這裡，
-> 因為兩份文件描述同一組端點時，遲早會有一份先過期，而讀者無從得知是哪一份。
-> 程式碼註解裡引用 `agent_server_stage4_endpoints.md §5.2 / §5.3` 的地方，指的是下面的 **§17.4**。
+> **完整契約在 [`docs/agent-server-api.md`](./agent-server-api.md)（英文）。**
+> 那份文件是**自包含**的：實作者只要讀它就能動手，不需要知道這個平台的存在，
+> 因此它是唯一來源。本節只留下平台這一側需要知道的摘要——契約的任何細節都以那份為準，
+> 不要在這裡複述，兩份文件描述同一組端點時遲早會有一份先過期，而讀者無從得知是哪一份。
+>
+> 歷史沿革：這份契約原本是獨立的 `docs/agent_server_stage4_endpoints.md`，一度被收進本節，
+> 現在又拆回獨立文件——差別在於**這次本節不留副本**。程式碼註解裡引用
+> `agent_server_stage4_endpoints.md §5.2 / §5.3` 或「§17.3 / §17.4」的地方，指的都是新文件。
 
 ### 17.0 需求總表
 
-| # | 需求 | 為什麼必要 | 狀態 |
-|---|---|---|---|
-| 1 | `POST /execute` 讀 `metadata.trace_data.trace_id`，**用它當 Langfuse trace id** | 沒有這一步，平台無從找回自己剛觸發的 trace，**整個錯誤定位功能失效** | ✅ 已實作 |
-| 2 | `GET /get_workspace` → `{version, config, redacted_paths, skills}` | 讓 Playground 從**真實的** config 與 skill 檔開始編輯，而不是從空白 textarea | ✅ 已實作 |
-| 3 | `GET /get_config_version` → `{version}`，與上面同一個字串 | 送出前的過期檢查（§4.10a）。單獨一個端點是因為它被問得頻繁得多 | ✅ 已實作 |
-| 4 | `POST /execute` 讀 `metadata.workspace = {config?, skills?}`，**只影響這一次呼叫、不落磁碟、不影響其他 request** | Playground 的迭代沙盒（Stage 4）與 Stage 3 的重跑實驗都靠它 | ✅ 已實作 |
-| 5 | skill 更新 API + 版本控制 / rollback | Stage 3 的「存回 agent server」 | 🔴 Stage 3，未規劃 |
-| 6 | `POST /execute` 讀 `metadata.timeout_s` **當這一次呼叫的時間預算**，取代內建的固定上限 | agent server 內部寫死的上限（目前 120s）會**蓋掉**使用者在平台上設定的 timeout：調小有效、**調大完全無效**。長題目因此永遠跑不完 | 🔴 **待實作** |
+| # | 需求 | 為什麼必要 |
+|---|---|---|
+| 1 | `POST /execute` 讀 `metadata.trace_data.trace_id`，**用它當 Langfuse trace id** | 沒有這一步，平台無從找回自己剛觸發的 trace，**整個錯誤定位功能失效** |
+| 2 | `GET /skills` → `{skills, version?}` | Evaluation 的起飛前檢查、Playground 的連線與編輯起點、Optimize 的 skill 快照，全部由這一支供應 |
+| 3 | `POST /execute` 讀 `metadata.skills`，**只影響這一次呼叫、不落磁碟、不影響其他 request** | Playground 的迭代沙盒與 Optimize 的每一次 rollout 都靠它 |
+| 4 | `POST /execute` 讀 `metadata.timeout_s` **當這一次呼叫的時間預算**，取代內建的固定上限 | agent server 內部寫死的上限會**蓋掉**使用者在平台上設定的 timeout：調小有效、**調大完全無效**，長題目因此永遠跑不完 |
+| 5 | skill 更新 API + 版本控制 / rollback | Stage 3 的「存回 agent server」。🔴 未規劃 |
 
-**第 2–4 項都是加法**，不改動既有 `/execute` 契約：**沒有 override 時 request body 與加這個功能之前
-完全相同**（連 `workspace` 這個 key 都不會出現）。這是相容性要求，不是巧合。
-**第 6 項同樣是加法**，但方向相反：`timeout_s` **每次呼叫都會送**，相容性靠的是
-**收到不認得的 key 就忽略**——還沒實作第 6 項的 agent server 收到新 body 必須照常回答。
+### 17.1 這一版契約砍掉了什麼，為什麼
 
-### 17.1 前提：workspace 的形狀與兩個名詞
-
-```
-<AGENT_ROOT>/
-  config.json                  ← 巢狀 JSON，含機密（LLM API key 等）
-  workspace/skills/
-    skill_A/SKILL.md
-    skill_A/references/ref_1.md
-    skill_B/SKILL.md
-```
-
-| 名詞 | 意思 |
+| 砍掉 | 原因 |
 |---|---|
-| **skill 相對路徑** | 相對於 `workspace/skills/`，例如 `skill_A/references/ref_1.md`。**一律用 `/` 分隔** |
-| **config 路徑** | 用 `.` 串起來的 key 路徑，例如 `agents.defaults.api_key` |
+| `GET /get_config_version` | 它回的字串與 `GET /skills` 的 `version` **是同一個**，分開只為了省頻寬。兩個端點必須在每次部署後保持一致，而不一致時的症狀——過期檢查回答的是另一個時刻——**兩個方向都是靜默的** |
+| 回傳的 `config` 與 `redacted_paths` | 只有 Playground 用得到，Evaluation 與 Optimize 都不碰（`optimizer/adapter.py` 刻意送 `config=None`）。它帶來的卻是整份契約最難實作的一條規則：sparse deep-merge ＋ 機密遮罩 ＋「遮罩過的 config 送回去不可以清掉金鑰」。做錯的症狀是 agent 沒有金鑰可用，而那要很久才會被歸因到這裡 |
+| `metadata.workspace` 這層包裝 | 裡面只剩 `skills` 一個 key，包裝已無從消歧義 |
 
-### 17.2 三條共用規則
+代價是誠實的：`version` 現在是**選填**，缺少時平台改用 skill 檔的 hash 推導。
+那個 fallback 看不見 model 或 prompt 的變動，也就是說 **isolated 模式下唯一還會影響結果的 drift 偵測不到**——
+所以文件把「有能力提供 version 就一定要提供」寫成強烈建議，而 UI 會標示版本是推導來的。
 
-**各寫成一個共用函式**，不要在每個端點各寫一份——兩份實作遲早不一致。
+### 17.2 平台如何驗證 override 真的生效
 
-**① 機密遮罩 `redact(config) -> (safe_config, redacted_paths)`**
-遞迴走訪每一層，key 名稱轉小寫後**包含**下列任一字串的葉節點就**刪掉**並記下它的 config 路徑：
-`api_key` · `apikey` · `secret` · `token` · `password` · `passwd` · `credential` · `private_key`
+`detect_activation`（`optimizer/detector.py`）只能證明「這個 skill 被讀了」，
+不能證明「讀的是我們送的那一份」——候選通常是部署版的小幅編輯，兩者留下的證據無從區分。
+因此 agent 若忽略 `metadata.skills`，一個 optimize run 會跑完全程、activation 100%、accuracy 平坦、**零警告**。
 
-> **為什麼回 `redacted_paths` 而不是安靜地刪掉**：呼叫端會把 config 畫成編輯表單。
-> 一個憑空消失的欄位會誘使人自己補一個同名 key，把真的金鑰蓋掉。
+Optimize 的 pre-flight 因此會多做兩件事（只有那一次呼叫）：
+在送出的 `SKILL.md` frontmatter 之後插入一行只有這次 run 知道的哨兵註解，
+並在問題後面附加 `(you must first read the <skill> skill)`，
+讓檔案內容無論 agent 是注入 prompt 還是用工具讀檔都會落進 trace。
+三值判定：看到哨兵句＝生效；skill 確實被讀到但沒有哨兵句＝**擋下 run**；什麼都沒觀察到＝警告不擋。
 
-**② 版本字串 `workspace_version() -> str`**
-1. `git rev-parse --short HEAD` → 例如 `a1b2c3d`
-2. `git status --porcelain` 是空的 → 就用 `a1b2c3d`，結束
-3. 非空 → 算 sha256：先餵 `config.json` 原始位元組，再把所有 skill 檔**依相對路徑排序**逐一餵入
-   「相對路徑 utf-8 位元組 + `\0` + 檔案原始位元組」，取十六進位前 7 碼
-4. 版本 = `a1b2c3d-dirty.9f3e11c`。**不是 git repo** 時跳過 1–2，用 `nogit.<前7碼>`，**不要讓端點失敗**
+細節與 agent 端該預期看到什麼，見 [`docs/agent-server-api.md` §8](./agent-server-api.md#8-the-probe-marker-you-will-see-in-your-logs)。
 
-> **為什麼不能只用 commit hash**：直接手改 `SKILL.md` 存檔測試是最常見的操作，
-> 那時 commit hash 不會變，呼叫端的過期檢查就永遠失效。
-
-**③ 錯誤回應**：失敗一律回非 2xx，**body 一定要寫得出原因**——呼叫端會把這段文字原樣顯示給使用者。
-
-```json
-{ "detail": "could not read workspace: [Errno 13] Permission denied: '/app/workspace/skills'" }
-```
-
-> ⚠️ 讀不到 skill 時**絕對不可以**回 `200` 加一個空的 `skills: {}`。那會讓「這台 agent 沒有 skill」
-> 和「你的路徑設錯了」長得一模一樣，而前者是合法狀態（§7.4）。
-
-### 17.3 端點契約
-
-**`GET /get_workspace`** — 無 input，回：
-
-```json
-{
-  "version": "a1b2c3d",
-  "config": { "agents": { "defaults": { "model": "gpt-4o", "temperature": 0.2 } }, "retries": 3 },
-  "redacted_paths": ["agents.defaults.api_key"],
-  "skills": { "skill_A/SKILL.md": "# Skill A\n…", "skill_A/references/ref_1.md": "…" }
-}
-```
-
-- `config` **保留原本的巢狀結構**（不要攤平），機密已移除
-- `skills` 是**扁平**的 `{相對路徑: 完整內容}`：走訪**所有層級**（不要只讀 `SKILL.md`）、
-  **不要截斷**（使用者要在全文上編輯）、decode 失敗的二進位檔跳過但不讓整個請求失敗
-- 沒有 skill 就回 `{}`（合法）；`config.json` 或 `skills/` 讀不到 → `500` + 原因
-
-**`GET /get_config_version`** — 無 input，回 `{"version": "a1b2c3d"}`，與上面**同一個字串**。
-
-**`POST /execute`** — 既有端點，多讀一個選填的 `metadata.workspace` 與一個 `metadata.timeout_s`：
-
-```json
-{ "message": "<題目>", "metadata": { "trace_data": {...}, "timeout_s": 115, "workspace": { "config": {...}, "skills": {...} } } }
-```
-
-回應不變：`{"content": "<agent 的回答>"}`。
-
-**`metadata.timeout_s`（秒，float）——這一次呼叫的執行預算**，取代 agent server 內建的固定上限：
-
-- **缺席時 fallback 回 server 自己的預設值**（今天的 120s）。舊的呼叫端因此完全不受影響。
-- **仍然要 clamp 到 server 自己的上限**（例如一個 `MAX_TIMEOUT_S` 環境變數）。
-  不要無條件相信呼叫端——這個欄位是要讓上限**可調**，不是要把上限拿掉。
-  上限本身可以放寬（呼叫端會送 600、1800 這種值），但必須存在：一個掛住的 request
-  會一直佔著 worker，而平台這一側早就斷線了。
-- **超時的時候要回 `504`（或其他 5xx）+ 原因**，不要靜默回一個被截斷的答案。
-  平台會把「空的 / 半截的答案」拿去給 judge 評分，那會產生一個毫無意義的 incorrect，
-  反而蓋掉真正的問題。
-- 平台送過來的值**已經比它自己的等待上限少 5 秒**（§3.3），所以正常情況下**是 server 先到期**，
-  這正是為了讓上面那個 5xx 有機會送出去。
-  > ⚠️ 平台側的既有行為：5xx 會 raise `AgentHttpError`，而它**不在重試名單**
-  > （`pipeline.py` 的 `RETRYABLE` 只收 timeout / 連線錯誤 / OSError），
-  > 所以 server 回 504 **不會被重試**、該題直接判 failed。這是刻意的——
-  > 一個已經超時的呼叫再重試兩次只是花三倍時間得到同一個結果。
-
-**路徑安全檢查**：`skills` 的 key 會被當成檔案路徑寫到磁碟，含 `..` / 以 `/` 開頭 / 含 `\` /
-含 NUL / 空字串 → 一律 `400`。通過後再確認「暫存目錄 + 相對路徑」解析出的絕對路徑
-**仍在暫存目錄底下**，不是的話一樣 `400`。
-
-### 17.4 ⚠️ 兩條刻意不對稱的規則
-
-**這是整份契約最容易做錯的地方，也是最容易被「順手優化」掉的。**
-
-**① 傳入的 `config` 是 deep merge，不是取代**
-
-```python
-config = payload["metadata"]["workspace"]["config"]   # ❌ 錯！agent 會沒有 API key
-config = deep_merge(load_config_json(), incoming)     # ✅ 對
-```
-
-> `GET /get_workspace` 已經把金鑰刪掉了，所以呼叫端手上那份 config **本來就沒有金鑰**。
-> 整份取代會讓 agent 初始化時沒有金鑰可用——**而那是一個很晚才會發現的失敗**。
-
-合併規則：傳入 dict 且原本也是 dict → 遞迴往下；傳入純量 → 取代原值；傳入 list → **整份取代**，不逐項合併。
-
-**② 傳入的 `skills` 是整份取代**
-
-map 裡有的檔案用傳入的內容；map 裡**沒有**的檔案這次呼叫**看不到**（即使磁碟上有）；
-`skills: {}` 代表這次一個 skill 都沒有（合法的測試情境）；**`skills` 這個 key 不存在**才是照常用磁碟上的。
-
-> **為什麼 config 是 merge、skills 是 replace？** config 因為機密被拿掉了，非 merge 不可；
-> skills 沒有機密，而且**只有整份取代才表達得出「把某個 reference 檔刪掉試試看」**。
-> 實作者若把它們「統一」，其中一個就會壞掉。
-
-### 17.5 驗收清單
-
-```bash
-# ① 不帶 workspace —— 回歸測試，行為必須與加這個功能之前完全相同
-curl -s $AGENT/execute -H 'Content-Type: application/json' \
-  -d '{"message":"hi","metadata":{"trace_data":{"trace_id":"t1"}}}'
-
-# ② 兩個端點回的版本要一樣
-test "$(curl -s $AGENT/get_workspace | jq -r .version)" \
-   = "$(curl -s $AGENT/get_config_version | jq -r .version)"
-
-# ③ 手改一個 skill 檔（不 commit），版本必須改變
-# ④ 帶 config override —— 關鍵是 agent 仍然叫得動 LLM（這一項在驗 merge 而不是取代）
-# ⑤ 路徑攻擊必須被擋下
-curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: application/json' \
-  -d '{"message":"x","metadata":{"workspace":{"skills":{"../../etc/passwd":"x"}}}}'   # 期望 400
-
-# ⑥ timeout_s（§17.0 第 6 項）
-#   a. 帶一個很小的預算 —— 必須在那個時間左右回 5xx + 原因，而不是跑滿內建上限
-time curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: application/json' \
-  -d '{"message":"<一題會跑很久的題目>","metadata":{"trace_data":{"trace_id":"t2"},"timeout_s":5}}'
-#   b. 帶一個大於內建上限的預算 —— 這一題必須真的跑得比 120s 久（這才是整件事的目的）
-#   c. 相容性回歸：上面第 ① 條那個「不帶 timeout_s」的 body 行為必須完全不變
-```
-
-⚠️ 第 ④ 項是這份清單裡最重要的一項：它是唯一能證明 §17.4 的 config 規則沒被做成「取代」的檢查，
-而做錯的症狀（agent 沒有金鑰）在生產環境要很久才會被歸因到這裡。
-
----
 
 ## 18. 給接手者的下一步建議
 
@@ -2291,13 +2162,13 @@ time curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute -H 'Content-Type: a
    診斷指對的比例大概多少？caveat 出現的頻率？多少題其實錯在 tool 而不在 skill？
    > **這一步的觀察是整個專案最重要的一份資料。** 它決定 Stage 2（機率熱點）值不值得做，
    > 也決定 Stage 3（SkillOpt）的前提假設站不站得住。在此之前投入 Stage 2/3 是在賭博。
-4. **完成 agent server 那一側的對接驗證**（§17 的 2–4 項已經實作，但兩邊還沒一起跑過），
-   並請 agent server 端補上**第 6 項 `metadata.timeout_s`**——在那之前，
-   平台上把 timeout 調得比 agent server 內建上限（120s）大是**沒有作用的**，
+4. **完成 agent server 那一側的對接驗證**：契約已精簡為兩支端點並換了形狀，
+   agent server 需依 [`docs/agent-server-api.md`](./agent-server-api.md) 重新實作一輪，
+   其中 `metadata.timeout_s` 若沒做，平台上把 timeout 調得比 agent server 內建上限大是**沒有作用的**，
    跑得久的題目一律在 120s 被砍。
-   優先確認的順序是：`get_workspace` 讀得回來 → 帶 `metadata.workspace` 送一題、
-   **確認 agent 仍然叫得動 LLM**（這一項在驗 config 是 merge 而不是取代）→
-   注入的文字出現在 trace 第一個 span 的 system message 裡。
+   優先確認的順序是 [`docs/agent-server-api.md` §9](./agent-server-api.md#9-acceptance-checklist)
+   的驗收清單，其中 ④ 與 ⑤ 最重要：它們是唯一能證明 `metadata.skills` **真的被套用**
+   而不是被接受後丟掉的檢查，而做錯的症狀是一個「成功完成」卻毫無意義的 optimize run。
 5. **開 `SYNTHESIS_IMPL=real` 並調 prompt**（§8.3）。假層產出的顆粒度是設計出來的，
    真模型會不會貼整段 SQL、會不會寫成十五步，只有真資料知道。
 6. **補 §15.2 的小缺口**時，優先考慮 **verdict 寫回 Langfuse Score**——

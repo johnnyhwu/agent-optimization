@@ -98,10 +98,11 @@ async def get_workspace(
     agent_timeout_s: float | None = None,
     subject: str = Depends(current_subject),
 ):
-    """The agent's config + skill files, so an edit starts from the real thing.
+    """The agent's skill files, so an edit starts from the real thing.
 
     This doubles as the playground's **connect** call: reaching it proves the
-    agent is there, speaks the §17.3 contract and hands over a version to check
+    agent is there, speaks the `GET /skills` contract (docs/agent-server-api.md)
+    and hands over a version to check
     staleness against, all of which the UI needs before its first question. A
     separate health endpoint would prove less and be one more thing to keep in
     step.
@@ -118,12 +119,7 @@ async def get_workspace(
         raise HTTPException(
             status_code=503, detail=f"could not read the agent's workspace: {exc}"
         ) from exc
-    return WorkspaceOut(
-        version=ws.version,
-        config=ws.config,
-        redacted_paths=ws.redacted_paths,
-        skills=ws.skills,
-    )
+    return WorkspaceOut(version=ws.version, skills=ws.skills)
 
 
 @router.get("/workspace/version", response_model=WorkspaceVersionOut)
@@ -161,7 +157,6 @@ def _out(attempt: PlaygroundAttempt) -> PlaygroundAttemptOut:
         has_expected_answer=attempt.judged,
         has_expected_reasoning=attempt.diagnosable,
         workspace_overridden=attempt.workspace is not None,
-        config_overrides=attempt.config_overrides,
         edited_skill_files=attempt.edited_skill_files,
         status=attempt.status,
         phase=attempt.phase,
@@ -236,9 +231,7 @@ def _detail(attempt: PlaygroundAttempt) -> PlaygroundAttemptDetail:
         ground_truth_response=attempt.ground_truth_response,
         ground_truth_reasoning=attempt.ground_truth_reasoning,
         workspace=(
-            WorkspaceOverrideIn(
-                config=attempt.workspace.config, skills=attempt.workspace.skills
-            )
+            WorkspaceOverrideIn(skills=attempt.workspace.skills)
             if attempt.workspace is not None
             else None
         ),
@@ -268,9 +261,7 @@ async def create_attempt(
         # agent server's request body then stays byte-for-byte what an
         # un-overridden call sends, and the attempt does not claim an edit that
         # never happened.
-        override = WorkspaceOverride(
-            config=body.workspace.config or None, skills=body.workspace.skills
-        )
+        override = WorkspaceOverride(skills=body.workspace.skills)
 
     baseline = None
     if override is not None and override.skills is not None:

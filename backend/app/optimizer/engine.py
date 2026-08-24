@@ -34,13 +34,13 @@ import json
 import logging
 import random
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Sequence
 
 from app.config import settings
 from app.integrations import Seams
-from app.optimizer.adapter import run_rollout, score_rollout
+from app.optimizer.adapter import make_probe_marker, run_rollout, score_rollout
 from app.optimizer.detector import DEFAULT_PATH_PATTERNS
 from app.optimizer.gating import decide_gate
 from app.optimizer.hyperparams import resolve_algorithm
@@ -194,12 +194,16 @@ async def _execute(
             # for an agent call per restart and could abort a half-finished
             # routing run over a transient trace failure, discarding steps that
             # were already paid for.
-            ok, message = await _preflight(
+            preflight = await _preflight(
                 run_id, spec=spec, items=val or train, store=store, seams=seams,
                 publish=publish, cancel_event=cancel_event,
             )
-            if not ok and spec.mode == "routing":
-                return "failed", message, "failed"
+            # An override that never arrives makes both modes unmeasurable, so
+            # this one stops every run; a silent detector only stops routing.
+            if preflight.override_ignored:
+                return "failed", preflight.message, "failed"
+            if not preflight.detector_ok and spec.mode == "routing":
+                return "failed", preflight.message, "failed"
             await _baseline_step(
                 run_id, spec=spec, val=val, store=store, seams=seams,
                 publish=publish, cancel_event=cancel_event, state=state,
@@ -266,18 +270,47 @@ def _seed_state(state: _State, spec: RunSpec, resume: ResumeState | None) -> Non
 # --- Pre-flight -------------------------------------------------------------
 
 
+def probe_question(question: str, skill_name: str) -> str:
+    """The pre-flight question, with a nudge to read the skill first.
+
+    Without it the probe only learns what the agent *chose* to do on one
+    question, which conflates two things worth separating: whether a detector
+    can see a skill being read at all, and whether this particular question
+    happened to call for one. Asking for the read isolates the first.
+
+    It is also what makes the marker check work against a tool-using agent. Such
+    an agent's trace carries paths, not file bodies — until it actually reads a
+    file, at which point the contents come back as a tool result and land in the
+    trace either as that observation's output or in the next generation's
+    messages. Either way the marker becomes visible.
+
+    The **directory** name, never a file path: a path in the prompt is a path
+    the agent can echo into a tool call, and the tool-path detector would then
+    be matching our own instruction rather than the agent's behaviour.
+    """
+    return f"{question}\n\n(you must first read the {skill_name} skill)"
+
+
 async def probe_activation(
     items: Sequence[Item], *, spec: RunSpec, seams: Seams, cancel_event: asyncio.Event,
 ) -> list:
-    """One question, answered with the initial skill, to see what can be observed.
+    """One question, answered with a marked copy of the initial skill.
 
-    Cheap on purpose — a single agent call — because its whole value is being
-    the thing that happens before the expensive part.
+    Cheap on purpose — a single question — because its whole value is being the
+    thing that happens before the expensive part. It answers two questions at
+    once: can we see this agent load a skill, and did it use the files we sent
+    rather than its own?
+
+    The skill sent is `initial_skill`, i.e. what the agent already has, so the
+    probe measures the machinery and not a candidate. The marker is the only
+    difference between the two copies, and it is what makes the second question
+    answerable at all.
     """
     if not items:
         return []
+    item = items[0]
     return await run_rollout(
-        [items[0]],
+        [replace(item, question=probe_question(item.question, spec.skill_name))],
         skill_files=spec.initial_skill,
         mode=spec.mode,
         skill_name=spec.skill_name,
@@ -288,14 +321,31 @@ async def probe_activation(
         concurrency=1,
         detectable=bool(spec.detector.get("detectable")),
         path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
+        probe_marker=make_probe_marker(),
     )
+
+
+@dataclass
+class PreflightResult:
+    """What the probe established, and whether the run may go on.
+
+    Two independent findings, kept apart because they have different
+    consequences. `detector_ok` is about what we can *see* and only routing
+    depends on it. `override_ignored` is about whether the experiment is
+    possible at all, and stops both modes.
+    """
+
+    detector_ok: bool
+    override_ignored: bool
+    message: str
 
 
 async def _preflight(
     run_id, *, spec: RunSpec, items, store: OptimizationStore, seams: Seams,
     publish: Publisher, cancel_event: asyncio.Event,
-) -> tuple[bool, str]:
-    """Can this run observe whether the agent used the skill at all?
+) -> PreflightResult:
+    """Can this run observe whether the agent used the skill at all — and did the
+    agent use *our* copy of it?
 
     The two modes need very different answers. Routing's gate *compares
     activation rates*, so a routing run that cannot see activation has no way to
@@ -319,12 +369,32 @@ async def _preflight(
     and one reading nothing reported 100%, which is exactly the number that
     cannot be trusted — a rate is worthless if the questions it is quietly
     excluding are the ones it exists to catch.
+
+    **The second finding is whether the override was applied at all.** The probe
+    ships a marker that exists only in the copy we sent (`adapter`), so its
+    absence from a trace that demonstrably *did* read the skill means the agent
+    answered from its own files. That invalidates both modes — every step would
+    measure the same deployed text — so it stops the run here rather than after
+    an hour of rollouts that could not have shown anything.
+
+    The marker is only ever read as evidence when something was observed. An
+    agent whose trace shows no skill read at all is one we cannot see into, and
+    reporting that as a violation would lock out working agents.
     """
     rows = await probe_activation(items, spec=spec, seams=seams, cancel_event=cancel_event)
     observed = [row for row in rows if getattr(row, "activated", None) is not None]
     ok = any(row.activated for row in observed)
     hit = rows[0].detector_hit if rows else "none"
     skills_read = (rows[0].skills_read or []) if rows else []
+
+    # Tri-state, and `None` must never harden into a negative: it is the default
+    # on every row, so anything that did not actually run the marker check —
+    # a trace that never landed, a stubbed probe — reads as "not asked".
+    verified = rows[0].override_verified if rows else None
+    if verified is False and hit == "none":
+        # Nothing was seen at all, so the marker's absence says nothing either.
+        verified = None
+    override_ignored = verified is False
 
     # In memory for the steps this process is about to run, and persisted below
     # for the ones a restart will run — the probe is bought once, on a fresh
@@ -335,8 +405,16 @@ async def _preflight(
         detector["detectable"] = True
         spec.detector["detectable"] = True
 
-    if ok:
-        message = f"the agent read the skill ({hit})"
+    if override_ignored:
+        message = (
+            f"the agent read the skill ({hit}) but answered from its own copy: the "
+            "marker this run sent was not in the trace. The agent server is not "
+            "applying metadata.skills, so every step would measure the deployed "
+            "skill instead of the candidate — the run is stopped rather than "
+            "spending an hour to produce a flat line."
+        )
+    elif ok:
+        message = f"the agent read the skill we sent ({hit})"
     elif spec.mode == "routing":
         message = (
             "no activation could be detected on the probe question. A routing run "
@@ -352,13 +430,16 @@ async def _preflight(
     await store.finish_run(run_id, detector={
         **detector,
         "preflight": {"ok": ok, "detector_hit": hit, "skills_read": skills_read,
-                      "message": message},
+                      "override_verified": verified, "message": message},
     })
     await publish({
         "type": "preflight", "ok": ok, "detector_hit": hit,
-        "skills_read": skills_read, "message": message,
+        "skills_read": skills_read, "override_verified": verified,
+        "message": message,
     })
-    return ok, message
+    return PreflightResult(
+        detector_ok=ok, override_ignored=override_ignored, message=message
+    )
 
 
 # --- Steps ------------------------------------------------------------------
@@ -546,7 +627,7 @@ async def _agent_version(seams: Seams) -> str | None:
     are comparable" is the question a reader has once they know something moved.
 
     Never raises. An hour of agent calls is already paid for by the time this
-    runs, and discarding it over a flaky `GET /get_config_version` would be
+    runs, and discarding it over a flaky read of `GET /skills` would be
     throwing away the measurement to report a caveat about it. `None` rather
     than `""` for the same reason the detector distinguishes "unknown" from
     "no": an empty string would disagree with every pinned version and warn

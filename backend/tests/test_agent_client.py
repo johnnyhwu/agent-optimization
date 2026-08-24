@@ -63,19 +63,19 @@ async def test_tags_default_to_empty_list(client):
 
 
 @respx.mock
-async def test_no_workspace_key_without_one(client):
-    """The playground's override must not leak into every other call (§10.7).
+async def test_no_skills_key_without_an_override(client):
+    """The playground's override must not leak into every other call.
 
     `timeout_s` is the one key that rides along unconditionally — it states
-    something true of every call. `workspace` is the opposite: only the
-    playground sends one, so its existence must not add a key, or change one,
-    for an eval run.
+    something true of every call. `skills` is the opposite: only the playground
+    and the optimizer send one, so its existence must not add a key, or change
+    one, for an eval run.
     """
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
     await client.call("q", "corr-1", "bob", ["eval_billing"])
 
     metadata = json.loads(respx.calls[0].request.content)["metadata"]
-    assert "workspace" not in metadata
+    assert "skills" not in metadata
     assert set(metadata) == {"trace_data", "timeout_s"}
 
 
@@ -121,56 +121,58 @@ def test_server_budget_never_falls_below_half_the_timeout():
 
 
 @respx.mock
-async def test_workspace_override_travels_in_metadata(client):
+async def test_skill_override_travels_flat_in_metadata(client):
+    """One kind of override left, so it sits directly under `metadata`.
+
+    The wrapper object existed to hold two halves that were applied by different
+    rules; with the config half gone there is nothing left for it to disambiguate.
+    """
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
     await client.call(
         "q", "corr-1", "bob", ["playground"],
-        workspace=WorkspaceOverride(
-            config={"agents": {"defaults": {"model": "big"}}},
-            skills={"billing/SKILL.md": "# Billing (edited)"},
-        ),
+        workspace=WorkspaceOverride(skills={"billing/SKILL.md": "# Billing (edited)"}),
     )
 
     metadata = json.loads(respx.calls[0].request.content)["metadata"]
-    assert metadata["workspace"] == {
-        "config": {"agents": {"defaults": {"model": "big"}}},
-        "skills": {"billing/SKILL.md": "# Billing (edited)"},
-    }
+    assert metadata["skills"] == {"billing/SKILL.md": "# Billing (edited)"}
+    assert "workspace" not in metadata
     # The correlation mechanism is untouched by the override riding along.
     assert metadata["trace_data"]["trace_id"] == "corr-1"
     assert metadata["trace_data"]["tags"] == ["playground"]
 
 
 @respx.mock
-async def test_untouched_half_of_the_override_is_omitted(client):
-    """`config` absent and `config` null are not the same request.
+async def test_an_override_carrying_no_skills_sends_no_key(client):
+    """`skills` absent and `skills: null` are not the same request.
 
-    The agent server reads an absent half as "keep yours" and a present one as
-    "use this"; sending `skills: null` for an edit that only touched the config
-    would be a claim the developer never made.
+    The agent server reads an absent key as "keep yours". An override object
+    that was constructed but never given files must not turn into a claim the
+    developer never made.
     """
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
     await client.call(
-        "q", "corr-1", "bob", ["playground"],
-        workspace=WorkspaceOverride(config={"log_level": "debug"}),
+        "q", "corr-1", "bob", ["playground"], workspace=WorkspaceOverride(skills=None),
     )
 
-    assert json.loads(respx.calls[0].request.content)["metadata"]["workspace"] == {
-        "config": {"log_level": "debug"}
-    }
+    assert "skills" not in json.loads(respx.calls[0].request.content)["metadata"]
 
 
 @respx.mock
 async def test_empty_skills_map_is_sent_because_it_means_something(client):
-    """`skills: {}` is "run with no skills", which is a legitimate experiment."""
+    """`skills: {}` is "run with no skills", which is a legitimate experiment.
+
+    The trap this guards is a truthiness test: `{}` is falsy, so `if skills:`
+    would drop the key and the agent would silently fall back to its own files —
+    the exact opposite of what was asked for.
+    """
     respx.post(EXECUTE_URL).mock(return_value=httpx.Response(200, json={"content": "hi"}))
     await client.call(
         "q", "corr-1", "bob", ["playground"], workspace=WorkspaceOverride(skills={}),
     )
 
-    assert json.loads(respx.calls[0].request.content)["metadata"]["workspace"] == {
-        "skills": {}
-    }
+    metadata = json.loads(respx.calls[0].request.content)["metadata"]
+    assert "skills" in metadata
+    assert metadata["skills"] == {}
 
 
 @respx.mock
@@ -198,6 +200,48 @@ async def test_plain_text_response_is_accepted(client):
     resp = await client.call("q", "corr", "alice")
     assert resp.failed is False
     assert resp.response == "the answer"
+
+
+@respx.mock
+async def test_an_html_body_is_a_failure_not_an_answer(client):
+    """A 200 carrying an error page is the one non-JSON body we must not trust.
+
+    Plain text is accepted above because some agents legitimately answer that
+    way. A proxy, gateway or framework error page is not an agent answering —
+    but it arrives on the same code path, and if it were passed through, the
+    judge would grade the HTML and record a confident wrong verdict.
+    """
+    respx.post(EXECUTE_URL).mock(
+        return_value=httpx.Response(
+            200, text="<!DOCTYPE html><html><body>502 Bad Gateway</body></html>",
+            headers={"content-type": "text/html"},
+        )
+    )
+    resp = await client.call("q", "corr", "alice")
+    assert resp.failed is True
+    assert "not a usable string" in resp.error
+
+
+@respx.mock
+async def test_an_html_body_without_a_doctype_is_also_refused(client):
+    respx.post(EXECUTE_URL).mock(
+        return_value=httpx.Response(200, text="  <html><body>nope</body></html>")
+    )
+    assert (await client.call("q", "corr", "alice")).failed is True
+
+
+@respx.mock
+async def test_a_plain_text_answer_that_merely_mentions_a_tag_is_kept(client):
+    """The guard keys on the body opening as markup, not on containing any."""
+    respx.post(EXECUTE_URL).mock(
+        return_value=httpx.Response(
+            200, text="Wrap the value in <b> to bold it.",
+            headers={"content-type": "text/plain"},
+        )
+    )
+    resp = await client.call("q", "corr", "alice")
+    assert resp.failed is False
+    assert resp.response == "Wrap the value in <b> to bold it."
 
 
 @respx.mock

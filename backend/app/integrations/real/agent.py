@@ -6,12 +6,13 @@ with the agent's answer. No protocol SDK is involved — the payload and
 response are both trivial, so a hand-written httpx POST is simpler than
 depending on one.
 
-A playground attempt may also carry `metadata.workspace`, the config/skills the
-agent should use for this one call (see docs/spec.md §17).
-An eval run never sends it, so the run path's request body is unchanged.
+A playground attempt — and every optimization rollout — may also carry
+`metadata.skills`, the complete skill file set the agent should use for this one
+call. An eval run never sends it, so the run path's request body carries only
+what is true of every call.
 
 Every call also carries `metadata.timeout_s`, the budget the agent server should
-give itself for this one question (§17.0 #6) — see `server_budget_s` for why it
+give itself for this one question — see `server_budget_s` for why it
 is not simply this client's own timeout.
 
 The correlation mechanism (§6.2 / §6.7) is the whole point of this client: the
@@ -63,18 +64,33 @@ def server_budget_s(timeout_s: float, margin_s: float = SERVER_TIMEOUT_MARGIN_S)
     return round(max(timeout_s - max(margin_s, 0.0), timeout_s / 2), 3)
 
 
+def _looks_like_markup(text: str) -> bool:
+    """Does this body open as HTML/XML rather than as an answer?
+
+    The one non-JSON body that must never be passed through. A proxy, gateway
+    or web framework answering 200 with an error page is not an agent
+    answering — but it arrives on the same code path as a legitimate
+    `text/plain` answer, and if it were accepted the judge would grade the
+    markup and record a confident wrong verdict against the agent.
+
+    Keyed on how the body *opens*, not on containing a tag anywhere: an answer
+    may perfectly well discuss `<b>`.
+    """
+    return text.lstrip()[:1] == "<"
+
+
 def _extract_text(resp: httpx.Response) -> str | None:
     """Pull the answer out of an `/execute` response body: `{"content": str}`.
 
     A bare JSON string is also accepted (some servers skip the wrapper), and a
-    non-JSON body falls back to the raw response text. Anything else — a dict
-    without a string `content`, or another JSON shape entirely — is not a
-    usable answer.
+    non-JSON body falls back to the raw response text unless it opens as markup.
+    Anything else — a dict without a string `content`, or another JSON shape
+    entirely — is not a usable answer.
     """
     try:
         body = resp.json()
     except ValueError:
-        return resp.text
+        return None if _looks_like_markup(resp.text) else resp.text
     if isinstance(body, dict):
         content = body.get("content")
         return content if isinstance(content, str) else None
@@ -114,31 +130,26 @@ class HttpAgentClient:
                     "user_id": user_id,
                     "tags": tags or [],
                 },
-                # Unlike `workspace` below, this key is always sent: it states
+                # Unlike `skills` below, this key is always sent: it states
                 # something true of every call, not an override the playground
                 # opted into. Compatibility rests on the far side ignoring keys
-                # it does not know — a server that has not implemented §17's
-                # sixth requirement yet answers exactly as it did before.
+                # it does not know — a server that has not implemented the
+                # budget yet answers exactly as it did before.
                 "timeout_s": server_budget_s(self.timeout_s),
             },
         }
-        if workspace is not None:
-            # Only present when the playground asked for one, so an eval run's
-            # request body is byte-for-byte what it was before §10 existed. The
-            # agent server is expected to apply this to THIS call only and never
-            # persist it (§10.7).
-            #
-            # Each half is omitted rather than sent as null when it wasn't
-            # edited, because the two mean different things on the far side:
-            # an absent `config` means "keep yours", while a present-but-empty
-            # `skills` means "run this call with no skills at all".
-            override: dict[str, Any] = {}
-            if workspace.config is not None:
-                override["config"] = workspace.config
-            if workspace.skills is not None:
-                override["skills"] = workspace.skills
-            if override:
-                payload["metadata"]["workspace"] = override
+        # `is not None`, never a truthiness test. An eval run sends no override
+        # at all and its request body must not grow a key; but `skills == {}` is
+        # a real instruction — "run this call with no skills" — and `{}` is
+        # falsy, so `if workspace.skills:` would drop it and the agent would
+        # quietly fall back to its own files, which is the opposite of what was
+        # asked for.
+        #
+        # The agent server is expected to apply this to THIS call only, never to
+        # persist it, and to treat it as replacing its skill directory rather
+        # than patching it.
+        if workspace is not None and workspace.skills is not None:
+            payload["metadata"]["skills"] = workspace.skills
         return payload
 
     async def call(

@@ -12,11 +12,9 @@ import SpanList from "./SpanList.jsx";
 import { useToast } from "./Toast.jsx";
 import { IconAlert, IconBookmark, IconRefresh } from "./icons.jsx";
 import {
-  diffConfig,
   editedFiles,
   overrideCounts,
   sameSkills,
-  stripRedacted,
 } from "../workspace_util.js";
 import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
@@ -46,7 +44,7 @@ function useAttemptsCollapsed() {
 }
 
 // The playground: one question at a time, against an editable copy of the
-// agent's own config and skill files.
+// agent's own skill files.
 //
 // Structurally this is the three-column detail view with a composer on top, and
 // it reuses that view's two hard-won mechanisms:
@@ -237,7 +235,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       // the old edits onto new text would produce a third version that matches
       // neither, which is precisely the confusion the version check exists to
       // prevent.
-      setWsEdit({ config: ws.config, skills: ws.skills });
+      setWsEdit({ skills: ws.skills });
       return ws;
     } catch (e) {
       // Never a blank editor: "this agent has no skills" and "the agent server
@@ -280,10 +278,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // — the question can be retyped in seconds, a rewritten skill cannot.
   function dirtyCount() {
     if (!workspace || !wsEdit) return 0;
-    return (
-      Object.keys(diffConfig(workspace.config, wsEdit.config) || {}).length +
-      editedFiles(workspace.skills, wsEdit.skills).length
-    );
+    return editedFiles(workspace.skills, wsEdit.skills).length;
   }
 
   function reloadWorkspace() {
@@ -331,17 +326,14 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   }
 
   // What the next question should carry, or null when nothing was edited. An
-  // empty override is not sent: the agent server reads a present `workspace` as
-  // "use this instead of mine", so sending one would claim an experiment that
-  // never happened.
+  // unedited copy is not sent: the agent server reads a present `skills` as
+  // "use these instead of mine", so sending one would claim an experiment that
+  // never happened — and `{}` would be the strongest claim of all, since it
+  // means "answer with no skills".
   function buildOverride() {
     if (!workspace || !wsEdit) return null;
-    const config = stripRedacted(
-      diffConfig(workspace.config, wsEdit.config), workspace.redacted_paths
-    );
-    const skills = sameSkills(workspace.skills, wsEdit.skills) ? null : wsEdit.skills;
-    if (!config && skills === null) return null;
-    return { config, skills };
+    if (sameSkills(workspace.skills, wsEdit.skills)) return null;
+    return { skills: wsEdit.skills };
   }
 
   // A question handed over from the three-column view. Only the question
@@ -653,14 +645,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         ground_truth_reasoning: full.ground_truth_reasoning || "",
       });
       if (full.workspace && workspace) {
-        // Rebuilt against the current snapshot, each half the way the agent
-        // server reads it: the config overlay is sparse and merges onto what the
-        // agent has now, while the skills are the complete set that attempt ran
-        // with and replace the working copy outright.
-        setWsEdit({
-          config: applyOverlay(workspace.config, full.workspace.config),
-          skills: full.workspace.skills || workspace.skills,
-        });
+        // The complete set that attempt ran with, replacing the working copy
+        // outright — which is how the agent server reads it too.
+        setWsEdit({ skills: full.workspace.skills || workspace.skills });
       }
       // Credentials are excluded: they are write-only and never come back. They
       // are already in this session's state anyway. So is the agent, and for a
@@ -747,7 +734,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         subtitle={
           attempts.length
             ? null
-            : "One question against an editable copy of the agent's config and skill files, run as often as you like. Nothing here is saved — attempts last until the backend restarts."
+            : "One question against an editable copy of the agent's skill files, run as often as you like. Nothing here is saved — attempts last until the backend restarts."
         }
         primary={
           <Button
@@ -920,8 +907,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           }
         >
           <p style={{ margin: "0 0 8px" }}>
-            Someone changed the agent's config or skill files after this editor
-            read them.
+            The agent changed after this editor read its skill files.
           </p>
           <p className="muted" style={{ margin: 0, fontSize: 13 }}>
             <strong>Reload workspace</strong> starts over from what the agent has
@@ -935,28 +921,14 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   );
 }
 
-// What an attempt carried, for the line above the three columns. Counts rather
-// than names: a config path and a file path are both long, and the point of the
-// line is that an override happened at all.
+// What an attempt carried, for the line above the three columns. A count rather
+// than names: a file path is long, and the point of the line is that an
+// override happened at all.
 function describeOverride(attempt) {
-  const { configs, files } = overrideCounts(attempt);
-  const parts = [];
-  if (configs) parts.push(`${configs} config value${configs === 1 ? "" : "s"}`);
-  if (files) parts.push(`${files} skill file${files === 1 ? "" : "s"}`);
-  return parts.length ? `an override of ${parts.join(" and ")}` : "a workspace override";
-}
-
-// A sparse config overlay merged onto a full config, the same deep merge the
-// agent server does with it (the agent-server contract): a key the
-// overlay does not mention keeps the value it already had.
-function applyOverlay(base, overlay) {
-  if (!overlay) return base;
-  const out = { ...(base || {}) };
-  Object.entries(overlay).forEach(([key, value]) => {
-    const isObject = (v) => v && typeof v === "object" && !Array.isArray(v);
-    out[key] = isObject(value) && isObject(out[key]) ? applyOverlay(out[key], value) : value;
-  });
-  return out;
+  const { files } = overrideCounts(attempt);
+  return files
+    ? `an override of ${files} skill file${files === 1 ? "" : "s"}`
+    : "a skill override";
 }
 
 // Only the values an attempt actually recorded, so cloning never overwrites a

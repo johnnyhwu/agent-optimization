@@ -10,7 +10,7 @@ sections, all runnable end to end; the design record is
   orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
   jumps the UI straight to the suspect span with its input/output/token detail.
 - **Playground** — one ad-hoc question goes to the agent with an **editable copy
-  of its config and skill files**, so the hypothesis you form while reading a
+  of its skill files**, so the hypothesis you form while reading a
   failed trace can be tested without editing an eval set and running the whole
   thing; the questions worth keeping get promoted into a new eval set. See
   [The playground](#the-playground).
@@ -183,13 +183,12 @@ button.
   paperwork: an **expected answer** turns judging on, an **expected reasoning
   process** turns diagnosis on. With neither, you get the answer and the trace —
   which is often all you wanted.
-- **Workspace override.** The composer loads the agent's own `config.json` (minus
-  its secrets) and every file under its `skills/` directory. Change a config value,
-  edit a `SKILL.md`, add or delete a reference file — and it all travels with
-  *this one call* as `metadata.workspace`. Nothing is written back to the agent
-  server.
-- **Stale-snapshot check.** Before each send the platform asks the agent server
-  for its workspace version. If it moved since the editor read it, you are asked
+- **Skill override.** The composer loads every file under the agent's `skills/`
+  directory. Edit a `SKILL.md`, add a reference file, delete one — and the whole
+  set travels with *this one call* as `metadata.skills`, replacing the agent's
+  directory for it. Nothing is written back to the agent server.
+- **Stale-snapshot check.** Before each send the platform re-reads the agent's
+  version. If it moved since the editor read it, you are asked
   whether to reload (discarding your edits) or send anyway — a question answered
   against a skill that changed underneath you is not a result you can trust, and
   you would have no way of telling afterwards.
@@ -219,35 +218,46 @@ button.
   playground"* link that carries the question, both ground-truth fields and that
   run's endpoints over.
 
-> **The platform cannot verify that the agent honoured your override.** The one
-> piece of evidence is that the injected text shows up in the trace's first
-> span system message, which the span view renders — so you can see it. The UI
-> says as much rather than implying a check that does not exist.
+> **In the playground, the platform does not verify that the agent honoured your
+> override.** The evidence is that the injected text shows up in the trace's
+> first span system message, which the span view renders — so you can see it.
+> The UI says as much rather than implying a check that does not exist.
+> (An **optimization run** does check, before it spends an hour: see below.)
 
-Three things are needed on the **agent server** for the real path (all additive) —
-the full contract, written so the agent server team can implement from it alone,
-is **spec §17**:
+Two endpoints are needed on the **agent server** — the full contract, written so
+an agent developer can implement from it alone with no other context, is
+**[`docs/agent-server-api.md`](docs/agent-server-api.md)**:
 
 ```
-GET  /get_workspace       -> {"version", "config", "redacted_paths", "skills"}
-                             config.json minus its secrets, plus every skill file
-                             as {relative path: text}
-GET  /get_config_version  -> {"version"}   the same string, on its own
-POST /execute             also reads metadata.workspace = {"config", "skills"},
-                             applying it to this call only and never persisting it
-                          ...and metadata.timeout_s, this call's time budget,
-                             replacing the server's own hard-coded limit
+GET  /skills    -> {"skills": {relative path: text}, "version": "..."}
+                   every skill file, in full. `{}` is a valid answer — an agent
+                   with no skills works. `version` is optional but recommended;
+                   without it the platform derives one by hashing the files,
+                   which cannot see a model or prompt change.
+POST /execute   -> {"content": "the answer"}
+                   reads metadata.trace_data.trace_id and uses it as the Langfuse
+                   trace id; metadata.timeout_s as this call's budget, replacing
+                   its own hard-coded limit; and an optional metadata.skills,
+                   the complete file set for this call only — replacing its
+                   directory, never persisted.
 ```
 
-Two rules on the agent's side carry the design: the incoming `config` is
-**deep-merged** onto its own `config.json` (it must be — the snapshot arrived with
-the secrets stripped, so replacing the file wholesale would leave the agent with
-no API key), while `skills` **replaces** its directory for that call (only
-replacement can express deleting a file).
+One rule on the agent's side carries the design: `skills` **replaces** its
+directory for that call rather than patching it, because only replacement can
+express deleting a file. Which is also why `{}` and an absent key are different
+requests — `{}` means "answer with no skills at all".
 
-With `WORKSPACE_IMPL=fake` (the default) the workspace is canned, and the editor
-says so — so the whole flow, including seeing an override appear in a span, is
-demonstrable on nothing but Docker.
+An optimization run is the one place the platform proves the override arrived
+rather than assuming it. Its pre-flight sends one question with a marker line
+that exists only in the copy it sent; if the trace shows the skill being read
+but not the marker, the agent is answering from its own files and the run stops
+there instead of spending an hour producing a flat line. Agent developers who
+see that marker in their logs can find out what it is in
+[`docs/agent-server-api.md` §8](docs/agent-server-api.md#8-the-probe-marker-you-will-see-in-your-logs).
+
+With `WORKSPACE_IMPL=fake` (the default) the skill files are canned, and the
+editor says so — so the whole flow, including seeing an override appear in a
+span, is demonstrable on nothing but Docker.
 
 ## Stack
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
@@ -499,7 +509,7 @@ so on.
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
 | `SYNTHESIS_IMPL` | `SynthesisClient` | draft an expected reasoning process from a trace, for a question being promoted out of the playground. Shares the LLM endpoint with the judge and the diagnosis; `SYNTHESIS_MODEL` picks the model |
-| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's config + skill files for the playground: `GET {AGENT_BASE_URL}/get_workspace` and `/get_config_version` (spec §3.2). Read-only, so it is the cheapest one to switch on first |
+| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's skill files: `GET {AGENT_BASE_URL}/skills` ([contract](docs/agent-server-api.md)). Read-only, so it is the cheapest one to switch on first — and it gates the Run-eval Start button and the playground's Connect, so it is also the first one worth having |
 | `OPTIMIZER_IMPL` | `OptimizerClient` | the model that edits the skill in Optimize — reflect, merge and rank all call it and nothing else (`LLM_BASE_URL`, `OPTIMIZER_MODEL`). The fake one returns deterministic patches, which is enough to exercise accept, reject and multi-file diffs end to end |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
@@ -529,7 +539,7 @@ while the endpoint they authenticate against is unchanged.
 AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=...
 
-# the playground's view of the agent's config + skills — read-only, so safe first
+# the agent's skill files — read-only, and it gates Start and Connect
 WORKSPACE_IMPL=real  AGENT_BASE_URL=https://your-agent-server
 ```
 Then check the wiring before spending a run on it:
@@ -548,11 +558,11 @@ trace it just caused. The full metadata shape sent on every call is:
 `trace_id` and `session_id` are the same value (each question is its own
 correlation unit); `user_id` is the subject who triggered the run. A playground
 attempt sends the same shape with `tags: ["playground"]`, plus
-`metadata.workspace` when the agent's config or skill files were edited
+`metadata.skills` when the agent's skill files were edited
 ([the playground](#the-playground)) — an eval run never sends that key at all.
 
 `timeout_s` is the budget the agent server should give **itself** for this one
-question (spec §17.0 #6), and it is sent on every call. Both ends need a
+question ([contract](docs/agent-server-api.md)), and it is sent on every call. Both ends need a
 deadline: the agent server enforces its own limit, so until it is told ours it
 uses a built-in default — which is why raising the timeout in the UI past that
 default used to change nothing. The value sent is `AGENT_TIMEOUT_S` minus a

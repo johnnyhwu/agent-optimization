@@ -75,7 +75,7 @@ class Activation:
     offered: bool = False
 
 
-def _payload_text(trace: Trace) -> str:
+def payload_text(trace: Trace) -> str:
     """Everything the model was shown or produced, as one searchable blob."""
     parts: list[str] = []
     for span in trace.spans:
@@ -207,7 +207,7 @@ def detect_activation(
         return Activation(activated=True, skills_read=skills_read, hit="tool_path", offered=True)
 
     body_markers, front_markers = _markers(skill_files, skill_name)
-    payload = _payload_text(trace)
+    payload = payload_text(trace)
     body_seen = any(marker in payload for marker in body_markers)
     front_seen = any(marker in payload for marker in front_markers)
 

@@ -9,7 +9,8 @@ nothing was listening. This turns that into a mark on the dialog before anything
 has been started.
 
 **It is the same call the playground connects with.** `get_workspace` reaching
-the agent proves the host is there, that it speaks the §17.3 contract, and hands
+the agent proves the host is there, that it speaks the `GET /skills` contract
+(docs/agent-server-api.md), and hands
 back the skill list the dialog's coverage check needs — all in one round trip. A
 health endpoint of its own would prove less and be one more thing to keep in
 step with the contract.
@@ -89,7 +90,7 @@ async def agent_skills(
     except Exception as exc:  # noqa: BLE001
         # The reason, unwrapped. The workspace client's own messages already name
         # what it tried and what came back ("could not reach the agent server at
-        # …/get_workspace", "agent server returned 404 for …"), and the dialog
+        # …/skills", "agent server returned 404 for …"), and the dialog
         # prints its own heading above this — a prefix here only made the line
         # say "could not reach the agent server" twice.
         raise HTTPException(

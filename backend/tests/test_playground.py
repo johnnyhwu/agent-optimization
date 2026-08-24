@@ -302,15 +302,12 @@ async def test_settling_does_not_stall_a_trace_that_is_already_whole(
 async def test_workspace_override_reaches_the_agent(seams, monkeypatch):
     from app.integrations.base import WorkspaceOverride
 
-    override = WorkspaceOverride(
-        config={"agents": {"defaults": {"model": "big"}}},
-        skills={"billing/SKILL.md": "# Billing (edited)"},
-    )
+    override = WorkspaceOverride(skills={"billing/SKILL.md": "# Billing (edited)"})
     attempt = make_attempt(workspace=override)
     await execute(attempt, seams, monkeypatch)
 
     assert seams.agent.calls[0]["workspace"] is override
-    assert attempt.config_overrides == ["agents.defaults.model"]
+    assert attempt.workspace is override
 
 
 async def test_edited_files_are_counted_against_the_snapshot_not_the_whole_set(
@@ -351,7 +348,7 @@ async def test_no_override_reports_nothing_edited(seams, monkeypatch):
     await execute(attempt, seams, monkeypatch)
 
     assert seams.agent.calls[0]["workspace"] is None
-    assert attempt.config_overrides == []
+    assert attempt.workspace is None
     assert attempt.edited_skill_files == []
 
 
@@ -375,7 +372,6 @@ async def test_the_override_is_visible_in_the_fake_trace(monkeypatch):
     )
     attempt = make_attempt(
         workspace=WorkspaceOverride(
-            config={"agents": {"defaults": {"model": "OVERRIDE-MODEL"}}},
             skills={"billing/SKILL.md": "# Billing OVERRIDE-MARKER-12345"},
         ),
     )
@@ -383,7 +379,6 @@ async def test_the_override_is_visible_in_the_fake_trace(monkeypatch):
 
     system = attempt.trace.spans[0].input_json["messages"][0]["content"]
     assert "OVERRIDE-MARKER-12345" in system
-    assert "agents.defaults.model='OVERRIDE-MODEL'" in system
 
 
 async def test_a_plain_attempt_leaves_no_override_in_the_trace(monkeypatch):
@@ -1082,11 +1077,8 @@ async def test_fake_workspace_is_readable(configure):
     assert ws.skills["billing/SKILL.md"].startswith("# Billing")
     # A skill is a directory, and the fake has to prove the whole path survives.
     assert "billing/references/refunds.md" in ws.skills
-    assert ws.config["agents"]["defaults"]["model"]
-    # Secrets are named but not carried, so the UI can show them as hidden
-    # rather than letting someone re-add the key by hand and shadow the real one.
-    assert "agents.defaults.api_key" in ws.redacted_paths
-    assert "api_key" not in ws.config["agents"]["defaults"]
+    # Never blank, so the staleness check is exercised rather than skipped.
+    assert ws.version
 
 
 async def test_fake_version_agrees_with_the_snapshot(configure):
@@ -1120,8 +1112,6 @@ async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
             async def get_workspace(self):
                 return Workspace(
                     version="v-from-b",
-                    config={},
-                    redacted_paths=[],
                     skills={"b/SKILL.md": "agent B's skill"},
                 )
 

@@ -80,6 +80,44 @@ from app.sse import hub
 log = logging.getLogger(__name__)
 
 
+async def agent_version(config: dict, secrets: dict | None = None) -> str | None:
+    """The agent's version right now, or None if it cannot be had.
+
+    Never raises, and that is the whole design. By the time this is called at
+    the end of a run, every question has already been answered and paid for;
+    throwing the measurement away to report a caveat about it would be the wrong
+    trade in every case. The same reasoning as the optimizer's `_agent_version`.
+
+    `None` rather than `""`: an empty string would compare unequal to the
+    version pinned at the start and warn about drift on every run that never
+    managed to probe — a warning that fires when nothing is known is worse than
+    no warning at all.
+    """
+    try:
+        seams = build_seams(
+            {
+                **(config or {}),
+                # Never the run's answering budget, which is two minutes by
+                # default. This probe sits in front of `POST /runs` — the Start
+                # button waits for it — and at the end of every run, so
+                # borrowing that budget would let one hung agent hold the button
+                # for two minutes and add the same again to every completion.
+                # The same reasoning, and the same setting, as the Run-eval
+                # dialog's own pre-flight in `routers/agent.py`.
+                "agent_timeout_s": settings.agent_probe_timeout_s,
+            },
+            secrets or {},
+            include_workspace=True,
+        )
+        client = getattr(seams, "workspace", None)
+        if client is None:
+            return None
+        return await client.get_version()
+    except Exception as exc:  # noqa: BLE001 - an observation, not a dependency
+        log.warning("could not read the agent's version: %s", exc)
+        return None
+
+
 async def run_eval(run_id: uuid.UUID) -> None:
     async with SessionLocal() as session:
         run = await session.get(Run, run_id)
@@ -191,6 +229,10 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     # reason that has nothing to do with the agent. Left null, exactly as a
     # failed run already is.
     run.pass_rate = None if cancelled else ((correct / total) if total else None)
+    # Asked once, at the end, and compared against what was pinned at the start.
+    # Recorded even on a cancelled run: a partial run is still a thing someone
+    # will read, and "was the agent the same throughout?" is the same question.
+    run.workspace_version_end = await agent_version(config, run.secrets or {})
     await session.commit()
 
     await hub.publish(

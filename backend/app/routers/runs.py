@@ -16,7 +16,7 @@ from app import cancellation
 from app.auth import current_subject, require_owner, require_reader, role_for
 from app.db import SessionLocal, get_session
 from app.models import EvalSet, QuestionResult, Run
-from app.orchestrator import run_eval
+from app.orchestrator import agent_version, run_eval
 from app.schemas import RunConfig, RunCreate, RunOut, RunPage, RunRename
 from app import settings_catalog
 from app.services import judge_prompt, run_config, user_secrets, user_settings
@@ -211,6 +211,11 @@ async def trigger_run(
     run = Run(
         eval_set_id=eval_set_id, triggered_by=subject, status="running",
         name=(body.name or "").strip() or None, config=config, secrets=secrets,
+        # What the run is about to measure against. Best-effort by design: an
+        # agent that will not answer this costs the run its drift check, not its
+        # start — the Run eval dialog's own pre-flight already refused to enable
+        # Start against an agent that is not there.
+        workspace_version=await agent_version(config, secrets),
     )
     session.add(run)
     await session.commit()
@@ -228,6 +233,8 @@ def _run_out(run: Run, incorrect_count: int, judge_invalid_count: int = 0) -> Ru
         id=run.id, eval_set_id=run.eval_set_id, triggered_by=run.triggered_by,
         name=run.name, config=RunConfig(**(run.config or {})),
         credentials_set=_credentials_set(run),
+        workspace_version=run.workspace_version,
+        workspace_version_end=run.workspace_version_end,
         status=run.status, cancel_requested=bool(run.cancel_requested),
         started_at=run.started_at, completed_at=run.completed_at,
         pass_rate=float(run.pass_rate) if run.pass_rate is not None else None,
