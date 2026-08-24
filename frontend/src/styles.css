@@ -248,10 +248,18 @@ select { cursor: pointer; }
 .rail-brand:hover { text-decoration: none; }
 /* The brand mark draws its own tile, so this sets the box it sits in and
    nothing else — no background, no type. It used to be a gradient square with
-   the initials in it, which is why the shadow and radius are still here. */
+   the initials in it, which is why the shadow and radius are still here.
+   The radius here shapes the shadow, not the tile — the mark paints its own
+   corners. `rx="8"` in a 32-unit viewBox drawn at 28px lands at 7, so that is
+   the number, not `--radius-sm`: the token's 8px rounds a corner the tile does
+   not have, and the shadow squares off just past where the artwork stops.
+   Tight rather than the 12px glow it was: that was tuned under a near-black
+   tile, where a wide indigo halo read as light coming off the chip. The tile
+   is indigo itself now, and at that spread the two hues just smeared into each
+   other instead of lifting it off the rail. */
 .rail-brand .logo {
-  width: 28px; height: 28px; border-radius: var(--radius-sm); flex: none;
-  box-shadow: 0 4px 12px var(--accent-soft);
+  width: 28px; height: 28px; border-radius: 7px; flex: none;
+  box-shadow: 0 2px 6px var(--accent-soft);
 }
 .rail-brand-name {
   font-family: var(--font-display); font-size: 15px; font-weight: var(--fw-bold);
