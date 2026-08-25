@@ -73,12 +73,6 @@ class Activation:
     # The skill's description reached the model, but its body did not: the agent
     # was offered this skill and chose something else. Routing mode's signal.
     offered: bool = False
-    # Whether the trace carries the skill's own body text at all — separate from
-    # `activated`, and computed even when the tool-path detector already answered.
-    # It is the only thing that says whether *file content* is observable for
-    # this agent, which is what lets the override check tell "the agent used its
-    # own copy" apart from "this agent does not log what it read".
-    body_seen: bool = False
 
 
 def payload_text(trace: Trace) -> str:
@@ -209,31 +203,19 @@ def detect_activation(
     # activation across a rollout does not split it into two skills; the others
     # keep the spelling the trace gave, which is the agent's own truth.
     skills_read = [skill_name if name.lower() == target else name for name in skills_read]
+    if any(name.lower() == target for name in skills_read):
+        return Activation(activated=True, skills_read=skills_read, hit="tool_path", offered=True)
 
-    # Computed before the tool-path branch returns, not after. `activated` is
-    # answered by whichever detector fires first, but `body_seen` is a fact
-    # about the trace that the caller needs either way — and short-circuiting it
-    # is what would leave the override check unable to distinguish an agent that
-    # ignored our files from one that simply never logs what it reads.
     body_markers, front_markers = _markers(skill_files, skill_name)
     payload = payload_text(trace)
     body_seen = any(marker in payload for marker in body_markers)
     front_seen = any(marker in payload for marker in front_markers)
 
-    if any(name.lower() == target for name in skills_read):
-        return Activation(
-            activated=True, skills_read=skills_read, hit="tool_path",
-            offered=True, body_seen=body_seen,
-        )
-
     if body_seen:
         read = skills_read or [skill_name]
         if not any(name.lower() == target for name in read):
             read = [*read, skill_name]
-        return Activation(
-            activated=True, skills_read=read, hit="content",
-            offered=True, body_seen=True,
-        )
+        return Activation(activated=True, skills_read=read, hit="content", offered=True)
 
     # Nothing proved the skill was loaded. Whether that is a "no" or a "cannot
     # tell" is the caller's to know: only the pre-flight rollout can establish
@@ -243,5 +225,31 @@ def detect_activation(
         skills_read=skills_read,
         hit="none",
         offered=front_seen,
-        body_seen=False,
     )
+
+
+def entry_body_visible(
+    trace: Trace | None, *, skill_name: str, skill_files: Mapping[str, str]
+) -> bool:
+    """Does this trace carry the **entry point's own** body text?
+
+    The one question that makes a missing probe marker mean anything. The marker
+    can only ever sit in `<skill>/SKILL.md`, so its absence is evidence only
+    where that file's text would have been visible had it arrived.
+
+    **Reference files are deliberately excluded**, which is the opposite of what
+    `Activation.body_seen` counts and why this is a separate function. Reading a
+    reference file legitimately proves the skill was loaded — but it says nothing
+    about the marker, and skills routinely instruct exactly that ("for refunds,
+    read references/refunds.md"). Counting it would accuse an agent of ignoring
+    an override at the moment it was following the very skill we sent.
+
+    A skill with no entry point returns False for the same reason: nothing was
+    injected, so nothing can be missing.
+    """
+    entry = f"{skill_name}/SKILL.md"
+    if trace is None or not trace.spans or entry not in skill_files:
+        return False
+    body_markers, _ = _markers({entry: skill_files[entry]}, skill_name)
+    payload = payload_text(trace)
+    return any(marker in payload for marker in body_markers)

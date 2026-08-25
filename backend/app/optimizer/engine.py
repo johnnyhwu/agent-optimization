@@ -414,10 +414,13 @@ async def _preflight(
     if override_ignored:
         message = (
             f"the agent read the skill ({hit}) but answered from its own copy: the "
-            "marker this run sent was not in the trace. The agent server is not "
-            "applying metadata.skills, so every step would measure the deployed "
-            "skill instead of the candidate — the run is stopped rather than "
-            "spending an hour to produce a flat line."
+            "marker this run sent was not in the trace, though SKILL.md's own text "
+            "was. The agent server is most likely not applying metadata.skills, so "
+            "every step would measure the deployed skill instead of the candidate — "
+            "the run is stopped rather than spending an hour to produce a flat "
+            "line. The one innocent explanation is an agent that strips HTML "
+            "comments while building its prompt; the marker is a comment, and "
+            "nothing else distinguishes the two copies."
         )
     elif ok:
         message = f"the agent read the skill we sent ({hit})"

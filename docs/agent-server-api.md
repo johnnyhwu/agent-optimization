@@ -383,6 +383,14 @@ would be a second variable in the measurement.
 
 Treat the marker as what it says it is: a comment, to be ignored.
 
+> ⚠️ **One thing to know if you render markdown into your prompt.** The marker is
+> an HTML comment, and it is the *only* difference between the copy we send and
+> the copy you already have — the pre-flight deliberately sends your own files so
+> that nothing else varies. If your pipeline strips comments while building the
+> prompt, the marker vanishes and an override you applied correctly looks like one
+> you ignored, which stops the run. If you see that accusation and believe it is
+> wrong, this is the first thing to check.
+
 ---
 
 ## 9. Acceptance checklist

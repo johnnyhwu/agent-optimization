@@ -34,7 +34,7 @@ import uuid
 import pytest
 
 from app.integrations.base import Span, Trace
-from app.optimizer import adapter, engine
+from app.optimizer import adapter, detector, engine
 from app.optimizer.skillio import frontmatter_span
 from app.optimizer.store import Item, ResultRow, RunSpec
 
@@ -230,6 +230,54 @@ def test_a_missing_marker_is_only_a_negative_when_file_content_is_visible():
     seen = _trace("nothing recognisable here")
     assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=False) is None
     assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=True) is False
+
+
+def test_a_reference_file_being_visible_is_not_grounds_for_a_negative():
+    """The likeliest false accusation, and the one that would have hurt most.
+
+    `detect_activation`'s `body_seen` counts reference files — reading one does
+    prove the skill was loaded, which is what that flag is for. But the probe
+    marker can only ever sit in `SKILL.md`. A skill whose own text says "for
+    refunds, read references/refunds.md" therefore produces an agent that
+    follows its instructions, shows only the reference file in its trace, and
+    gets accused of ignoring the override it actually applied.
+    """
+    files = {
+        "billing/SKILL.md": "# Billing\nIdentify the customer or order first of all.\n",
+        "billing/references/refunds.md":
+            "Refunds are prorated by the number of service days remaining in the term.\n",
+    }
+    # The trace shows the reference file and nothing of SKILL.md.
+    trace = _trace(files["billing/references/refunds.md"])
+
+    assert detector.entry_body_visible(
+        trace, skill_name="billing", skill_files=files
+    ) is False
+
+
+def test_the_entry_points_own_text_being_visible_is_grounds_for_a_negative():
+    files = {"billing/SKILL.md": "# Billing\nIdentify the customer or order first of all.\n"}
+    trace = _trace("Identify the customer or order first of all.")
+
+    assert detector.entry_body_visible(
+        trace, skill_name="billing", skill_files=files
+    ) is True
+
+
+def test_a_skill_with_no_entry_point_can_never_produce_a_negative():
+    """No `SKILL.md` means no marker was injected, so its absence proves nothing.
+
+    Isolated mode accepts such a skill at run creation — only routing demands an
+    entry point — so without this the run would be stopped for a fault the agent
+    does not have.
+    """
+    files = {"billing/references/only.md":
+             "Refunds are prorated by the number of service days remaining.\n"}
+    trace = _trace(files["billing/references/only.md"])
+
+    assert detector.entry_body_visible(
+        trace, skill_name="billing", skill_files=files
+    ) is False
 
 
 def test_a_marker_that_is_present_is_a_positive_regardless(): 

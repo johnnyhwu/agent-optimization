@@ -35,7 +35,12 @@ from typing import Iterable, Mapping, Sequence
 from app.config import settings
 from app.integrations import Seams
 from app.integrations.base import LlmOutputError, Trace, WorkspaceOverride
-from app.optimizer.detector import DEFAULT_PATH_PATTERNS, detect_activation, payload_text
+from app.optimizer.detector import (
+    DEFAULT_PATH_PATTERNS,
+    detect_activation,
+    entry_body_visible,
+    payload_text,
+)
 from app.optimizer.skillio import frontmatter_span
 from app.optimizer.store import Item, ResultRow, RolloutSummary
 from app.pipeline import RunCancelled, call_agent, call_judge, clip, wait_for_trace
@@ -168,6 +173,14 @@ def verify_probe_marker(
     `None` for a missing or empty trace is load-bearing for the same reason:
     Langfuse ingestion lags and sometimes fails outright, and reading that as
     "the agent ignored us" would stop runs over a trace store hiccup.
+
+    **One path stays undetectable, and it is worth stating rather than
+    discovering.** The probe sends the agent's own files, so the marker line is
+    the *only* textual difference between our copy and its copy — nothing else
+    can discriminate them. An agent that strips HTML comments while rendering a
+    skill into its prompt therefore looks exactly like one that ignored the
+    override. The block message names that possibility so a false positive is
+    diagnosable rather than baffling.
     """
     if marker is None or trace is None or not trace.spans:
         return None
@@ -370,7 +383,13 @@ async def _run_item(
         row.skills_read = activation.skills_read
         row.detector_hit = activation.hit
         row.override_verified = verify_probe_marker(
-            trace, probe_marker, content_visible=activation.body_seen
+            trace, probe_marker,
+            # The entry point's own text, not any body text: the marker lives in
+            # `SKILL.md` alone, so a visible reference file is not evidence that
+            # the marker would have been visible too.
+            content_visible=entry_body_visible(
+                trace, skill_name=skill_name, skill_files=skill_files
+            ),
         )
 
     return row
