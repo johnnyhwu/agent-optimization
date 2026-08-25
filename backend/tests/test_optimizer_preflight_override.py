@@ -467,6 +467,27 @@ async def test_a_probe_that_reports_no_verdict_does_not_block(monkeypatch):
     assert preflight_event(events)["override_verified"] is None
 
 
+async def test_the_message_does_not_claim_a_check_that_never_concluded(monkeypatch):
+    """`ok` is the activation detector's verdict and nothing more.
+
+    "the agent read the skill we sent" was being printed on the strength of it —
+    including when the marker check returned `None`, which is the case the whole
+    asymmetry in `verify_probe_marker` exists to protect. That is the one
+    sentence a reader would quote back when an optimization run turns out to
+    have measured the deployed skill all along.
+    """
+    _, _, events = await engine_run(monkeypatch, probe_returning(verified=None))
+    message = preflight_event(events)["message"]
+
+    assert "we sent" not in message
+    assert "could not be verified" in message
+
+
+async def test_the_message_says_so_when_the_override_is_confirmed(monkeypatch):
+    _, _, events = await engine_run(monkeypatch, probe_returning(verified=True))
+    assert "we sent" in preflight_event(events)["message"]
+
+
 async def test_the_verdict_is_persisted_with_the_rest_of_the_pre_flight(monkeypatch):
     """A resumed run does not re-probe, so the answer has to survive on the row."""
     store, _, _ = await engine_run(monkeypatch, probe_returning(verified=True))

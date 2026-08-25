@@ -518,6 +518,10 @@ select { cursor: pointer; }
 /* ---- three-column detail ---- */
 /* The run-level caveat, above the facts row rather than inside it: it is a
    sentence about the whole run, and the facts row is a line of badges. */
+/* The "this version is ours, not the agent's" tag. Muted: it qualifies the
+   version beside it rather than competing with it. */
+.agent-version-derived { color: var(--muted); font-style: italic; }
+
 .detail-drift {
   display: flex; align-items: center; gap: var(--space-2);
   padding: var(--space-2) 0;

@@ -777,7 +777,12 @@ class _Workspace:
 
 
 def install_workspace(monkeypatch, version, *, base=None):
-    """A workspace seam whose version the run will read on the way out."""
+    """A workspace seam whose version the run will read on the way out.
+
+    `workspace_impl` comes along because `agent_version` refuses to pin anything
+    from a fake seam — a canned constant would read as "the agent never moved".
+    """
+    monkeypatch.setattr(orchestrator.settings, "workspace_impl", "real")
     real = orchestrator.build_seams
 
     def build(config=None, secrets=None, include_workspace=False):
@@ -828,6 +833,7 @@ async def test_an_unreadable_version_does_not_fail_the_run(seams, monkeypatch):
             return Seams()
         return real(config, secrets)
 
+    monkeypatch.setattr(orchestrator.settings, "workspace_impl", "real")
     monkeypatch.setattr(orchestrator, "build_seams", build)
     run, questions = make_run(), [make_question()]
     run.workspace_version = "cfg-1"
@@ -869,7 +875,8 @@ async def test_the_version_probe_uses_its_own_short_timeout(monkeypatch, configu
         return Seams()
 
     monkeypatch.setattr(orchestrator, "build_seams", build)
-    with configure(agent_timeout_s=120.0, agent_probe_timeout_s=5.0):
+    with configure(agent_timeout_s=120.0, agent_probe_timeout_s=5.0,
+                   workspace_impl="real"):
         version = await orchestrator.agent_version(
             {"agent_timeout_s": 120.0, "agent_base_url": "http://agent-b:8080"}
         )
@@ -879,3 +886,24 @@ async def test_the_version_probe_uses_its_own_short_timeout(monkeypatch, configu
     # Only the timeout is replaced: the version has to come from the agent this
     # run is actually pointed at, or it describes a different server entirely.
     assert seen["agent_base_url"] == "http://agent-b:8080"
+
+
+async def test_a_fake_workspace_seam_pins_no_version_at_all(configure):
+    """A canned constant is worse than nothing, and the README tells people to
+    bring seams up one at a time — `AGENT_IMPL=real` with `WORKSPACE_IMPL=fake`
+    is a documented state, not a mistake.
+
+    Left as-is, both ends of a real agent's run would be stamped with the fake
+    seam's constant. It never moves, so the drift check silently never fires
+    while the column looks populated — exactly the failure the agent-server
+    contract warns implementers about.
+    """
+    with configure(workspace_impl="fake", agent_impl="real",
+                   agent_base_url="http://agent.example:9000"):
+        assert await orchestrator.agent_version({}) is None
+
+
+async def test_a_real_workspace_seam_still_pins_a_version(seams, monkeypatch, configure):
+    install_workspace(monkeypatch, "cfg-1")
+    with configure(workspace_impl="real"):
+        assert await orchestrator.agent_version({}) == "cfg-1"

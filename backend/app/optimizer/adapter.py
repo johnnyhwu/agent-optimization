@@ -41,7 +41,6 @@ from app.optimizer.detector import (
     entry_body_visible,
     payload_text,
 )
-from app.optimizer.skillio import frontmatter_span
 from app.optimizer.store import Item, ResultRow, RolloutSummary
 from app.pipeline import RunCancelled, call_agent, call_judge, clip, wait_for_trace
 from app.services.failure_text import describe_failure
@@ -382,15 +381,22 @@ async def _run_item(
         row.activated = activation.activated
         row.skills_read = activation.skills_read
         row.detector_hit = activation.hit
-        row.override_verified = verify_probe_marker(
-            trace, probe_marker,
+        if probe_marker is not None:
+            # Guarded rather than passed unconditionally: `entry_body_visible`
+            # re-materialises the whole trace payload, and only the pre-flight
+            # ever asks for a verdict. Evaluated eagerly it cost every scored
+            # rollout of every step that work for a value thrown away on
+            # `verify_probe_marker`'s first line.
+            #
             # The entry point's own text, not any body text: the marker lives in
             # `SKILL.md` alone, so a visible reference file is not evidence that
             # the marker would have been visible too.
-            content_visible=entry_body_visible(
-                trace, skill_name=skill_name, skill_files=skill_files
-            ),
-        )
+            row.override_verified = verify_probe_marker(
+                trace, probe_marker,
+                content_visible=entry_body_visible(
+                    trace, skill_name=skill_name, skill_files=skill_files
+                ),
+            )
 
     return row
 

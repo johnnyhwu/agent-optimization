@@ -93,6 +93,14 @@ async def agent_version(config: dict, secrets: dict | None = None) -> str | None
     managed to probe — a warning that fires when nothing is known is worse than
     no warning at all.
     """
+    # A fake seam answers with a canned constant. Recording that would be worse
+    # than recording nothing: it never moves, so the comparison silently never
+    # fires while the column looks populated — and `README`'s "bring the seams up
+    # one at a time" makes `AGENT_IMPL=real` beside `WORKSPACE_IMPL=fake` a state
+    # people are told to pass through, not a mistake. `RunConfigDialog` draws the
+    # same distinction for the same reason.
+    if settings.workspace_impl != "real":
+        return None
     try:
         seams = build_seams(
             {

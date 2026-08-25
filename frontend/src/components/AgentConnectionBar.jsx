@@ -69,7 +69,25 @@ export default function AgentConnectionBar({
         <div className="agent-bar-main">
           <span className="agent-url" title={baseUrl}>{baseUrl}</span>
           <span className="agent-meta">
-            {version ? <code className="agent-version">{version}</code> : null}
+            {version ? (
+              // A version this platform computed from the skill files, because
+              // the agent supplied none. Worth saying: it moves when a skill
+              // file changes and stays put when the agent's model or prompt
+              // does, so the staleness check below it is only half a check.
+              <code
+                className="agent-version"
+                title={
+                  version.startsWith("sha256.")
+                    ? "Derived from the skill files — this agent reports no version of its own, so a model or prompt change will not be noticed."
+                    : "Reported by the agent server."
+                }
+              >
+                {version}
+                {version.startsWith("sha256.") && (
+                  <span className="agent-version-derived"> derived</span>
+                )}
+              </code>
+            ) : null}
             {skillCount != null && (
               <span className="hint">
                 {skillCount} skill file{skillCount === 1 ? "" : "s"}

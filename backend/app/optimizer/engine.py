@@ -422,8 +422,19 @@ async def _preflight(
             "comments while building its prompt; the marker is a comment, and "
             "nothing else distinguishes the two copies."
         )
-    elif ok:
+    elif ok and verified is True:
         message = f"the agent read the skill we sent ({hit})"
+    elif ok:
+        # `ok` is the activation detector's verdict alone. Saying "we sent" on
+        # the strength of it would assert the very thing the marker check
+        # declined to conclude — and this sentence is what somebody would quote
+        # back after discovering a run had measured the deployed skill all along.
+        message = (
+            f"the agent read the skill ({hit}), but the override could not be "
+            "verified: the trace does not show SKILL.md's own text, so there was "
+            "nowhere for this run's marker to appear. Accuracy is measured "
+            "normally; nothing here proves the candidate reached the agent."
+        )
     elif spec.mode == "routing":
         message = (
             "no activation could be detected on the probe question. A routing run "

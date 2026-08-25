@@ -105,6 +105,11 @@ export default function RunDetail({
       .catch(() => null);
 
   useEffect(() => {
+    // Cleared first, not left standing until the fetch resolves: going from a
+    // drifted run to another one would otherwise paint the previous run's
+    // warning over it for a round trip, which is a false statement about the
+    // run on screen.
+    setDrift(null);
     if (!liveRunId) return;
     loadRunRef.current();
   }, [evalSet.id, liveRunId]);

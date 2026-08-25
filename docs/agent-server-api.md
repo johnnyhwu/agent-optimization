@@ -148,10 +148,12 @@ so under normal conditions **you expire first**. That margin exists precisely so
 your 5xx has time to reach the wire; if the platform gives up first it sees a
 dropped connection, which is far less informative than your error.
 
-> **Note:** a 5xx from `/execute` fails that question and is **not retried**. Only
-> transport-level failures (connection errors, the platform's own timeout) are
-> retried. This is deliberate: retrying an already-timed-out call twice more
-> just spends three times as long reaching the same answer.
+> **Note:** a 5xx from `/execute` fails that question and is **not retried** —
+> retrying an already-timed-out call twice more just spends three times as long
+> reaching the same answer. Be aware that **a refused or reset connection is not
+> retried either** today: only the platform's own timeout is. Do not size a
+> restart or redeploy window on the assumption that brief unavailability is
+> absorbed — every question in flight will fail on the first refusal.
 
 ---
 
@@ -323,8 +325,9 @@ at all: it disables both checks above while looking like it is doing something.
 ## 7. Errors, and what each one causes
 
 Skill Studio never guesses what went wrong — it shows the developer your status
-code and the first ~500 characters of your response body. Say something useful in
-it.
+code and the beginning of your response body (the first 500 characters for
+`/execute`, the first 200 for `/skills`). Say something useful, and say it
+early.
 
 ### `POST /execute`
 
@@ -336,7 +339,8 @@ it.
 | 200 + a body starting with `<` | The question fails: "not a usable string". |
 | **4xx** | The question fails immediately, carrying your status and body. **Not retried** — a bad request fails identically every time. |
 | **5xx** | The question fails, carrying your status and body. **Not retried.** |
-| Connection refused / reset / platform timeout | **Retried** with exponential backoff, then failed. |
+| Connection refused / reset | Fails the question. **Not** retried — see the note in §2.2. |
+| The platform's own timeout elapses | **Retried** with exponential backoff, then failed. |
 
 ### `GET /skills`
 
@@ -377,9 +381,10 @@ The appended sentence is there so the file's contents land in the trace whether
 you inject skills into a prompt or read them with a tool — a tool result comes
 back into the conversation either way.
 
-**This happens on exactly one call per optimization run.** Every scored rollout
-carries the candidate text and the unmodified question, because anything else
-would be a second variable in the measurement.
+**This happens on one call per optimization run** — twice at most, since a run
+interrupted before its first scored step re-probes when it resumes. Every scored
+rollout carries the candidate text and the unmodified question, because anything
+else would be a second variable in the measurement.
 
 Treat the marker as what it says it is: a comment, to be ignored.
 
@@ -511,15 +516,24 @@ def safe_relative(key: str) -> Path:
 
 
 def materialise(skills: dict[str, str]) -> Path:
-    """Write an override to a private directory for one call."""
+    """Write an override to a private directory for one call.
+
+    The whole body is wrapped, not just the containment check: `safe_relative`
+    raises too, and checklist item ⑦ drives exactly that path. Cleaning up on
+    only one of the two rejection branches leaks a directory per hostile
+    request — attacker-influenced and unbounded.
+    """
     root = Path(tempfile.mkdtemp(prefix="skills-"))
-    for key, text in skills.items():
-        target = (root / safe_relative(key)).resolve()
-        if not target.is_relative_to(root.resolve()):
-            shutil.rmtree(root, ignore_errors=True)
-            raise HTTPException(400, f"unsafe skill path: {key!r}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, "utf-8")
+    try:
+        for key, text in skills.items():
+            target = (root / safe_relative(key)).resolve()
+            if not target.is_relative_to(root.resolve()):
+                raise HTTPException(400, f"unsafe skill path: {key!r}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, "utf-8")
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
     return root
 
 
