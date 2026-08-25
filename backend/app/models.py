@@ -184,6 +184,16 @@ class Run(Base):
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # The agent's version when the run started and when it ended. A run is a
+    # measurement whose pass rate gets compared against other runs, and that
+    # only holds if the agent held still; a redeploy halfway through makes the
+    # questions either side of it readings of two different systems, and the
+    # only other symptom is the number moving — which is what the comparison is
+    # for. NULL is "not known" (fake mode, an agent that did not answer, a run
+    # that predates this), never "unchanged": only the two disagreeing is a
+    # signal, so one of them missing means there is nothing to say.
+    workspace_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workspace_version_end: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pass_rate: Mapped[float | None] = mapped_column(Numeric, nullable=True)

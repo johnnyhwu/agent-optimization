@@ -54,7 +54,7 @@ export default function AgentConnectionBar({
         <div className="agent-bar-main">
           <strong>Demo agent</strong>
           <span className="hint">
-            Demo mode — a built-in simulated agent, with canned config and skill
+            Demo mode — a built-in simulated agent, with canned skill
             files. No URL needed.
           </span>
         </div>
@@ -69,7 +69,25 @@ export default function AgentConnectionBar({
         <div className="agent-bar-main">
           <span className="agent-url" title={baseUrl}>{baseUrl}</span>
           <span className="agent-meta">
-            {version ? <code className="agent-version">{version}</code> : null}
+            {version ? (
+              // A version this platform computed from the skill files, because
+              // the agent supplied none. Worth saying: it moves when a skill
+              // file changes and stays put when the agent's model or prompt
+              // does, so the staleness check below it is only half a check.
+              <code
+                className="agent-version"
+                title={
+                  version.startsWith("sha256.")
+                    ? "Derived from the skill files — this agent reports no version of its own, so a model or prompt change will not be noticed."
+                    : "Reported by the agent server."
+                }
+              >
+                {version}
+                {version.startsWith("sha256.") && (
+                  <span className="agent-version-derived"> derived</span>
+                )}
+              </code>
+            ) : null}
             {skillCount != null && (
               <span className="hint">
                 {skillCount} skill file{skillCount === 1 ? "" : "s"}
@@ -88,7 +106,7 @@ export default function AgentConnectionBar({
             size="sm"
             icon={<IconRefresh size={13} />}
             onClick={onReload}
-            title="Re-read this agent's config and skill files"
+            title="Re-read this agent's skill files"
           >
             Reload
           </Button>
@@ -118,7 +136,7 @@ export default function AgentConnectionBar({
           <IconTarget size={14} />
           <strong>Target agent</strong>
           <span className="hint">
-            The playground reads this agent's config and skill files before you
+            The playground reads this agent's skill files before you
             can ask it anything.
           </span>
         </div>

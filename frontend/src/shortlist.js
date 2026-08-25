@@ -61,7 +61,6 @@ export function itemFromAttempt(attempt, detail) {
     // does not block, because writing the skill back is a Stage 3 capability
     // and the developer may be promoting the question deliberately.
     workspace_overridden: Boolean(attempt.workspace_overridden),
-    config_overrides: attempt.config_overrides || [],
     edited_skill_files: attempt.edited_skill_files || [],
   };
 }

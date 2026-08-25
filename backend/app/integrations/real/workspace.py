@@ -1,31 +1,37 @@
-"""Real WorkspaceClient: read the agent server's config and skill files (§10.2).
+"""Real WorkspaceClient: read the agent server's skill files.
 
-Two endpoints, both additive on the agent server's side and both read-only:
+One endpoint, read-only and additive on the agent server's side:
 
-    GET {base}/get_workspace       -> {"version", "config", "redacted_paths", "skills"}
-    GET {base}/get_config_version  -> {"version"}
+    GET {base}/skills  -> {"skills": {path: text}, "version": str (optional)}
 
 Writing a workspace back is deliberately absent — that needs versioning and
 rollback (§4.9) and belongs to Stage 3.
 
-**Why one request instead of a catalogue plus a fetch per skill**: a skill is a
-directory, not a string, and `config.json` decides as much of the agent's
-behaviour as the skill text does. Reading them separately would let the
-playground pair this minute's config with last minute's skills and call the
-result a snapshot — and the version string, which the whole staleness check
-rests on, would have nothing single to describe.
+**Why one request rather than a catalogue plus a fetch per skill**: a skill is a
+directory, not a string. Reading them separately would let the playground pair
+this minute's `SKILL.md` with last minute's reference files and call the result a
+snapshot — and the version string, which the whole staleness check rests on,
+would have nothing single to describe.
 
-Parsing is strict about the two things the UI cannot work without — `config`
-being an object and `skills` being a flat {path: text} map — and tolerant about
-everything else (a missing `redacted_paths`, a missing `version`). What is *not*
-tolerated is silence: an unreadable body raises with the body quoted, because
-"this agent has no skills" and "your URL is wrong" must not look the same in the
-UI. A developer who cannot tell them apart retypes the skill from memory and
-then tests the wrong text.
+**Why the version may be omitted.** Maintaining a string that has to move
+whenever anything behavioural moves is the most forgettable requirement we could
+put on an agent author, and one that has stopped moving disables the staleness
+check without saying so. So it is optional, and `derived_version` fills in from
+the skill files when it is absent. That fallback is strictly weaker — it cannot
+see a model swap or a system-prompt edit — which is why a server that *can*
+supply its own is asked to.
 
-Shares `AGENT_BASE_URL` / `AGENT_TIMEOUT_S` with the agent seam: the workspace
-lives on the same server that answers questions, so a second base URL would only
-be an extra thing to get wrong.
+Parsing is strict about the one thing the UI cannot work without — `skills`
+being a flat {path: text} map — and tolerant about the rest (an absent `skills`
+is an agent with none; an absent `version` is derived). What is *not* tolerated
+is silence: an unreadable body raises with the body quoted, because "this agent
+has no skills" and "your URL is wrong" must not look the same in the UI. A
+developer who cannot tell them apart retypes the skill from memory and then
+tests the wrong text.
+
+Shares `AGENT_BASE_URL` / `AGENT_TIMEOUT_S` with the agent seam: the skills live
+on the same server that answers questions, so a second base URL would only be an
+extra thing to get wrong.
 """
 from __future__ import annotations
 
@@ -34,11 +40,14 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.integrations.base import Workspace
+from app.integrations.base import Workspace, derived_version
 
 
 class WorkspaceFetchError(RuntimeError):
     """The agent server could not be reached, or answered unusably."""
+
+
+SKILLS_PATH = "/skills"
 
 
 def _as_str(value: Any) -> str | None:
@@ -71,7 +80,7 @@ def _skills_from(body: dict, where: str) -> dict[str, str]:
 
 
 class HttpWorkspaceClient:
-    """Read the agent server's workspace over HTTP."""
+    """Read the agent server's skill files over HTTP."""
 
     def __init__(self, base_url: str | None = None, timeout_s: float | None = None) -> None:
         self.base_url = (base_url or settings.agent_base_url).rstrip("/")
@@ -106,40 +115,25 @@ class HttpWorkspaceClient:
             ) from exc
 
     async def get_workspace(self) -> Workspace:
-        where = f"GET {self.base_url}/get_workspace"
-        body = await self._get("/get_workspace")
+        where = f"GET {self.base_url}{SKILLS_PATH}"
+        body = await self._get(SKILLS_PATH)
         if not isinstance(body, dict):
             raise WorkspaceFetchError(f"{where} did not return an object: {str(body)[:200]}")
 
-        config = body.get("config", {})
-        if config is None:
-            config = {}
-        if not isinstance(config, dict):
-            raise WorkspaceFetchError(
-                f"{where} returned a 'config' that is not an object: {str(config)[:200]}"
-            )
-
-        redacted = body.get("redacted_paths") or []
-        if not isinstance(redacted, list):
-            redacted = []
-
+        skills = _skills_from(body, where)
         return Workspace(
-            # A server that does not version its workspace still works; the
-            # staleness check simply never fires. Refusing the whole snapshot
-            # over a missing version would trade a real capability for a
-            # convenience.
-            version=_as_str(body.get("version")) or "",
-            config=config,
-            redacted_paths=[p for p in redacted if isinstance(p, str)],
-            skills=_skills_from(body, where),
+            # The server's own string wins: it can see changes we cannot. Ours
+            # is the fallback, never the override.
+            version=_as_str(body.get("version")) or derived_version(skills),
+            skills=skills,
         )
 
     async def get_version(self) -> str:
-        body = await self._get("/get_config_version")
-        version = _as_str(body.get("version")) if isinstance(body, dict) else _as_str(body)
-        if version is None:
-            raise WorkspaceFetchError(
-                f"GET {self.base_url}/get_config_version had no version in it: "
-                f"{str(body)[:200]}"
-            )
-        return version
+        """The same read as `get_workspace`, reduced to its version.
+
+        There is no endpoint of its own for this. One that existed would have to
+        agree with the snapshot endpoint on every deploy, and the failure mode
+        when it did not — a staleness check that answers about a different
+        moment than the editor was filled from — is silent in both directions.
+        """
+        return (await self.get_workspace()).version

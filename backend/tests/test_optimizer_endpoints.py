@@ -271,6 +271,26 @@ async def test_skill_check_reports_whether_routing_mode_is_possible():
     assert check.routing_blocked_reason
 
 
+async def test_skill_check_reports_an_unreachable_agent_as_a_503(monkeypatch):
+    """Not a 500. The wizard prints this sentence beside the skill card, and the
+    agent server's own words are the only thing that tells a developer whether
+    the URL is wrong, the host is down, or /skills is not implemented.
+    """
+    class Broken:
+        async def get_workspace(self):
+            raise RuntimeError("could not reach the agent server at http://x/skills")
+
+    class Seams:
+        workspace = Broken()
+
+    monkeypatch.setattr(opt, "build_seams", lambda *a, **k: Seams())
+    with pytest.raises(HTTPException) as exc:
+        await opt.skill_check(skill_name="billing", subject="alice")
+
+    assert exc.value.status_code == 503
+    assert "/skills" in exc.value.detail
+
+
 # --- POST /optimization/import-preview --------------------------------------
 
 
@@ -451,6 +471,31 @@ async def make_runnable_set(session, n=20):
     ])
     keys = [f"{eval_set.id}:{q.question_id}" for q in questions]
     return eval_set, questions, keys
+
+
+async def test_creating_a_run_reports_an_unreachable_agent_as_a_503(
+    session, monkeypatch
+):
+    """Same reason as the skill check, and it matters more here: Start is the
+    last place a developer can be told the agent is not answering. A 500 would
+    read as a bug in this platform rather than a URL to fix."""
+    eval_set, questions, keys = await make_runnable_set(session)
+
+    class Broken:
+        async def get_workspace(self):
+            raise RuntimeError("agent server returned 404 for /skills")
+
+    class Seams:
+        workspace = Broken()
+
+    monkeypatch.setattr(opt, "build_seams", lambda *a, **k: Seams())
+    with pytest.raises(HTTPException) as exc:
+        await opt.create_optimization_run(
+            create_body(keys[:14], keys[14:]), subject="alice", session=session
+        )
+
+    assert exc.value.status_code == 503
+    assert "404" in exc.value.detail
 
 
 async def test_creating_a_run_snapshots_the_questions(session, monkeypatch):

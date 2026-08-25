@@ -129,7 +129,7 @@ async def test_the_probe_spends_its_own_timeout_not_the_runs(monkeypatch, config
 
         class Stub:
             async def get_workspace(self):
-                return Workspace(version="v1", config={}, redacted_paths=[], skills={})
+                return Workspace(version="v1", skills={})
 
         class Seams:
             workspace = Stub()

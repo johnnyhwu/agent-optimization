@@ -8,13 +8,15 @@ Seams:
     JudgeClient.judge(question, response, ground_truth)               -> Verdict
     TraceClient.fetch_trace(correlation_id)                           -> Trace | NotReady
     DiagnosisClient.diagnose(trace, ground_truth_reasoning, verdict)  -> dict (§6.9 JSON)
-    WorkspaceClient.get_workspace() / .get_version()                  -> the agent's config + skills
+    WorkspaceClient.get_workspace() / .get_version()                  -> the agent's skill files
     SynthesisClient.synthesize(trace, question, response)             -> a draft expected process
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Mapping, Protocol, runtime_checkable
 
 
 # --- Shared errors ----------------------------------------------------------
@@ -85,70 +87,59 @@ class Trace:
 
 @dataclass
 class Workspace:
-    """What the agent server is currently configured with (§10.2).
+    """The skill files the agent server is currently running with.
 
     A skill is not a blob of text: on the agent server it is a directory
-    (`SKILL.md` plus whatever `references/` it carries), and half of what
-    decides the agent's behaviour lives in `config.json` next to it. So the
-    playground reads the whole thing at once — one request, one consistent
-    snapshot, no chance of pairing this minute's config with last minute's
-    skills.
+    (`SKILL.md` plus whatever `references/` it carries), so the whole set
+    arrives at once — one request, one consistent snapshot, and one version
+    string that describes all of it.
     """
 
-    # Changes whenever config.json or any skill file changes, so an edit that
-    # started from a stale snapshot can be spotted before it is sent.
+    # Moves whenever anything that changes the agent's answers changes. The
+    # agent server supplies it when it can (it can see its own model and prompt
+    # settings, which we cannot); otherwise `derived_version` fills it in from
+    # the skill files, which covers less but is never stale about what it does
+    # cover. Never "" — every consumer reads that as "no check possible".
     version: str
-    # config.json, nested exactly as the agent server holds it, minus the
-    # secrets — the platform must never receive the agent's own API keys.
-    config: dict
-    # Dotted paths the agent server removed, e.g. "agents.defaults.api_key".
-    # Kept so the UI can show the field as present-but-hidden: a field that
-    # vanishes silently invites someone to re-add it and shadow the real key.
-    redacted_paths: list[str] = field(default_factory=list)
     # Flat {relative path: file text}, e.g. "billing/references/refunds.md".
     skills: dict[str, str] = field(default_factory=dict)
 
 
+def derived_version(skills: Mapping[str, str]) -> str:
+    """A version string computed from the skill files themselves.
+
+    Used when the agent server does not supply one. Deliberately not silent
+    about being second-best: it cannot see a model swap or a system-prompt
+    edit, so a run whose version came from here carries a weaker guarantee —
+    the UI says so, and the `sha256.` prefix makes it recognisable in a
+    database column full of the agent's own opaque strings.
+
+    Sorted keys, so the same files hashed twice give the same answer regardless
+    of the order they arrived in. A version that moved on its own would block
+    every send on a staleness check that was never real.
+    """
+    payload = json.dumps(dict(sorted(skills.items())), sort_keys=True).encode()
+    return f"sha256.{hashlib.sha256(payload).hexdigest()[:12]}"
+
+
 @dataclass
 class WorkspaceOverride:
-    """The config/skills one agent call should use instead of the server's own.
+    """The skill files one agent call should use instead of the server's own.
 
-    The playground's whole point (§4.7 / §6.5): try an edited skill or a
-    different setting without writing anything back to the agent server.
+    The playground's whole point (§4.7 / §6.5), and the mechanism an
+    optimization run measures a candidate skill with: try edited text without
+    writing anything back to the agent server.
 
-    The two halves are sent — and applied — differently, and the asymmetry is
-    deliberate (see docs/spec.md §17.4):
+    `skills` is the **complete** file set for the call, replacing the server's
+    directory rather than patching it. Only replacement can express deleting a
+    file, which is a legitimate experiment ("does it still work without this
+    reference?") — and it is why `{}` and `None` mean different things:
 
-      * `config` is a **sparse** overlay, deep-merged onto the agent's own
-        config.json. It has to be: the snapshot arrived with its secrets
-        stripped, so replacing the file wholesale would leave the agent with no
-        API key at all.
-      * `skills` is the **complete** file set for the call, replacing the
-        server's directory. Only replacement can express deleting a file, which
-        is a legitimate experiment ("does it still work without this
-        reference?").
-
-    Either half may be None, meaning "use the agent server's own".
+      * `None` — no override at all; the agent uses its own files.
+      * `{}`   — run this call with **no skills**.
     """
 
-    config: dict | None = None
     skills: dict[str, str] | None = None
-
-    @property
-    def edited_config_paths(self) -> list[str]:
-        """Dotted paths this override changes, for the UI's summary line."""
-        return sorted(_leaf_paths(self.config or {}))
-
-
-def _leaf_paths(node: dict, prefix: str = "") -> list[str]:
-    out: list[str] = []
-    for key, value in node.items():
-        path = f"{prefix}{key}"
-        if isinstance(value, dict) and value:
-            out.extend(_leaf_paths(value, f"{path}."))
-        else:
-            out.append(path)
-    return out
 
 
 class NotReady:
@@ -268,8 +259,8 @@ class OptimizerClient(Protocol):
 
 @runtime_checkable
 class WorkspaceClient(Protocol):
-    """Read the agent's config and skill files, so the playground can edit from
-    the real starting point rather than from a blank textarea (§10.2).
+    """Read the agent's skill files, so the playground can edit from the real
+    starting point rather than from a blank textarea (§10.2).
 
     Read-only by design: writing an optimized skill back to the agent server
     needs versioning and rollback (§4.9) and belongs to Stage 3.
@@ -277,7 +268,8 @@ class WorkspaceClient(Protocol):
 
     async def get_workspace(self) -> Workspace: ...
 
-    # Just the version string. Cheap enough to call before every send, which is
-    # what makes "your snapshot is stale" a question the developer gets asked
-    # before the experiment rather than a mystery afterwards.
+    # Just the version string, for the staleness check made before every send
+    # and recorded against every optimization step. It is a separate method
+    # rather than a second endpoint: one read answers both "what is it?" and
+    # "has it moved?", so the two can never disagree with each other.
     async def get_version(self) -> str: ...

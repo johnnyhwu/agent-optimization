@@ -75,7 +75,7 @@ class Activation:
     offered: bool = False
 
 
-def _payload_text(trace: Trace) -> str:
+def payload_text(trace: Trace) -> str:
     """Everything the model was shown or produced, as one searchable blob."""
     parts: list[str] = []
     for span in trace.spans:
@@ -207,7 +207,7 @@ def detect_activation(
         return Activation(activated=True, skills_read=skills_read, hit="tool_path", offered=True)
 
     body_markers, front_markers = _markers(skill_files, skill_name)
-    payload = _payload_text(trace)
+    payload = payload_text(trace)
     body_seen = any(marker in payload for marker in body_markers)
     front_seen = any(marker in payload for marker in front_markers)
 
@@ -226,3 +226,30 @@ def detect_activation(
         hit="none",
         offered=front_seen,
     )
+
+
+def entry_body_visible(
+    trace: Trace | None, *, skill_name: str, skill_files: Mapping[str, str]
+) -> bool:
+    """Does this trace carry the **entry point's own** body text?
+
+    The one question that makes a missing probe marker mean anything. The marker
+    can only ever sit in `<skill>/SKILL.md`, so its absence is evidence only
+    where that file's text would have been visible had it arrived.
+
+    **Reference files are deliberately excluded**, which is the opposite of what
+    `Activation.body_seen` counts and why this is a separate function. Reading a
+    reference file legitimately proves the skill was loaded — but it says nothing
+    about the marker, and skills routinely instruct exactly that ("for refunds,
+    read references/refunds.md"). Counting it would accuse an agent of ignoring
+    an override at the moment it was following the very skill we sent.
+
+    A skill with no entry point returns False for the same reason: nothing was
+    injected, so nothing can be missing.
+    """
+    entry = f"{skill_name}/SKILL.md"
+    if trace is None or not trace.spans or entry not in skill_files:
+        return False
+    body_markers, _ = _markers({entry: skill_files[entry]}, skill_name)
+    payload = payload_text(trace)
+    return any(marker in payload for marker in body_markers)

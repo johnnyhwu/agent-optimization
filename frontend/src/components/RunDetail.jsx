@@ -8,7 +8,7 @@ import { useToast } from "./Toast.jsx";
 import { setServerTime } from "../useElapsed.js";
 import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
-import { IconSend } from "./icons.jsx";
+import { IconAlert, IconSend } from "./icons.jsx";
 
 // Bottom tier (§6.13): three columns. Left = question list (per-mode incorrect),
 // middle = trace + diagnosis + caveat, right = span detail. Clicking a question
@@ -55,6 +55,9 @@ export default function RunDetail({
   // The run's own settings, so a question handed to the playground is retried
   // against the endpoints it actually ran against rather than today's defaults.
   const [runConfig, setRunConfig] = useState(null);
+  // The agent's version at the run's start and end. Only ever read together:
+  // one alone says nothing, and the pair disagreeing is the whole signal.
+  const [drift, setDrift] = useState(null);
   const subject = getSubject();
 
   const activeResult = results?.find((r) => r.id === activeResultId) || null;
@@ -76,9 +79,13 @@ export default function RunDetail({
   }, [evalSet.id, runIds.join(","), mode, lastN]);
 
   // Who started this run — needed to decide whether the stop button is offered
-  // (a viewer may cancel their own run, §6.16).
-  useEffect(() => {
-    if (!liveRunId) return;
+  // (a viewer may cancel their own run, §6.16) — and, once it is over, which
+  // agent it actually measured.
+  //
+  // Held in a ref rather than closed over, so the SSE effect can call it
+  // without listing it as a dependency and tearing down the stream.
+  const loadRunRef = useRef(null);
+  loadRunRef.current = () =>
     api
       .getRun(evalSet.id, liveRunId)
       .then((run) => {
@@ -86,8 +93,25 @@ export default function RunDetail({
         setTriggeredBy(run.triggered_by);
         setRunConfig(run.config || null);
         setCancelling(Boolean(run.cancel_requested));
+        setDrift(
+          run.workspace_version &&
+            run.workspace_version_end &&
+            run.workspace_version !== run.workspace_version_end
+            ? { from: run.workspace_version, to: run.workspace_version_end }
+            : null
+        );
+        return run;
       })
-      .catch(() => {});
+      .catch(() => null);
+
+  useEffect(() => {
+    // Cleared first, not left standing until the fetch resolves: going from a
+    // drifted run to another one would otherwise paint the previous run's
+    // warning over it for a round trip, which is a false statement about the
+    // run on screen.
+    setDrift(null);
+    if (!liveRunId) return;
+    loadRunRef.current();
   }, [evalSet.id, liveRunId]);
 
   // Live repaint. The backend closes the stream immediately for a finished run,
@@ -156,14 +180,9 @@ export default function RunDetail({
     // Refetching answers both questions authoritatively.
     es.addEventListener("resync", () => {
       loadResults();
-      api
-        .getRun(evalSet.id, liveRunId)
-        .then((run) => {
-          setRunStatus(run.status);
-          setCancelling(Boolean(run.cancel_requested));
-          if (run.status !== "running") es.close();
-        })
-        .catch(() => {});
+      loadRunRef.current().then((run) => {
+        if (run && run.status !== "running") es.close();
+      });
     });
     es.addEventListener("run_completed", (e) => {
       let status = "completed";
@@ -178,6 +197,11 @@ export default function RunDetail({
       // still the cheap way to reconcile anything a dropped or out-of-order
       // event missed (concurrency > 1 makes ordering non-deterministic).
       loadResults();
+      // And the run row itself, which grew a field after the last question: the
+      // agent's version at the end. The read on arrival happened while the run
+      // was still going, so it necessarily saw a null there — without this, the
+      // drift warning only ever appeared to someone who came back later.
+      loadRunRef.current();
     });
     es.onerror = () => es.close();
     return () => es.close();
@@ -305,6 +329,21 @@ export default function RunDetail({
           onCancel={cancelRun}
           canCancel={myRole === "owner" || triggeredBy === subject}
         />
+      )}
+      {/* A run is a measurement, and its pass rate gets compared against other
+          runs of this set — the card's sparkline and the regression summary
+          both do it. A deploy to the agent halfway through makes the questions
+          either side of it readings of two different systems, and the only
+          other symptom is the number moving, which is what the comparison is
+          for. Said once, here, rather than on every row: it is a fact about the
+          run, not about any one question. */}
+      {drift && runIds.length === 1 && (
+        <div className="hint warn-text detail-drift">
+          <IconAlert size={13} /> The agent changed while this run was going —
+          from <code>{drift.from}</code> to <code>{drift.to}</code>. Questions
+          either side of that ran against different agents, so this run's pass
+          rate is not comparable with the runs around it.
+        </div>
       )}
       <div className="detail-meta">
         <div className="detail-meta-facts">

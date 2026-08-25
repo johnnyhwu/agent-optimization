@@ -1332,7 +1332,7 @@ async def test_a_version_probe_that_fails_does_not_end_the_run(monkeypatch):
     """The probe is an observation, not a dependency.
 
     An hour of agent calls is already paid for by the time this runs. Letting a
-    flaky `GET /get_config_version` throw out of the step would discard the whole
+    flaky read of the agent's version throw out of the step would discard the whole
     run to report a fact that is, at worst, a caveat on the chart.
     """
 

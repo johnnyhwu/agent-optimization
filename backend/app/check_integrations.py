@@ -125,16 +125,20 @@ async def check_workspace() -> bool:
     from app.integrations.real.workspace import HttpWorkspaceClient
 
     try:
-        # Unlike the agent check this is a real call: /get_workspace is a GET, so
+        # Unlike the agent check this is a real call: /skills is a GET, so
         # there is no reason to settle for "something is listening".
         ws = await HttpWorkspaceClient().get_workspace()
     except Exception as exc:  # noqa: BLE001
         _line(FAIL, "workspace", f"{settings.agent_base_url}: {exc}")
         return False
+    # Says whether the version came from the agent or was derived here, because
+    # the two carry different guarantees: the agent's own moves on a model or
+    # prompt change, ours only on a skill file edit.
+    derived = ws.version.startswith("sha256.")
     _line(
         OK, "workspace",
-        f"version {ws.version or '(none)'}, {len(ws.skills)} skill file(s), "
-        f"{len(ws.redacted_paths)} redacted config path(s)",
+        f"version {ws.version}{' (derived here — the agent supplied none)' if derived else ''}, "
+        f"{len(ws.skills)} skill file(s)",
     )
     return True
 

@@ -248,13 +248,11 @@ export default function ShortlistDialog({
                   <>
                     {active.workspace_overridden && (
                       <div className="hint warn-text">
-                        <IconAlert size={13} /> This attempt ran against an edited
-                        workspace ({[...active.config_overrides, ...active.edited_skill_files]
+                        <IconAlert size={13} /> This attempt ran against edited
+                        skill files ({(active.edited_skill_files || [])
                           .slice(0, 3)
                           .join(", ")}
-                        {active.config_overrides.length + active.edited_skill_files.length > 3
-                          ? "…"
-                          : ""}
+                        {(active.edited_skill_files || []).length > 3 ? "…" : ""}
                         ). The deployed agent has none of those edits, so it may not be
                         able to produce this answer until you apply them on the agent
                         server yourself.

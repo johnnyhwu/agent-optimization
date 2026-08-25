@@ -349,6 +349,27 @@ async def import_preview(
     )
 
 
+async def _read_workspace(seams):
+    """The agent's skill files, or a 503 carrying the agent server's own words.
+
+    Both callers below are answering "can this run start?", and both used to let
+    a `WorkspaceFetchError` escape as a 500 — which reads as a bug in this
+    platform rather than as an agent server that is down, unreachable, or has
+    not implemented `/skills`. The distinction is the whole answer: one of them
+    is fixed by editing a URL, and the other by filing a bug here.
+
+    Unwrapped, deliberately, the same way `routers/agent.py` does it: the
+    workspace client's messages already name what was tried and what came back,
+    and the UI prints its own heading above the line.
+    """
+    try:
+        return await seams.workspace.get_workspace()
+    except Exception as exc:  # noqa: BLE001 - the agent server's problem, not ours
+        raise HTTPException(
+            status_code=503, detail=str(exc) or type(exc).__name__
+        ) from exc
+
+
 @router.get("/skill-check", response_model=SkillCheck)
 async def skill_check(
     skill_name: str = Query(..., min_length=1),
@@ -380,7 +401,7 @@ async def skill_check(
     # so the card names the agent that answered rather than the box that was
     # left blank.
     effective_url = (agent_base_url or "").strip() or settings.agent_base_url
-    workspace = await seams.workspace.get_workspace()
+    workspace = await _read_workspace(seams)
     files = {
         path: text for path, text in workspace.skills.items()
         if path == skill_name or path.startswith(f"{skill_name}/")
@@ -457,7 +478,7 @@ async def create_optimization_run(
     #    if the agent moves underneath it the numbers still describe the snapshot.
     seams = build_seams(body.config.model_dump(), body.secrets.model_dump(),
                         include_workspace=True)
-    workspace = await seams.workspace.get_workspace()
+    workspace = await _read_workspace(seams)
     initial = {
         path: text for path, text in workspace.skills.items()
         if path == body.skill_name or path.startswith(f"{body.skill_name}/")

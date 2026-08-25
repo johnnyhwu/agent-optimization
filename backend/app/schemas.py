@@ -421,6 +421,14 @@ class RunOut(BaseModel):
     # because the judge broke is a different problem from one that dropped
     # because the agent got worse, and the number is the only thing that says so.
     judge_invalid_count: int | None = None
+    # The agent's version when the run started and when it finished. Both null
+    # far more often than not — fake mode, an agent that did not answer, a run
+    # that predates the check — and the UI says nothing unless the two are both
+    # present and disagree. A run whose agent moved underneath it is not wrong,
+    # but its pass rate is not comparable with the run before it either, and
+    # nothing else about it would ever show that.
+    workspace_version: str | None = None
+    workspace_version_end: str | None = None
 
 
 class RunPage(Page):
@@ -545,14 +553,11 @@ class TraceView(BaseModel):
 # --- Playground (§10) -------------------------------------------------------
 
 class WorkspaceOut(BaseModel):
-    """The agent server's config + skill files, as the editor starts from."""
+    """The agent server's skill files, as the editor starts from."""
 
+    # Never blank: the agent server's own string when it supplies one, else one
+    # the platform derived from the files themselves.
     version: str = ""
-    config: dict = Field(default_factory=dict)
-    # Config paths the agent server withheld (its own API keys). Shown as
-    # present-but-hidden rather than dropped: a field that vanishes silently
-    # invites someone to re-add it by hand and shadow the real value.
-    redacted_paths: list[str] = Field(default_factory=list)
     # Flat {relative path: file text} — a skill is a directory, so `SKILL.md`
     # and everything under `references/` arrive as separate entries.
     skills: dict[str, str] = Field(default_factory=dict)
@@ -565,26 +570,21 @@ class WorkspaceVersionOut(BaseModel):
 
 
 class WorkspaceOverrideIn(BaseModel):
-    """The config/skills to use for this one call instead of the agent's own.
+    """The skill files to use for this one call instead of the agent's own.
 
-    The two halves travel differently on purpose (see
-    docs/spec.md §17.4): `config` is sparse and is
-    deep-merged on the agent server — it must be, since the snapshot the editor
-    started from had the agent's secrets removed — while `skills` is the
-    complete file set for the call, because only replacement can express
-    deleting a file.
+    `skills` is the complete file set for the call, not a patch, because only
+    replacement can express deleting a file — which is a legitimate experiment
+    ("does it still work without this reference?").
 
-    Both are optional: editing only the config, or only a skill, is the common
-    case, and sending the untouched half would claim an edit that never
-    happened.
+    `None` and `{}` are different requests: `None` sends no override at all and
+    the agent uses its own files, while `{}` asks it to run with no skills.
     """
 
-    config: dict | None = None
     skills: dict[str, str] | None = None
 
     @property
     def is_empty(self) -> bool:
-        return not self.config and self.skills is None
+        return self.skills is None
 
 
 class PlaygroundCreate(BaseModel):
@@ -670,12 +670,9 @@ class PlaygroundAttemptOut(BaseModel):
     # rather than leaving an empty verdict looking like a failure.
     has_expected_answer: bool
     has_expected_reasoning: bool
-    # What the call carried, for the attempt list's summary. The platform cannot
-    # verify the agent actually applied any of it (§10.7) — these only report
-    # what was sent.
+    # What the call carried, for the attempt list's summary. This reports what
+    # was sent; the playground does not verify that the agent applied it.
     workspace_overridden: bool = False
-    # Dotted config paths this attempt overrode, e.g. ["agents.defaults.model"].
-    config_overrides: list[str] = Field(default_factory=list)
     # Skill files whose text differed from the agent's own, plus any it deleted.
     edited_skill_files: list[str] = Field(default_factory=list)
     status: str  # running | done | failed | cancelled

@@ -193,7 +193,7 @@ input, textarea, select {
    optimize wizard's eval-set picker, which put an invisible thousand-pixel box
    between the tick and the label it belonged to. Five screens had already
    patched it locally (`.dl-file`, `.dl-runpick-row`, `.include-row`,
-   `.ws-field-control .checkline`, `.ui-table-check`); the wizard's two had not,
+   `.ui-table-check`); the wizard's two had not,
    and the next new checkbox would not have either. */
 input[type="checkbox"], input[type="radio"] {
   width: auto; flex: none;
@@ -524,6 +524,17 @@ select { cursor: pointer; }
 .stackbar .s.pending { background: transparent; }
 
 /* ---- three-column detail ---- */
+/* The run-level caveat, above the facts row rather than inside it: it is a
+   sentence about the whole run, and the facts row is a line of badges. */
+/* The "this version is ours, not the agent's" tag. Muted: it qualifies the
+   version beside it rather than competing with it. */
+.agent-version-derived { color: var(--muted); font-style: italic; }
+
+.detail-drift {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
 .detail-meta {
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--space-3); margin: 0 0 var(--space-3); min-height: var(--ctl-h-sm);
@@ -1164,69 +1175,6 @@ select { cursor: pointer; }
 .workspace-bar code { font-size: var(--text-micro); }
 .workspace-source { max-width: 78ch; }
 .workspace-foot { margin: 0; flex: none; }
-
-/* ---- config tree ---- */
-/* Grows with the tree and stops at the dialog's floor, where it starts
-   scrolling. Not `flex: 1`: a config whose groups are all collapsed is four
-   lines, and stretching its box to fill 80vh would draw a tall empty panel
-   around them — the same dead space the 320px cap used to leave, just further
-   down. The box should be the size of what is in it. */
-.ws-tree {
-  flex: 0 1 auto; min-height: 0;
-  display: flex; flex-direction: column; gap: 2px;
-  overflow-y: auto;
-  padding: var(--space-2); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: var(--panel-2);
-}
-.ws-node { border-radius: var(--radius-sm); }
-.ws-node-head {
-  display: flex; align-items: center; gap: var(--space-2); width: 100%;
-  background: none; border: none; box-shadow: none; padding: 6px var(--space-2);
-  border-radius: var(--radius-sm); color: var(--text); text-align: left;
-}
-.ws-node-head:hover { background: var(--panel-2); }
-.ws-node-head svg { color: var(--muted); transition: transform 0.15s var(--ease); }
-.ws-node.open > .ws-node-head svg { transform: rotate(90deg); }
-.ws-node-name {
-  font-family: var(--font-mono); font-size: var(--text-body); font-weight: var(--fw-semibold);
-}
-.ws-node-meta { font-size: var(--text-micro); color: var(--muted); }
-/* The indent is the hierarchy, so it gets a rule to follow rather than empty
-   space — three levels of pure indentation stop reading as nesting. */
-.ws-children {
-  margin-left: 13px; padding-left: var(--space-3);
-  border-left: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 2px;
-}
-
-/* The control column is capped rather than fluid: a text box stretched across
-   the full width for `log_level: info` makes the eye travel the whole page for
-   one word, and the column of controls stops reading as a column. */
-.ws-field {
-  display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 520px) 30px;
-  align-items: center; gap: var(--space-3);
-  padding: 3px var(--space-2); border-radius: var(--radius-sm);
-}
-.ws-field:hover { background: var(--panel-3); }
-.ws-field.changed .ws-field-key { color: var(--amber); }
-.ws-field.wide {
-  grid-template-columns: minmax(140px, 240px) minmax(0, 760px) 30px; align-items: start;
-}
-.ws-field.wide .ws-field-key { padding-top: 8px; }
-.ws-field-key {
-  font-family: var(--font-mono); font-size: var(--text-body);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.ws-field-control { min-width: 0; }
-.ws-field-control input, .ws-field-control textarea { font-size: var(--text-body); }
-.ws-field-control textarea.config-json { min-height: 140px; font-family: var(--font-mono); }
-.ws-field-control .checkline {
-  display: flex; align-items: center; gap: var(--space-2);
-  font-size: var(--text-body); color: var(--muted); margin: 0;
-}
-.ws-field-control .checkline input { width: auto; }
-.ws-field-note { grid-column: 2 / -1; font-size: var(--text-micro); color: var(--muted); }
-.ws-field-spacer { display: block; }
 
 /* ---- skill files ---- */
 /* A file list beside the file, both running the full height of the dialog. The

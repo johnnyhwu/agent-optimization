@@ -89,6 +89,12 @@ class ResultRow:
     activated: bool | None = None
     skills_read: list[str] | None = None
     detector_hit: str | None = None
+    # Whether the agent answered from the files we sent rather than its own.
+    # Only the pre-flight asks — it is the one call that ships a distinguishing
+    # marker — so `None` here means "not asked", which is also what every
+    # scored rollout reports. None must never read as a negative: a verdict
+    # nobody sought cannot be evidence of anything.
+    override_verified: bool | None = None
     trace_ready: bool = False
     trace_error: str | None = None
     minibatch_no: int | None = None
