@@ -35,6 +35,7 @@ import pytest
 
 from app.integrations.base import Span, Trace
 from app.optimizer import adapter, engine
+from app.optimizer.skillio import frontmatter_span
 from app.optimizer.store import Item, ResultRow, RunSpec
 
 from tests.test_optimizer_engine import (
@@ -108,6 +109,52 @@ def test_injection_does_not_touch_the_other_files():
     )
 
 
+def test_the_marker_never_lands_above_the_frontmatter_on_a_crlf_file():
+    """A `\r\n` SKILL.md is ordinary on Windows, and `frontmatter_span` does not
+    parse one. Falling back to "insert at offset 0" put the comment *above* the
+    opening `---`, which stops the block being frontmatter at all — in routing
+    mode that is the very text being optimised."""
+    text = "---\r\nname: billing\r\ndescription: d\r\n---\r\n# Billing\r\n"
+    out = adapter.inject_probe_marker({"billing/SKILL.md": text}, "billing", "probe-abc")
+
+    body = out["billing/SKILL.md"]
+    assert body.startswith("---")
+    # Still a parseable frontmatter block after the edit.
+    assert frontmatter_span(body.replace("\r\n", "\n")) is not None
+    assert "probe-abc" in body
+
+
+def test_the_marker_never_glues_itself_to_the_closing_delimiter():
+    """An unterminated frontmatter (no trailing newline) reported a span ending
+    at EOF, so the comment was appended straight onto the `---`."""
+    text = "---\nname: billing\n---"
+    out = adapter.inject_probe_marker({"billing/SKILL.md": text}, "billing", "probe-abc")
+
+    lines = out["billing/SKILL.md"].splitlines()
+    assert "---<!--" not in out["billing/SKILL.md"]
+    # The closing delimiter survives as a line of its own.
+    assert lines[2] == "---"
+    assert "probe-abc" in lines[3]
+
+
+def test_the_marker_always_occupies_a_line_of_its_own():
+    for text in (
+        "---\nname: b\n---\n# Body\n",
+        "---\r\nname: b\r\n---\r\n# Body\r\n",
+        "---\nname: b\n---",
+        "# Body only\n",
+        "",
+    ):
+        out = adapter.inject_probe_marker({"b/SKILL.md": text}, "b", "probe-abc")
+        marker_lines = [
+            ln for ln in out["b/SKILL.md"].replace("\r\n", "\n").split("\n")
+            if "probe-abc" in ln
+        ]
+        assert len(marker_lines) == 1, text
+        assert marker_lines[0].strip().startswith("<!--"), text
+        assert marker_lines[0].strip().endswith("-->"), text
+
+
 def test_a_skill_with_no_entry_point_is_returned_unchanged():
     """Nowhere to put the marker is a reason to learn nothing, not to crash."""
     files = {"billing/references/only.md": "text"}
@@ -147,8 +194,10 @@ def test_a_marker_in_the_payload_verifies_the_override():
     assert adapter.verify_probe_marker(_trace("...probe-abc123..."), "probe-abc123") is True
 
 
-def test_a_marker_absent_from_the_payload_is_a_negative():
-    assert adapter.verify_probe_marker(_trace("nothing here"), "probe-abc123") is False
+def test_a_marker_absent_from_a_trace_that_shows_the_skill_is_a_negative():
+    assert adapter.verify_probe_marker(
+        _trace("nothing here"), "probe-abc123", content_visible=True
+    ) is False
 
 
 def test_no_trace_is_unknown_rather_than_a_negative():
@@ -160,6 +209,33 @@ def test_no_trace_is_unknown_rather_than_a_negative():
 
 def test_no_marker_asked_for_is_unknown():
     assert adapter.verify_probe_marker(_trace("anything"), None) is None
+
+
+def test_a_missing_marker_is_only_a_negative_when_file_content_is_visible():
+    """The trap this closes: a tool-using agent whose trace carries the tool
+    *call* but not its *result*.
+
+    `detect_activation` fires `tool_path` on a path found in a tool call's
+    arguments — which proves the agent went to read the skill, and proves
+    nothing at all about whether the file's text was ever logged. If the
+    marker's absence were taken as evidence there, an agent that applies the
+    override perfectly but logs its tool results elsewhere would have every
+    optimization run hard-failed with a false accusation.
+
+    So the negative needs positive proof that this trace shows file content at
+    all — which the body detector already establishes, and which holds whether
+    the agent used our copy or its own, since the pre-flight sends the agent's
+    own files.
+    """
+    seen = _trace("nothing recognisable here")
+    assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=False) is None
+    assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=True) is False
+
+
+def test_a_marker_that_is_present_is_a_positive_regardless(): 
+    """Seeing it is proof on its own — nothing else has to corroborate."""
+    seen = _trace("...probe-abc123...")
+    assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=False) is True
 
 
 # --- What actually reaches the agent ----------------------------------------
@@ -306,15 +382,32 @@ async def test_an_ignored_override_stops_the_run_in_both_modes(monkeypatch, mode
     assert store.steps == []
 
 
-async def test_an_unverified_override_with_nothing_observed_does_not_block(monkeypatch):
-    """An agent whose trace shows no skill read at all may simply be one we
-    cannot see into. Blocking there would lock out working agents."""
+async def test_a_tool_using_agent_that_logs_no_file_content_is_not_accused(monkeypatch):
+    """End of the same story, at the engine: `override_verified` arrives as
+    `None` and the run proceeds, rather than being stopped on a guess."""
+    store, status, events = await engine_run(
+        monkeypatch, probe_returning(verified=None, hit="tool_path")
+    )
+
+    assert status == "completed"
+    assert preflight_event(events)["override_verified"] is None
+
+
+async def test_a_negative_with_nothing_observed_still_does_not_block(monkeypatch):
+    """The engine's second guard, on a combination the adapter cannot produce.
+
+    `verify_probe_marker` only answers `False` once body text has been seen, and
+    the detector calls that `content` — so a `False` alongside `hit == "none"`
+    is already impossible upstream. The guard is kept because this branch
+    hard-fails a run somebody is paying for, and this test is what stops it
+    being tidied away as dead code.
+    """
     store, status, events = await engine_run(
         monkeypatch, probe_returning(verified=False, hit="none", activated=False)
     )
 
     assert status == "completed"
-    assert preflight_event(events)["override_verified"] is None
+    assert store.steps, "the run should have gone on to do work"
 
 
 async def test_a_probe_that_reports_no_verdict_does_not_block(monkeypatch):

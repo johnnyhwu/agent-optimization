@@ -389,12 +389,18 @@ async def _preflight(
 
     # Tri-state, and `None` must never harden into a negative: it is the default
     # on every row, so anything that did not actually run the marker check —
-    # a trace that never landed, a stubbed probe — reads as "not asked".
+    # a trace that never landed, a stubbed probe, an agent whose trace shows no
+    # file content to look in — reads as "not asked". `verify_probe_marker`
+    # already applied that last condition, so a `False` here means the trace
+    # carried the skill's text and our marker was not in it.
     verified = rows[0].override_verified if rows else None
-    if verified is False and hit == "none":
-        # Nothing was seen at all, so the marker's absence says nothing either.
-        verified = None
-    override_ignored = verified is False
+    # `hit == "none"` cannot coexist with a legitimate `False` — the detector
+    # reports `content` whenever body text was seen, which is the same condition
+    # `verify_probe_marker` requires before it will answer `False` at all. Kept
+    # anyway: this branch hard-fails a run somebody is paying for, and two
+    # independent conditions agreeing is cheap insurance against a later change
+    # to either one.
+    override_ignored = verified is False and hit != "none"
 
     # In memory for the steps this process is about to run, and persisted below
     # for the ones a restart will run — the probe is bought once, on a fresh

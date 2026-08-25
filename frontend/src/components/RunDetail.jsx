@@ -79,9 +79,13 @@ export default function RunDetail({
   }, [evalSet.id, runIds.join(","), mode, lastN]);
 
   // Who started this run — needed to decide whether the stop button is offered
-  // (a viewer may cancel their own run, §6.16).
-  useEffect(() => {
-    if (!liveRunId) return;
+  // (a viewer may cancel their own run, §6.16) — and, once it is over, which
+  // agent it actually measured.
+  //
+  // Held in a ref rather than closed over, so the SSE effect can call it
+  // without listing it as a dependency and tearing down the stream.
+  const loadRunRef = useRef(null);
+  loadRunRef.current = () =>
     api
       .getRun(evalSet.id, liveRunId)
       .then((run) => {
@@ -96,8 +100,13 @@ export default function RunDetail({
             ? { from: run.workspace_version, to: run.workspace_version_end }
             : null
         );
+        return run;
       })
-      .catch(() => {});
+      .catch(() => null);
+
+  useEffect(() => {
+    if (!liveRunId) return;
+    loadRunRef.current();
   }, [evalSet.id, liveRunId]);
 
   // Live repaint. The backend closes the stream immediately for a finished run,
@@ -166,14 +175,9 @@ export default function RunDetail({
     // Refetching answers both questions authoritatively.
     es.addEventListener("resync", () => {
       loadResults();
-      api
-        .getRun(evalSet.id, liveRunId)
-        .then((run) => {
-          setRunStatus(run.status);
-          setCancelling(Boolean(run.cancel_requested));
-          if (run.status !== "running") es.close();
-        })
-        .catch(() => {});
+      loadRunRef.current().then((run) => {
+        if (run && run.status !== "running") es.close();
+      });
     });
     es.addEventListener("run_completed", (e) => {
       let status = "completed";
@@ -188,6 +192,11 @@ export default function RunDetail({
       // still the cheap way to reconcile anything a dropped or out-of-order
       // event missed (concurrency > 1 makes ordering non-deterministic).
       loadResults();
+      // And the run row itself, which grew a field after the last question: the
+      // agent's version at the end. The read on arrival happened while the run
+      // was still going, so it necessarily saw a null there — without this, the
+      // drift warning only ever appeared to someone who came back later.
+      loadRunRef.current();
     });
     es.onerror = () => es.close();
     return () => es.close();

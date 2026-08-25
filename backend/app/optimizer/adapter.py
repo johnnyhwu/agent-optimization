@@ -102,7 +102,7 @@ def make_probe_marker() -> str:
 def inject_probe_marker(
     skill_files: Mapping[str, str], skill_name: str, marker: str
 ) -> dict[str, str]:
-    """A copy of `skill_files` whose entry point carries `marker`.
+    """A copy of `skill_files` whose entry point carries `marker` on its own line.
 
     **After the frontmatter, not at the end of the file.** Two reasons, and they
     pull in the same direction: routing mode optimises the description inside
@@ -110,6 +110,15 @@ def inject_probe_marker(
     `---`, so nothing may be inserted above it; and an agent's read tool may cap
     how much of a long file it returns, in which case the end is what is lost.
     The first line of the body satisfies both.
+
+    Line-based rather than using `frontmatter_span`'s character offsets, because
+    that function only recognises `\n` and only a *terminated* block, and both
+    of its failure modes corrupt the file we are about to hand the agent: a CRLF
+    `SKILL.md` reported no frontmatter at all and took the marker above its
+    opening `---`, and one with no trailing newline reported a span ending at
+    EOF and had the comment glued onto its closing `---`. Splitting on lines
+    cannot land mid-line, and treats both delimiters the same way whatever ends
+    them.
 
     A skill with no entry point is returned unchanged — there is nowhere to put
     the marker, which costs us the check rather than the run.
@@ -120,22 +129,51 @@ def inject_probe_marker(
         return dict(skill_files)
 
     line = PROBE_MARKER_TEMPLATE.format(marker=marker)
-    span = frontmatter_span(text)
-    at = span[1] if span else 0
-    marked = f"{text[:at]}{line}\n{text[at:]}"
+    lines = text.split("\n")
+    # Where the body starts: the line after the frontmatter's closing `---`, or
+    # the top of the file when there is no frontmatter to stay below. `rstrip`
+    # so a `\r` left by CRLF does not stop a delimiter being recognised.
+    at = 0
+    if lines and lines[0].rstrip() == "---":
+        for i, raw in enumerate(lines[1:], start=1):
+            if raw.rstrip() == "---":
+                at = i + 1
+                break
+        else:
+            # An opening delimiter with no closing one is not a frontmatter
+            # block; treat the whole file as body rather than guessing.
+            at = 0
+
+    marked = "\n".join([*lines[:at], line, *lines[at:]])
     return {**skill_files, entry: marked}
 
 
-def verify_probe_marker(trace: Trace | None, marker: str | None) -> bool | None:
+def verify_probe_marker(
+    trace: Trace | None, marker: str | None, *, content_visible: bool = False
+) -> bool | None:
     """Did the marker reach the model? True / False / None for "cannot tell".
 
-    `None` for a missing or empty trace is the load-bearing case. Langfuse
-    ingestion lags and sometimes fails outright, and reading that as "the agent
-    ignored us" would stop runs over a trace store hiccup.
+    Seeing it is proof on its own. **Not** seeing it is only evidence when this
+    trace demonstrably carries skill file content — which is what
+    `content_visible` says, and why a bare absence is `None`.
+
+    That asymmetry is the whole safety of the check. `detect_activation` fires
+    `tool_path` on a path found in a tool call's *arguments*, which proves the
+    agent went to read the skill and proves nothing about whether the file's
+    text was ever logged. An agent that applies the override correctly but keeps
+    its tool results out of Langfuse would otherwise have every optimization run
+    hard-failed on a false accusation — the worst way for this to be wrong,
+    because it blocks work that would have succeeded.
+
+    `None` for a missing or empty trace is load-bearing for the same reason:
+    Langfuse ingestion lags and sometimes fails outright, and reading that as
+    "the agent ignored us" would stop runs over a trace store hiccup.
     """
     if marker is None or trace is None or not trace.spans:
         return None
-    return marker in payload_text(trace)
+    if marker in payload_text(trace):
+        return True
+    return False if content_visible else None
 
 
 async def run_rollout(
@@ -331,7 +369,9 @@ async def _run_item(
         row.activated = activation.activated
         row.skills_read = activation.skills_read
         row.detector_hit = activation.hit
-        row.override_verified = verify_probe_marker(trace, probe_marker)
+        row.override_verified = verify_probe_marker(
+            trace, probe_marker, content_visible=activation.body_seen
+        )
 
     return row
 
