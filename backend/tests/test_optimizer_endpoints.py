@@ -1201,3 +1201,23 @@ async def test_a_single_skill_run_still_records_its_name(session, monkeypatch):
 
     assert run.skill_name == "billing"
     assert run.target_skills == ["billing"]
+
+
+async def test_a_request_carrying_the_old_detector_knobs_is_still_accepted(
+    session, monkeypatch
+):
+    """They configured the tool-path detector, which no longer exists.
+
+    Nothing reads them now, so leaving them on the request model would be a
+    control that looks settable and changes nothing. Removing them must not
+    refuse a caller that still sends them — a script written last month, or a
+    tab left open — so they are dropped rather than rejected.
+    """
+    run = await _create_run(
+        session, monkeypatch, mode="isolated",
+        detector={"detectable": True, "path_patterns": [r"skills/([a-z]+)/"]},
+    )
+
+    row = await session.get(OptimizationRun, run.id)
+    assert "path_patterns" not in row.detector
+    assert "detectable" not in row.detector

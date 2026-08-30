@@ -1054,15 +1054,24 @@ class OptimizationSecrets(BaseModel):
 
 
 class DetectorConfig(BaseModel):
-    """How a run decides whether the agent actually used the skill.
+    """Deliberately empty: there is nothing left to configure here.
 
-    `path_patterns` are regexes matched against tool-call arguments; blank means
-    the shipped default. `detectable` says the agent's traces are known to name
-    skill file paths, which turns the content-matching fallback off.
+    It carried `path_patterns` — regexes matched against tool-call arguments —
+    and `detectable`, which said the agent's traces are known to name skill file
+    paths. Both belonged to a detector that read tool-call *arguments* to decide
+    whether a skill had been loaded, and that has been replaced by one that
+    looks for the skill's own text in what the agent was shown
+    (`optimizer/detector.py`). Neither has a reader.
+
+    The model stays so that a caller still sending them is accepted and they are
+    dropped, rather than refused: a script written last month should not fail
+    against this. Pydantic ignores unknown keys, which is exactly the behaviour
+    wanted here.
+
+    The run's `detector` column is still written — by the pre-flight, with what
+    it found — so a resumed run can read the verdict back without paying for a
+    second probe.
     """
-
-    path_patterns: list[str] = Field(default_factory=list)
-    detectable: bool = False
 
 
 class OptimizationRunCreate(BaseModel):

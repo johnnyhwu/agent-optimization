@@ -281,9 +281,9 @@ def probe_question(question: str, skill_name: str) -> str:
     trace either as that observation's output or in the next generation's
     messages. Either way the marker becomes visible.
 
-    The **directory** name, never a file path: a path in the prompt is a path
-    the agent can echo into a tool call, and the tool-path detector would then
-    be matching our own instruction rather than the agent's behaviour.
+    The **directory** name, never a file path. A path in the prompt is a path
+    the agent can echo, and an instruction quoted back is not evidence of
+    anything the agent did.
     """
     return f"{question}\n\n(you must first read the {skill_name} skill)"
 
@@ -355,16 +355,20 @@ async def _preflight(
     run_id, *, spec: RunSpec, items, store: OptimizationStore, seams: Seams,
     publish: Publisher, cancel_event: asyncio.Event,
 ) -> PreflightResult:
-    """Can this run observe whether the agent used the skill at all — and did the
-    agent use *our* copy of it?
+    """Did we see the agent read the copy of the skill this run sent it?
 
-    The two modes need very different answers. Routing's gate *compares
-    activation rates*, so a routing run that cannot see activation has no way to
-    measure its own outcome — it would spend an hour and produce a number that
-    means nothing. Isolated's gate is accuracy, which is measurable either way,
-    so a silent detector there costs it one column in the UI and nothing else.
-    Aborting isolated runs on this would lock out every agent whose traces do
-    not happen to name skill file paths.
+    One question, and the same one in both modes. It used to be two, with
+    different consequences: whether activation was observable, which stopped
+    routing only, and whether the override was applied, which stopped both. The
+    asymmetry was there because isolated's gate is judge accuracy — measurable
+    whether or not the agent says what it read — so refusing there would have
+    locked out every agent whose traces do not name skill file paths, to buy a
+    column in the UI.
+
+    What that left out is that the same silence also hides whether the candidate
+    reached the agent at all. An isolated run that cannot be seen into can spend
+    an hour measuring the skill already deployed and report the flat line as a
+    finding. The column was worth losing; the measurement was not.
 
     **A successful probe is what makes "nothing was seen" mean something.** The
     detector answers `False` for a trajectory that landed and carried no body

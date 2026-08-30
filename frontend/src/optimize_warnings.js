@@ -54,15 +54,16 @@ export function runWarnings(run, steps) {
 
   if (best) {
     if (best.val_activation_rate == null) {
-      // Not the same as "no". The detectors disagreeing or finding nothing to
-      // go on is a fact about the measurement, and saying "0%" about it would
-      // accuse the run of something nobody observed.
+      // Not the same as "no". A trace that never landed is a fact about the
+      // measurement, and saying "0%" about it would accuse the run of something
+      // nobody observed.
       out.push({
         id: "activation-unknown",
         tone: "info",
         title: "Whether the agent read the skill is unknown",
-        body: "Neither detector could tell for step " + best.step_no +
-          ", so the accuracy beside it cannot be attributed to the skill with confidence.",
+        body: "No trace landed for step " + best.step_no +
+          ", so nothing could be seen of what the agent read and the accuracy " +
+          "beside it cannot be attributed to the skill with confidence.",
       });
     } else if (best.val_activation_rate < ACTIVATION_FLOOR) {
       out.push({

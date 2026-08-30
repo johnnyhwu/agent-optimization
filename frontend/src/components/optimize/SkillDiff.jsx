@@ -300,12 +300,13 @@ function Outcome({ view, rejected }) {
   if (rejected) {
     return (
       <Banner tone="warning" title="These edits were not kept">
-        The gate rejected this candidate
-        {view.gate_reject_reason === "activation"
-          ? " because the agent stopped reading the skill"
-          : " because it did not beat the current skill on validation"}
-        , and the run carried on from {against}. What follows is what the step
-        proposed, not what the skill contains.{fallback}
+        {/* One sentence, and `gateLabel` already writes it for every reason the
+            gate can give — including the two that are not the gate refusing
+            anything (a split that never came back, a routing score that could
+            not be computed). Restating a subset of them here is how this banner
+            came to still be explaining a guard that no longer exists. */}
+        {gateLabel(view).detail} The run carried on from {against}. What follows
+        is what the step proposed, not what the skill contains.{fallback}
       </Banner>
     );
   }
