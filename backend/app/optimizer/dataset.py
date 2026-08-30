@@ -80,28 +80,39 @@ def split_item_key(key: str) -> tuple[str, str]:
 def group_by_skill(
     candidates: Iterable[Candidate],
 ) -> tuple[dict[str, list[Candidate]], list[Candidate]]:
-    """`({skill: [candidate]}, ambiguous)` — one bucket per candidate, always.
+    """`({skill: [candidate]}, unassignable)` — every candidate placed somewhere.
 
-    A question with no skill, or with more than one, goes to `ambiguous` rather
-    than to a guess. Both cases look harmless and are not: an unlabelled
-    question dropped into a group is reflected on by an analyst editing a skill
-    it may have nothing to do with, and a question tagged `billing` *and*
-    `reporting` attributes to whichever came first a failure that may belong
-    entirely to the other. The wizard shows the bucket, disabled, with the tags
-    it does carry — so the developer can go and fix the labels, which is the
-    only place the answer actually exists.
+    A question with **no** tag goes to the second list. Guessing a group for it
+    would have an analyst reflect on it while editing a skill it may have
+    nothing to do with, and the run would look entirely normal while learning
+    from it. The wizard shows the bucket, disabled, so the developer can go and
+    fix the labels — the only place the answer actually exists.
+
+    A question with **several** tags now belongs to each of them. It used to be
+    excluded beside the untagged ones, and the reason held while a run optimised
+    exactly one skill: training `billing` on a question tagged `billing` and
+    `reporting` attributes to `billing` a failure that may belong to the other.
+    A routing run optimises several descriptions together and scores each
+    question against all the skills it carries, so a question spanning two is
+    exactly the evidence that says where the boundary between their descriptions
+    belongs. Excluding those discarded the most informative questions in the set.
+
+    The consequence is that group sizes sum to more than the number of
+    questions. That is real and the wizard says so, rather than being hidden by
+    picking a group.
 
     Skills come back sorted; the wizard renders them as a list and one that
     reshuffles between requests is unusable.
     """
     groups: dict[str, list[Candidate]] = {}
-    ambiguous: list[Candidate] = []
+    unassignable: list[Candidate] = []
     for candidate in candidates:
-        if len(candidate.skills) != 1:
-            ambiguous.append(candidate)
+        if not candidate.skills:
+            unassignable.append(candidate)
             continue
-        groups.setdefault(candidate.skills[0], []).append(candidate)
-    return {name: groups[name] for name in sorted(groups)}, ambiguous
+        for skill in candidate.skills:
+            groups.setdefault(skill, []).append(candidate)
+    return {name: groups[name] for name in sorted(groups)}, unassignable
 
 
 def _difficulty(candidate: Candidate) -> tuple:

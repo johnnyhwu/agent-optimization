@@ -120,23 +120,46 @@ def test_a_question_with_no_skill_goes_to_the_ambiguous_bucket():
     assert [c.question_id for c in groups["billing"]] == ["q2"]
 
 
-def test_a_question_with_several_skills_goes_to_the_ambiguous_bucket_too():
-    """Two skills is not a licence to pick the first one.
+def test_a_question_with_several_skills_belongs_to_each_of_them():
+    """Two tags is evidence about both skills, and now it is used as such.
 
-    A question tagged `billing` and `reporting` is evidence about both, and
-    training a `billing` run on it attributes to `billing` a failure that may
-    belong entirely to the other. The wizard shows which skills it carries so
-    the developer can decide; the code does not decide for them.
+    It used to go to the ambiguous bucket beside the untagged ones, for a reason
+    that held while a run optimised exactly one skill: training `billing` on a
+    question tagged `billing` and `reporting` attributes to `billing` a failure
+    that may belong entirely to the other.
+
+    A routing run optimises the descriptions of several skills together and
+    scores each question against *all* the skills it is tagged with — a question
+    belonging to both is precisely the case that says where the boundary between
+    two descriptions should fall. Dropping it discarded the most informative
+    questions in the set.
     """
     groups, ambiguous = group_by_skill([
         candidate("q1", skills=("billing", "reporting")),
     ])
-    assert groups == {}
-    assert ambiguous[0].skills == ("billing", "reporting")
+
+    assert ambiguous == []
+    assert [c.question_id for c in groups["billing"]] == ["q1"]
+    assert [c.question_id for c in groups["reporting"]] == ["q1"]
 
 
-def test_no_candidate_is_lost_or_duplicated_by_grouping():
-    """Every question is in exactly one place, so the counts on screen add up."""
+def test_only_an_untagged_question_is_unassignable_now():
+    groups, ambiguous = group_by_skill([
+        candidate("q1", skills=()),
+        candidate("q2", skills=("billing", "reporting")),
+    ])
+
+    assert [c.question_id for c in ambiguous] == ["q1"]
+    assert set(groups) == {"billing", "reporting"}
+
+
+def test_every_candidate_is_placed_somewhere():
+    """Nothing is silently dropped, so the wizard's counts describe the whole set.
+
+    A multi-tagged question is now in more than one group, which means the group
+    counts add up to more than the number of questions — the wizard says so
+    rather than hiding it.
+    """
     candidates = [
         candidate("q1", skills=("billing",)),
         candidate("q2", skills=()),
@@ -144,9 +167,11 @@ def test_no_candidate_is_lost_or_duplicated_by_grouping():
         candidate("q4", skills=("reporting",)),
     ]
     groups, ambiguous = group_by_skill(candidates)
-    placed = [c.item_key for group in groups.values() for c in group]
-    placed += [c.item_key for c in ambiguous]
-    assert sorted(placed) == sorted(c.item_key for c in candidates)
+    placed = {c.item_key for group in groups.values() for c in group}
+    placed |= {c.item_key for c in ambiguous}
+
+    assert placed == {c.item_key for c in candidates}
+    assert sum(len(g) for g in groups.values()) == 4, "q3 counted under both its tags"
 
 
 def test_groups_come_back_in_a_stable_order():

@@ -196,11 +196,10 @@ async def _execute(
                 run_id, spec=spec, items=val or train, store=store, seams=seams,
                 publish=publish, cancel_event=cancel_event,
             )
-            # An override that never arrives makes both modes unmeasurable, so
-            # this one stops every run; a silent detector only stops routing.
-            if preflight.override_ignored:
-                return "failed", preflight.message, "failed"
-            if not preflight.detector_ok and spec.mode == "routing":
+            # One rule, both modes: unless this run has *seen* the agent read
+            # the copy it was sent, nothing it goes on to measure means
+            # anything.
+            if not preflight.ok:
                 return "failed", preflight.message, "failed"
             await _baseline_step(
                 run_id, spec=spec, val=val, store=store, seams=seams,
@@ -306,7 +305,12 @@ async def probe_activation(
     """
     if not items:
         return []
-    item = items[0]
+    # The first question that carries a skill tag, not simply the first. The
+    # probe asks the agent to read a named skill and then looks for that skill's
+    # text coming back; a question tagged for nothing gives the instruction no
+    # subject. Falls back to the first item, because an untagged split is still
+    # worth probing for the override check even though it cannot be scored.
+    item = next((i for i in items if i.gt_skills), items[0])
     return await run_rollout(
         [replace(item, question=probe_question(item.question, spec.skill_name))],
         skill_files=spec.initial_skill,
@@ -321,18 +325,29 @@ async def probe_activation(
     )
 
 
+def _workspace_saturated(spec: RunSpec, skills_read: Sequence[str]) -> bool:
+    """Did one question put most of the workspace in front of the agent?
+
+    A majority rather than all of it: an agent may hold a couple of skills back
+    for reasons of its own, and the finding is "this agent does not route", which
+    a two-thirds share establishes as well as a clean sweep. Below that it is an
+    agent making a choice — badly or well — which is what a routing run is for.
+
+    A single-skill workspace can never be saturated. Every agent shows its one
+    skill, and calling that "no routing decision" would be true and useless.
+    """
+    workspace = {**(spec.workspace_baseline or {}), **spec.initial_skill}
+    names = {path.split("/", 1)[0] for path in workspace if "/" in path}
+    if len(names) < 2:
+        return False
+    return len({s for s in skills_read} & names) * 3 >= len(names) * 2
+
+
 @dataclass
 class PreflightResult:
-    """What the probe established, and whether the run may go on.
+    """Whether this run can measure anything at all, and what to say if not."""
 
-    Two independent findings, kept apart because they have different
-    consequences. `detector_ok` is about what we can *see* and only routing
-    depends on it. `override_ignored` is about whether the experiment is
-    possible at all, and stops both modes.
-    """
-
-    detector_ok: bool
-    override_ignored: bool
+    ok: bool
     message: str
 
 
@@ -370,8 +385,6 @@ async def _preflight(
     reporting that as a violation would lock out working agents.
     """
     rows = await probe_activation(items, spec=spec, seams=seams, cancel_event=cancel_event)
-    observed = [row for row in rows if getattr(row, "activated", None) is not None]
-    ok = any(row.activated for row in observed)
     hit = rows[0].detector_hit if rows else "none"
     skills_read = (rows[0].skills_read or []) if rows else []
 
@@ -382,54 +395,60 @@ async def _preflight(
     # already applied that last condition, so a `False` here means the trace
     # carried the skill's text and our marker was not in it.
     verified = rows[0].override_verified if rows else None
-    # `hit == "none"` cannot coexist with a legitimate `False` — the detector
-    # reports `content` whenever body text was seen, which is the same condition
-    # `verify_probe_marker` requires before it will answer `False` at all. Kept
-    # anyway: this branch hard-fails a run somebody is paying for, and two
-    # independent conditions agreeing is cheap insurance against a later change
-    # to either one.
-    override_ignored = verified is False and hit != "none"
-
     # Carried forward as it arrived. The probe is bought once, on a fresh start
     # only, so what it found has to be readable by a resumed run — and a run
     # created before this shape existed may carry keys nothing reads any more,
     # which are kept rather than stripped so resuming one cannot fail on them.
     detector = {**spec.detector}
 
-    if override_ignored:
+    # An agent that shows every skill's body on every question is not making a
+    # routing decision — it sees the whole workspace whatever any description
+    # says. Optimising a description against it changes nothing, and the way
+    # that presents is the worst kind: routing accuracy pinned near zero because
+    # every skill counts as read on every question, every candidate rejected,
+    # for an hour, with nothing on screen saying why. The probe's trace already
+    # answers this, so the check costs nothing.
+    saturated = (
+        spec.mode == "routing"
+        and hit == "system_prompt"
+        and _workspace_saturated(spec, skills_read)
+    )
+
+    if saturated:
+        ok = False
         message = (
-            f"the agent read the skill ({hit}) but answered from its own copy: the "
-            "marker this run sent was not in the trace, though SKILL.md's own text "
-            "was. The agent server is most likely not applying metadata.skills, so "
-            "every step would measure the deployed skill instead of the candidate — "
-            "the run is stopped rather than spending an hour to produce a flat "
-            "line. The one innocent explanation is an agent that strips HTML "
-            "comments while building its prompt; the marker is a comment, and "
-            "nothing else distinguishes the two copies."
+            f"the agent was shown {len(skills_read)} of this workspace's skills in "
+            "its system prompt on a single question, so it is not choosing between "
+            "them — it has all of them, whatever any description says. A routing "
+            "run would optimise a field that changes nothing the agent does. Use "
+            "isolated mode to optimise this skill's body instead."
         )
-    elif ok and verified is True:
-        message = f"the agent read the skill we sent ({hit})"
-    elif ok:
-        # `ok` is the activation detector's verdict alone. Saying "we sent" on
-        # the strength of it would assert the very thing the marker check
-        # declined to conclude — and this sentence is what somebody would quote
-        # back after discovering a run had measured the deployed skill all along.
+    elif verified is True:
+        ok = True
+        message = f"the agent read the skill we sent it ({hit})"
+    elif verified is False:
+        ok = False
         message = (
-            f"the agent read the skill ({hit}), but the override could not be "
-            "verified: the trace does not show SKILL.md's own text, so there was "
-            "nowhere for this run's marker to appear. Accuracy is measured "
-            "normally; nothing here proves the candidate reached the agent."
-        )
-    elif spec.mode == "routing":
-        message = (
-            "no activation could be detected on the probe question. A routing run "
-            "is gated on activation, so it cannot measure whether a description "
-            "edit helped — fix the detector settings, or use isolated mode."
+            "the agent read the skill but answered from its own copy: the marker "
+            "this run sent was not in the trace, though SKILL.md's own text was. "
+            "The agent server is most likely not applying metadata.skills, so "
+            "every step would measure the deployed skill instead of the candidate. "
+            "The one innocent explanation is an agent that strips HTML comments "
+            "while building its prompt; the marker is a comment, and nothing else "
+            "distinguishes the two copies. See docs/agent-server-api.md §4."
         )
     else:
+        ok = False
         message = (
-            "no activation could be detected on the probe question. Accuracy is "
-            "still measured normally; the activation column will read 'unknown'."
+            "this run could not confirm that the agent used the skill it was sent. "
+            "Two things produce that and the trace cannot tell them apart: the "
+            "agent server is not applying metadata.skills (docs/agent-server-api.md "
+            "§4, acceptance check ④), or it applies it but its trace records no "
+            "skill content — no tool result, no system prompt — so there was "
+            "nowhere for this run's marker to appear. Either way every step would "
+            "be measuring something this platform cannot see, so the run is stopped "
+            "here rather than after an hour of rollouts that could not have shown "
+            "anything."
         )
 
     await store.finish_run(run_id, detector={
@@ -442,9 +461,7 @@ async def _preflight(
         "skills_read": skills_read, "override_verified": verified,
         "message": message,
     })
-    return PreflightResult(
-        detector_ok=ok, override_ignored=override_ignored, message=message
-    )
+    return PreflightResult(ok=ok, message=message)
 
 
 # --- Steps ------------------------------------------------------------------

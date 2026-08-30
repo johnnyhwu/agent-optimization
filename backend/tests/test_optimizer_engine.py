@@ -269,12 +269,22 @@ def install_noop_update(monkeypatch):
     monkeypatch.setattr(engine, "run_update_stage", fake_update)
 
 
-def install_preflight(monkeypatch, *, activated=True):
+def install_preflight(monkeypatch, *, activated=True, verified=True):
+    """A pre-flight that clears, unless a test asks for one that does not.
+
+    `verified` defaults to True because that is what a working agent produces
+    and what every test here is otherwise about: the pre-flight now stops any
+    run that has not *seen* the agent read the copy it was sent, so a helper
+    that left it unset would fail every run in this file for a reason none of
+    them are testing.
+    """
+
     async def fake_probe(*args, **kwargs):
         row = ResultRow(item_key="probe", correlation_id="p", status="done")
         row.activated = activated
-        row.detector_hit = "tool_path" if activated else "none"
+        row.detector_hit = "tool" if activated else "none"
         row.skills_read = ["billing"] if activated else []
+        row.override_verified = verified
         return [row]
 
     monkeypatch.setattr(engine, "probe_activation", fake_probe)
@@ -914,50 +924,35 @@ async def test_a_resumed_run_keeps_counting_refusals_from_before_the_restart(mon
 
 
 @pytest.mark.asyncio
-async def test_routing_refuses_to_start_when_the_skill_cannot_be_seen(monkeypatch):
-    """A routing run with no detector signal cannot measure its own outcome.
+@pytest.mark.parametrize("mode", ["isolated", "routing"])
+async def test_a_run_refuses_to_start_when_the_agent_cannot_be_seen(monkeypatch, mode):
+    """One rule for both modes, and for isolated that is a change.
 
-    Its gate compares activation rates. If nothing can observe activation, every
-    comparison is against `None` and the run degenerates into an accuracy-only
-    run that is *also* forbidden from editing the body — an hour spent, nothing
-    learned. Better to say so in the first ten seconds.
+    Isolated used to carry on here. Its gate was judge accuracy, which is
+    measurable whether or not the agent announces what it read, so a silent
+    detector cost it one column in the UI and nothing else — and refusing would
+    have locked out every agent whose traces did not name skill file paths.
+
+    What that reasoning left out is that the same silence also hides whether the
+    candidate reached the agent at all. Such a run can spend an hour measuring
+    the skill already deployed on the agent, and report the resulting flat line
+    as a finding. The column was worth losing; the measurement is not.
+
+    So the pre-flight now asks one question in both modes — did we *see* the
+    agent read the copy we sent — and a run that cannot answer it stops before
+    it buys anything. `tests/test_optimizer_preflight_override.py` holds the
+    detail of what counts as an answer.
     """
-    store = RecordingStore(make_spec(mode="routing"), make_items(4), make_items(4, "val"))
+    store = RecordingStore(make_spec(mode=mode), make_items(4), make_items(4, "val"))
     Scores({}).install(monkeypatch, store)
-    install_preflight(monkeypatch, activated=False)
+    install_preflight(monkeypatch, activated=False, verified=None)
     install_update(monkeypatch)
 
     status, events = await run(store, monkeypatch)
 
     assert status == "failed"
-    assert not store.steps
-    preflight = next(e for e in events if e["type"] == "preflight")
-    assert preflight["ok"] is False
-
-
-@pytest.mark.asyncio
-async def test_isolated_warns_about_a_silent_detector_and_carries_on(monkeypatch):
-    """Isolated mode does not need the detector to reach a verdict.
-
-    Its gate is accuracy, and accuracy is measurable whether or not the agent
-    announces which file it read. Aborting here would block the common case —
-    an agent whose traces do not name skill paths — from using the feature at
-    all, so the honest move is to say the activation column will read 'unknown'.
-    """
-    store = RecordingStore(make_spec(mode="isolated", total_steps=1, steps_per_epoch=1),
-                           make_items(2), make_items(2, "val"))
-    Scores({(0, "val"): (2, 1), (1, "train"): (2, 1), (1, "val"): (2, 2)}).install(
-        monkeypatch, store
-    )
-    install_preflight(monkeypatch, activated=False)
-    install_update(monkeypatch)
-
-    status, events = await run(store, monkeypatch)
-
-    preflight = next(e for e in events if e["type"] == "preflight")
-    assert preflight["ok"] is False
-    assert status == "completed"
-    assert store.steps
+    assert not store.steps, "nothing was bought"
+    assert next(e for e in events if e["type"] == "preflight")["ok"] is False
 
 
 def _detector_of(store):

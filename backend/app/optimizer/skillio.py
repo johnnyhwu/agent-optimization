@@ -27,7 +27,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 from app.optimizer.vendor.skill import (
     _ENTRY_POINT_NAME,
@@ -59,33 +59,39 @@ def has_frontmatter(files: Mapping[str, str], skill_dir: str) -> bool:
 
 
 def build_protection(
-    files: Mapping[str, str], skill_dir: str, mode: str
+    files: Mapping[str, str], skill_dir: str | Sequence[str], mode: str
 ) -> Protection:
     """What step-level edits may not touch, for one optimization mode.
 
     The two modes are mirror images, which is the whole reason they can share
     every other stage of the algorithm:
 
-      * ``isolated`` optimises the **body**. Only this skill is sent to the
-        agent, so there is no routing decision for a description to influence
-        and an edit to it could not be validated by the gate.
-      * ``routing`` optimises the **description**. The body is frozen — and so
-        is every other file, since only ``SKILL.md`` has a frontmatter — so a
-        routing run cannot quietly become a body-optimising one judged by the
-        routing guard.
+      * ``isolated`` optimises the **body** of one skill. Only that skill is
+        sent to the agent, so there is no routing decision for a description to
+        influence and an edit to it could not be validated by the gate.
+      * ``routing`` optimises the **descriptions**, of one skill or of several
+        together. Every body is frozen — and so is every other file, since only
+        ``SKILL.md`` has a frontmatter — so a routing run cannot quietly become
+        a body-optimising one judged by the routing score.
+
+    Several targets is routing's case alone, and it exists because descriptions
+    compete: widening one narrows the others by implication, so a run permitted
+    to move only one boundary is scored against a workspace that was frozen
+    against it. Each target still gives up exactly its own description.
     """
-    entry = entry_point_for(skill_dir)
+    dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
+    entries = frozenset(entry_point_for(d) for d in dirs)
     if mode == "routing":
         return Protection(
-            entry_point=entry,
+            entry_points=entries,
             protect="body",
-            readonly=frozenset(p for p in files if p != entry),
+            readonly=frozenset(p for p in files if p not in entries),
             # An `append` has no well-defined insertion point inside a `---`
             # block; guessing one hands the agent server unparseable YAML.
             allow_append=False,
         )
     if mode == "isolated":
-        return Protection(entry_point=entry, protect="frontmatter")
+        return Protection(entry_points=entries, protect="frontmatter")
     raise ValueError(f"unknown optimization mode {mode!r}; expected 'isolated' or 'routing'")
 
 

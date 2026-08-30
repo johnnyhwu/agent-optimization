@@ -805,3 +805,132 @@ def test_the_probe_marker_lands_below_the_frontmatter_of_a_crlf_skill():
     marker_at = marked.index("probe-deadbeef")
     assert marker_at > marked.index("description:"), "below the frontmatter"
     assert marker_at < marked.index("# Billing skill"), "above the body"
+
+
+# --- Routing across several skills at once ----------------------------------
+#
+# A routing run optimises the descriptions of several skills *together*, because
+# they compete: widening one narrows the others by implication, and a run that
+# could only touch one would either take the boundary from a description it was
+# not allowed to move, or move it and be scored against a workspace half of
+# which was frozen against it.
+#
+# What must not follow from that is a licence to edit anything else. Each target
+# gives up exactly its own description; every body, and every file of every
+# other skill, is as protected as it was with a single target.
+
+MULTI = {
+    "billing/SKILL.md": FRONTMATTER + BODY,
+    "billing/references/refunds.md": "# Refunds\n- Prorated.\n",
+    "reporting/SKILL.md": (
+        "---\nname: reporting\ndescription: Revenue reports.\n---\n# Reporting\n"
+        "1. Pick the period.\n"
+    ),
+    "shipping/SKILL.md": (
+        "---\nname: shipping\ndescription: Carriers.\n---\n# Shipping\n1. Track it.\n"
+    ),
+}
+
+
+def multi(f, *skills):
+    return skillio.build_protection(f, skill_dir=list(skills), mode="routing")
+
+
+def apply_multi(f, edits, *skills):
+    return apply_patch_with_report(
+        f, {"edits": edits}, skill_dir=list(skills), protection=multi(f, *skills)
+    )
+
+
+def test_each_target_can_have_its_own_description_edited():
+    out, reports = apply_multi(
+        MULTI,
+        [
+            {"op": "replace", "path": "billing/SKILL.md",
+             "target": "description: Invoices, balances, refunds and payment status.",
+             "content": "description: Invoices and balances only."},
+            {"op": "replace", "path": "reporting/SKILL.md",
+             "target": "description: Revenue reports.",
+             "content": "description: Revenue reports and period comparisons."},
+        ],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["applied_replace", "applied_replace"]
+    assert "Invoices and balances only." in out["billing/SKILL.md"]
+    assert "period comparisons" in out["reporting/SKILL.md"]
+
+
+def test_a_skill_that_is_not_a_target_cannot_be_written_to():
+    """The boundary of the licence. `shipping` is in the workspace so the agent
+    can choose it, which is not the same as the run being allowed to rewrite it.
+
+    Caught by the path check rather than the read-only list, which is the
+    stronger of the two: `path` is model output that becomes a key in the
+    override sent to the agent server, so "outside every directory this run was
+    given" is refused before anything looks at what the file is. Same verdict
+    the single-target case gives a sibling skill.
+    """
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "replace", "path": "shipping/SKILL.md",
+          "target": "description: Carriers.", "content": "description: Everything."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_invalid_path"]
+    assert out == MULTI
+
+
+def test_every_targets_body_is_still_frozen():
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "replace", "path": "reporting/SKILL.md",
+          "target": "1. Pick the period.", "content": "1. Guess."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_protected_region"]
+    assert out == MULTI
+
+
+def test_a_reference_file_of_a_target_is_still_read_only():
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "append", "path": "billing/references/refunds.md", "content": "- More."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_readonly_file"]
+
+
+def test_an_edit_naming_no_path_is_refused_when_there_are_several_targets():
+    """With one target, a missing `path` means "the skill" and is defaulted.
+
+    With several there is no such thing, and guessing one would silently write
+    another skill's description into this one. It is refused instead.
+    """
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "replace", "target": "description: Revenue reports.",
+          "content": "description: Anything."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_invalid_path"]
+    assert out == MULTI
+
+
+def test_a_single_target_still_works_when_passed_as_a_bare_string():
+    """Every existing caller passes one skill name; none of them should change."""
+    f = files(**{ENTRY: FRONTMATTER + BODY})
+    out, reports = apply(
+        f,
+        [{"op": "replace", "path": ENTRY,
+          "target": "description: Invoices, balances, refunds and payment status.",
+          "content": "description: Just invoices."}],
+        protection=routing(f),
+    )
+
+    assert statuses(reports) == ["applied_replace"]
+    assert "Just invoices." in out[ENTRY]

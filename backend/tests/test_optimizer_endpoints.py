@@ -304,8 +304,13 @@ async def test_the_preview_groups_questions_by_skill(session):
     )
     by_name = {g.skill_name: g for g in preview.groups}
     assert sorted(by_name) == ["billing", "reporting"]
-    assert len(by_name["billing"].questions) == 2
-    assert {q.question_id for q in preview.ambiguous} == {"q4", "q5"}
+    # q5 carries both tags and appears under both: a routing run optimises
+    # several descriptions together and a question spanning two of them is what
+    # says where the boundary between them belongs.
+    assert {q.question_id for q in by_name["billing"].questions} == {"q1", "q2", "q5"}
+    assert {q.question_id for q in by_name["reporting"].questions} == {"q3", "q5"}
+    # Only the untagged one has nowhere to go.
+    assert {q.question_id for q in preview.ambiguous} == {"q4"}
 
 
 async def test_a_source_the_caller_cannot_read_is_refused(session):

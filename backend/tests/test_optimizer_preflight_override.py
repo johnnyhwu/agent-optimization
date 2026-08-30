@@ -441,57 +441,79 @@ async def test_an_ignored_override_stops_the_run_in_both_modes(monkeypatch, mode
     assert store.steps == []
 
 
-async def test_a_tool_using_agent_that_logs_no_file_content_is_not_accused(monkeypatch):
-    """End of the same story, at the engine: `override_verified` arrives as
-    `None` and the run proceeds, rather than being stopped on a guess."""
-    store, status, events = await engine_run(
-        monkeypatch, probe_returning(verified=None, hit="tool_path")
-    )
+@pytest.mark.parametrize("mode", ["isolated", "routing"])
+async def test_an_unconfirmable_override_stops_the_run_in_both_modes(monkeypatch, mode):
+    """One rule now, and this is the case it changed.
 
-    assert status == "completed"
-    assert preflight_event(events)["override_verified"] is None
+    An agent whose trace carries no skill text at all used to be waved through:
+    `override_verified` was `None`, the marker check declined to accuse anyone,
+    and an isolated run went ahead on the strength of judge accuracy alone.
 
-
-async def test_a_negative_with_nothing_observed_still_does_not_block(monkeypatch):
-    """The engine's second guard, on a combination the adapter cannot produce.
-
-    `verify_probe_marker` only answers `False` once body text has been seen, and
-    the detector calls that `content` — so a `False` alongside `hit == "none"`
-    is already impossible upstream. The guard is kept because this branch
-    hard-fails a run somebody is paying for, and this test is what stops it
-    being tidied away as dead code.
+    That was the wrong trade once anything depended on seeing what the agent
+    read. Such a run cannot measure activation, cannot measure routing, and —
+    the part that matters for both modes — cannot establish that the candidate
+    ever reached the agent. It may spend an hour measuring the skill already
+    deployed and report a flat line as a finding. Stopping now costs one agent
+    call; the alternative costs the run and is indistinguishable from a real
+    result.
     """
     store, status, events = await engine_run(
-        monkeypatch, probe_returning(verified=False, hit="none", activated=False)
+        monkeypatch, probe_returning(verified=None, hit="none", activated=False),
+        mode=mode,
     )
 
-    assert status == "completed"
-    assert store.steps, "the run should have gone on to do work"
+    assert status == "failed"
+    assert store.steps == []
 
 
-async def test_a_probe_that_reports_no_verdict_does_not_block(monkeypatch):
-    """`None` is the default on every `ResultRow`, so anything that did not
-    actually run the marker check reads as "unknown" and lets the run go on."""
-    store, status, events = await engine_run(monkeypatch, probe_returning(verified=None))
+async def test_the_refusal_names_both_ways_it_can_happen(monkeypatch):
+    """A developer has to be able to tell which of the two it is.
 
-    assert status == "completed"
-    assert preflight_event(events)["override_verified"] is None
-
-
-async def test_the_message_does_not_claim_a_check_that_never_concluded(monkeypatch):
-    """`ok` is the activation detector's verdict and nothing more.
-
-    "the agent read the skill we sent" was being printed on the strength of it —
-    including when the marker check returned `None`, which is the case the whole
-    asymmetry in `verify_probe_marker` exists to protect. That is the one
-    sentence a reader would quote back when an optimization run turns out to
-    have measured the deployed skill all along.
+    "Your agent ignores metadata.skills" and "your agent applies it but does not
+    log skill content" need different fixes, and nothing in the trace
+    distinguishes them — so the message says so rather than picking one.
     """
-    _, _, events = await engine_run(monkeypatch, probe_returning(verified=None))
+    _, _, events = await engine_run(
+        monkeypatch, probe_returning(verified=None, hit="none", activated=False)
+    )
+
+    message = preflight_event(events)["message"]
+    assert "metadata.skills" in message
+    assert "trace" in message
+
+
+async def test_an_agent_that_reads_the_skill_but_hides_its_content_is_still_stopped(
+    monkeypatch,
+):
+    """Activation alone is not enough any more.
+
+    The old pre-flight accepted "the agent read something" as proof the machine
+    works. It is not proof the agent read *our copy*, which is the only thing
+    that makes a step a measurement.
+    """
+    _, status, _ = await engine_run(
+        monkeypatch, probe_returning(verified=None, hit="tool", activated=True)
+    )
+
+    assert status == "failed"
+
+
+async def test_the_message_never_claims_a_check_that_did_not_conclude(monkeypatch):
+    """The refusal must not borrow the confirmation's words.
+
+    Activation was firing here — the agent read *a* skill — and the old message
+    said "the agent read the skill we sent". It had no basis for the last two
+    words, and that is the sentence somebody would quote back after discovering
+    a run had measured the deployed skill all along. It stays reserved for the
+    one case that establishes it.
+    """
+    _, _, events = await engine_run(
+        monkeypatch, probe_returning(verified=None, hit="tool", activated=True)
+    )
     message = preflight_event(events)["message"]
 
     assert "we sent" not in message
-    assert "could not be verified" in message
+    assert "could not confirm" in message
 
 
 async def test_the_message_says_so_when_the_override_is_confirmed(monkeypatch):
@@ -527,7 +549,14 @@ async def test_only_the_probe_carries_the_marker_and_the_instruction(monkeypatch
             "probe_marker": kwargs.get("probe_marker"),
         })
         from tests.test_optimizer_engine import make_rows
-        return make_rows(len(items), correct=len(items))
+        rows = make_rows(len(items), correct=len(items))
+        if kwargs.get("probe_marker"):
+            # A healthy agent: it read the copy we sent, which is what the
+            # pre-flight now requires before any step is bought.
+            for row in rows:
+                row.override_verified = True
+                row.detector_hit = "tool"
+        return rows
 
     store = RecordingStore(
         make_spec(initial_skill=dict(PLAIN_SKILL)), make_items(4), make_items(2, "val")
@@ -549,3 +578,100 @@ async def test_only_the_probe_carries_the_marker_and_the_instruction(monkeypatch
             assert "probe-" not in text
         for question in call["questions"]:
             assert "read the billing skill" not in question
+
+
+# --- The agent that has no routing decision to make -------------------------
+
+
+async def test_routing_is_refused_when_every_skill_is_already_in_the_prompt(monkeypatch):
+    """An agent that injects every skill's body has nothing to route.
+
+    Its system prompt already carries all of them, so the agent never chooses:
+    it sees the whole workspace on every question, whatever any description
+    says. A routing run against it optimises a field that changes nothing, and
+    the symptom is the worst kind — routing accuracy pinned near zero (every
+    skill counts as read on every question, so the set never matches) and every
+    candidate rejected, for an hour, with nothing on screen explaining why.
+
+    Caught from the probe's own trace, which costs nothing: it is already
+    fetched, and the question is just how much of the workspace is visible in
+    the one place the agent was set up from.
+    """
+    async def probe(*args, **kwargs):
+        row = ResultRow(item_key="probe", correlation_id="p", status="done")
+        row.activated = True
+        row.detector_hit = "system_prompt"
+        row.override_verified = True
+        row.skills_read = ["billing", "reporting", "shipping"]
+        return [row]
+
+    store = RecordingStore(
+        make_spec(
+            mode="routing", initial_skill=dict(PLAIN_SKILL),
+            workspace_baseline={
+                "reporting/SKILL.md": "# Reporting\n",
+                "shipping/SKILL.md": "# Shipping\n",
+            },
+        ),
+        make_items(4), make_items(2, "val"),
+    )
+    Scores({}).install(monkeypatch, store)
+    install_update(monkeypatch)
+    monkeypatch.setattr(engine, "probe_activation", probe)
+
+    status, events = await run(store, monkeypatch)
+
+    assert status == "failed"
+    assert store.steps == []
+    message = preflight_event(events)["message"]
+    assert "isolated" in message, "it has to say what to do instead"
+
+
+async def test_isolated_is_unaffected_by_the_saturation_check(monkeypatch):
+    """It sends one skill, so "all of them are in the prompt" is the normal case."""
+    async def probe(*args, **kwargs):
+        row = ResultRow(item_key="probe", correlation_id="p", status="done")
+        row.activated = True
+        row.detector_hit = "system_prompt"
+        row.override_verified = True
+        row.skills_read = ["billing"]
+        return [row]
+
+    store, status, _ = await engine_run(monkeypatch, probe, mode="isolated")
+
+    assert status == "completed"
+
+
+async def test_routing_is_fine_when_the_agent_reads_a_subset(monkeypatch):
+    """Reading two of three skills is an agent making a choice, badly or well —
+    which is exactly what a routing run is for."""
+    async def probe(*args, **kwargs):
+        row = ResultRow(item_key="probe", correlation_id="p", status="done")
+        row.activated = True
+        row.detector_hit = "tool"
+        row.override_verified = True
+        row.skills_read = ["billing"]
+        return [row]
+
+    store = RecordingStore(
+        make_spec(
+            mode="routing", initial_skill=dict(PLAIN_SKILL),
+            workspace_baseline={
+                "reporting/SKILL.md": "# Reporting\n",
+                "shipping/SKILL.md": "# Shipping\n",
+            },
+        ),
+        make_items(4), make_items(2, "val"),
+    )
+    Scores({}).install(monkeypatch, store)
+    install_update(monkeypatch)
+    monkeypatch.setattr(engine, "probe_activation", probe)
+
+    _, events = await run(store, monkeypatch)
+
+    # The pre-flight is what this test is about; the run goes on to stop for an
+    # unrelated and correct reason (these items carry no skill tags, so routing
+    # accuracy has nothing to score — see `_baseline_step`).
+    event = preflight_event(events)
+    assert event["ok"] is True
+    assert "isolated mode" not in event["message"]
