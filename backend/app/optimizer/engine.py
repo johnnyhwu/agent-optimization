@@ -41,7 +41,6 @@ from typing import Awaitable, Callable, Sequence
 from app.config import settings
 from app.integrations import Seams
 from app.optimizer.adapter import make_probe_marker, run_rollout, score_rollout
-from app.optimizer.detector import DEFAULT_PATH_PATTERNS
 from app.optimizer.gating import decide_gate
 from app.optimizer.hyperparams import resolve_algorithm
 from app.optimizer.reflection import build_analyst_items
@@ -319,8 +318,6 @@ async def probe_activation(
         workspace_baseline=spec.workspace_baseline,
         cancel_event=cancel_event,
         concurrency=1,
-        detectable=bool(spec.detector.get("detectable")),
-        path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
         probe_marker=make_probe_marker(),
     )
 
@@ -355,20 +352,12 @@ async def _preflight(
     Aborting isolated runs on this would lock out every agent whose traces do
     not happen to name skill file paths.
 
-    **A successful probe turns the detector's absence into evidence.** That is
-    what this function is for, and until now it was the one thing it did not do.
-    `detect_activation` will only answer `False` when the caller has said a
-    detector demonstrably works against this agent — otherwise "nothing was seen"
-    is `None`, unknown, and `score_rollout` leaves unknowns out of the fraction
-    rather than averaging them in as zeros. Both halves of that are right. What
-    was missing is the connection: the probe proved the detector fires, wrote
-    `preflight.ok` for the UI, and never set `detectable`, which is the flag the
-    detector actually reads. It therefore stayed `False` on every run ever
-    executed, and a question where the agent called no tool at all scored
-    `None` and dropped out of the denominator. Nine questions reading the skill
-    and one reading nothing reported 100%, which is exactly the number that
-    cannot be trusted — a rate is worthless if the questions it is quietly
-    excluding are the ones it exists to catch.
+    **A successful probe is what makes "nothing was seen" mean something.** The
+    detector answers `False` for a trajectory that landed and carried no body
+    text, and `None` only when nothing landed at all. That is sound because a
+    run whose agent cannot be seen into does not get this far — which is the
+    pre-flight's job, and the reason it is bought before the first step rather
+    than inferred from the steps themselves.
 
     **The second finding is whether the override was applied at all.** The probe
     ships a marker that exists only in the copy we sent (`adapter`), so its
@@ -402,14 +391,11 @@ async def _preflight(
     # to either one.
     override_ignored = verified is False and hit != "none"
 
-    # In memory for the steps this process is about to run, and persisted below
-    # for the ones a restart will run — the probe is bought once, on a fresh
-    # start only, so a resumed run has to read this decision back rather than
-    # re-establish it.
+    # Carried forward as it arrived. The probe is bought once, on a fresh start
+    # only, so what it found has to be readable by a resumed run — and a run
+    # created before this shape existed may carry keys nothing reads any more,
+    # which are kept rather than stripped so resuming one cannot fail on them.
     detector = {**spec.detector}
-    if ok:
-        detector["detectable"] = True
-        spec.detector["detectable"] = True
 
     if override_ignored:
         message = (
@@ -981,8 +967,6 @@ async def _rollout(
         workspace_baseline=spec.workspace_baseline,
         cancel_event=cancel_event,
         concurrency=int(config.get("concurrency") or settings.run_concurrency),
-        detectable=bool(spec.detector.get("detectable")),
-        path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
         on_progress=item_done,
     )
     summary = score_rollout(

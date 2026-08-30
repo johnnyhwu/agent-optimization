@@ -543,6 +543,7 @@ async def create_optimization_run(
     await session.flush()
 
     accuracy = await _prior_accuracy(session, sorted(set_ids))
+    item_skills = await _skills_of(session, [q.id for q in questions])
     for split, keys in (("train", body.train), ("val", body.val)):
         for ordinal, key in enumerate(dict.fromkeys(keys)):
             question = by_key[key]
@@ -555,6 +556,11 @@ async def create_optimization_run(
                 question=question.question,
                 ground_truth_response=question.ground_truth_response,
                 ground_truth_reasoning=question.ground_truth_reasoning,
+                # The skills this question is *supposed* to route to, pinned for
+                # the same reason and with more force: routing accuracy is
+                # measured against them, so a tag edited mid-run would silently
+                # change what the chart has been plotting since step 0.
+                ground_truth_skills=list(item_skills.get(question.id, ())),
                 ordinal=ordinal, prior_accuracy=prior, prior_runs=runs,
             ))
     await session.commit()

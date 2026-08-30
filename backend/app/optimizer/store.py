@@ -48,6 +48,11 @@ class Item:
     question_pk: uuid.UUID | None = None
     source_eval_set_id: uuid.UUID | None = None
     ordinal: int = 0
+    # The skills this question should have routed to, as the run pinned them.
+    # Empty for a question with no tags, and for every run created before
+    # routing accuracy existed — both of which score as unmeasurable rather
+    # than as wrong.
+    gt_skills: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -259,6 +264,7 @@ class DbOptimizationStore:
                 question_pk=row.question_pk,
                 source_eval_set_id=row.source_eval_set_id,
                 ordinal=row.ordinal,
+                gt_skills=tuple(row.ground_truth_skills or ()),
             )
             for row in rows
         ]

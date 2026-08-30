@@ -36,11 +36,12 @@ from app.config import settings
 from app.integrations import Seams
 from app.integrations.base import LlmOutputError, Trace, WorkspaceOverride
 from app.optimizer.detector import (
-    DEFAULT_PATH_PATTERNS,
+    build_markers,
     detect_activation,
     entry_body_visible,
-    payload_text,
+    shown_to_model as _shown_to_model,
 )
+from app.optimizer.trajectory import Trajectory, build_trajectory
 from app.optimizer.store import Item, ResultRow, RolloutSummary
 from app.pipeline import RunCancelled, call_agent, call_judge, clip, wait_for_trace
 from app.services.failure_text import describe_failure
@@ -84,11 +85,11 @@ def build_workspace_skills(
 #
 # `detect_activation` answers "was this skill loaded?". It cannot answer "was
 # *our copy* of it loaded?", because a candidate is usually a light edit of the
-# agent's deployed file and both leave the same evidence — the same directory
-# name in a tool call, the same long body lines in the payload. So an agent
-# server that ignored `metadata.skills` would look perfect: full activation, a
-# passing pre-flight, and an accuracy curve that never moves because every step
-# measured the same unchanging deployed text.
+# agent's deployed file and both leave the same evidence — the same long body
+# lines, in the same places. So an agent server that ignored `metadata.skills`
+# would look perfect: full activation, a passing pre-flight, and an accuracy
+# curve that never moves because every step measured the same unchanging
+# deployed text.
 #
 # The marker closes that gap by making one copy distinguishable. It goes only
 # into the pre-flight's copy — a scored rollout must carry the candidate text
@@ -153,7 +154,7 @@ def inject_probe_marker(
 
 
 def verify_probe_marker(
-    trace: Trace | None, marker: str | None, *, content_visible: bool = False
+    trajectory: Trajectory | None, marker: str | None, *, content_visible: bool = False
 ) -> bool | None:
     """Did the marker reach the model? True / False / None for "cannot tell".
 
@@ -161,15 +162,13 @@ def verify_probe_marker(
     trace demonstrably carries skill file content — which is what
     `content_visible` says, and why a bare absence is `None`.
 
-    That asymmetry is the whole safety of the check. `detect_activation` fires
-    `tool_path` on a path found in a tool call's *arguments*, which proves the
-    agent went to read the skill and proves nothing about whether the file's
-    text was ever logged. An agent that applies the override correctly but keeps
-    its tool results out of Langfuse would otherwise have every optimization run
-    hard-failed on a false accusation — the worst way for this to be wrong,
-    because it blocks work that would have succeeded.
+    That asymmetry is the whole safety of the check. An agent can apply the
+    override correctly and still leave a trajectory with no file text in it —
+    it logs the tool call but not the result, or logs neither. Reading that
+    silence as "you ignored us" would hard-fail a run that would have succeeded,
+    which is the worst way for this to be wrong.
 
-    `None` for a missing or empty trace is load-bearing for the same reason:
+    `None` for a missing trajectory is load-bearing for the same reason:
     Langfuse ingestion lags and sometimes fails outright, and reading that as
     "the agent ignored us" would stop runs over a trace store hiccup.
 
@@ -181,9 +180,9 @@ def verify_probe_marker(
     override. The block message names that possibility so a false positive is
     diagnosable rather than baffling.
     """
-    if marker is None or trace is None or not trace.spans:
+    if marker is None or trajectory is None:
         return None
-    if marker in payload_text(trace):
+    if marker in _shown_to_model(trajectory):
         return True
     return False if content_visible else None
 
@@ -199,8 +198,6 @@ async def run_rollout(
     workspace_baseline: Mapping[str, str] | None = None,
     cancel_event: asyncio.Event | None = None,
     concurrency: int = 4,
-    detectable: bool = False,
-    path_patterns: Iterable[str] = DEFAULT_PATH_PATTERNS,
     probe_marker: str | None = None,
     on_progress=None,
 ) -> list[ResultRow]:
@@ -216,11 +213,19 @@ async def run_rollout(
     cancel_event = cancel_event or asyncio.Event()
     skills = build_workspace_skills(mode, skill_files, workspace_baseline)
     if probe_marker is not None:
-        # Only the pre-flight passes one. `detect_activation` below still runs
-        # against the *unmarked* `skill_files`, so the marker cannot become one
-        # of the body markers it matches on and inflate activation.
+        # Only the pre-flight passes one. The markers below are built from the
+        # *unmarked* files, so the marker cannot become one of the body lines
+        # the detector matches on and inflate activation.
         skills = inject_probe_marker(skills, skill_name, probe_marker)
     override = WorkspaceOverride(skills=skills)
+    # Computed once for the whole split rather than per item: routing checks
+    # every skill in the workspace on every question, and the candidate is fixed
+    # for the length of this rollout.
+    #
+    # From `build_workspace_skills`, not from the marked copy: a probe marker
+    # must never become one of the body lines the detector matches on, or the
+    # pre-flight would be measuring the line it inserted itself.
+    markers = build_markers(build_workspace_skills(mode, skill_files, workspace_baseline))
     timeout_s = config.get("agent_timeout_s") or settings.agent_timeout_s
     semaphore = asyncio.Semaphore(max(concurrency, 1))
     rows: list[ResultRow] = [None] * len(items)  # type: ignore[list-item]
@@ -235,8 +240,7 @@ async def run_rollout(
                 seams=seams,
                 timeout_s=timeout_s,
                 cancel_event=cancel_event,
-                detectable=detectable,
-                path_patterns=path_patterns,
+                markers=markers,
                 probe_marker=probe_marker,
             )
         if on_progress is not None:
@@ -270,8 +274,7 @@ async def _run_item(
     seams: Seams,
     timeout_s: float,
     cancel_event: asyncio.Event,
-    detectable: bool,
-    path_patterns: Iterable[str],
+    markers: Mapping[str, list[str]],
     probe_marker: str | None = None,
 ) -> ResultRow:
     correlation_id = uuid.uuid4().hex
@@ -371,12 +374,18 @@ async def _run_item(
         # Kept in memory for the reflect stage, which runs minutes later in the
         # same step and would otherwise re-fetch what we are holding.
         row.trace = trace
+        # Folded once, here, and carried on the row: the reflect stage needs the
+        # same conversation minutes later and re-folding a fifteen-span trace is
+        # not free. `build_trajectory` is also what makes the detector dialect-
+        # agnostic — it is the one place that knows how each agent shapes a
+        # tool result.
+        trajectory = build_trajectory(trace) if trace is not None else None
+        row.trajectory = trajectory
         activation = detect_activation(
-            trace,
+            trajectory,
             skill_name=skill_name,
             skill_files=skill_files,
-            path_patterns=path_patterns,
-            detectable=detectable,
+            markers=markers,
         )
         row.activated = activation.activated
         row.skills_read = activation.skills_read
@@ -392,9 +401,9 @@ async def _run_item(
             # `SKILL.md` alone, so a visible reference file is not evidence that
             # the marker would have been visible too.
             row.override_verified = verify_probe_marker(
-                trace, probe_marker,
+                trajectory, probe_marker,
                 content_visible=entry_body_visible(
-                    trace, skill_name=skill_name, skill_files=skill_files
+                    trajectory, skill_name=skill_name, skill_files=skill_files
                 ),
             )
 

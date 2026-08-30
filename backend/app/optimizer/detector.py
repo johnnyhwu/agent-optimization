@@ -1,255 +1,243 @@
-"""Did the agent actually load the skill being optimised?
+"""Which skills a question actually loaded, from the trace it left behind.
 
-Everything downstream assumes it did. In `isolated` mode a low activation rate
-means optimising the body is pointless — the agent never read it — and the run
-should say so rather than spend an hour producing edits nobody will execute. In
-`routing` mode activation *is* the objective, and it additionally guards the gate.
+Everything downstream assumes an answer to this. In `isolated` mode a low
+activation rate means optimising the body is pointless — the agent never read it
+— and the run should say so rather than spend an hour producing edits nobody
+will execute. In `routing` mode it *is* the objective: what the description is
+optimised for is that the right skill gets opened, and which skills were opened
+instead is the measurement.
 
-Two detectors, because the two plausible agent designs leave different evidence:
+**One rule.** A skill counts as read when its own body text appears somewhere the
+agent was *shown* it:
 
-  * **tool path** — the agent reads `.../skills/billing/SKILL.md` through a tool
-    call, so the path is right there in the trace. This also answers a question a
-    boolean cannot: *which* skills were read. "It read `reporting` instead of
-    you" is a far stronger signal for the routing analyst than "it did not read
-    you".
-  * **content match** — the agent has the skill injected into its prompt, so
-    there is no tool call to find, but the text itself is in the payload.
+  * the **system prompt** it was set up with — whole classes of agent inject
+    skills there and never call a tool for them;
+  * the result of a **tool** it called — which tool does not matter, and
+    deliberately so.
 
-The marker for the content detector is a line **of the skill's own body**.
-Nothing is injected: a probe token would put a new variable into the very context
-whose effect on the model we are trying to measure, and this platform's entire
-job is measuring that effect.
+Nothing is injected to make this visible. The markers are lines of the skill
+exactly as it was sent, because a probe token would put a new variable into the
+very context whose effect on the model is being measured, and measuring that
+effect is this platform's whole job.
 
-Body and frontmatter are matched separately, and the distinction carries routing
-mode. An agent that lists every skill's `description` in its system prompt so it
-can choose between them has been **offered** this skill; only body text proves it
-was **loaded**. Collapsing the two would score routing mode at 100% before it
-optimised anything.
+**Body, never frontmatter.** An agent that lists every skill's `description` in
+its system prompt so it can choose between them has been *offered* this skill;
+only body text proves it was *loaded*. Collapsing the two scores every skill as
+read on every question — 100% before anything has been optimised — and it is
+`offered` that names the difference, which is the one routing failure worth
+telling apart from the rest: the agent saw this skill on the menu and picked
+something else, which a description can fix.
 
-The third answer matters as much as the other two. When neither detector fires
-and nothing has yet established that either *could* fire for this agent, the
-result is **unknown**, not false — reporting 0% activation for an agent whose
-skill-loading is simply invisible to us would condemn a perfectly good run.
-`detectable` is how the caller says "pre-flight proved a detector works here", at
-which point absence becomes evidence.
+**Assistant turns are excluded.** They are the model's output, not its input. A
+good answer that restates a rule is not evidence the rule was read, and counting
+it was the false positive that made the previous whole-payload search
+untrustworthy.
+
+Three answers, not two. When no trajectory landed the result is **unknown** and
+not "read nothing": Langfuse ingestion lags and sometimes fails outright, and
+reporting that as the agent having read nothing blames the agent for the trace
+store — and, since routing accuracy is computed from these, would reject every
+candidate in a run that then ends having learned nothing, with no indication
+why. A trajectory that *did* land and shows no body text is evidence, because a
+run that could not be seen into at all never gets past the pre-flight.
 """
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Mapping
 
-from app.integrations.base import Trace
 from app.optimizer.skillio import frontmatter_span
-
-# `<anything>/skill|skills/<name>/<rest>`. Deployments differ in the prefix, the
-# case and — on Windows-shaped paths — the separator, but not in this shape.
-DEFAULT_PATH_PATTERNS: tuple[str, ...] = (
-    r"(?:^|[/\\])skills?[/\\]([A-Za-z0-9._-]+)[/\\]",
-)
+from app.optimizer.trajectory import Trajectory
 
 # A body line shorter than this is not evidence: "Do it." would match by
 # coincidence in half the traces ever recorded.
 MIN_MARKER_CHARS = 24
 
-# How many distinct body lines to look for. One is enough to prove the text
-# arrived; a handful makes the detector robust to a step editing the line it
-# happened to pick.
+# How many distinct body lines to look for per skill. One is enough to prove the
+# text arrived; a handful makes the detector robust to a step editing the line
+# it happened to pick.
 MARKER_COUNT = 3
+
+_ENTRY = "SKILL.md"
 
 
 @dataclass
 class Activation:
-    """What the detectors saw for one rollout item."""
+    """What one rollout's trace showed about the skills it was sent."""
 
-    # True when a detector fired. False only when the caller has established
-    # that a detector *would* have fired. None otherwise — see the module note.
+    # Whether the *run's* skill was read. None only when nothing could be seen —
+    # see the module note; it must never harden into a negative.
     activated: bool | None
-    # Every skill the trace shows being read, first-seen order, de-duplicated.
+    # Every skill whose body appeared, sorted. The set routing accuracy compares
+    # against the question's ground-truth skills.
     skills_read: list[str] = field(default_factory=list)
-    # tool_path | content | none. The stronger evidence wins when both fire.
+    # system_prompt | tool | none — where the target's evidence was found.
     hit: str = "none"
-    # The skill's description reached the model, but its body did not: the agent
-    # was offered this skill and chose something else. Routing mode's signal.
+    # The target's description reached the model but its body did not: it was on
+    # the menu and something else was chosen. Routing mode's signal.
     offered: bool = False
 
 
-def payload_text(trace: Trace) -> str:
-    """Everything the model was shown or produced, as one searchable blob."""
-    parts: list[str] = []
-    for span in trace.spans:
-        for body in (span.input, span.output):
-            if body:
-                parts.append(body)
+def _body_of(files: Mapping[str, str], skill_name: str) -> str:
+    """Everything of this skill that is not its frontmatter, as one blob."""
+    entry = f"{skill_name}/{_ENTRY}"
+    text = files.get(entry, "")
+    span = frontmatter_span(text)
+    body = text[span[1]:] if span else text
+
+    # Reference files are body: reading one proves the skill was loaded, and
+    # skills routinely instruct exactly that ("for refunds, read
+    # references/refunds.md").
+    for path, content in sorted(files.items()):
+        if path != entry and path.startswith(f"{skill_name}/"):
+            body += "\n" + content
+    return body
+
+
+def _description_of(files: Mapping[str, str], skill_name: str) -> str:
+    text = files.get(f"{skill_name}/{_ENTRY}", "")
+    span = frontmatter_span(text)
+    if span is None:
+        return ""
+    for line in text[span[0]:span[1]].splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower() == "description":
+            return value.strip().strip("\"'")
+    return ""
+
+
+def skill_names(files: Mapping[str, str]) -> list[str]:
+    """The skill directories present in a workspace, sorted."""
+    return sorted({path.split("/", 1)[0] for path in files if "/" in path})
+
+
+def skill_markers(files: Mapping[str, str], skill_name: str) -> list[str]:
+    """Distinctive lines of one skill's body, longest first.
+
+    Longest first because a long line is both less likely to collide by chance
+    and more likely to survive a step that rewords something shorter. Matching is
+    line-based rather than on a fixed-size block of the file: a tool returning a
+    file adds line numbers, elides the middle, or normalises whitespace, and any
+    of those breaks one long block silently while leaving most lines intact.
+    """
+    lines = {
+        stripped
+        for line in _body_of(files, skill_name).splitlines()
+        if len(stripped := line.strip()) >= MIN_MARKER_CHARS
+    }
+    return sorted(lines, key=len, reverse=True)[:MARKER_COUNT]
+
+
+def build_markers(files: Mapping[str, str]) -> dict[str, list[str]]:
+    """`{skill: markers}` for every skill in a workspace, computed once.
+
+    Worth hoisting: routing compares against the whole workspace on every item
+    of every rollout, and in routing mode the other skills are frozen for the
+    life of the run.
+    """
+    return {name: skill_markers(files, name) for name in skill_names(files)}
+
+
+def shown_to_model(trajectory: Trajectory) -> str:
+    """Everything the agent was *shown*, and nothing it produced.
+
+    Stated as "everything except `assistant`" rather than as a list of the roles
+    that count, because the list would be wrong. A tool result reaches us under
+    at least three roles depending on the agent: `tool` in the OpenAI shape,
+    `user` in the Anthropic one (a `tool_result` content part inside the user
+    message), and `span` when the trace store logged the tool as an observation
+    of its own rather than as a message. Enumerating those means a fourth
+    dialect scores 0% activation silently — which is exactly how the tool-path
+    detector this replaces used to fail.
+
+    Only the assistant's own turns are output, and only they are excluded. The
+    theoretical cost is a question that quotes 24+ characters of a skill body
+    back verbatim; the cost of the alternative is whole agent dialects reading
+    as agents that never open a skill.
+    """
+    parts = [trajectory.system_prompt or ""]
+    parts += [turn.text or "" for turn in trajectory.turns if turn.role != "assistant"]
     return "\n".join(parts)
 
 
-def _tool_call_paths(trace: Trace) -> list[str]:
-    """Every string that could be a file path in a tool call's arguments.
+def read_skills(
+    trajectory: Trajectory | None, markers: Mapping[str, list[str]]
+) -> set[str] | None:
+    """The skills this question loaded, or None when nothing could be seen.
 
-    Deliberately not "the `path` argument of the `read_file` tool": agents name
-    that tool `read_file`, `Read`, `view_file` and `fs.read`, and the argument
-    `path`, `file_path` or `target`. Scanning the argument *values* costs nothing
-    and does not need a list of every agent's vocabulary — the skill-directory
-    shape is distinctive enough on its own.
+    A skill with no markers at all — a body too short for any line to qualify —
+    can never be read. That is the safe direction: the alternative, matching
+    nothing and calling it a hit, would report every such skill as read on every
+    question.
     """
-    found: list[str] = []
-    for span in trace.spans:
-        for payload in (span.output_json, span.input_json):
-            for call in _walk_tool_calls(payload):
-                arguments = call.get("function", {}).get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except (ValueError, TypeError):
-                        found.append(arguments)
-                        continue
-                if isinstance(arguments, Mapping):
-                    found.extend(v for v in arguments.values() if isinstance(v, str))
-                elif isinstance(arguments, str):
-                    found.append(arguments)
-    return found
+    if trajectory is None or (not trajectory.system_prompt and not trajectory.turns):
+        return None
 
-
-def _walk_tool_calls(payload: Any) -> Iterable[dict]:
-    if isinstance(payload, Mapping):
-        calls = payload.get("tool_calls")
-        if isinstance(calls, list):
-            for call in calls:
-                if isinstance(call, Mapping):
-                    yield dict(call)
-        for value in payload.values():
-            if isinstance(value, (Mapping, list)):
-                yield from _walk_tool_calls(value)
-    elif isinstance(payload, list):
-        for item in payload:
-            if isinstance(item, (Mapping, list)):
-                yield from _walk_tool_calls(item)
-
-
-def _skills_from_paths(paths: Iterable[str], patterns: Iterable[str]) -> list[str]:
-    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
-    seen: list[str] = []
-    for raw in paths:
-        for pattern in compiled:
-            match = pattern.search(raw)
-            if not match:
-                continue
-            name = match.group(1)
-            if name.lower() not in {s.lower() for s in seen}:
-                seen.append(name)
-            break
-    return seen
-
-
-def _markers(skill_files: Mapping[str, str], skill_name: str) -> tuple[list[str], list[str]]:
-    """`(body markers, frontmatter markers)` — distinctive lines of each region.
-
-    Longest first: a long line is both less likely to collide by chance and more
-    likely to survive a step that rewords something shorter.
-    """
-    entry = f"{skill_name}/SKILL.md"
-    text = skill_files.get(entry, "")
-    span = frontmatter_span(text)
-    front_text, body_text = ("", text)
-    if span:
-        front_text, body_text = text[span[0]:span[1]], text[span[1]:]
-
-    # Reference files are body: reading one proves the skill was loaded.
-    for path, content in skill_files.items():
-        if path != entry and path.startswith(f"{skill_name}/"):
-            body_text += "\n" + content
-
-    def pick(source: str, *, values_only: bool = False) -> list[str]:
-        lines = set()
-        for line in source.splitlines():
-            line = line.strip()
-            if values_only:
-                # Frontmatter markers are the *values*, not the YAML. An agent
-                # that lists skills for routing writes "- billing: Invoices,
-                # balances…", not "description: Invoices, balances…" — matching
-                # the key line would miss every real menu.
-                if line in ("---", ""):
-                    continue
-                _, _, value = line.partition(":")
-                line = value.strip().strip("\"'") or line
-            if len(line) >= MIN_MARKER_CHARS:
-                lines.add(line)
-        return sorted(lines, key=len, reverse=True)[:MARKER_COUNT]
-
-    return pick(body_text), pick(front_text, values_only=True)
+    visible = shown_to_model(trajectory)
+    return {
+        name
+        for name, lines in markers.items()
+        if lines and any(line in visible for line in lines)
+    }
 
 
 def detect_activation(
-    trace: Trace | None,
+    trajectory: Trajectory | None,
     *,
     skill_name: str,
     skill_files: Mapping[str, str],
-    path_patterns: Iterable[str] = DEFAULT_PATH_PATTERNS,
-    detectable: bool = False,
+    workspace_files: Mapping[str, str] | None = None,
+    markers: Mapping[str, list[str]] | None = None,
 ) -> Activation:
-    """Whether this rollout loaded `skill_name`, and what else it read."""
-    # No trace is not the same as a trace showing no skill read. Langfuse
-    # ingestion lags and sometimes fails; treating that as "the agent ignored the
-    # skill" would blame the agent for the trace store being unreachable.
-    if trace is None or not trace.spans:
+    """One rollout's row: was the target read, and what else was.
+
+    `workspace_files` is everything the call sent — the target plus, in routing
+    mode, the frozen baseline. Isolated sends one skill, so the same code reports
+    at most that one and needs no special case.
+    """
+    if markers is None:
+        markers = build_markers({**(workspace_files or {}), **skill_files})
+
+    read = read_skills(trajectory, markers)
+    if read is None:
         return Activation(activated=None, hit="none")
 
-    skills_read = _skills_from_paths(_tool_call_paths(trace), path_patterns)
-    target = skill_name.lower()
-    # A path may spell the target differently from the run's own name (`Billing/`
-    # on a case-insensitive filesystem). Canonicalise that one so aggregating
-    # activation across a rollout does not split it into two skills; the others
-    # keep the spelling the trace gave, which is the agent's own truth.
-    skills_read = [skill_name if name.lower() == target else name for name in skills_read]
-    if any(name.lower() == target for name in skills_read):
-        return Activation(activated=True, skills_read=skills_read, hit="tool_path", offered=True)
+    activated = skill_name in read
+    hit = "none"
+    if activated:
+        own = markers.get(skill_name) or []
+        in_system = any(line in (trajectory.system_prompt or "") for line in own)
+        hit = "system_prompt" if in_system else "tool"
 
-    body_markers, front_markers = _markers(skill_files, skill_name)
-    payload = payload_text(trace)
-    body_seen = any(marker in payload for marker in body_markers)
-    front_seen = any(marker in payload for marker in front_markers)
+    offered = activated
+    if not activated:
+        description = _description_of(skill_files, skill_name)
+        offered = bool(description) and description in shown_to_model(trajectory)
 
-    if body_seen:
-        read = skills_read or [skill_name]
-        if not any(name.lower() == target for name in read):
-            read = [*read, skill_name]
-        return Activation(activated=True, skills_read=read, hit="content", offered=True)
-
-    # Nothing proved the skill was loaded. Whether that is a "no" or a "cannot
-    # tell" is the caller's to know: only the pre-flight rollout can establish
-    # that a detector works against this particular agent.
     return Activation(
-        activated=False if (detectable or skills_read) else None,
-        skills_read=skills_read,
-        hit="none",
-        offered=front_seen,
+        activated=activated, skills_read=sorted(read), hit=hit, offered=offered,
     )
 
 
 def entry_body_visible(
-    trace: Trace | None, *, skill_name: str, skill_files: Mapping[str, str]
+    trajectory: Trajectory | None, *, skill_name: str, skill_files: Mapping[str, str]
 ) -> bool:
-    """Does this trace carry the **entry point's own** body text?
+    """Does this trajectory carry the **entry point's own** body text?
 
     The one question that makes a missing probe marker mean anything. The marker
     can only ever sit in `<skill>/SKILL.md`, so its absence is evidence only
     where that file's text would have been visible had it arrived.
 
     **Reference files are deliberately excluded**, which is the opposite of what
-    `Activation.body_seen` counts and why this is a separate function. Reading a
-    reference file legitimately proves the skill was loaded — but it says nothing
-    about the marker, and skills routinely instruct exactly that ("for refunds,
-    read references/refunds.md"). Counting it would accuse an agent of ignoring
-    an override at the moment it was following the very skill we sent.
-
-    A skill with no entry point returns False for the same reason: nothing was
-    injected, so nothing can be missing.
+    `read_skills` counts and why this is a separate function. Reading a reference
+    file legitimately proves the skill was loaded — but it says nothing about the
+    marker, and skills routinely instruct exactly that. Counting it would accuse
+    an agent of ignoring an override at the moment it was following the very
+    skill we sent.
     """
-    entry = f"{skill_name}/SKILL.md"
-    if trace is None or not trace.spans or entry not in skill_files:
+    entry = f"{skill_name}/{_ENTRY}"
+    if trajectory is None or entry not in skill_files:
         return False
-    body_markers, _ = _markers({entry: skill_files[entry]}, skill_name)
-    payload = payload_text(trace)
-    return any(marker in payload for marker in body_markers)
+    markers = skill_markers({entry: skill_files[entry]}, skill_name)
+    visible = shown_to_model(trajectory)
+    return any(line in visible for line in markers)

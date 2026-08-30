@@ -966,21 +966,20 @@ def _detector_of(store):
 
 
 @pytest.mark.asyncio
-async def test_a_successful_probe_makes_the_detector_trusted(monkeypatch):
-    """The whole point of the probe, and for a long time the one thing it skipped.
+async def test_the_probe_records_what_it_found_for_a_resumed_run(monkeypatch):
+    """The probe is bought once, so what it found has to outlive this process.
 
-    `detect_activation` only answers "no" when the caller has established that a
-    detector *would* have fired against this agent; otherwise silence is
-    `None` — unknown — and `score_rollout` leaves unknowns out of the fraction
-    instead of averaging them in as zeros. Both halves are deliberate, and
-    together they are only correct if something ever flips the flag.
+    It runs on a fresh start only — re-probing on every restart would bill an
+    agent call per restart and could abort a half-finished routing run over one
+    transient trace failure — so a run resumed after a backend restart reads the
+    verdict back rather than establishing it again.
 
-    Nothing did. The probe proved the detector works, wrote `preflight.ok` for
-    the UI, and left `detectable` at its default, so every rollout treated "the
-    agent read nothing" as "we could not tell". A question that called no tool at
-    all fell out of the denominator, and nine questions reading the skill beside
-    one that ignored it reported 100% — the one number that had to be believable,
-    quietly excluding the case it exists to catch.
+    There used to be a `detectable` flag here as well, and it was the thing that
+    decided whether a later "nothing was seen" meant *no* or *unknown*. It is
+    gone: the detector now answers `False` for a trajectory that landed carrying
+    no body text and `None` only when nothing landed at all, which is sound
+    because a run whose agent cannot be seen into does not get past the
+    pre-flight at all.
     """
     store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
                            make_items(2), make_items(2, "val"))
@@ -992,9 +991,33 @@ async def test_a_successful_probe_makes_the_detector_trusted(monkeypatch):
 
     await run(store, monkeypatch)
 
-    assert _detector_of(store)["detectable"] is True
-    # And in memory, which is what the steps this process goes on to run read.
-    assert store.spec.detector["detectable"] is True
+    preflight = _detector_of(store)["preflight"]
+    assert preflight["ok"] is True
+    assert "detectable" not in _detector_of(store)
+
+
+@pytest.mark.asyncio
+async def test_a_detector_key_from_an_older_run_is_carried_not_rejected(monkeypatch):
+    """A run created before this shape existed must still resume.
+
+    `detector` is a JSONB column holding whatever the run was created with, and
+    rows in the wild carry `detectable` and `path_patterns` — settings nothing
+    reads any more. Stripping them would be a migration; failing on them would
+    strand every in-flight run at the moment this deploys.
+    """
+    spec = make_spec(total_steps=1, steps_per_epoch=1)
+    spec.detector.update({"detectable": True, "path_patterns": [r"skills/([a-z]+)/"]})
+    store = RecordingStore(spec, make_items(2), make_items(2, "val"))
+    Scores({(0, "val"): (2, 1), (1, "train"): (2, 1), (1, "val"): (2, 2)}).install(
+        monkeypatch, store
+    )
+    install_preflight(monkeypatch, activated=True)
+    install_update(monkeypatch)
+
+    status, _ = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert _detector_of(store)["path_patterns"] == [r"skills/([a-z]+)/"]
 
 
 @pytest.mark.asyncio

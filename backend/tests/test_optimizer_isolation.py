@@ -66,6 +66,7 @@ LATER_OPTIMIZATION_MIGRATIONS = [
     VERSIONS / "0010_rollout_mean_latency.py",
     VERSIONS / "0011_optimization_stage_calls.py",
     VERSIONS / "0013_optimization_stop_reason.py",
+    VERSIONS / "0016_routing_accuracy.py",
 ]
 
 # The tables that existed before Optimize. Nothing in the 0009 migration may

@@ -37,6 +37,7 @@ from app.integrations.base import Span, Trace
 from app.optimizer import adapter, detector, engine
 from app.optimizer.skillio import frontmatter_span
 from app.optimizer.store import Item, ResultRow, RunSpec
+from app.optimizer.trajectory import build_trajectory
 
 from tests.test_optimizer_engine import (
     RecordingStore,
@@ -183,6 +184,7 @@ def test_the_probe_question_names_the_directory_not_a_file_path():
 
 
 def _trace(text: str) -> Trace:
+    """One span carrying `text`, as the trace store would hand it over."""
     return Trace(
         correlation_id="c",
         spans=[Span(index=0, tool_name="generation", status="success",
@@ -190,13 +192,24 @@ def _trace(text: str) -> Trace:
     )
 
 
+def _folded(text: str):
+    """The same trace, folded the way a rollout folds it before looking at it.
+
+    Put through `build_trajectory` rather than constructed as a `Trajectory`
+    directly: the marker check and the detector both read the folded
+    conversation, and a test that skipped the fold would pass while the real
+    path failed on a dialect the folding handles differently.
+    """
+    return build_trajectory(_trace(text))
+
+
 def test_a_marker_in_the_payload_verifies_the_override():
-    assert adapter.verify_probe_marker(_trace("...probe-abc123..."), "probe-abc123") is True
+    assert adapter.verify_probe_marker(_folded("...probe-abc123..."), "probe-abc123") is True
 
 
 def test_a_marker_absent_from_a_trace_that_shows_the_skill_is_a_negative():
     assert adapter.verify_probe_marker(
-        _trace("nothing here"), "probe-abc123", content_visible=True
+        _folded("nothing here"), "probe-abc123", content_visible=True
     ) is False
 
 
@@ -204,30 +217,28 @@ def test_no_trace_is_unknown_rather_than_a_negative():
     """Langfuse ingestion fails sometimes; that is not the agent's fault and
     must not be read as it ignoring us."""
     assert adapter.verify_probe_marker(None, "probe-abc123") is None
-    assert adapter.verify_probe_marker(Trace("c", []), "probe-abc123") is None
+    assert adapter.verify_probe_marker(build_trajectory(Trace("c", [])), "probe-abc123") is None
 
 
 def test_no_marker_asked_for_is_unknown():
-    assert adapter.verify_probe_marker(_trace("anything"), None) is None
+    assert adapter.verify_probe_marker(_folded("anything"), None) is None
 
 
 def test_a_missing_marker_is_only_a_negative_when_file_content_is_visible():
     """The trap this closes: a tool-using agent whose trace carries the tool
     *call* but not its *result*.
 
-    `detect_activation` fires `tool_path` on a path found in a tool call's
-    arguments — which proves the agent went to read the skill, and proves
-    nothing at all about whether the file's text was ever logged. If the
-    marker's absence were taken as evidence there, an agent that applies the
-    override perfectly but logs its tool results elsewhere would have every
-    optimization run hard-failed with a false accusation.
+    An agent can log the tool *call* and not its *result*, or log neither, and
+    still have applied the override perfectly. If the marker's absence were
+    taken as evidence there, every one of those runs would be hard-failed on a
+    false accusation.
 
     So the negative needs positive proof that this trace shows file content at
     all — which the body detector already establishes, and which holds whether
     the agent used our copy or its own, since the pre-flight sends the agent's
     own files.
     """
-    seen = _trace("nothing recognisable here")
+    seen = _folded("nothing recognisable here")
     assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=False) is None
     assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=True) is False
 
@@ -235,9 +246,9 @@ def test_a_missing_marker_is_only_a_negative_when_file_content_is_visible():
 def test_a_reference_file_being_visible_is_not_grounds_for_a_negative():
     """The likeliest false accusation, and the one that would have hurt most.
 
-    `detect_activation`'s `body_seen` counts reference files — reading one does
-    prove the skill was loaded, which is what that flag is for. But the probe
-    marker can only ever sit in `SKILL.md`. A skill whose own text says "for
+    `read_skills` counts reference files — reading one does prove the skill was
+    loaded, which is what it is for. But the probe marker can only ever sit in
+    `SKILL.md`. A skill whose own text says "for
     refunds, read references/refunds.md" therefore produces an agent that
     follows its instructions, shows only the reference file in its trace, and
     gets accused of ignoring the override it actually applied.
@@ -248,7 +259,7 @@ def test_a_reference_file_being_visible_is_not_grounds_for_a_negative():
             "Refunds are prorated by the number of service days remaining in the term.\n",
     }
     # The trace shows the reference file and nothing of SKILL.md.
-    trace = _trace(files["billing/references/refunds.md"])
+    trace = _folded(files["billing/references/refunds.md"])
 
     assert detector.entry_body_visible(
         trace, skill_name="billing", skill_files=files
@@ -257,7 +268,7 @@ def test_a_reference_file_being_visible_is_not_grounds_for_a_negative():
 
 def test_the_entry_points_own_text_being_visible_is_grounds_for_a_negative():
     files = {"billing/SKILL.md": "# Billing\nIdentify the customer or order first of all.\n"}
-    trace = _trace("Identify the customer or order first of all.")
+    trace = _folded("Identify the customer or order first of all.")
 
     assert detector.entry_body_visible(
         trace, skill_name="billing", skill_files=files
@@ -273,7 +284,7 @@ def test_a_skill_with_no_entry_point_can_never_produce_a_negative():
     """
     files = {"billing/references/only.md":
              "Refunds are prorated by the number of service days remaining.\n"}
-    trace = _trace(files["billing/references/only.md"])
+    trace = _folded(files["billing/references/only.md"])
 
     assert detector.entry_body_visible(
         trace, skill_name="billing", skill_files=files
@@ -282,7 +293,7 @@ def test_a_skill_with_no_entry_point_can_never_produce_a_negative():
 
 def test_a_marker_that_is_present_is_a_positive_regardless(): 
     """Seeing it is proof on its own — nothing else has to corroborate."""
-    seen = _trace("...probe-abc123...")
+    seen = _folded("...probe-abc123...")
     assert adapter.verify_probe_marker(seen, "probe-abc123", content_visible=False) is True
 
 
@@ -364,7 +375,7 @@ async def test_the_marker_does_not_inflate_activation():
         [Item(item_key="k", question="q", ground_truth_response="gt",
               ground_truth_reasoning="r")],
         skill_files=dict(PLAIN_SKILL), mode="isolated", skill_name="billing",
-        seams=seams, config={}, probe_marker="probe-abc123", detectable=True,
+        seams=seams, config={}, probe_marker="probe-abc123",
     )
 
     assert rows[0].override_verified is True
