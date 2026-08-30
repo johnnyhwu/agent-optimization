@@ -78,16 +78,58 @@ class Protection:
 def _frontmatter_span(text: str) -> tuple[int, int] | None:
     """`(start, end)` of the leading YAML frontmatter block, or None.
 
-    Duplicated deliberately from `app.optimizer.skillio` rather than imported:
-    this package must not depend on ours, so the fork stays a leaf.
+    The single implementation: `app.optimizer.skillio.frontmatter_span`
+    delegates here, so the dependency runs ours -> vendored and the fork stays a
+    leaf.
+
+    Scanned line by line rather than matched against `"---\\n"`, because that
+    literal recognises only one *encoding* of a file authors write identically,
+    and each miss is silent. A `SKILL.md` checked out with `core.autocrlf` opens
+    `---\\r\\n`; one saved by an editor that writes a BOM opens `\\ufeff---`.
+    Both have a description, both used to report having none — which marks the
+    skill unavailable for routing, freezes the whole file against routing edits
+    (`_mode_spans`), and lets the detector count a menu listing the description
+    as proof the skill was *loaded*.
+
+    Only differences the author cannot see are tolerated. A blank line **above**
+    the opening delimiter is not one of them: the first line is then empty
+    rather than `---`, which is a different document, and every frontmatter
+    parser this platform's skills are written against reads it that way too. So
+    the rules are:
+
+      * a delimiter is a line whose stripped text is exactly ``---``, so CRLF
+        and trailing whitespace are the same delimiter as a bare one;
+      * a leading BOM is skipped — it is a byte, not a line;
+      * the block must **open the file**. Anything above it, blank or prose,
+        makes a later ``---`` a horizontal rule; an opening delimiter with
+        nothing closing it is a rule or a truncated file. Both answer None,
+        because reading either as frontmatter would hand routing mode a licence
+        to edit the body.
+
+    Offsets are returned into the *original* string: callers slice `text` with
+    them (`_mode_spans`, `detector._markers`), so any skipping done here must
+    not shift what the numbers mean.
     """
-    if not text.startswith("---\n"):
+    if not text:
         return None
-    close = text.find("\n---\n", 3)
-    if close != -1:
-        return (0, close + len("\n---\n"))
-    if text.endswith("\n---"):
-        return (0, len(text))
+
+    lines = text.split("\n")
+
+    # The opening delimiter is the first line, allowing for a BOM in front of it.
+    if lines[0].lstrip("﻿").rstrip() != "---":
+        return None
+
+    for index in range(1, len(lines)):
+        if lines[index].rstrip() != "---":
+            continue
+        # Character offset of the end of this line, plus its newline when the
+        # file has one there. `+ 1` per line consumed is the separator `split`
+        # removed; the final `+ 1` is the newline after the closing delimiter,
+        # which a file ending at the delimiter does not have.
+        end = sum(len(lines[i]) + 1 for i in range(index)) + len(lines[index])
+        return (0, end + 1 if index + 1 < len(lines) else end)
+
+    # Opened and never closed: a horizontal rule, or a file cut short.
     return None
 
 

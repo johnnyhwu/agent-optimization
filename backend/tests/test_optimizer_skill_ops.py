@@ -634,3 +634,174 @@ def test_the_counts_never_exceed_what_the_edit_could_possibly_be():
         n_after = len(after.splitlines())
         assert added - removed == n_after - n_before, (before, after)
         assert added <= n_after and removed <= n_before, (before, after)
+
+
+# --- Recognising the frontmatter block --------------------------------------
+#
+# `_frontmatter_span` is the foundation four separate things stand on, and all
+# four fail *silently* when it answers "no frontmatter" about a file that has
+# one:
+#
+#   * the wizard marks the skill unavailable for routing, and `POST /runs`
+#     refuses it — the visible failure, and the least damaging;
+#   * `_mode_spans` freezes the **whole file** in routing mode, so a run that
+#     started anyway would have every edit discarded and draw a flat line;
+#   * `detector._markers` cannot separate body from frontmatter, so a menu
+#     listing this skill's description scores as the skill having been *loaded*
+#     — activation reads 100% before anything has been optimised;
+#   * `adapter.inject_probe_marker` would put the pre-flight marker above the
+#     opening `---`. That one already scans lines itself and is the reason this
+#     whole family of bugs was noticed.
+#
+# The cases below are ordinary files, not adversarial ones: a `SKILL.md` edited
+# on Windows, checked out with `core.autocrlf`, or saved by an editor that
+# writes a BOM. Each of them used to report no frontmatter at all.
+
+FM_BODY = "# Billing skill\nInvoices and balances.\n"
+
+
+def span_of(text: str):
+    return skillio.frontmatter_span(text)
+
+
+def test_frontmatter_is_recognised_with_unix_newlines():
+    text = FRONTMATTER + FM_BODY
+    assert span_of(text) == (0, len(FRONTMATTER))
+
+
+def test_frontmatter_is_recognised_with_windows_newlines():
+    """CRLF is not an edge case; it is what `core.autocrlf=true` checks out."""
+    text = (FRONTMATTER + FM_BODY).replace("\n", "\r\n")
+    span = span_of(text)
+    assert span is not None
+    assert text[span[0]:span[1]].startswith("---")
+    assert "description:" in text[span[0]:span[1]]
+    assert text[span[1]:].lstrip().startswith("# Billing skill"), "body starts after it"
+
+
+def test_frontmatter_is_recognised_behind_a_byte_order_mark():
+    """Editors write a BOM; it must not hide the `---` on the line behind it."""
+    text = "﻿" + FRONTMATTER + FM_BODY
+    span = span_of(text)
+    assert span is not None
+    assert "description:" in text[span[0]:span[1]]
+    assert text[span[1]:].startswith("# Billing skill")
+
+
+def test_a_blank_line_above_the_delimiter_is_still_not_frontmatter():
+    """The boundary of what "the same file" means, and it is worth stating.
+
+    CRLF and a BOM are tolerated above because the author cannot see them: the
+    same keystrokes produce either, depending on the editor and the checkout. A
+    blank first line is not that — it is a line the author put there, the file
+    no longer *opens* with `---`, and every frontmatter parser these skills are
+    written against reads it as prose. Tolerating it here would make this
+    platform disagree with the agent actually loading the file.
+    """
+    assert span_of("\n" + FRONTMATTER + FM_BODY) is None
+
+
+def test_frontmatter_delimiters_may_carry_trailing_whitespace():
+    text = "---  \nname: billing\ndescription: Invoices.\n---\t\n" + FM_BODY
+    span = span_of(text)
+    assert span is not None
+    assert text[span[1]:].startswith("# Billing skill")
+
+
+def test_frontmatter_closing_delimiter_at_end_of_file_still_counts():
+    """A file that is nothing but frontmatter, with no trailing newline."""
+    text = "---\nname: billing\ndescription: Invoices.\n---"
+    span = span_of(text)
+    assert span == (0, len(text))
+
+
+def test_an_unclosed_delimiter_is_not_frontmatter():
+    """The one case that must keep answering "no".
+
+    An opening `---` with nothing closing it is a horizontal rule or a truncated
+    file, not a YAML block. Treating it as one would let routing mode edit
+    whatever happened to follow.
+    """
+    assert span_of("---\nname: billing\n" + FM_BODY) is None
+
+
+def test_a_delimiter_that_is_not_at_the_top_is_not_frontmatter():
+    assert span_of(FM_BODY + "---\nname: billing\n---\n") is None
+
+
+def test_a_file_with_no_delimiters_has_no_frontmatter():
+    assert span_of(FM_BODY) is None
+
+
+def test_an_empty_file_has_no_frontmatter():
+    assert span_of("") is None
+
+
+def test_a_horizontal_rule_alone_is_not_frontmatter():
+    """`---` twice with prose between them is still not a YAML block start.
+
+    It is, in fact, indistinguishable from one by shape alone — which is why
+    the rule is positional: only a block that *opens the file* counts.
+    """
+    assert span_of("Some prose.\n\n---\n\nMore prose.\n\n---\n") is None
+
+
+def test_has_frontmatter_agrees_across_newline_dialects():
+    """The wizard's verdict must not depend on who last saved the file."""
+    for text in (FRONTMATTER + FM_BODY, (FRONTMATTER + FM_BODY).replace("\n", "\r\n")):
+        assert skillio.has_frontmatter({ENTRY: text}, SKILL) is True
+
+
+def test_routing_protects_the_body_of_a_crlf_skill_and_still_edits_the_description():
+    """The consequence that matters: a CRLF skill is optimisable at all.
+
+    Before, `_mode_spans` saw no frontmatter here and froze the entire file, so
+    every routing edit came back `skipped_protected_region` — a run that spent
+    an hour and changed nothing.
+    """
+    text = (FRONTMATTER + FM_BODY).replace("\n", "\r\n")
+    f = files(**{ENTRY: text})
+
+    out, reports = apply(
+        f,
+        [{
+            "op": "replace",
+            "path": ENTRY,
+            "target": "description: Invoices, balances, refunds and payment status.",
+            "content": "description: Customer invoices and outstanding balances.",
+        }],
+        protection=routing(f),
+    )
+    assert statuses(reports) == ["applied_replace"]
+    assert "description: Customer invoices" in out[ENTRY]
+    assert "# Billing skill" in out[ENTRY], "the body survives"
+
+    out2, reports2 = apply(
+        f,
+        [{"op": "replace", "path": ENTRY, "target": "Invoices and balances.", "content": "Nope."}],
+        protection=routing(f),
+    )
+    assert statuses(reports2) == ["skipped_protected_region"]
+    assert out2 == f
+
+
+def test_the_probe_marker_lands_below_the_frontmatter_of_a_crlf_skill():
+    """Two implementations of "where does the body start" must agree.
+
+    `inject_probe_marker` scans lines; `_frontmatter_span` returns offsets. They
+    are used on the same file — one to place the pre-flight marker, the other to
+    decide what routing may edit — and a disagreement puts the marker inside the
+    YAML block, handing the agent server a skill it cannot parse.
+    """
+    from app.optimizer.adapter import inject_probe_marker
+
+    text = (FRONTMATTER + FM_BODY).replace("\n", "\r\n")
+    marked = inject_probe_marker({ENTRY: text}, SKILL, "probe-deadbeef")[ENTRY]
+
+    span = span_of(text)
+    assert span is not None
+    front = text[span[0]:span[1]]
+    assert "probe-deadbeef" not in front
+    marker_at = marked.index("probe-deadbeef")
+    assert marker_at > marked.index("description:"), "below the frontmatter"
+    assert marker_at < marked.index("# Billing skill"), "above the body"
