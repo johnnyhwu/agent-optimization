@@ -1,4 +1,4 @@
-"""The validation gate, and the second guard that only routing mode has.
+"""The validation gate: one comparison, on whichever score the mode is about.
 
 The decision itself is upstream's (`vendor/gate.py`, byte-identical): a
 candidate is kept only if it beats the skill currently in force, and it becomes
@@ -7,20 +7,23 @@ rejection, because validation accuracy on a few dozen questions moves a question
 at a time and `>=` would let the skill take a random walk through edits the data
 never supported.
 
-What is added here is routing mode's activation guard, and it exists because
-routing mode has a way to improve accuracy that nobody wants:
+**Both modes take the same path.** What differs is upstream of here: an isolated
+run hands over the judge's accuracy, a routing run hands over routing accuracy
+(`engine._score_of`). The gate compares the numbers it is given.
 
-    narrow the description until the agent stops opening the skill at all.
+There used to be a second guard, for routing only: the target skill's activation
+rate must not fall. It existed because routing has a way to improve *judge*
+accuracy that nobody wants — narrow the description until the agent stops
+opening the skill, and every question it was answering badly gets answered from
+the model's own knowledge instead — and an accuracy-only gate would accept that
+one approved step at a time while the chart climbed.
 
-Every question the skill was answering badly then gets answered by the agent's
-own knowledge instead, and accuracy goes up. An accuracy-only gate calls that an
-improvement and accepts it, and the run optimises the skill out of existence one
-approved step at a time — while the chart climbs. So a routing candidate must
-also not *lose* ground: activation may hold or rise, never fall.
-
-Isolated mode gets no such guard. It sends one skill and no alternatives, so
-there is no competitor to lose to and a dip in activation is just the agent
-answering from memory — a fact about the question, not about the edit.
+It watched one skill, in one direction, and the mirror image walked straight
+past it: a description widened to claim every question keeps its own activation
+at 100% and starves every other skill on the agent. Gating on routing accuracy
+closes both, because both are the same error measured properly — the questions
+tagged for a skill stopped reaching it, or questions belonging to another skill
+started reaching this one. A proxy needed a guard; the real thing does not.
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ class GateOutcome:
     """What the gate decided, and the state the next step inherits."""
 
     action: str  # accept_new_best | accept | reject
-    reject_reason: str | None  # accuracy | activation | None
+    reject_reason: str | None  # accuracy | None
     candidate_score: float
     current_score: float
     best_score: float
@@ -47,13 +50,10 @@ class GateOutcome:
 
 def decide_gate(
     *,
-    mode: str,
     step_no: int,
     cand_hard: float,
     cand_soft: float = 0.0,
-    cand_activation: float | None = None,
     current_score: float,
-    current_activation: float | None = None,
     best_score: float,
     best_step: int,
     metric: str = "hard",
@@ -88,22 +88,6 @@ def decide_gate(
             action="reject", reject_reason="accuracy", candidate_score=candidate_score,
             current_score=result.current_score, best_score=result.best_score,
             best_step=result.best_step,
-        )
-
-    # Accuracy is satisfied. Routing has one more thing to check — and only when
-    # both rates are actually known: activation is unobservable when no trace
-    # landed, and treating unknown as zero would turn a Langfuse outage into
-    # "every candidate rejected", ending the run having learned nothing with no
-    # indication why.
-    if (
-        mode == "routing"
-        and cand_activation is not None
-        and current_activation is not None
-        and cand_activation < current_activation
-    ):
-        return GateOutcome(
-            action="reject", reject_reason="activation", candidate_score=candidate_score,
-            current_score=current_score, best_score=best_score, best_step=best_step,
         )
 
     return GateOutcome(

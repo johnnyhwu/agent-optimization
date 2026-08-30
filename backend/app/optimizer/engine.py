@@ -78,7 +78,6 @@ class _State:
 
     current_files: dict[str, str]
     current_score: float = 0.0
-    current_activation: float | None = None
     best_files: dict[str, str] = field(default_factory=dict)
     best_score: float = 0.0
     best_step: int = 0
@@ -492,11 +491,19 @@ async def _baseline_step(
     )
 
     score = _score_of(summary, spec)
+    if score is None:
+        # Routing, and the baseline could not be scored at all. Every later step
+        # is a comparison against this number, so there is nothing to build on.
+        raise RunAborted(
+            "the baseline routing accuracy could not be measured: no validation "
+            "question both produced a trace and carried skill tags. Tag the "
+            "questions with the skills they belong to, or run in isolated mode."
+        )
     state.current_score = state.best_score = score
     state.best_step = 0
-    state.current_activation = summary.activation_rate
+    pair = _gate_pair(summary, spec)
     state.score_cache[content_hash] = (
-        summary.hard or 0.0, summary.soft or 0.0, summary.activation_rate
+        pair[0], pair[1], summary.activation_rate
     )
 
     await store.finish_step(
@@ -735,6 +742,11 @@ async def _run_step(
         questions={item.item_key: item.question for item in batch},
         ground_truths={item.item_key: item.ground_truth_response for item in batch},
         budget_chars=params["reflect_budget_chars"],
+        # So the analysts are split by the same definition of failure the gate
+        # enforces. A routing run reflecting on judge verdicts would be shown
+        # its routing failures under "answered correctly, so the routing worked".
+        mode=spec.mode,
+        gt_skills={item.item_key: item.gt_skills for item in batch},
     )
     outcome = await asyncio.to_thread(
         run_update_stage,
@@ -814,7 +826,7 @@ async def _run_step(
     # --- 3. validation rollout, against the candidate -----------------------
     cached = state.score_cache.get(candidate_hash)
     if cached is not None:
-        hard, soft, activation = cached
+        hard, soft, _ = cached
         from_cache = True
         # A cached score is one this run already measured and accepted as
         # trustworthy — a refused split never reaches the cache — so it counts
@@ -862,17 +874,44 @@ async def _run_step(
             })
             return None
 
-        hard = val_summary.hard or 0.0
-        soft = val_summary.soft or 0.0
-        activation = val_summary.activation_rate
-        state.score_cache[candidate_hash] = (hard, soft, activation)
+        pair = _gate_pair(val_summary, spec)
+        if pair is None:
+            # Routing, and not one validation question could be scored: every
+            # trace was missing, or none of them carried skill tags. Handled
+            # exactly like a refused split, and for the same reason — there is
+            # no number, so there is no gate, and accepting an edit here would
+            # be accepting it on no evidence at all.
+            await _finish_unscored_step(
+                store, step_id, seams=seams, state=state,
+                action="reject", reason="routing_unmeasured",
+                edit_budget=edit_budget, candidate_hash=candidate_hash,
+                n_edits_merged=outcome.n_edits_merged,
+                n_edits_ranked=outcome.n_edits_ranked,
+                n_edits_applied=outcome.n_edits_applied,
+                n_edits_skipped=outcome.n_edits_skipped,
+                edit_reports=outcome.reports,
+                lines_added=lines_added, lines_removed=lines_removed,
+                files_touched=len(stats), n_answer_leaks=len(leaks),
+                skill_len=sum(len(text) for text in candidate.values()),
+                edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+            )
+            await publish({
+                "type": "gate_done", "step_no": step_no, "action": "reject",
+                "reject_reason": "routing_unmeasured", "candidate_score": None,
+                "current_score": state.current_score, "best_score": state.best_score,
+                "from_cache": False,
+            })
+            return None
+
+        hard, soft = pair
+        state.score_cache[candidate_hash] = (hard, soft, val_summary.activation_rate)
         from_cache = False
 
     # --- 4. the gate --------------------------------------------------------
     gate = decide_gate(
-        mode=spec.mode, step_no=step_no,
-        cand_hard=hard, cand_soft=soft, cand_activation=activation,
-        current_score=state.current_score, current_activation=state.current_activation,
+        step_no=step_no,
+        cand_hard=hard, cand_soft=soft,
+        current_score=state.current_score,
         best_score=state.best_score, best_step=state.best_step,
         metric=params["gate_metric"],
         mixed_weight=params["mixed_weight"],
@@ -880,7 +919,6 @@ async def _run_step(
 
     if gate.accepted:
         state.current_files = candidate
-        state.current_activation = activation
         state.parent_step_no = step_no
     if gate.action == "accept_new_best":
         state.best_files = candidate
@@ -971,6 +1009,10 @@ async def _rollout(
     )
     summary = score_rollout(
         rows, split=split, skill_step_no=skill_step_no, error_threshold=error_share,
+        # Routing accuracy is scored against each question's own tags, so the
+        # items travel with the rows. Isolated passes them too and simply has
+        # nothing tagged to compare, which keeps one code path.
+        items=items,
     )
     if summary.aborted:
         # A split that "failed" because the stop button was pressed is not a
@@ -1027,11 +1069,34 @@ def skill_hash(files) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _score_of(summary, spec: RunSpec) -> float:
+def _gate_pair(summary, spec: RunSpec) -> tuple[float, float] | None:
+    """The `(hard, soft)` this run's gate compares, or None if unmeasurable.
+
+    The whole of the mode's difference at the gate, in one place. An isolated run
+    is about whether the skill's body produces better answers, so it is gated on
+    the judge. A routing run is about whether the agent reaches for the right
+    skill, so it is gated on routing accuracy — and improving the routing while
+    the answers get worse is a *pass*, because what is inside the skill is not
+    what a description edit can fix.
+
+    None only for routing, and it means nothing could be scored: no trajectory
+    landed, or none of the questions carried tags. There is no number to gate on
+    then, and inventing a zero would read as "it routed everything wrong".
+    """
+    if spec.mode == "routing":
+        if summary.routing_hard is None:
+            return None
+        return float(summary.routing_hard), float(summary.routing_soft or 0.0)
+    return float(summary.hard or 0.0), float(summary.soft or 0.0)
+
+
+def _score_of(summary, spec: RunSpec) -> float | None:
     params = resolve_algorithm(spec.config)
+    pair = _gate_pair(summary, spec)
+    if pair is None:
+        return None
     return select_gate_score(
-        summary.hard or 0.0, summary.soft or 0.0,
-        params["gate_metric"], params["mixed_weight"],
+        pair[0], pair[1], params["gate_metric"], params["mixed_weight"],
     )
 
 

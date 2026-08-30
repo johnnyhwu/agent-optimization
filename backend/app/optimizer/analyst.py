@@ -73,9 +73,28 @@ def format_trajectory_item(item: dict, ordinal: int, *, include_preamble: bool =
     if reference:
         parts.append(f"#### Ground-truth Response\n{reference}")
 
+    # Which skills the question belonged to and which the agent actually opened.
+    # Stated as its own section rather than left to be read out of the tool
+    # results in the conversation below, because those are the first thing
+    # `truncate_trajectory` cuts when a minibatch is over budget — so on exactly
+    # the long trajectories where a routing failure hides, the evidence for it
+    # would be the part that did not survive.
+    wanted, read = item.get("gt_skills"), item.get("skills_read")
+    if wanted and read is not None:
+        parts.append(
+            "#### Routing\n"
+            f"- tagged for: {', '.join(wanted)}\n"
+            f"- skills the agent read: {', '.join(read) or '(none)'}"
+        )
+
     fail_reason = str(item.get("fail_reason") or "").strip()
     if fail_reason:
-        parts.append(f"#### Failure Reason (from the judge)\n{fail_reason}")
+        # Named for where the verdict came from. In a routing run it is not the
+        # judge — the answer may well have been graded correct while the agent
+        # opened the wrong skill, and attributing that to the judge would send
+        # the analyst looking at the answer instead of the description.
+        source = "routing" if (wanted and read is not None) else "the judge"
+        parts.append(f"#### Failure Reason (from {source})\n{fail_reason}")
 
     trajectory = item.get("trajectory")
     if isinstance(trajectory, Trajectory):

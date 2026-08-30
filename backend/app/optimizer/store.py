@@ -130,6 +130,12 @@ class RolloutSummary:
     n_judge_error: int = 0
     hard: float | None = None
     soft: float | None = None
+    # How well the agent routed: `routing_hard` is the strict set match against
+    # the questions' tags, `routing_soft` the F1. None on an isolated rollout,
+    # which is not measuring a choice, and None when nothing was measurable —
+    # never 0.0, which would read as "it routed everything wrong".
+    routing_hard: float | None = None
+    routing_soft: float | None = None
     activation_rate: float | None = None
     n_activated: int = 0
     latency_min_ms: int | None = None
@@ -400,6 +406,8 @@ class DbOptimizationStore:
             n_judge_error=summary.n_judge_error,
             hard=summary.hard,
             soft=summary.soft,
+            routing_hard=summary.routing_hard,
+            routing_soft=summary.routing_soft,
             activation_rate=summary.activation_rate,
             n_activated=summary.n_activated,
             latency_min_ms=summary.latency_min_ms,

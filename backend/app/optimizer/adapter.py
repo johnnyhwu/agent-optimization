@@ -42,6 +42,7 @@ from app.optimizer.detector import (
     shown_to_model as _shown_to_model,
 )
 from app.optimizer.trajectory import Trajectory, build_trajectory
+from app.optimizer.routing import routing_scores
 from app.optimizer.store import Item, ResultRow, RolloutSummary
 from app.pipeline import RunCancelled, call_agent, call_judge, clip, wait_for_trace
 from app.services.failure_text import describe_failure
@@ -416,6 +417,7 @@ def score_rollout(
     split: str,
     skill_step_no: int,
     error_threshold: float = DEFAULT_ERROR_THRESHOLD,
+    items: Sequence[Item] | None = None,
 ) -> RolloutSummary:
     """Aggregate one split into the numbers behind a single point on the chart.
 
@@ -483,6 +485,12 @@ def score_rollout(
 
     summary.hard = sum(1 for r in scored if r.verdict == "correct") / n_scored
     summary.soft = sum(float(r.judge_score or 0.0) for r in scored) / n_scored
+
+    # Both pairs, always, when the caller supplied the questions' tags. Which
+    # one gates is the run's `gate_metric` and the mode's choice; the other is
+    # how a developer sees that routing improved while the answers did not —
+    # the finding that says to run an isolated pass next.
+    summary.routing_hard, summary.routing_soft = routing_scores(scored, items)
 
     latencies = sorted(r.agent_latency_ms for r in scored if r.agent_latency_ms is not None)
     if latencies:

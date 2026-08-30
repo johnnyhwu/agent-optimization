@@ -11,8 +11,12 @@ So these tests are mostly about the boundaries — ties, unknowns, and the case
 where one guard is happy and the other is not.
 
 The decision itself is SkillOpt's (`vendor/gate.py`, byte-identical to
-upstream). What is ours is the wrapper: which metric goes in, how a refusal is
-labelled, and the second guard that only routing mode has.
+upstream). What is ours is the wrapper: which numbers go in, and how a refusal
+is labelled.
+
+There used to be a second guard here, for routing mode only: activation must not
+fall. It is gone, along with the hole in it — see the routing-mode section
+below.
 """
 from __future__ import annotations
 
@@ -24,13 +28,10 @@ from app.optimizer.gating import decide_gate
 def gate(**overrides):
     """A gate call with sensible middles, so each test states only its point."""
     kwargs = dict(
-        mode="isolated",
         step_no=3,
         cand_hard=0.5,
         cand_soft=0.5,
-        cand_activation=None,
         current_score=0.5,
-        current_activation=None,
         best_score=0.5,
         best_step=1,
     )
@@ -145,102 +146,64 @@ def test_mixed_weights_the_two_metrics():
     assert outcome.action in ("accept", "accept_new_best")
 
 
-# --- Routing mode's second guard -------------------------------------------
+# --- Routing mode ----------------------------------------------------------
+#
+# Routing runs feed the gate routing accuracy instead of judge accuracy
+# (`engine._score_of`), so everything above applies unchanged and there is no
+# second comparison. What that replaced was a guard requiring the target
+# skill's activation not to fall, and the tests below are the two behaviours
+# that mattered, re-stated against the metric that now carries them.
 
 
-def test_routing_refuses_a_candidate_whose_activation_dropped():
-    """Routing mode can improve accuracy by getting the skill *ignored*.
+def test_a_description_narrowed_until_the_skill_is_ignored_is_refused():
+    """The failure the old activation guard existed for.
 
-    This is the failure the guard exists for, and it is not hypothetical: a
-    description narrowed until the agent stops opening the skill will raise
-    accuracy on every question the skill was answering badly. Accuracy alone
-    would call that an improvement and the run would optimise the skill out of
-    existence, one accepted step at a time.
+    A description narrowed until the agent stops opening the skill raises judge
+    accuracy on every question the skill was answering badly — the answers come
+    from the model's own knowledge instead — so a run gated on judge accuracy
+    would optimise the skill out of existence, one accepted step at a time,
+    with the chart climbing all the way.
+
+    Gated on routing accuracy it is refused on the first step: the questions
+    tagged for this skill stopped reaching it, which is what the number counts.
     """
-    outcome = gate(
-        mode="routing", cand_hard=0.9, current_score=0.5,
-        cand_activation=0.4, current_activation=0.8,
-    )
+    outcome = gate(cand_hard=0.2, current_score=0.8)
+
     assert outcome.action == "reject"
-    assert outcome.reject_reason == "activation"
+    assert outcome.reject_reason == "accuracy"
 
 
-def test_routing_accepts_when_activation_holds_steady():
-    """The rule is 'must not decrease', not 'must increase'.
+def test_a_description_widened_until_it_wins_everything_is_refused_too():
+    """The half the old guard could not see, and the reason it was replaced.
 
-    A description edit that fixes wording without changing which questions route
-    to the skill is a legitimate improvement; requiring activation to rise as
-    well would reject most of the good ones.
+    A description broadened to claim every question keeps its own activation at
+    100% — rising, even — while every other skill on the agent is starved. An
+    activation-only guard reads that as an improvement. Routing accuracy counts
+    a skill opened for a question that was not its job as the error it is, so
+    the candidate scores worse and is refused.
     """
-    outcome = gate(
-        mode="routing", cand_hard=0.7, current_score=0.5,
-        cand_activation=0.8, current_activation=0.8,
-    )
-    assert outcome.accepted is True
-    assert outcome.reject_reason is None
+    outcome = gate(cand_hard=0.3, current_score=0.7)
+
+    assert outcome.action == "reject"
 
 
-def test_routing_does_not_reject_on_an_unknown_activation_rate():
-    """Unknown is not zero, and treating it as a drop would block every step.
+def test_routing_accepts_a_candidate_that_routes_better():
+    outcome = gate(cand_hard=0.9, current_score=0.5)
 
-    Activation is unobservable when no trace landed. If a missing rate counted
-    as 0.0, a Langfuse outage would silently turn into 'every candidate rejected'
-    and the run would end having learned nothing, with no indication why.
-    """
-    unknown_candidate = gate(
-        mode="routing", cand_hard=0.9, current_score=0.5,
-        cand_activation=None, current_activation=0.8,
-    )
-    unknown_current = gate(
-        mode="routing", cand_hard=0.9, current_score=0.5,
-        cand_activation=0.4, current_activation=None,
-    )
-    assert unknown_candidate.accepted is True
-    assert unknown_current.accepted is True
-
-
-def test_isolated_mode_ignores_activation_entirely():
-    """The guard belongs to routing alone.
-
-    An isolated run sends only this skill, so there is no competitor to lose to
-    and a dip in activation is just the agent answering from its own knowledge.
-    Applying the guard there would reject candidates for a reason the mode
-    cannot act on.
-    """
-    outcome = gate(
-        mode="isolated", cand_hard=0.9, current_score=0.5,
-        cand_activation=0.1, current_activation=0.9,
-    )
     assert outcome.action == "accept_new_best"
     assert outcome.reject_reason is None
 
 
-def test_routing_rejects_on_accuracy_before_it_looks_at_activation():
-    """A candidate that failed both guards is reported against the first.
+def test_the_gate_does_not_take_a_mode_at_all():
+    """Structural, not asserted: there is no argument to branch on.
 
-    Otherwise a step that was simply worse would be labelled an activation
-    problem, sending the developer to rewrite a description that was not the
-    cause.
+    The caller chooses which pair of numbers to hand over and the gate compares
+    them. A mode-conditional branch in here is how the previous guard came to
+    apply one rule, in one direction, to one skill — so the parameter is gone
+    rather than merely unused.
     """
-    outcome = gate(
-        mode="routing", cand_hard=0.2, current_score=0.5,
-        cand_activation=0.1, current_activation=0.9,
-    )
-    assert outcome.reject_reason == "accuracy"
+    import inspect
 
+    from app.optimizer.gating import decide_gate
 
-def test_an_activation_refusal_keeps_the_previous_scores():
-    """The second guard must roll back as completely as the first.
-
-    A candidate rejected for activation had a *higher* accuracy, so leaking its
-    score into `current_score` would raise the bar for every later step — the
-    run would then be comparing against a skill it decided not to keep.
-    """
-    outcome = gate(
-        mode="routing", cand_hard=0.9, current_score=0.5,
-        best_score=0.6, best_step=2,
-        cand_activation=0.1, current_activation=0.9,
-    )
-    assert outcome.current_score == pytest.approx(0.5)
-    assert outcome.best_score == pytest.approx(0.6)
-    assert outcome.best_step == 2
+    assert "mode" not in inspect.signature(decide_gate).parameters
