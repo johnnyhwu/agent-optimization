@@ -40,7 +40,7 @@ from typing import Any, Mapping, Sequence
 
 from app.integrations.base import OptimizerClient
 from app.optimizer.analyst import run_analyst_minibatch
-from app.optimizer.skillio import build_protection, render_skill
+from app.optimizer.skillio import build_protection, render_competing_skills, render_skill
 from app.optimizer.trajectory import (
     Trajectory,
     conversation_chars,
@@ -205,6 +205,12 @@ def run_update_stage(
     seed: int | None = None,
     update_mode: str = "patch",
     truncation_by_item: Mapping[str, list[dict]] | None = None,
+    # Every *other* skill on the agent, for routing runs. The rollout already
+    # sends these to the agent (they are what the description competes against);
+    # this is what lets the analyst see the same field. `None` for isolated —
+    # and for a routing run resumed from before this existed, which must keep
+    # working rather than crash.
+    context_files: Mapping[str, str] | None = None,
     # Optimizer-side memory from the last epoch boundary. Empty unless the run
     # turned `meta_skill` on, in which case the analyst is shown what the
     # previous epoch taught the optimizer about its own editing.
@@ -227,11 +233,30 @@ def run_update_stage(
         )
 
     skill_content = render_skill(files, skill_dir)
+    # Analyst-only, deliberately. Merge and ranking open with the same
+    # "## Current Skill" section, so folding this into `skill_content` would
+    # have been a one-word change — and would then pay for the whole menu twice
+    # more per step, on the largest model in the run, in two stages that combine
+    # and choose among edits rather than making any routing judgement.
+    #
+    # Gated on the mode here rather than at the call site: isolated sends one
+    # skill to the agent, so there is no choice for a menu to inform and showing
+    # one would have the analyst weighing alternatives the agent was never
+    # offered. That is a property of the mode, so it holds wherever the caller
+    # is, and it keeps an isolated prompt byte-identical to what it was.
+    competing = (
+        render_competing_skills({
+            path: text for path, text in context_files.items()
+            if not (path == skill_dir or path.startswith(f"{skill_dir}/"))
+        })
+        if context_files and mode == "routing" else ""
+    )
     recorder = _Recorder(client)
 
     with use_optimizer(recorder):
         records, patches = _reflect(
             skill_content=skill_content, mode=mode, items=items, recorder=recorder,
+            competing_skills=competing,
             edit_budget=edit_budget, minibatch_size=minibatch_size,
             analyst_workers=analyst_workers, failure_only=failure_only, seed=seed,
             update_mode=update_mode, truncation_by_item=truncation_by_item,
@@ -385,7 +410,7 @@ def _merge_level(user_prompt: str) -> int | None:
 def _reflect(
     *, skill_content, mode, items, recorder, edit_budget, minibatch_size,
     analyst_workers, failure_only, seed, update_mode, truncation_by_item,
-    meta_skill_context="",
+    meta_skill_context="", competing_skills="",
 ) -> tuple[list[MinibatchRecord], list[dict]]:
     """Split into minibatches and run one analyst call per group, in parallel.
 
@@ -418,6 +443,7 @@ def _reflect(
                 edit_budget=edit_budget,
                 update_mode=update_mode,
                 meta_skill_context=meta_skill_context,
+                competing_skills=competing_skills,
             )
         except Exception as exc:  # noqa: BLE001 - one batch must not end the step
             error = f"{type(exc).__name__}: {exc}"

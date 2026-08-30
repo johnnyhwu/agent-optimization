@@ -765,6 +765,11 @@ async def _run_step(
         seed=config.get("seed"),
         truncation_by_item=ledger,
         meta_skill_context=state.meta_skill_text,
+        # The same skills the rollout just sent to the agent. A routing
+        # description is optimised to win a choice, so the analyst has to see
+        # what it is choosing against; `run_update_stage` ignores this in
+        # isolated mode, where there is no choice.
+        context_files=spec.workspace_baseline,
     )
     for record in outcome.minibatches:
         await store.record_minibatch(

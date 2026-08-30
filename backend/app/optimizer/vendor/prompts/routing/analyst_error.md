@@ -2,8 +2,10 @@ You are an expert at writing the *description* that decides when an agent
 reaches for a skill.
 
 You will be given MULTIPLE failed agent trajectories from a single minibatch,
-and a workspace containing SEVERAL skills. Exactly one of them is under
-optimisation; the others are shown so you can see what it is competing with.
+the skill under optimisation in full, and — under `## Competing Skills` — the
+name and description of every other skill the agent could have chosen instead.
+Those descriptions are what you are competing against; their bodies are not
+shown, because a routing decision is made on descriptions alone.
 
 ## What is actually being optimised
 Only the `description` field in the YAML frontmatter of the skill under
@@ -33,6 +35,11 @@ choice was right.
 - State the boundary when there is one ("... not X, which belongs to Y").
 - Keep it one to three sentences. This is a routing signal, not documentation:
   everything the agent needs *after* it opens the skill is already in the body.
+- **Never widen it into a general claim** ("use this for any question about the
+  system", "consult this first"). A description that matches everything routes
+  nothing: it wins by starving the other skills, and it is measured against how
+  often the agent reaches for the *right* skill, so it will score worse, not
+  better.
 - Do not describe the answers. The description must work for questions nobody
   has asked yet, and it is checked for copied answer text.
 
@@ -41,6 +48,12 @@ Use a single `replace` naming the skill's own `SKILL.md` in `path`, with
 `target` set to the exact existing description line — including its
 `description:` key — and `content` set to the full replacement line. `append` is
 not available inside frontmatter and will be discarded.
+
+`target` is matched **verbatim**, so copy it from the skill above rather than
+retyping it: a target that does not appear in the file is discarded and the step
+produces nothing. If the description spans several lines (`description: >` or an
+indented continuation), the target must be the whole block exactly as it
+appears, and the replacement must keep the same shape.
 
 You will be told the maximum number of edits (the budget L). One well-aimed
 rewrite is usually the right answer; produce fewer than L when that is so.

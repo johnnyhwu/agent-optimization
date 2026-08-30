@@ -144,10 +144,22 @@ def build_user_prompt(
     mode: str,
     step_buffer_context: str = "",
     meta_skill_context: str = "",
+    competing_skills: str = "",
 ) -> str:
-    """The analyst's user message. Section order is upstream's, verbatim."""
+    """The analyst's user message. Section order is upstream's, verbatim.
+
+    `competing_skills` is the one section upstream has no equivalent of, because
+    upstream has no routing mode: it is the menu of other skills this
+    description is competing against, and it sits directly under the skill it is
+    being compared with. Empty for isolated runs, which send one skill to the
+    agent and so present no choice to inform — and empty means *absent*, so an
+    isolated prompt is byte-for-byte what it was before this existed.
+    """
     update_mode = normalize_update_mode(mode)
     user = f"## Current Skill\n{skill_content}\n\n"
+
+    if competing_skills.strip():
+        user += f"{competing_skills.rstrip()}\n\n"
 
     if is_full_rewrite_minibatch_mode(update_mode):
         user += (
@@ -183,6 +195,7 @@ def run_analyst_minibatch(
     update_mode: str = "patch",
     step_buffer_context: str = "",
     meta_skill_context: str = "",
+    competing_skills: str = "",
 ) -> dict | None:
     """One optimizer call over one minibatch. `None` when it had nothing to say.
 
@@ -199,6 +212,7 @@ def run_analyst_minibatch(
         source_type=source_type, edit_budget=edit_budget, mode=update_mode,
         step_buffer_context=step_buffer_context,
         meta_skill_context=meta_skill_context,
+        competing_skills=competing_skills,
     )
 
     # Exceptions travel. Upstream swallows them and returns `None`, which is

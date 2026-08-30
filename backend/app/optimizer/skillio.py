@@ -30,6 +30,7 @@ import zipfile
 from typing import Iterable, Mapping
 
 from app.optimizer.vendor.skill import (
+    _ENTRY_POINT_NAME,
     Protection,
     _frontmatter_span,
     _normalise_path,
@@ -106,6 +107,85 @@ def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
     return "\n\n".join(
         f"### File: {path}\n```markdown\n{files[path]}\n```" for path in ordered
     )
+
+
+# Enough for a few dozen descriptions, and a hard stop well short of the point
+# where the skill section could crowd out the model's room to answer. The
+# trajectory budget (`reflect_budget_chars`) covers trajectories only — the
+# skill goes in front of it, unbudgeted — so a workspace that grows without
+# limit would otherwise grow this prompt without limit too, and going over the
+# context window truncates nothing: the call is refused and the step loses its
+# gradient.
+DEFAULT_COMPETING_BUDGET_CHARS = 8_000
+
+
+def description_of(text: str) -> str:
+    """The `description` field of a skill's frontmatter, as one line.
+
+    Deliberately not a YAML parse. This runs over every skill on the agent,
+    including ones this platform never validated, and a single malformed file
+    would otherwise take out the whole block — for a field that is one line in
+    every skill that has one. A folded or block description (`description: >`)
+    keeps only its first line here, which is what a routing menu shows anyway.
+    """
+    span = frontmatter_span(text)
+    if span is None:
+        return ""
+    for line in text[span[0]:span[1]].splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower() == "description":
+            return value.strip().strip("\"'")
+    return ""
+
+
+def render_competing_skills(
+    files: Mapping[str, str],
+    *,
+    budget_chars: int = DEFAULT_COMPETING_BUDGET_CHARS,
+) -> str:
+    """The other skills on the agent, as the menu the routing analyst competes in.
+
+    Routing optimises a description so that it wins a choice, and both routing
+    analyst prompts ask the model to distinguish this skill from "the *other*
+    descriptions you were shown". Until this existed, nothing was shown: the
+    analyst received the target skill's directory alone and was asked to
+    differentiate it from competitors it had never seen.
+
+    **Descriptions only.** Bodies are the bulk of a workspace and say nothing
+    about when a skill should be chosen — the description is the entire basis on
+    which the agent chooses — so sending them would spend the unbudgeted part of
+    the prompt on text that cannot inform the judgement.
+
+    A skill with no description is still named. It competes whether or not it
+    explains itself, and omitting it would read as "there is no such skill".
+
+    Over budget, the tail is dropped and the block says how many went with it: an
+    analyst comparing against a subset while believing it has the set is the
+    failure this whole function exists to fix, one level down.
+    """
+    entries: list[tuple[str, str]] = []
+    for path, text in sorted(files.items()):
+        if not path.endswith(f"/{_ENTRY_POINT_NAME}"):
+            continue
+        entries.append((path.split("/", 1)[0], description_of(text)))
+    if not entries:
+        return ""
+
+    heading = "## Competing Skills\n"
+    lines: list[str] = []
+    used = len(heading)
+    for index, (name, description) in enumerate(entries):
+        line = f"- {name}: {description}\n" if description else f"- {name}: (no description)\n"
+        # Leave room for the omission notice itself, or it could be the thing
+        # that does not fit.
+        remaining = len(entries) - index
+        notice = f"({remaining} more not shown)\n" if remaining else ""
+        if used + len(line) + len(notice) > budget_chars:
+            lines.append(f"({remaining} more not shown)\n")
+            break
+        lines.append(line)
+        used += len(line)
+    return heading + "".join(lines)
 
 
 def _opcodes(before: list[str], after: list[str]) -> list[tuple[str, int, int, int, int]]:
