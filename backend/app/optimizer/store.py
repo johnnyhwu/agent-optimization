@@ -61,6 +61,8 @@ class RunSpec:
 
     id: uuid.UUID
     mode: str
+    # The first target. Every screen, download name and log line reads this, and
+    # it is what an isolated run optimises.
     skill_name: str
     config: dict
     secrets: dict
@@ -74,6 +76,10 @@ class RunSpec:
     # The agent config version pinned when the run was created. Each step
     # records what it actually saw, so a mid-run deploy is visible.
     workspace_version: str | None = None
+    # Every skill this run may edit, `skill_name` first. One entry unless a
+    # routing run is moving competing descriptions together; empty on a spec
+    # built before that existed, which `_targets_of` reads as `[skill_name]`.
+    target_skills: tuple[str, ...] = ()
 
 
 @dataclass
@@ -241,6 +247,7 @@ class DbOptimizationStore:
             id=run.id,
             mode=run.mode,
             skill_name=run.skill_name,
+            target_skills=tuple(run.target_skills or [run.skill_name]),
             config=run.config or {},
             secrets=run.secrets or {},
             initial_skill=dict(run.initial_skill or {}),

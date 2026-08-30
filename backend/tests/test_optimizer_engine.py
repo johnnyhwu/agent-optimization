@@ -235,7 +235,11 @@ def install_update(monkeypatch, *, edits_line="2. Mention the period.", applied=
 
     def fake_update(*, files, skill_dir, mode, items, client, edit_budget, **kwargs):
         candidate = dict(files)
-        entry = f"{skill_dir}/SKILL.md"
+        # `skill_dir` is one directory or several — a routing run optimising
+        # competing descriptions passes the whole set. The first is the run's
+        # primary target, which is what these tests assert against.
+        first = skill_dir if isinstance(skill_dir, str) else list(skill_dir)[0]
+        entry = f"{first}/SKILL.md"
         candidate[entry] = candidate.get(entry, "") + edits_line + "\n"
         return UpdateOutcome(
             files=candidate,

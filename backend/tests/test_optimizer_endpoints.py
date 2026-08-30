@@ -1099,3 +1099,105 @@ async def test_a_cancelled_run_deletes(session, monkeypatch):
     _, run = await _seed_deletable_run(session, monkeypatch, status="cancelled")
     await opt.delete_optimization_run(run.id, subject="alice", session=session)
     assert await session.get(OptimizationRun, run.id) is None
+
+
+# --- Several skills in one routing run --------------------------------------
+
+MULTI_WORKSPACE = {
+    "billing/SKILL.md": (
+        "---\nname: billing\ndescription: Invoices and balances.\n---\n# Billing\n"
+    ),
+    "billing/references/refunds.md": "# Refunds\nProrated.\n",
+    "reporting/SKILL.md": (
+        "---\nname: reporting\ndescription: Revenue reports.\n---\n# Reporting\n"
+    ),
+    "shipping/SKILL.md": (
+        "---\nname: shipping\ndescription: Carriers.\n---\n# Shipping\n"
+    ),
+    "plain/SKILL.md": "# Plain\nNo frontmatter, so nothing to route on.\n",
+}
+
+
+async def _create_run(session, monkeypatch, **overrides):
+    """A run against a workspace whose skills actually carry descriptions.
+
+    The fake seam's skills have no frontmatter at all, which is fine for the
+    isolated tests above and makes every routing target unusable here.
+    """
+    _stub_start(monkeypatch)
+
+    class Workspace:
+        version = "v1"
+        skills = dict(MULTI_WORKSPACE)
+
+    class Fake:
+        async def get_workspace(self):
+            return Workspace()
+
+        async def get_version(self):
+            return "v1"
+
+    class Seams:
+        workspace = Fake()
+
+    monkeypatch.setattr(opt, "build_seams", lambda *a, **k: Seams())
+    _, _, keys = await make_runnable_set(session)
+    return await opt.create_optimization_run(
+        create_body(keys[:14], keys[14:], **overrides),
+        subject="alice", session=session,
+    )
+
+
+async def test_a_routing_run_can_target_several_skills(session, monkeypatch):
+    """Descriptions compete, so they are optimised together.
+
+    A run allowed to move only one boundary is scored against a workspace that
+    was frozen against it: widening `billing` narrows `reporting` by
+    implication, and the questions that say where the line belongs are the ones
+    tagged for both.
+    """
+    out = await _create_run(
+        session, monkeypatch, mode="routing", skill_names=["billing", "reporting"],
+    )
+    row = await session.get(OptimizationRun, out.id)
+
+    assert sorted(out.target_skills) == ["billing", "reporting"]
+    # Both targets are pinned as the skill under optimisation...
+    assert set(row.initial_skill) >= {"billing/SKILL.md", "reporting/SKILL.md"}
+    # ...and neither is in the frozen baseline, which is the rest of the
+    # workspace. A target appearing in both would have the run competing against
+    # a stale copy of the description it is editing.
+    assert not any(p.startswith("billing/") for p in row.workspace_baseline)
+    assert not any(p.startswith("reporting/") for p in row.workspace_baseline)
+    assert "shipping/SKILL.md" in row.workspace_baseline
+
+
+async def test_isolated_still_takes_exactly_one_skill(session, monkeypatch):
+    """Isolated sends one skill and edits its body; two would be two experiments."""
+    with pytest.raises(HTTPException) as exc:
+        await _create_run(
+            session, monkeypatch, mode="isolated", skill_names=["billing", "reporting"],
+        )
+
+    assert exc.value.status_code == 400
+    assert "one skill" in exc.value.detail
+
+
+async def test_a_routing_target_without_frontmatter_is_still_refused(session, monkeypatch):
+    """The existing check, applied to every target rather than to the first."""
+    with pytest.raises(HTTPException) as exc:
+        await _create_run(
+            session, monkeypatch, mode="routing",
+            skill_names=["billing", "plain"],
+        )
+
+    assert exc.value.status_code == 400
+    assert "plain" in exc.value.detail
+
+
+async def test_a_single_skill_run_still_records_its_name(session, monkeypatch):
+    """Every existing caller sends `skill_name`; none of them should change."""
+    run = await _create_run(session, monkeypatch, mode="isolated", skill_name="billing")
+
+    assert run.skill_name == "billing"
+    assert run.target_skills == ["billing"]

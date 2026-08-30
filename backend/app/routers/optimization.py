@@ -191,6 +191,9 @@ def _run_out(run: OptimizationRun, splits, sources, steps_done) -> OptimizationR
         status=run.status,
         mode=run.mode,
         skill_name=run.skill_name,
+        # Null on every run created before a routing run could name several, and
+        # those had exactly one target: the name they recorded.
+        target_skills=list(run.target_skills or [run.skill_name]),
         num_epochs=run.num_epochs,
         batch_size=run.batch_size,
         steps_per_epoch=run.steps_per_epoch,
@@ -450,6 +453,22 @@ async def create_optimization_run(
     if body.mode not in ("isolated", "routing"):
         raise HTTPException(status_code=400, detail=f"unknown mode {body.mode!r}")
 
+    # One name or several, resolved once. `skill_name` stays the first target so
+    # that every screen, download and log line reading it keeps working.
+    targets = list(dict.fromkeys(body.skill_names or [body.skill_name]))
+    if not targets:
+        raise HTTPException(status_code=400, detail="name at least one skill to optimise")
+    if body.mode == "isolated" and len(targets) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "an isolated run optimises the body of one skill and sends only "
+                f"that skill to the agent; {len(targets)} were named. Optimising "
+                "several at once is routing mode, where the descriptions compete "
+                "and have to move together."
+            ),
+        )
+
     # 1. The split, on its own terms.
     issues = dataset.split_issues(body.train, body.val)
     errors = [i for i in issues if i["level"] == "error"]
@@ -481,26 +500,37 @@ async def create_optimization_run(
     workspace = await _read_workspace(seams)
     initial = {
         path: text for path, text in workspace.skills.items()
-        if path == body.skill_name or path.startswith(f"{body.skill_name}/")
+        if any(path == name or path.startswith(f"{name}/") for name in targets)
     }
-    if not initial:
+    missing = [
+        name for name in targets
+        if not any(p == name or p.startswith(f"{name}/") for p in workspace.skills)
+    ]
+    if missing:
         available = top_level_skills(workspace.skills)
         raise HTTPException(
             status_code=400,
             detail=(
-                f"the agent has no skill directory named {body.skill_name!r}"
+                f"the agent has no skill directory named {', '.join(repr(m) for m in missing)}"
                 + (f" — it has: {', '.join(available)}" if available else "")
             ),
         )
-    if body.mode == "routing" and not skillio.has_frontmatter(initial, body.skill_name):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"routing mode optimises the description in "
-                f"{skillio.entry_point_for(body.skill_name)}'s YAML frontmatter, "
-                "and this skill has none"
-            ),
-        )
+    if body.mode == "routing":
+        # Every target, not just the first: a run that silently dropped one
+        # would report progress on a boundary it never moved.
+        undescribed = [
+            name for name in targets if not skillio.has_frontmatter(initial, name)
+        ]
+        if undescribed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "routing mode optimises the description in a skill's YAML "
+                    "frontmatter, and "
+                    + ", ".join(skillio.entry_point_for(n) for n in undescribed)
+                    + " has none"
+                ),
+            )
 
     # 4. Materialise the config, the same way `run_config.resolve` does for an
     #    eval run: a field left blank is stored with the environment's value, so
@@ -514,7 +544,7 @@ async def create_optimization_run(
         created_by=subject,
         status="pending",
         mode=body.mode,
-        skill_name=body.skill_name,
+        skill_name=targets[0],
         config=config,
         # Typed into this request, else this developer's saved default for the
         # endpoint this run is actually pointed at. Same `inject` as the eval and
@@ -526,6 +556,7 @@ async def create_optimization_run(
             body.secrets.model_dump(),
         ),
         workspace_version=workspace.version,
+        target_skills=targets,
         initial_skill=initial,
         # Routing sends the whole workspace, so the *other* skills are part of
         # the experiment and must not shift mid-run.

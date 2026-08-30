@@ -609,6 +609,9 @@ async def _epoch_boundary(
         run_epoch_boundary,
         files=state.current_files,
         prev_files=state.epoch_files.get(epoch_no - 1, {}),
+        # The primary target only. The boundary writes its guidance into a
+        # marker block in the *body*, which routing freezes and isolated has
+        # exactly one of — so there is no second skill for it to write into.
         skill_dir=spec.skill_name,
         items=[{"id": item.item_key, "question": item.question} for item in val],
         results_prev=await store.load_val_results(run_id, previous),
@@ -768,7 +771,10 @@ async def _run_step(
     outcome = await asyncio.to_thread(
         run_update_stage,
         files=state.current_files,
-        skill_dir=spec.skill_name,
+        # Every target: a routing run moves competing descriptions together, and
+        # one permitted to edit only the first would be scored against a
+        # workspace the other half of which was frozen against it.
+        skill_dir=_targets_of(spec),
         mode=spec.mode,
         items=items,
         client=seams.optimizer,
@@ -1084,6 +1090,15 @@ def skill_hash(files) -> str:
     """A stable identity for one skill directory, for the validation cache."""
     payload = json.dumps(dict(files), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _targets_of(spec: RunSpec) -> list[str]:
+    """Every skill this run may edit, for a spec of any age.
+
+    `target_skills` is empty on a run created before routing could name several,
+    and those had exactly one target: the name they recorded.
+    """
+    return list(spec.target_skills or (spec.skill_name,))
 
 
 def _gate_pair(summary, spec: RunSpec) -> tuple[float, float] | None:

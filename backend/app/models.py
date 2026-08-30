@@ -344,7 +344,14 @@ class OptimizationRun(Base):
     # them), which analyst prompts run, what the gate additionally guards, and
     # which half of SKILL.md the optimizer may edit.
     mode: Mapped[str] = mapped_column(Text, nullable=False)
+    # The first target, and the only one for an isolated run. Kept as its own
+    # column because every screen, download name and log line reads it, and
+    # because every run created before routing could take several has one.
     skill_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Every skill this run may edit, `skill_name` included. Null on runs that
+    # predate multiple targets, which read as `[skill_name]` — so nothing has to
+    # be backfilled and an old run resumes unchanged.
+    target_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # Same split as `runs`: no response model reads `secrets`, which is what
     # makes "credentials never leave the server" structural rather than a habit.

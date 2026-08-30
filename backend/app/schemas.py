@@ -812,6 +812,11 @@ class OptimizationRunOut(BaseModel):
     status: str
     mode: str
     skill_name: str
+    # Every skill this run may edit. One entry for an isolated run and for a
+    # routing run with a single target; several when a routing run is moving
+    # competing descriptions together. Read `skill_name` for the headline and
+    # this for what the run is actually allowed to touch.
+    target_skills: list[str] = Field(default_factory=list)
     num_epochs: int
     batch_size: int
     steps_per_epoch: int
@@ -1057,6 +1062,11 @@ class OptimizationRunCreate(BaseModel):
     name: str | None = None
     mode: str = "isolated"
     skill_name: str
+    # Routing optimises descriptions, and descriptions compete: widening one
+    # narrows the others by implication, so a run may name several skills and
+    # move the boundaries together. Empty means "just `skill_name`", which is
+    # what every isolated run and every caller written before this sends.
+    skill_names: list[str] = Field(default_factory=list)
     # `item_key`s, as the split editor produced them. A key may appear in both:
     # the wizard offers "also add to validation" deliberately.
     train: list[str] = Field(default_factory=list)

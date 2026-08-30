@@ -13,6 +13,11 @@ What the mode is actually trying to improve is whether the agent reaches for the
 *right* skill, and that is measurable directly: every question already carries
 the skill tags it belongs to. Three columns is all it takes.
 
+`target_skills` on the run, because descriptions compete: widening one narrows
+the others by implication, so a routing run may move several boundaries together
+and has to record which ones it was allowed to touch. Null reads as
+`[skill_name]`, so no run in flight needs backfilling.
+
 `ground_truth_skills` on the item, because a run is a comparison and the thing
 being compared against has to hold still — the question, its gold answer and now
 its tags are pinned when the run starts, so retagging a question tomorrow cannot
@@ -45,6 +50,10 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column(
+        "optimization_runs",
+        sa.Column("target_skills", JSONB(), nullable=True),
+    )
+    op.add_column(
         "optimization_items",
         sa.Column("ground_truth_skills", JSONB(), nullable=True),
     )
@@ -59,6 +68,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_column("optimization_runs", "target_skills")
     op.drop_column("optimization_rollouts", "routing_soft")
     op.drop_column("optimization_rollouts", "routing_hard")
     op.drop_column("optimization_items", "ground_truth_skills")

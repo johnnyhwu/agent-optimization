@@ -95,7 +95,7 @@ def build_protection(
     raise ValueError(f"unknown optimization mode {mode!r}; expected 'isolated' or 'routing'")
 
 
-def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
+def render_skill(files: Mapping[str, str], skill_dir: str | Sequence[str]) -> str:
     """The whole directory as the one document every vendored stage expects.
 
     SkillOpt's parameter is a single markdown file, and its analyst, merge and
@@ -104,12 +104,16 @@ def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
     only formatting: the analyst is told to name a `path` on every edit, and the
     only way it can name one correctly is by having seen the list.
 
-    `SKILL.md` comes first because it is the file the agent reads first, and a
-    model reading top-down should meet the entry point before its references.
+    Each `SKILL.md` comes first because it is the file the agent reads first,
+    and a model reading top-down should meet the entry points before their
+    references. Several directories arrive together when a routing run is
+    optimising competing descriptions, and they are rendered as one document for
+    the same reason they are optimised together: the analyst is choosing where
+    the boundary between them falls.
     """
-    entry = entry_point_for(skill_dir)
-    ordered = [entry] if entry in files else []
-    ordered += sorted(path for path in files if path != entry)
+    dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
+    entries = [entry_point_for(d) for d in dirs if entry_point_for(d) in files]
+    ordered = entries + sorted(path for path in files if path not in entries)
     return "\n\n".join(
         f"### File: {path}\n```markdown\n{files[path]}\n```" for path in ordered
     )

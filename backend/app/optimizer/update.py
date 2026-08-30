@@ -193,7 +193,9 @@ class _Recorder:
 def run_update_stage(
     *,
     files: Mapping[str, str],
-    skill_dir: str,
+    # One skill directory, or several when a routing run is optimising competing
+    # descriptions together.
+    skill_dir: str | Sequence[str],
     mode: str,
     items: Sequence[dict],
     client: OptimizerClient,
@@ -232,7 +234,8 @@ def run_update_stage(
             tokens={"calls": 0, "prompt_tokens": 0, "completion_tokens": 0},
         )
 
-    skill_content = render_skill(files, skill_dir)
+    dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
+    skill_content = render_skill(files, dirs)
     # Analyst-only, deliberately. Merge and ranking open with the same
     # "## Current Skill" section, so folding this into `skill_content` would
     # have been a one-word change — and would then pay for the whole menu twice
@@ -247,7 +250,7 @@ def run_update_stage(
     competing = (
         render_competing_skills({
             path: text for path, text in context_files.items()
-            if not (path == skill_dir or path.startswith(f"{skill_dir}/"))
+            if not any(path == d or path.startswith(f"{d}/") for d in dirs)
         })
         if context_files and mode == "routing" else ""
     )
