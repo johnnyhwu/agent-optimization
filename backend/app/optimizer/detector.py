@@ -43,7 +43,7 @@ run that could not be seen into at all never gets past the pre-flight.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Mapping
 
 from app.optimizer.skillio import frontmatter_span
@@ -68,9 +68,14 @@ class Activation:
     # Whether the *run's* skill was read. None only when nothing could be seen —
     # see the module note; it must never harden into a negative.
     activated: bool | None
-    # Every skill whose body appeared, sorted. The set routing accuracy compares
-    # against the question's ground-truth skills.
-    skills_read: list[str] = field(default_factory=list)
+    # Every skill whose body appeared, sorted — or None when nothing could be
+    # seen at all. `None` and `[]` are different answers and the difference is
+    # load-bearing: routing accuracy skips the first and scores the second as
+    # "opened nothing", which is a routing failure. Defaulting this to `[]`
+    # alongside `activated=None` made a trace that never landed count against
+    # the candidate, which is the Langfuse outage the tri-state exists to
+    # survive.
+    skills_read: list[str] | None = None
     # system_prompt | tool | none — where the target's evidence was found.
     hit: str = "none"
     # The target's description reached the model but its body did not: it was on
@@ -200,7 +205,7 @@ def detect_activation(
 
     read = read_skills(trajectory, markers)
     if read is None:
-        return Activation(activated=None, hit="none")
+        return Activation(activated=None, skills_read=None, hit="none")
 
     activated = skill_name in read
     hit = "none"

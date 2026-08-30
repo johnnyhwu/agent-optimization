@@ -27,6 +27,7 @@ import {
   furthestStep,
   hyperState,
   needsMixedWeight,
+  previewQuestionCount,
   tokenEstimate,
 } from "../../optimize_wizard.js";
 
@@ -537,11 +538,7 @@ function SourceStep({ evalSets, selected, onToggle, preview, previewing, error, 
         {Boolean(selected.length) && !previewing && preview && (
           <>
             <IconCheck size={13} />{" "}
-            {plural(
-              preview.groups.reduce((n, g) => n + g.questions.length, 0)
-                + (preview.ambiguous?.length || 0),
-              "question",
-            )}{" "}
+            {plural(previewQuestionCount(preview), "question")}{" "}
             read from {plural(selected.length, "eval set")}.
           </>
         )}

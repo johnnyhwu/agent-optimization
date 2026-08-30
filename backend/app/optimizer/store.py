@@ -117,6 +117,11 @@ class ResultRow:
     # for data we already have. Detail views read the trace live, the same way
     # the evaluation pages do, so nothing depends on this outliving the step.
     trace: Any = None
+    # The same trace folded into one conversation. Built once during the
+    # rollout because both the detector and the reflect stage need it, and
+    # folding a fifteen-span trace twice per question is pure waste. In
+    # memory only, like `trace` above, and for the same reason.
+    trajectory: Any = None
 
 
 @dataclass
@@ -307,6 +312,15 @@ class DbOptimizationStore:
         The validation scores come from the rollouts rather than from
         `steps.current_score`, because a rejected step's own score is not on the
         step row — the gate leaves `current_score` at the value that survived.
+
+        **Which pair of columns those are is the run's mode.** A routing run is
+        gated on routing accuracy and an isolated one on the judge's, and the
+        cache exists to let a step skip a validation rollout when its candidate
+        is byte-identical to one already measured. Seeded from the wrong family,
+        a resumed routing run would compare a cached judge score against a
+        routing `current_score` — two different measurements on one axis — and
+        could pin `best_score` at a number no candidate can reach, then hand out
+        that candidate as the run's best.
         """
         steps = (
             await self.session.scalars(
@@ -339,6 +353,9 @@ class DbOptimizationStore:
             ).all()
         }
 
+        run = await self.session.get(OptimizationRun, run_id)
+        routing = bool(run and run.mode == "routing")
+
         initial = files_by_step.get((0, "initial"), {})
         state = ResumeState(
             last_step_no=steps[-1].step_no,
@@ -351,10 +368,19 @@ class DbOptimizationStore:
             candidate = files_by_step.get((step.step_no, "candidate"))
             rollout = val_scores.get(step.id)
             if step.candidate_hash and rollout is not None:
-                state.score_cache[step.candidate_hash] = (
-                    float(rollout.hard or 0.0), float(rollout.soft or 0.0),
-                    None if rollout.activation_rate is None else float(rollout.activation_rate),
-                )
+                hard = rollout.routing_hard if routing else rollout.hard
+                soft = rollout.routing_soft if routing else rollout.soft
+                # A rollout that produced no gating score is not a zero — it is
+                # a step that was never judged (its split was refused, or
+                # nothing in it could be scored). Caching 0.0 for it would have
+                # a resumed run treat the candidate as measured and terrible
+                # instead of measuring it.
+                if hard is not None:
+                    state.score_cache[step.candidate_hash] = (
+                        float(hard), float(soft or 0.0),
+                        None if rollout.activation_rate is None
+                        else float(rollout.activation_rate),
+                    )
             if step.step_no == 0:
                 state.current_score = float(step.current_score or 0.0)
                 state.best_score = float(step.best_score or 0.0)

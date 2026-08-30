@@ -675,3 +675,30 @@ async def test_routing_is_fine_when_the_agent_reads_a_subset(monkeypatch):
     event = preflight_event(events)
     assert event["ok"] is True
     assert "isolated mode" not in event["message"]
+
+
+async def test_a_probe_that_never_reached_the_agent_is_not_an_override_accusation(
+    monkeypatch,
+):
+    """The one call this run makes can fail for reasons that are not the answer.
+
+    A timeout, a 500, a judge that would not parse — none of them say anything
+    about whether the agent applies `metadata.skills`, and `override_verified`
+    is `None` for all of them because the check never ran. Reported as "the
+    agent server is not applying metadata.skills", a single flaky call sends
+    somebody to debug a contract they implement correctly.
+    """
+    async def failed_probe(*args, **kwargs):
+        row = ResultRow(
+            item_key="probe", correlation_id="p", status="failed",
+            failure_kind="agent", error_message="the agent timed out after 115s",
+        )
+        return [row]
+
+    store, status, events = await engine_run(monkeypatch, failed_probe)
+
+    assert status == "failed"
+    assert store.steps == []
+    message = preflight_event(events)["message"]
+    assert "timed out" in message, "it quotes what actually went wrong"
+    assert "metadata.skills" not in message, "and does not accuse the agent of ignoring us"

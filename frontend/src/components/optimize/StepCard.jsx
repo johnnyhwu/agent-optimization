@@ -87,7 +87,12 @@ export default function StepCard({
       <div className="opt-stepcard-body">
         <section>
           <h4>Measured</h4>
-          <SplitTable step={step} isBaseline={isBaseline} valSkipped={valSkipped} />
+          <SplitTable
+            step={step}
+            isBaseline={isBaseline}
+            valSkipped={valSkipped}
+            mode={run.mode}
+          />
           {valSkipped && (
             <p className="opt-hint">
               No validation rollout was bought for this step: every edit it
@@ -162,7 +167,8 @@ export default function StepCard({
 // The two splits side by side. Every row is a question a reader asks as a
 // comparison, so the comparison is the layout rather than something they do in
 // their head from two separate lists.
-function SplitTable({ step, isBaseline, valSkipped }) {
+function SplitTable({ step, isBaseline, valSkipped, mode }) {
+  const routing = mode === "routing";
   const rows = [
     {
       label: "Questions",
@@ -170,12 +176,27 @@ function SplitTable({ step, isBaseline, valSkipped }) {
       train: count(step.train_n_scored, step.train_n_items),
       val: count(step.val_n_scored, step.val_n_items),
     },
+    // Both accuracies on a routing run, with the gated one first and in bold.
+    // Showing the judge's alone was how a step badged "rejected · routing"
+    // came to sit beside an accuracy figure that had gone up — the gate never
+    // compared it, and nothing on the card said so.
+    ...(routing
+      ? [{
+          label: "Routing accuracy",
+          title: "How often the agent opened the skills a question is tagged for. This is what the gate compares.",
+          train: pct(step.train_routing_hard),
+          val: pct(step.val_routing_hard),
+          strong: true,
+        }]
+      : []),
     {
-      label: "Accuracy",
-      title: "The share the judge scored strictly correct",
+      label: routing ? "Answer accuracy" : "Accuracy",
+      title: routing
+        ? "The share the judge scored strictly correct. Recorded and drawn, but not what a routing run is gated on."
+        : "The share the judge scored strictly correct",
       train: pct(step.train_hard),
       val: pct(step.val_hard),
-      strong: true,
+      strong: !routing,
     },
     {
       label: "Avg latency",

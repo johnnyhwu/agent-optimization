@@ -221,7 +221,9 @@ def test_activation_is_unknown_without_a_trajectory():
     act = _row_activation(None)
 
     assert act.activated is None
-    assert act.skills_read == []
+    # Not `[]`. See the pair of tests at the end of this file for why the
+    # difference decides whether a Langfuse outage counts against a candidate.
+    assert act.skills_read is None
     assert act.hit == "none"
 
 
@@ -343,3 +345,33 @@ def test_a_crlf_skill_is_detected_and_its_description_is_not_a_body_marker():
 
     menu_only = traj(system="Skills:\n- billing: Invoices, balances and refunds.\n")
     assert read_skills(menu_only, build_markers(crlf)) == set()
+
+
+def test_an_unobservable_question_reports_no_skill_list_at_all():
+    """`activated=None` and `skills_read=[]` are contradictory, and the empty
+    list is the one that gets believed.
+
+    Routing accuracy skips a question whose `skills_read` is None and scores one
+    whose list is empty as "opened nothing" — a routing failure. So a trace that
+    never landed was being counted against the candidate, which is precisely the
+    Langfuse outage this module's tri-state exists to survive: the run rejects
+    every step, the chart shows a collapse that never happened, and the message
+    says the descriptions got worse.
+    """
+    act = detect_activation(
+        None, skill_name="billing", skill_files=SKILLS, workspace_files=SKILLS,
+    )
+
+    assert act.activated is None
+    assert act.skills_read is None, "unknown, not 'read nothing'"
+
+
+def test_a_question_that_read_nothing_reports_an_empty_list():
+    """The other half: this one *is* evidence, and must stay distinguishable."""
+    act = detect_activation(
+        traj(system="You are an agent."),
+        skill_name="billing", skill_files=SKILLS, workspace_files=SKILLS,
+    )
+
+    assert act.activated is False
+    assert act.skills_read == []

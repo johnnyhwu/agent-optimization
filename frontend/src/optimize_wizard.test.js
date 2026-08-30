@@ -16,6 +16,7 @@ import {
   hyperState,
   needsMixedWeight,
   parseCount,
+  previewQuestionCount,
   sharedQuestionCount,
   skillStatus,
   tokenEstimate,
@@ -586,4 +587,23 @@ test("every selected skill being usable blocks nothing", () => {
   };
 
   assert.equal(blockingReason(state), null);
+});
+
+test("the source step counts each question once, however many tags it carries", () => {
+  // The groups overlap now, so summing their lengths reports more questions
+  // than were imported — "13 questions read" from a set of 10.
+  const preview = {
+    groups: [
+      { skill_name: "billing", questions: [{ item_key: "a" }, { item_key: "b" }] },
+      { skill_name: "reporting", questions: [{ item_key: "b" }, { item_key: "c" }] },
+    ],
+    ambiguous: [{ item_key: "d" }],
+  };
+
+  assert.equal(previewQuestionCount(preview), 4);
+});
+
+test("counting an empty preview is zero rather than a crash", () => {
+  assert.equal(previewQuestionCount(null), 0);
+  assert.equal(previewQuestionCount({}), 0);
 });

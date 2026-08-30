@@ -2,20 +2,27 @@ You are an expert at writing the *description* that decides when an agent
 reaches for a skill.
 
 You will be given MULTIPLE failed agent trajectories from a single minibatch,
-the skill under optimisation in full, and — under `## Competing Skills` — the
-name and description of every other skill the agent could have chosen instead.
+the skill or skills under optimisation in full, and — under
+`## Competing Skills` — the name and description of every other skill the agent
+could have chosen instead.
 Those descriptions are what you are competing against; their bodies are not
 shown, because a routing decision is made on descriptions alone.
 
 ## What is actually being optimised
-Only the `description` field in the YAML frontmatter of the skill under
-optimisation — the block between the first `---` and the next `---` in its
-`SKILL.md`. Its body, and every other file and every other skill, are FROZEN.
-Edits that target them will be discarded.
+Only the `description` field in the YAML frontmatter of the skills under
+optimisation — the block between the first `---` and the next `---` in each
+`SKILL.md`. Their bodies, every other file, and every skill not under
+optimisation are FROZEN. Edits that target them will be discarded.
 
-That description is the entire basis on which the agent decides whether to open
-this skill. It is a routing decision, and the failures you are looking at are
-routing failures:
+**There may be more than one skill under optimisation, and when there is, they
+are optimised together.** Descriptions compete: narrowing one is how another
+gets a class of question, so a boundary can only be moved by writing both sides
+of it. Every skill shown to you in full is one you may edit; the ones under
+`## Competing Skills` are not.
+
+A description is the entire basis on which the agent decides whether to open the
+skill it belongs to. That is a routing decision, and the failures you are
+looking at are routing failures:
 
 * **Missed** — the question was this skill's job, the agent never opened it, and
   answered worse for it. The description does not claim the ground it should.
@@ -44,13 +51,15 @@ choice was right.
   has asked yet, and it is checked for copied answer text.
 
 ## How to express the edit
-Use a single `replace` naming the skill's own `SKILL.md` in `path`, with
-`target` set to the exact existing description line — including its
+One `replace` per description you are changing, naming that skill's own
+`SKILL.md` in `path`, with `target` set to the exact existing description line — including its
 `description:` key — and `content` set to the full replacement line. `append` is
 not available inside frontmatter and will be discarded.
 
-`target` is matched **verbatim**, so copy it from the skill above rather than
-retyping it: a target that does not appear in the file is discarded and the step
+`path` decides which skill an edit lands on, so an edit with no `path` is
+discarded when several skills are under optimisation — there is no "the skill"
+to default to. `target` is matched **verbatim**, so copy it from the skill above
+rather than retyping it: a target that does not appear in the file is discarded and the step
 produces nothing. If the description spans several lines (`description: >` or an
 indented continuation), the target must be the whole block exactly as it
 appears, and the replacement must keep the same shape.
@@ -67,7 +76,8 @@ Respond ONLY with a valid JSON object (no markdown fences, no extra text):
   "patch": {
     "reasoning": "<what the current description gets wrong about when this skill applies>",
     "edits": [
-      {"op": "replace", "path": "<skill>/SKILL.md", "target": "description: <exact current text>", "content": "description: <replacement>"}
+      {"op": "replace", "path": "<skill>/SKILL.md", "target": "description: <exact current text>", "content": "description: <replacement>"},
+      {"op": "replace", "path": "<another skill under optimisation>/SKILL.md", "target": "description: <exact current text>", "content": "description: <replacement>"}
     ]
   }
 }

@@ -147,6 +147,22 @@ export function sharedQuestionCount(groups) {
   return shared.size;
 }
 
+// How many questions were imported, counting each one once.
+//
+// Not the sum of the groups: a question tagged for two skills is filed under
+// both, so adding the group sizes reports more questions than exist — "13
+// questions read" from a set of ten. `sharedQuestionCount` says how much they
+// overlap, on the step where that is the point; this says how many there are,
+// on the step where *that* is.
+export function previewQuestionCount(preview) {
+  const keys = new Set();
+  for (const group of preview?.groups || []) {
+    for (const question of group.questions || []) keys.add(question.item_key);
+  }
+  for (const question of preview?.ambiguous || []) keys.add(question.item_key);
+  return keys.size;
+}
+
 // --- Which score the gate compares ------------------------------------------
 //
 // One number decides whether a step's candidate is kept, and `gate_metric`

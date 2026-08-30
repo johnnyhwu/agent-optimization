@@ -418,7 +418,24 @@ async def _preflight(
         and _workspace_saturated(spec, skills_read)
     )
 
-    if saturated:
+    # The probe is one agent call and one judge call, and either can fail for
+    # reasons that say nothing about the override: a timeout, a 500, a judge
+    # reply that would not parse. `override_verified` is `None` for all of them
+    # because the check never ran, which is indistinguishable at this point from
+    # a trace that carried no skill content — so the failure is read here, where
+    # the difference is still visible, and quoted rather than diagnosed.
+    failed = rows[0] if rows and rows[0].status == "failed" else None
+
+    if failed is not None:
+        ok = False
+        message = (
+            "the pre-flight question did not come back: "
+            f"{failed.error_message or failed.failure_kind or 'the call failed'}. "
+            "Nothing was measured, so nothing is known yet about whether this "
+            "agent applies the skills a run sends it — fix the call and start "
+            "the run again."
+        )
+    elif saturated:
         ok = False
         message = (
             f"the agent was shown {len(skills_read)} of this workspace's skills in "

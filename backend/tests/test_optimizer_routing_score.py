@@ -328,3 +328,23 @@ def test_a_routing_failure_is_not_attributed_to_the_judge():
     )
 
     assert "from the judge" not in text
+
+
+def test_an_unobservable_question_never_counts_against_the_candidate():
+    """End to end for the tri-state, through the detector's own output.
+
+    Built by calling the detector rather than by hand-writing `None`, because
+    the bug this pins was the detector and the scorer disagreeing about which
+    value means "nothing was seen".
+    """
+    from app.optimizer.detector import detect_activation
+
+    unobservable = detect_activation(
+        None, skill_name="billing", skill_files={}, workspace_files={},
+    )
+    row = ResultRow(
+        item_key="k", correlation_id="c", status="done", verdict="correct",
+        skills_read=unobservable.skills_read,
+    )
+
+    assert routing_scores([row], [item("k", "billing")]) == (None, None)
