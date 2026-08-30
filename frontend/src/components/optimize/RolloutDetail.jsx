@@ -480,17 +480,28 @@ function QuestionPane({ result, trace, loading, activeSpan, onPickSpan }) {
           {result.verdict || result.status}
         </Badge>
         {result.activated === false && (
-          <Badge tone="warning" size="sm" title="Neither detector saw this skill being read.">
+          <Badge tone="warning" size="sm" title="This skill's own text was not in anything the agent was shown.">
             skill not read
           </Badge>
         )}
         {result.activated == null && (
-          <Badge tone="neutral" size="sm" title="The detectors could not tell — which is not the same as 'no'.">
+          <Badge tone="neutral" size="sm" title="No trace landed for this question, so nothing could be seen — which is not the same as 'no'.">
             activation unknown
           </Badge>
         )}
-        {result.skills_read?.length > 0 && (
-          <span className="muted">read: {result.skills_read.join(", ")}</span>
+        {/* The whole of a routing verdict for one question: what it was tagged
+            for, and what the agent actually opened. Shown together because
+            either alone is unreadable — "read: reporting" says nothing without
+            the skill that should have answered it. */}
+        {result.ground_truth_skills?.length > 0 && (
+          <span className="muted">
+            tagged: {result.ground_truth_skills.join(", ")}
+          </span>
+        )}
+        {result.skills_read != null && (
+          <span className="muted">
+            read: {result.skills_read.length ? result.skills_read.join(", ") : "nothing"}
+          </span>
         )}
       </div>
 

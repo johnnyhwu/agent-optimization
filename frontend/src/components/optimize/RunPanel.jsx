@@ -314,6 +314,7 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
           totalSteps={run.total_steps}
           bestStep={run.best_step}
           metric={metric}
+          mode={run.mode}
           yMode={yMode}
           show={show}
           onToggleSeries={(key) => setShow((s) => ({ ...s, [key]: !s[key] }))}

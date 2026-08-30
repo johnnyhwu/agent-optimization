@@ -20,11 +20,13 @@ import {
   blockingReason,
   cleanConfig,
   configFrom,
-  defaultSkill,
+  GATE_METRICS,
+  defaultSkills,
   defaultText,
   extraConfig,
   furthestStep,
   hyperState,
+  needsMixedWeight,
   tokenEstimate,
 } from "../../optimize_wizard.js";
 
@@ -52,7 +54,10 @@ export default function Wizard() {
   // reading — in the banner at the top it reads as the whole wizard having
   // broken.
   const [previewError, setPreviewError] = useState(null);
-  const [skill, setSkill] = useState(null);
+  // The skills this run will optimise. One in isolated mode, which sends a
+  // single skill to the agent; one or several in routing, where the
+  // descriptions compete and are moved together.
+  const [skills, setSkills] = useState([]);
   // Whether the selection is the developer's or the wizard's. The default only
   // moves itself while this is false: re-picking under someone who has already
   // chosen would look like the page arguing with them.
@@ -147,11 +152,24 @@ export default function Wizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey]);
 
-  function chooseSkill(skillName, { touched = true } = {}) {
-    setSkill(skillName);
+  function chooseSkills(names, { touched = true } = {}) {
+    setSkills(names);
     if (touched) setSkillTouched(true);
-    const group = preview?.groups.find((g) => g.skill_name === skillName);
-    const questions = group ? group.questions : [];
+
+    // Every question belonging to any selected skill, once. A question tagged
+    // for two of them is in both groups — that is the point of allowing several
+    // — and putting it in the split twice would train and score on it twice.
+    const seen = new Set();
+    const questions = [];
+    for (const name of names) {
+      const group = preview?.groups.find((g) => g.skill_name === name);
+      for (const question of group?.questions || []) {
+        if (seen.has(question.item_key)) continue;
+        seen.add(question.item_key);
+        questions.push(question);
+      }
+    }
+
     // The 70/30 proposal is computed on the server side of the wizard's model —
     // here it is simply the order the preview arrived in, which is already
     // stratified by prior accuracy.
@@ -164,6 +182,21 @@ export default function Wizard() {
       (crossed ? valKeys : trainKeys).push(q.item_key);
     });
     setSplit(makeSplit(questions, { train: trainKeys, val: valKeys }));
+  }
+
+  // One card clicked: a radio in isolated mode, a checkbox in routing.
+  function toggleSkill(skillName) {
+    if (mode !== "routing") {
+      chooseSkills([skillName]);
+      return;
+    }
+    const next = skills.includes(skillName)
+      ? skills.filter((n) => n !== skillName)
+      : [...skills, skillName];
+    // Order follows the groups rather than the clicks, so the review page and
+    // the request read the same way however the selection was assembled.
+    const order = (preview?.groups || []).map((g) => g.skill_name);
+    chooseSkills(order.filter((n) => next.includes(n)));
   }
 
   // One skill against the agent. Every candidate is checked as the Skill step
@@ -209,12 +242,20 @@ export default function Wizard() {
   // groups exist so the step never opens with nothing chosen, then moves off a
   // skill this mode cannot edit once the agent has answered — but only while the
   // developer has not chosen for themselves.
-  const wanted = skillTouched ? skill : defaultSkill(preview?.groups, checks, mode);
+  const wanted = skillTouched ? skills : defaultSkills(preview?.groups, checks, mode);
+  const wantedKey = wanted.join("\u0000");
   useEffect(() => {
-    if (skillTouched || !wanted || wanted === skill) return;
-    chooseSkill(wanted, { touched: false });
+    if (skillTouched || !wanted.length || wantedKey === skills.join("\u0000")) return;
+    chooseSkills(wanted, { touched: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wanted, skill, skillTouched]);
+  }, [wantedKey, skillTouched]);
+
+  // Switching to isolated cannot leave several selected: it sends one skill to
+  // the agent, and a request naming two is refused by the API.
+  useEffect(() => {
+    if (mode !== "routing" && skills.length > 1) chooseSkills(skills.slice(0, 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   async function start() {
     setStarting(true);
@@ -223,7 +264,8 @@ export default function Wizard() {
       const run = await api.createOptimizationRun({
         name: name.trim() || null,
         mode,
-        skill_name: skill,
+        skill_name: skills[0],
+        skill_names: skills,
         train: split.train,
         val: split.val,
         // Coerced here and nowhere else: the fields hold what was typed, and
@@ -247,7 +289,11 @@ export default function Wizard() {
         secrets,
         detector: {},
       });
-      toast.success(`Optimization run started for ${skill}.`);
+      toast.success(
+        skills.length > 1
+          ? `Optimization run started for ${skills.length} skills.`
+          : `Optimization run started for ${skills[0]}.`,
+      );
       navigate(href.optimizeRun(run.id));
     } catch (e) {
       setError(e.message);
@@ -260,7 +306,7 @@ export default function Wizard() {
   // blocking, which is how the bar could offer a step whose body rendered
   // nothing.
   const wizardState = {
-    stepIndex, sourceIds, preview, previewError, skill, split, limits, checks, mode,
+    stepIndex, sourceIds, preview, previewError, skills, split, limits, checks, mode,
     hyper, defaults: defaults?.defaults,
   };
   const blocked = blockingReason(wizardState);
@@ -318,8 +364,8 @@ export default function Wizard() {
           ) : (
             <SkillGroups
               preview={preview}
-              selected={skill}
-              onSelect={chooseSkill}
+              selected={skills}
+              onSelect={toggleSkill}
               checks={checks}
               mode={mode}
               onRecheck={runSkillCheck}
@@ -352,6 +398,7 @@ export default function Wizard() {
             onConfig={setConfig}
             secrets={secrets}
             onSecrets={setSecrets}
+            mode={mode}
           />
         )}
 
@@ -359,7 +406,7 @@ export default function Wizard() {
           <ReviewStep
             name={name}
             onName={setName}
-            skill={skill}
+            skills={skills}
             mode={mode}
             split={split}
             defaults={defaults}
@@ -655,10 +702,13 @@ function Explain({ text }) {
   );
 }
 
-function SettingsStep({ defaults, config, onConfig, secrets, onSecrets }) {
+function SettingsStep({ defaults, config, onConfig, secrets, onSecrets, mode }) {
   const set = (key) => (e) => onConfig({ ...config, [key]: e.target.value });
   const setSecret = (key) => (e) => onSecrets({ ...secrets, [key]: e.target.value });
   const d = defaults.defaults;
+  // The server's own default when the form has not been touched, so the
+  // selection shown is the one the run would actually use.
+  const gateMetric = config.gate_metric || d.gate_metric || "hard";
 
   return (
     <>
@@ -683,13 +733,60 @@ function SettingsStep({ defaults, config, onConfig, secrets, onSecrets }) {
         </Field>
       </FormSection>
 
+      <FormSection
+        title="What the gate compares"
+        description={
+          mode === "routing"
+            ? "A routing run is kept or dropped on whether the agent opened the skills each question is tagged for. The judge still grades every answer and the chart still draws it — it just does not decide."
+            : "An isolated run is kept or dropped on the judge's verdict on the answers."
+        }
+      >
+        <Field label="Score">
+          <div className="opt-metrics">
+            {GATE_METRICS.map((metric) => (
+              <label
+                key={metric.id}
+                className={`opt-metric${gateMetric === metric.id ? " is-selected" : ""}`}
+              >
+                <span className="opt-metric-head">
+                  <input
+                    type="radio"
+                    name="opt-gate-metric"
+                    value={metric.id}
+                    checked={gateMetric === metric.id}
+                    onChange={set("gate_metric")}
+                  />
+                  <span className="opt-metric-title">{metric.label}</span>
+                </span>
+                <span className="opt-metric-desc">{metric.help}</span>
+              </label>
+            ))}
+          </div>
+        </Field>
+        {needsMixedWeight(gateMetric) && (
+          <Field
+            label="Weight on partial credit"
+            help="Between 0 and 1. At 0 this is the exact score; at 1 it is partial credit alone."
+          >
+            <input
+              type="number" min="0" max="1" step="0.1"
+              value={config.mixed_weight ?? ""}
+              onChange={set("mixed_weight")}
+              placeholder={String(d.mixed_weight ?? 0.5)}
+            />
+          </Field>
+        )}
+      </FormSection>
+
       <FormSection title="Models">
         <Field
           label="Judge model"
           help={
             defaults.impls.judge === "fake"
               ? "JUDGE_IMPL=fake — this field has no effect until a real judge is configured."
-              : "Grades every answer, and its score is what the gate compares."
+              : mode === "routing"
+                ? "Grades every answer. In a routing run its score is recorded and drawn, but the gate compares routing accuracy instead."
+                : "Grades every answer, and its score is what the gate compares."
           }
         >
           <input value={config.judge_model || ""} onChange={set("judge_model")} placeholder={d.judge_model} />
@@ -813,7 +910,7 @@ function budgetHelp(chars) {
   return `≈ ${est.low.toLocaleString()}–${est.high.toLocaleString()} tokens. ${base}`;
 }
 
-function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper, values, errors, impls }) {
+function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHyper, values, errors, impls }) {
   const c = counts(split);
   // The effective values, which are the typed ones when they parse and the
   // server's defaults when the field has not been touched. A field mid-edit —
@@ -857,7 +954,7 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
     <>
       <FormSection title="Name this run">
         <Field label="Name" help="Optional. The list falls back to the time it started.">
-          <input value={name} onChange={(e) => onName(e.target.value)} placeholder={`Tune ${skill}`} />
+          <input value={name} onChange={(e) => onName(e.target.value)} placeholder={`Tune ${skills[0] || "this skill"}`} />
         </Field>
       </FormSection>
 
@@ -1094,7 +1191,17 @@ function ReviewStep({ name, onName, skill, mode, split, defaults, hyper, onHyper
         </div>
 
         <dl className="opt-review-grid">
-          <div><dt>Skill</dt><dd><code>{skill}</code> · {mode}</dd></div>
+          <div>
+            <dt>{skills.length > 1 ? "Skills" : "Skill"}</dt>
+            <dd>
+              {skills.map((name, i) => (
+                <React.Fragment key={name}>
+                  {i > 0 ? ", " : ""}<code>{name}</code>
+                </React.Fragment>
+              ))}
+              {" · "}{mode}
+            </dd>
+          </div>
           <div><dt>Training</dt><dd>{plural(c.train, "question")}</dd></div>
           <div>
             <dt>Validation</dt>

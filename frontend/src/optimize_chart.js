@@ -63,9 +63,23 @@ const MIN_STEP_WIDTH = 20;
 // "Accuracy" landed on top of it.
 const PAD = { top: 14, right: 14, bottom: 42, left: 54 };
 
-function metricKeys(metric) {
+// Which pair of columns the chart is drawing.
+//
+// A routing run records two accuracies per step and is gated on only one of
+// them: whether the agent opened the skills each question was tagged for. The
+// judge's verdict on the answers is kept and is worth reading — "the routing is
+// fixed and the answers did not improve" is what says to run an isolated pass
+// next — but it is not what the run is optimising, and plotting it as *the*
+// line would show the gate accepting steps that visibly made things worse.
+function metricKeys(metric, mode) {
   const suffix = metric === "soft" ? "soft" : "hard";
-  return { train: `train_${suffix}`, val: `val_${suffix}` };
+  const family = mode === "routing" ? `routing_${suffix}` : suffix;
+  return { train: `train_${family}`, val: `val_${family}` };
+}
+
+/** What the y axis is measuring, in the words the mode makes true. */
+export function accuracyLabel(mode) {
+  return mode === "routing" ? "Routing accuracy" : "Answer accuracy";
 }
 
 function stateOf(step) {
@@ -79,8 +93,8 @@ function stateOf(step) {
  * a zero — draws the skill collapsing to the floor for as long as each rollout
  * takes, which is exactly what a genuinely destroyed skill looks like.
  */
-export function series(steps, metric = "hard", { bestStep = null } = {}) {
-  const key = metricKeys(metric);
+export function series(steps, metric = "hard", { bestStep = null, mode = "isolated" } = {}) {
+  const key = metricKeys(metric, mode);
   const train = [];
   const val = [];
   for (const step of steps || []) {
@@ -284,6 +298,9 @@ export function chartModel(steps, options = {}) {
     width: requestedWidth = 640,
     height = 240,
     metric = "hard",
+    // Which accuracy this run is gated on, so the plotted line is the one the
+    // gate actually compares.
+    mode = "isolated",
     bestStep = null,
     totalSteps = 0,
     yMode = "fit",
@@ -319,7 +336,7 @@ export function chartModel(steps, options = {}) {
   // SVG's y grows downwards; accuracy grows upwards. This is the flip.
   const sy = (v) => plot.top + (1 - (v - y0) / (y1 - y0)) * plot.height;
 
-  const { train, val } = series(steps, metric, { bestStep });
+  const { train, val } = series(steps, metric, { bestStep, mode });
   // A hidden series is dropped here rather than in the component, so the paths,
   // the markers and the axis it was fitted to can never disagree about which
   // lines are on screen.

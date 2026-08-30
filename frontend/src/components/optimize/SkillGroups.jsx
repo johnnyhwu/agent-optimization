@@ -9,7 +9,7 @@ import { IconAlert, IconCheck, IconChevronRight, IconRefresh, IconTarget } from 
 import { plural } from "../../plural.js";
 import { charLabel, skillTree } from "../../skill_tree.js";
 import { evalSetLabel } from "../../eval_set_label.js";
-import { checkFor, skillStatus } from "../../optimize_wizard.js";
+import { checkFor, sharedQuestionCount, skillStatus } from "../../optimize_wizard.js";
 
 // Wizard step 3: the imported questions, grouped by the skill they are tagged
 // with. Picking a group is picking what the run optimises.
@@ -25,13 +25,22 @@ import { checkFor, skillStatus } from "../../optimize_wizard.js";
 // cards carry a radio, and the questions are folded away behind a summary so all
 // the options fit on one screen.
 //
-// **Say what cannot be picked, and why.** Two kinds of ineligible. The ambiguous
-// bucket — questions tagged with no skill or with two — is not a skill at all and
-// can never be chosen; guessing a group for them is worse than excluding them,
-// because a question reflected on by an analyst editing an unrelated skill looks
-// entirely normal while teaching the run nothing. And in routing mode, a skill
-// whose SKILL.md has no frontmatter has no description to optimise. Both now read
-// as unavailable rather than merely dimmer.
+// **Say what cannot be picked, and why.** Two kinds of ineligible. The
+// unassignable bucket — questions carrying no skill tag at all — is not a skill
+// and can never be chosen; guessing a group for them is worse than excluding
+// them, because a question reflected on by an analyst editing an unrelated skill
+// looks entirely normal while teaching the run nothing. And in routing mode, a
+// skill whose SKILL.md has no frontmatter has no description to optimise. Both
+// read as unavailable rather than merely dimmer.
+//
+// **Let routing pick several.** Descriptions compete — widening one narrows the
+// others by implication — so a routing run moves them together and the cards are
+// checkboxes with every usable skill already ticked. Isolated stays a radio: it
+// sends one skill to the agent and edits its body. A question tagged for two
+// skills is now listed under both, which makes the counts sum to more than the
+// number of questions imported; the note under the cards says so, because the
+// alternative was excluding those questions entirely and they are the ones that
+// say where a boundary belongs.
 //
 // **Clear the skill against the agent.** This was a step of its own, after the
 // split, which meant the wizard accepted a skill and then rejected it two screens
@@ -65,6 +74,8 @@ export default function SkillGroups({
 }) {
   const groups = preview?.groups || [];
   const ambiguous = preview?.ambiguous || [];
+  const shared = sharedQuestionCount(groups);
+  const chosen = Array.isArray(selected) ? selected : [selected].filter(Boolean);
 
   if (!groups.length && !ambiguous.length) {
     return (
@@ -86,17 +97,29 @@ export default function SkillGroups({
 
       {!groups.length && (
         <Banner tone="warning" title="Nothing here can be optimised">
-          Every question in these sets carries either no skill tag or more than
-          one, so there is no group to train against. Tagging them is done in the
+          No question in these sets carries a skill tag, so there is no group to
+          train against. Tagging them is done in the
           eval set.
         </Banner>
+      )}
+
+      {shared > 0 && (
+        <p className="opt-groups-note">
+          {plural(shared, "question")} carr{shared === 1 ? "ies" : "y"} more than one
+          skill tag, so {shared === 1 ? "it is" : "they are"} listed under each of
+          them and the counts below add up to more than the questions imported.
+          {mode === "routing"
+            ? " Selecting both of the skills a question spans is what tells the run where the boundary between their descriptions belongs."
+            : " An isolated run optimises one skill, so such a question is trained on under whichever you pick."}
+        </p>
       )}
 
       {groups.map((group) => (
         <SkillCard
           key={group.skill_name}
           group={group}
-          selected={selected === group.skill_name}
+          multiple={mode === "routing"}
+          selected={chosen.includes(group.skill_name)}
           status={skillStatus(checkFor(checks, group.skill_name), mode)}
           check={checkFor(checks, group.skill_name)}
           mode={mode}
@@ -108,7 +131,7 @@ export default function SkillGroups({
       {ambiguous.length > 0 && (
         <Card className="opt-group is-unavailable">
           <CardHeader
-            title="Cannot be assigned"
+            title="No skill tag"
             actions={
               <>
                 <span className="opt-group-count">{plural(ambiguous.length, "question")}</span>
@@ -118,9 +141,9 @@ export default function SkillGroups({
           />
           <div className="opt-group-body">
             <p className="opt-group-note">
-              These carry no skill tag, or more than one. A run trains one skill,
-              so there is no correct place to put them — tagging them in the eval
-              set is what brings them in.
+              These carry no skill tag at all, so there is no skill they could be
+              trained under and nothing to score a routing decision against.
+              Tagging them in the eval set is what brings them in.
             </p>
             <QuestionDetails questions={ambiguous} showSkills noun="excluded question" />
           </div>
@@ -138,7 +161,7 @@ export default function SkillGroups({
 // agent round-trip is how the previous version felt like it had not loaded.
 // `failed` does not either: the request not getting through says nothing about
 // the skill, so the card offers a retry rather than a verdict.
-function SkillCard({ group, selected, status, check, mode, onSelect, onRecheck }) {
+function SkillCard({ group, selected, multiple, status, check, mode, onSelect, onRecheck }) {
   const blocked = status.state === "blocked";
   const result = check?.status === "ok" ? check.result : null;
   const className = [
@@ -169,8 +192,14 @@ function SkillCard({ group, selected, status, check, mode, onSelect, onRecheck }
             {/* Presentational: the whole card is the button (Card's `interactive`
                 gives it role and keyboard handling), so this must not be a
                 second tab stop announcing itself separately. */}
+            {/* A checkbox when several may be chosen, a radio when one may.
+                The shape is the only thing on the card that says which, and
+                getting it wrong makes a multi-select look like a page that
+                keeps forgetting the last choice. */}
             <span
-              className={`opt-group-radio${selected ? " is-on" : ""}`}
+              className={
+                `opt-group-radio${multiple ? " is-multi" : ""}${selected ? " is-on" : ""}`
+              }
               aria-hidden="true"
             />
             <code>{group.skill_name}</code>

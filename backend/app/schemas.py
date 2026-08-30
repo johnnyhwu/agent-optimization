@@ -743,6 +743,11 @@ class OptimizationStepSummary(BaseModel):
 
     train_hard: float | None = None
     train_soft: float | None = None
+    # How well the agent routed, when the run measured it. Null on isolated
+    # runs and on anything that predates routing accuracy — never 0.0, which
+    # would draw a collapse that never happened.
+    train_routing_hard: float | None = None
+    train_routing_soft: float | None = None
     train_activation_rate: float | None = None
     train_n_scored: int | None = None
     train_n_items: int | None = None
@@ -755,6 +760,8 @@ class OptimizationStepSummary(BaseModel):
 
     val_hard: float | None = None
     val_soft: float | None = None
+    val_routing_hard: float | None = None
+    val_routing_soft: float | None = None
     val_activation_rate: float | None = None
     val_n_scored: int | None = None
     val_n_items: int | None = None
@@ -1107,6 +1114,10 @@ class OptimizationResultOut(BaseModel):
     # agent look like one that ignored its skill.
     activated: bool | None = None
     skills_read: list[str] | None = None
+    # What the question was tagged for, as the run pinned it. Read beside
+    # `skills_read` this is the whole of a routing verdict for one question:
+    # wanted these, opened those.
+    ground_truth_skills: list[str] | None = None
     detector_hit: str | None = None
     trace_ready: bool = False
     trace_error: str | None = None

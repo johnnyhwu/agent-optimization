@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   Y_FULL,
+  accuracyLabel,
   bestSoFar,
   chartModel,
   epochBands,
@@ -599,4 +600,49 @@ test("every planned step gets a column, whether or not it has a point", () => {
 
   // And the band is the click target the model already reports.
   assert.equal(model.stepAtPoint(one.cx, model.plot.top + 5), 1);
+});
+
+// --- Which accuracy the chart is drawing ------------------------------------
+//
+// A routing run records two numbers per step: whether the agent opened the
+// skills each question was tagged for, and whether the judge liked the answers.
+// The gate compares the first. Drawing the second on the same axis without
+// saying which is which would put a line the run is not optimising next to the
+// one it is, at the same weight.
+
+test("a routing run plots the score its gate compares", () => {
+  const steps = [
+    { step_no: 0, val_hard: 0.9, val_routing_hard: 0.4 },
+    { step_no: 1, val_hard: 0.8, val_routing_hard: 0.6, train_hard: 0.7, train_routing_hard: 0.5 },
+  ];
+
+  const { val, train } = series(steps, "hard", { mode: "routing" });
+
+  assert.deepEqual(val.map((p) => p.value), [0.4, 0.6]);
+  assert.deepEqual(train.map((p) => p.value), [0.5]);
+});
+
+test("an isolated run plots the judge, exactly as it did before", () => {
+  const steps = [
+    { step_no: 0, val_hard: 0.9, val_routing_hard: 0.4 },
+    { step_no: 1, val_hard: 0.8, val_routing_hard: 0.6, train_hard: 0.7, train_routing_hard: 0.5 },
+  ];
+
+  const { val } = series(steps, "hard", { mode: "isolated" });
+
+  assert.deepEqual(val.map((p) => p.value), [0.9, 0.8]);
+});
+
+test("a routing step whose routing score is missing contributes no point", () => {
+  // Not a zero. A step whose validation split could not be scored draws nothing
+  // rather than a collapse to the floor, which is what a destroyed skill looks
+  // like and is the one thing a reader must not confuse it with.
+  const steps = [{ step_no: 1, val_hard: 0.8, val_routing_hard: null }];
+
+  assert.deepEqual(series(steps, "hard", { mode: "routing" }).val, []);
+});
+
+test("the axis says which accuracy it is showing", () => {
+  assert.match(accuracyLabel("routing"), /routing/i);
+  assert.match(accuracyLabel("isolated"), /answer/i);
 });

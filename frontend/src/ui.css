@@ -970,6 +970,17 @@
   border-color: var(--accent);
   box-shadow: inset 0 0 0 3px var(--panel), inset 0 0 0 8px var(--accent);
 }
+/* Square when several may be chosen. The shape is the only thing on the card
+   that says whether picking a second one replaces the first, and a multi-select
+   drawn as radios reads as a page that keeps forgetting what was clicked. */
+.opt-group-radio.is-multi { border-radius: 4px; }
+.opt-group-radio.is-multi.is-on {
+  box-shadow: inset 0 0 0 2px var(--panel), inset 0 0 0 8px var(--accent);
+}
+.opt-groups-note {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-body); color: var(--muted);
+}
 .opt-group-blocked {
   display: flex; align-items: center; gap: 6px; margin: 0;
   font-size: var(--text-body); color: var(--amber);
@@ -1118,6 +1129,20 @@
 .opt-mode-head { display: flex; align-items: center; gap: var(--space-2); }
 .opt-mode-title { font-weight: var(--fw-medium); }
 .opt-mode-desc { font-size: var(--text-body); color: var(--muted); }
+
+/* The three gate metrics, laid out like the two modes above because they are the
+   same kind of choice — one of a closed set, each needing a sentence — but in a
+   single column: the descriptions are longer and three of them across a row
+   turn into columns of two-word lines. */
+.opt-metrics { display: grid; gap: var(--space-2); }
+.opt-metric {
+  display: grid; gap: 4px; padding: var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+}
+.opt-metric.is-selected { border-color: var(--accent); background: var(--accent-soft); }
+.opt-metric-head { display: flex; align-items: center; gap: var(--space-2); }
+.opt-metric-title { font-weight: var(--fw-medium); }
+.opt-metric-desc { font-size: var(--text-body); color: var(--muted); }
 
 /* The last card before Start. It was a `CardHeader` — small-caps, 12px, with a
    rule under it — followed by a seven-cell auto-fit grid pressed against that

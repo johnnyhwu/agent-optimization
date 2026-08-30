@@ -14,10 +14,17 @@
 // anyway, because the upstream gate can return it and a label that renders as
 // `undefined` is a worse way to find that out.
 //
+// Which number "validation" means is the mode's: an isolated run is gated on the
+// judge's verdict on the answers, a routing run on whether the agent opened the
+// skills each question is tagged for. The label says which, because "rejected ·
+// score" against a chart with two lines on it is a question rather than an
+// answer.
+//
 //   accepted (new best)   validation went up; this is the skill the run hands out
 //   accepted              better than the skill in force, but not the run's best
-//   rejected · score      validation did not beat the best so far
-//   rejected · activation routing only: the agent read the skill less often
+//   rejected · score      isolated: answer accuracy did not beat the best so far
+//   rejected · routing    routing: the agent reached the right skills less often
+//   rejected · not measurable  routing: nothing in the split could be scored
 //   rejected · errors     validation never came back, so there was nothing to judge
 //   skipped · errors      the training batch never came back, so there was no candidate
 //   not judged            still running, or a step that ended before its gate
@@ -67,20 +74,25 @@ export function gateLabel(step) {
         detail: `${failureText(state, "val")} The edit was dropped unjudged rather than accepted on the questions that did answer.`,
       });
     }
-    if (state.gate_reject_reason === "activation") {
+    if (state.gate_reject_reason === "routing_unmeasured") {
       return verdict({
-        tone: "neutral",
+        tone: "warning",
         label: "rejected",
-        reason: "activation",
+        reason: "not measurable",
         detail:
-          "The agent opened this skill less often than it did before the edit. In routing mode that is how a description can raise accuracy by getting itself ignored, so the gate refuses it.",
+          "Routing accuracy could not be measured on this validation split: no question both produced a trace and carried a skill tag, so there was nothing to score. The edit was dropped rather than judged against a number that does not exist.",
       });
     }
+    // The engine names the measurement that refused it, because the gate
+    // compares one number and the page draws two.
+    const routing = state.gate_reject_reason === "routing";
     return verdict({
       tone: "neutral",
       label: "rejected",
-      reason: "score",
-      detail: `Validation did not beat the best score so far${pct(state.best_score) ? ` (${pct(state.best_score)})` : ""}, so the skill in force is unchanged.`,
+      reason: routing ? "routing" : "score",
+      detail: routing
+        ? `Routing accuracy — how often the agent opened the skills a question is tagged for — did not beat the best so far${pct(state.best_score) ? ` (${pct(state.best_score)})` : ""}, so the descriptions in force are unchanged.`
+        : `Answer accuracy on validation did not beat the best score so far${pct(state.best_score) ? ` (${pct(state.best_score)})` : ""}, so the skill in force is unchanged.`,
     });
   }
 

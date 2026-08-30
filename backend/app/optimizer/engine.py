@@ -940,6 +940,15 @@ async def _run_step(
         mixed_weight=params["mixed_weight"],
     )
 
+    # Named for the measurement that actually refused it. The gate compares one
+    # number and does not know which it is; the run does, and the step row is
+    # read by a page showing two lines — so "rejected · score" against that
+    # chart is a question rather than an answer. Resolved here rather than
+    # threaded through five components as a prop.
+    reject_reason = gate.reject_reason
+    if reject_reason == "accuracy" and spec.mode == "routing":
+        reject_reason = "routing"
+
     if gate.accepted:
         state.current_files = candidate
         state.parent_step_no = step_no
@@ -952,7 +961,7 @@ async def _run_step(
     await store.finish_step(
         step_id, status="done", edit_budget=edit_budget,
         workspace_version=await _agent_version(seams),
-        gate_action=gate.action, gate_reject_reason=gate.reject_reason,
+        gate_action=gate.action, gate_reject_reason=reject_reason,
         candidate_hash=candidate_hash, candidate_from_cache=from_cache,
         n_edits_merged=outcome.n_edits_merged, n_edits_ranked=outcome.n_edits_ranked,
         n_edits_applied=outcome.n_edits_applied, n_edits_skipped=outcome.n_edits_skipped,
@@ -966,7 +975,7 @@ async def _run_step(
     )
     await publish({
         "type": "gate_done", "step_no": step_no, "action": gate.action,
-        "reject_reason": gate.reject_reason, "candidate_score": gate.candidate_score,
+        "reject_reason": reject_reason, "candidate_score": gate.candidate_score,
         "current_score": gate.current_score, "best_score": gate.best_score,
         "from_cache": from_cache,
     })
