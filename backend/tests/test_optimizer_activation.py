@@ -462,3 +462,47 @@ def test_each_skill_is_still_detected_by_a_line_of_its_own():
     billing = traj(turns=(("tool", "Quote every figure in the account's own currency."),))
 
     assert read_skills(billing, markers) == {"billing"}
+
+
+# --- a line a skill repeats in its own files is still its own ----------------
+#
+# The cross-skill de-duplication above counted qualifying lines once per *file*,
+# so a line a skill repeated in two of its own files reached a count of two and
+# was dropped as "shared" — from the only skill that had it. Skills quote
+# themselves routinely: a summary copied into a quick reference, one house-style
+# heading over both. The end of that is a skill with no markers at all, which
+# reads as a skill the agent never opens: routing accuracy of zero for every
+# question tagged for it, a baseline of `0.0` rather than the `None` that aborts
+# the run, and every candidate rejected against it for an hour.
+
+MIRRORED_BODY = (
+    "# Refunds\n"
+    "Always confirm the customer's identity before issuing anything.\n"
+    "A refund above five hundred needs a manager's approval first.\n"
+)
+MIRRORED = {
+    "billing/SKILL.md": (
+        "---\nname: billing\ndescription: Invoices and balances.\n---\n" + MIRRORED_BODY
+    ),
+    # The same prose again, which is what a "quick reference" is.
+    "billing/references/quickref.md": MIRRORED_BODY,
+    "reporting/SKILL.md": (
+        "---\nname: reporting\ndescription: Monthly reports.\n---\n"
+        "# Reporting\nCompare each period against the same period one year earlier.\n"
+    ),
+}
+
+
+def test_a_line_a_skill_repeats_in_its_own_files_is_still_a_marker():
+    """Shared means *between* skills. This skill shares nothing with anyone."""
+    markers = build_markers(MIRRORED)
+
+    assert markers["billing"], "a skill that quotes itself kept no evidence at all"
+    assert "A refund above five hundred needs a manager's approval first." in markers["billing"]
+
+
+def test_a_skill_that_quotes_itself_is_still_read():
+    """The failure this costs: the whole body visible, and no skill detected."""
+    opened = traj(turns=(("tool", MIRRORED_BODY),))
+
+    assert read_skills(opened, build_markers(MIRRORED)) == {"billing"}

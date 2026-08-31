@@ -167,7 +167,9 @@ def build_markers(files: Mapping[str, str]) -> dict[str, list[str]]:
     `hard`, which is a set equality, one such false positive scores the question
     zero however well the agent actually routed. Lines are compared across every
     qualifying line of every skill, not just the ones that got picked: a line
-    that is only a marker for one of them still matches the other's text.
+    that is only a marker for one of them still matches the other's text. What
+    is counted is one set of lines *per skill*, so a line a skill repeats across
+    its own files is not mistaken for one two skills share.
 
     A skill whose every line is shared ends with no markers and can never be
     read. That is the direction `read_skills` already commits to as the safe one:
@@ -177,8 +179,18 @@ def build_markers(files: Mapping[str, str]) -> dict[str, list[str]]:
     names = skill_names(files)
     seen: Counter[str] = Counter()
     for name in names:
+        # Counted once per *skill*, not once per file. A skill that repeats a
+        # line in two of its own files — a summary quoted into a quick
+        # reference, a house-style heading over both — shares it with nobody,
+        # and counting it twice here would drop it from the only skill it
+        # belongs to. A skill whose whole body is mirrored that way then ends
+        # with no markers at all, which is the "reads as never opened" failure
+        # the per-file budget above exists to prevent, arrived at from the
+        # other side.
+        own: set[str] = set()
         for text in _body_files(files, name).values():
-            seen.update(_qualifying_lines(text))
+            own |= _qualifying_lines(text)
+        seen.update(own)
     shared = {line for line, count in seen.items() if count > 1}
     return {name: skill_markers(files, name, exclude=shared) for name in names}
 
