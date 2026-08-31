@@ -472,3 +472,44 @@ def test_a_multi_target_routing_step_still_edits_both_descriptions():
     # frontmatter of the file the target actually belongs to.
     assert "Quote figures in the account's currency." in outcome.files["billing/SKILL.md"]
     assert "Always name the period." in outcome.files["reporting/SKILL.md"]
+
+
+def test_a_routing_run_bounds_the_skill_section_it_sends():
+    """The budget has to be *passed*, not merely to exist.
+
+    `render_skill` is bounded and `run_update_stage` decides whether to bound it.
+    Testing the renderer alone leaves the wiring untested, and an unbounded
+    routing prompt is the silent failure the budget was added for: over the
+    context window nothing is truncated, the call is refused, and the step loses
+    its gradient.
+    """
+    workspace = wide_workspace(n=30)
+    dirs = sorted(p.split("/", 1)[0] for p in workspace)
+    client, _ = run(files=workspace, skill_dir=dirs, mode="routing")
+
+    analyst = client.prompts("analyst")
+    assert analyst, "the analyst was called"
+    for prompt in analyst:
+        assert "not shown" in prompt.lower(), "the skill section was sent unbounded"
+
+
+def test_an_isolated_run_still_sends_its_whole_body():
+    """The mirror of the above, and the reason the budget is not unconditional.
+
+    Isolated edits the body, so an analyst that was shown a folded one would be
+    asked to target text that never arrived.
+    """
+    big = {
+        "billing/SKILL.md": (
+            "---\nname: billing\ndescription: Invoices.\n---\n# Billing\n"
+            + ("a long line of guidance that must survive\n" * 3000)
+            + "UNIQUE_TAIL_SENTENCE\n"
+        ),
+    }
+    client, _ = run(files=big, skill_dir="billing", mode="isolated")
+
+    analyst = client.prompts("analyst")
+    assert analyst, "the analyst was called"
+    for prompt in analyst:
+        assert "UNIQUE_TAIL_SENTENCE" in prompt
+        assert "not shown" not in prompt.lower()
