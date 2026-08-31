@@ -21,12 +21,9 @@ very context whose effect on the model is being measured, and measuring that
 effect is this platform's whole job.
 
 **Body, never frontmatter.** An agent that lists every skill's `description` in
-its system prompt so it can choose between them has been *offered* this skill;
-only body text proves it was *loaded*. Collapsing the two scores every skill as
-read on every question — 100% before anything has been optimised — and it is
-`offered` that names the difference, which is the one routing failure worth
-telling apart from the rest: the agent saw this skill on the menu and picked
-something else, which a description can fix.
+its system prompt so it can choose between them has only been *offered* this
+skill; only body text proves it was *loaded*. Collapsing the two scores every
+skill as read on every question — 100% before anything has been optimised.
 
 **Assistant turns are excluded.** They are the model's output, not its input. A
 good answer that restates a rule is not evidence the rule was read, and counting
@@ -78,9 +75,6 @@ class Activation:
     skills_read: list[str] | None = None
     # system_prompt | tool | none — where the target's evidence was found.
     hit: str = "none"
-    # The target's description reached the model but its body did not: it was on
-    # the menu and something else was chosen. Routing mode's signal.
-    offered: bool = False
 
 
 def _body_of(files: Mapping[str, str], skill_name: str) -> str:
@@ -97,18 +91,6 @@ def _body_of(files: Mapping[str, str], skill_name: str) -> str:
         if path != entry and path.startswith(f"{skill_name}/"):
             body += "\n" + content
     return body
-
-
-def _description_of(files: Mapping[str, str], skill_name: str) -> str:
-    text = files.get(f"{skill_name}/{_ENTRY}", "")
-    span = frontmatter_span(text)
-    if span is None:
-        return ""
-    for line in text[span[0]:span[1]].splitlines():
-        key, sep, value = line.partition(":")
-        if sep and key.strip().lower() == "description":
-            return value.strip().strip("\"'")
-    return ""
 
 
 def skill_names(files: Mapping[str, str]) -> list[str]:
@@ -214,14 +196,7 @@ def detect_activation(
         in_system = any(line in (trajectory.system_prompt or "") for line in own)
         hit = "system_prompt" if in_system else "tool"
 
-    offered = activated
-    if not activated:
-        description = _description_of(skill_files, skill_name)
-        offered = bool(description) and description in shown_to_model(trajectory)
-
-    return Activation(
-        activated=activated, skills_read=sorted(read), hit=hit, offered=offered,
-    )
+    return Activation(activated=activated, skills_read=sorted(read), hit=hit)
 
 
 def entry_body_visible(

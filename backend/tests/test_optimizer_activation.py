@@ -227,23 +227,15 @@ def test_activation_is_unknown_without_a_trajectory():
     assert act.hit == "none"
 
 
-def test_offered_says_the_description_arrived_but_the_body_did_not():
-    """The routing failure worth telling apart from every other kind.
-
-    The agent was shown this skill on its menu and picked something else. That is
-    a description problem, and it is fixable. "The skill was never offered" looks
-    identical in the activation rate and is not fixable by editing a description
-    at all.
-    """
+def test_a_description_on_the_menu_is_not_a_skill_that_was_read():
+    """The menu is not the skill. An agent shown every description in its system
+    prompt so it can choose between them has read none of them, and counting the
+    menu would score every skill as read on every question — 100% before
+    anything has been optimised."""
     act = _row_activation(traj(system="Skills:\n- billing: Invoices, balances and refunds.\n"))
 
     assert act.activated is False
-    assert act.offered is True
-
-
-def test_not_offered_when_the_description_never_appeared():
-    act = _row_activation(traj(system="You are an agent."))
-    assert act.offered is False
+    assert act.skills_read == []
 
 
 # --- Reading the whole workspace, not just the target ------------------------

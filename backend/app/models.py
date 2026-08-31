@@ -624,9 +624,12 @@ class OptimizationRollout(Base):
     soft: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     # Whether the agent reached for the skills the question was tagged with:
     # `routing_hard` is the strict set match, `routing_soft` the F1 over the two
-    # sets. What a routing run is gated on. Null on every isolated run and on
-    # every run that predates them — never zero, which would read as "it routed
-    # everything wrong".
+    # sets. What a routing run is gated on, and meaningful only there — an
+    # isolated run over tagged questions writes real numbers here, because the
+    # scoring path is deliberately one path in both modes, and nothing reads
+    # them. Null when nothing could be measured and on every run that predates
+    # the columns — never zero, which would read as "it routed everything
+    # wrong".
     routing_hard: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     routing_soft: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     activation_rate: Mapped[float | None] = mapped_column(Numeric, nullable=True)

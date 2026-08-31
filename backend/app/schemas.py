@@ -743,8 +743,10 @@ class OptimizationStepSummary(BaseModel):
 
     train_hard: float | None = None
     train_soft: float | None = None
-    # How well the agent routed, when the run measured it. Null on isolated
-    # runs and on anything that predates routing accuracy — never 0.0, which
+    # How well the agent routed, when the run measured it. Meaningful only for a
+    # routing run: an isolated one over tagged questions scores through the same
+    # path and writes real numbers that nothing reads. Null when nothing could be
+    # measured and on anything that predates routing accuracy — never 0.0, which
     # would draw a collapse that never happened.
     train_routing_hard: float | None = None
     train_routing_soft: float | None = None
