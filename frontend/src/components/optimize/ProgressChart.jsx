@@ -197,7 +197,8 @@ export default function ProgressChart({
           role="img"
           tabIndex={0}
           aria-label={
-            `${accuracyLabel(mode)} by step. ${steps.length} steps measured` +
+            `${accuracyLabel(mode, { legacy: model.legacyMetric })} by step.` +
+            ` ${steps.length} steps measured` +
             (bestStep != null ? `, best at step ${bestStep}.` : ".") +
             " Use the left and right arrow keys to pin a step." +
             " The table below carries the same numbers."
@@ -289,7 +290,8 @@ export default function ProgressChart({
             textAnchor="middle"
             transform={`translate(13, ${model.plot.top + model.plot.height / 2}) rotate(-90)`}
           >
-            {accuracyLabel(mode)}{model.zoomed ? " (zoomed)" : ""}
+            {accuracyLabel(mode, { legacy: model.legacyMetric })}
+            {model.zoomed ? " (zoomed)" : ""}
           </text>
           <text
             className="opt-chart-axis"

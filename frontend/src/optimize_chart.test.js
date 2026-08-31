@@ -637,12 +637,94 @@ test("a routing step whose routing score is missing contributes no point", () =>
   // Not a zero. A step whose validation split could not be scored draws nothing
   // rather than a collapse to the floor, which is what a destroyed skill looks
   // like and is the one thing a reader must not confuse it with.
-  const steps = [{ step_no: 1, val_hard: 0.8, val_routing_hard: null }];
+  //
+  // The baseline carries a routing score so this stays a run that *records*
+  // routing: a run with the column null on every step is a run from before
+  // migration 0016, which falls back to the judge on purpose (below). One
+  // unmeasured step among measured ones is the case this test is about.
+  const steps = [
+    { step_no: 0, val_hard: 0.9, val_routing_hard: 0.4 },
+    { step_no: 1, val_hard: 0.8, val_routing_hard: null },
+  ];
 
-  assert.deepEqual(series(steps, "hard", { mode: "routing" }).val, []);
+  assert.deepEqual(series(steps, "hard", { mode: "routing" }).val.slice(1), []);
 });
 
 test("the axis says which accuracy it is showing", () => {
   assert.match(accuracyLabel("routing"), /routing/i);
   assert.match(accuracyLabel("isolated"), /answer/i);
+});
+
+// --- runs recorded before routing accuracy existed ---------------------------
+//
+// Migration 0016 added the routing columns. A routing run created before it has
+// them NULL on every step, and `series` drops null points — so switching on
+// `run.mode` alone left those runs with two empty lines under an axis reading
+// "Routing accuracy", with nothing on screen saying why.
+
+test("a routing run recorded before 0016 plots the judge rather than nothing", () => {
+  const steps = [
+    { step_no: 0, val_hard: 0.9, val_routing_hard: null },
+    { step_no: 1, val_hard: 0.8, train_hard: 0.7, val_routing_hard: null, train_routing_hard: null },
+  ];
+
+  const { val, train } = series(steps, "hard", { mode: "routing" });
+
+  assert.deepEqual(val.map((p) => p.value), [0.9, 0.8]);
+  assert.deepEqual(train.map((p) => p.value), [0.7]);
+});
+
+test("the axis says the fallback is the older measurement", () => {
+  // Plotting the judge's numbers for these runs *silently* would be its own
+  // lie: it is not what their gate compared. The label has to carry that.
+  const legacy = [{ step_no: 0, val_hard: 0.9, val_routing_hard: null }];
+  const model = chartModel(legacy, { mode: "routing" });
+
+  assert.equal(model.legacyMetric, true);
+  assert.notEqual(accuracyLabel("routing", { legacy: true }), accuracyLabel("routing"));
+  assert.match(accuracyLabel("routing", { legacy: true }), /answer/i);
+});
+
+test("a routing run with any routing score at all does not fall back", () => {
+  // One recorded step is enough to know the run is a real routing run, and its
+  // unmeasured steps must keep drawing nothing rather than the judge's line.
+  const steps = [
+    { step_no: 0, val_hard: 0.9, val_routing_hard: 0.4 },
+    { step_no: 1, val_hard: 0.8, val_routing_hard: null },
+  ];
+
+  const model = chartModel(steps, { mode: "routing" });
+
+  assert.equal(model.legacyMetric, false);
+  assert.deepEqual(series(steps, "hard", { mode: "routing" }).val.map((p) => p.value), [0.4]);
+});
+
+test("a run with no scores of any kind is not mistaken for a legacy run", () => {
+  // A routing run that has only just started has both families null. It has not
+  // told us it predates 0016 — it has told us nothing yet — and labelling its
+  // empty chart "Answer accuracy" would be the same silent substitution in the
+  // other direction.
+  const model = chartModel([{ step_no: 0, val_hard: null, val_routing_hard: null }], {
+    mode: "routing",
+  });
+
+  assert.equal(model.legacyMetric, false);
+});
+
+// --- the axis is fitted to the line that is drawn ---------------------------
+
+test("a routing run fits its y axis to the routing scores it plots", () => {
+  // `visibleValues` read the judge's columns whatever the mode while `series`
+  // plotted routing, so a run whose judge sat at 0.85-0.90 and whose routing sat
+  // at 0.30-0.45 fitted the axis to the first and drew the second outside it.
+  const steps = [
+    { step_no: 0, val_hard: 0.88, val_routing_hard: 0.3 },
+    { step_no: 1, val_hard: 0.9, val_routing_hard: 0.45, train_hard: 0.86, train_routing_hard: 0.35 },
+  ];
+
+  const model = chartModel(steps, { mode: "routing", yMode: "fit" });
+  const [lo, hi] = model.yDomain;
+
+  assert.ok(lo <= 0.3, `y axis starts at ${lo}, above the lowest plotted point`);
+  assert.ok(hi >= 0.45, `y axis ends at ${hi}, below the highest plotted point`);
 });

@@ -77,9 +77,43 @@ function metricKeys(metric, mode) {
   return { train: `train_${family}`, val: `val_${family}` };
 }
 
+// Migration 0016 is where the routing columns start. A routing run recorded
+// before it has them null on every step, and a null draws no point — so a mode
+// switch on its own left those runs with two empty lines under an axis reading
+// "Routing accuracy", which is the one reading a blank chart must never get:
+// nothing on screen separated "not recorded" from "measured, and terrible".
+//
+// Both halves of the condition are load-bearing. Routing null *throughout* is
+// what makes this a recording gap rather than a run whose steps could not be
+// scored; a judge column that is actually populated is what makes falling back
+// to it worth doing. A run that has only just started is null in both families
+// and is neither — it gets its honest empty chart under its own axis.
+function routingWasNeverRecorded(steps, metric) {
+  const routing = metricKeys(metric, "routing");
+  const judge = metricKeys(metric, "isolated");
+  let sawJudge = false;
+  for (const step of steps || []) {
+    if (step[routing.train] != null || step[routing.val] != null) return false;
+    if (step[judge.train] != null || step[judge.val] != null) sawJudge = true;
+  }
+  return sawJudge;
+}
+
+/** Which columns to plot, and whether that is the fallback.
+ *
+ * The fallback is never silent. Plotting the judge's accuracy for these runs
+ * without saying so would assert that it is what their gate compared, and it is
+ * not — so `legacy` travels out with the keys and ends up in the axis title.
+ */
+export function plottedMetric(steps, metric = "hard", mode = "isolated") {
+  const legacy = mode === "routing" && routingWasNeverRecorded(steps, metric);
+  return { keys: metricKeys(metric, legacy ? "isolated" : mode), legacy };
+}
+
 /** What the y axis is measuring, in the words the mode makes true. */
-export function accuracyLabel(mode) {
-  return mode === "routing" ? "Routing accuracy" : "Answer accuracy";
+export function accuracyLabel(mode, { legacy = false } = {}) {
+  if (mode !== "routing") return "Answer accuracy";
+  return legacy ? "Answer accuracy (routing not recorded)" : "Routing accuracy";
 }
 
 function stateOf(step) {
@@ -94,7 +128,7 @@ function stateOf(step) {
  * takes, which is exactly what a genuinely destroyed skill looks like.
  */
 export function series(steps, metric = "hard", { bestStep = null, mode = "isolated" } = {}) {
-  const key = metricKeys(metric, mode);
+  const { keys: key } = plottedMetric(steps, metric, mode);
   const train = [];
   const val = [];
   for (const step of steps || []) {
@@ -197,8 +231,12 @@ function snapUp(value) {
  * around what is left, not leave a band of empty plot where the hidden line
  * used to be.
  */
-function visibleValues(steps, { show, metric }) {
-  const key = metricKeys(metric);
+// `runMode` and not `metric` alone: the axis has to be fitted to the column the
+// chart draws. Reading the judge's while `series` plotted routing put a run
+// whose judge sat at 0.88 and whose routing sat at 0.35 on an axis starting at
+// 0.85 — every point below the plot area, on a chart that looked ordinary.
+function visibleValues(steps, { show, metric, runMode }) {
+  const { keys: key } = plottedMetric(steps, metric, runMode);
   const values = [];
   for (const step of steps || []) {
     if (show.train && step.step_no > 0 && step[key.train] != null) values.push(step[key.train]);
@@ -223,10 +261,12 @@ function visibleValues(steps, { show, metric }) {
  * an axis that silently changes meaning is worse than one that never moves.
  */
 export function yDomain(steps, options = {}) {
-  const { mode = "fit", show = ALL_SERIES, metric = "hard" } = options;
+  // `mode` here is the zoom mode, which predates the run mode and keeps the
+  // name; `runMode` is the run's, and only picks which column is measured.
+  const { mode = "fit", show = ALL_SERIES, metric = "hard", runMode = "isolated" } = options;
   if (mode !== "fit") return [...Y_FULL];
 
-  const values = visibleValues(steps, { show, metric });
+  const values = visibleValues(steps, { show, metric, runMode });
   if (!values.length) return [...Y_FULL];
 
   let lo = snapDown(Math.min(...values));
@@ -330,12 +370,13 @@ export function chartModel(steps, options = {}) {
     height: Math.max(1, height - PAD.top - PAD.bottom),
   };
 
-  const [y0, y1] = yDomain(steps, { mode: yMode, show, metric });
+  const [y0, y1] = yDomain(steps, { mode: yMode, show, metric, runMode: mode });
 
   const sx = (x) => plot.left + ((x - x0) / span) * plot.width;
   // SVG's y grows downwards; accuracy grows upwards. This is the flip.
   const sy = (v) => plot.top + (1 - (v - y0) / (y1 - y0)) * plot.height;
 
+  const { legacy: legacyMetric } = plottedMetric(steps, metric, mode);
   const { train, val } = series(steps, metric, { bestStep, mode });
   // A hidden series is dropped here rather than in the component, so the paths,
   // the markers and the axis it was fitted to can never disagree about which
@@ -396,6 +437,12 @@ export function chartModel(steps, options = {}) {
     // component can say so. A zoomed axis that does not announce itself is the
     // one way this feature could mislead.
     zoomed: y0 !== Y_FULL[0] || y1 !== Y_FULL[1],
+    // Whether the plotted column is the fallback of `plottedMetric` — a routing
+    // run from before the routing columns existed, drawn with the judge's
+    // numbers. The component puts this in the axis title, because a chart that
+    // substitutes one measurement for another without saying so is the failure
+    // this fallback was added to remove, not a smaller version of it.
+    legacyMetric,
     train: trainPx,
     val: valPx,
     trainPath: path(trainPx),
