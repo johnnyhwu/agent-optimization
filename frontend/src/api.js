@@ -295,8 +295,14 @@ export const api = {
   // does. A copy in the bundle would drift, and Start would be enabled on a
   // request that 400s.
   optimizationDefaults: () => req("GET", "/optimization/defaults"),
-  importPreview: (evalSetIds) =>
-    req("POST", "/optimization/import-preview", { eval_set_ids: evalSetIds }),
+  // The mode travels with the request: it decides whether a question tagged
+  // with two skills is usable, so the same eval sets preview differently in the
+  // two modes and the answer cannot be cached across a switch.
+  importPreview: (evalSetIds, mode) =>
+    req("POST", "/optimization/import-preview", {
+      eval_set_ids: evalSetIds,
+      mode,
+    }),
   // Proves the skill tag and the agent's directory are the same name before a
   // run exists, rather than at step 0 after a batch of agent calls.
   //

@@ -78,28 +78,34 @@ def split_item_key(key: str) -> tuple[str, str]:
 
 
 def group_by_skill(
-    candidates: Iterable[Candidate],
+    candidates: Iterable[Candidate], *, mode: str,
 ) -> tuple[dict[str, list[Candidate]], list[Candidate]]:
-    """`({skill: [candidate]}, unassignable)` — every candidate placed somewhere.
+    """`({skill: [candidate]}, unassignable)` — the wizard's groups, per mode.
 
-    A question with **no** tag goes to the second list. Guessing a group for it
-    would have an analyst reflect on it while editing a skill it may have
-    nothing to do with, and the run would look entirely normal while learning
-    from it. The wizard shows the bucket, disabled, so the developer can go and
-    fix the labels — the only place the answer actually exists.
+    A question with **no** tag goes to the second list in either mode. Guessing
+    a group for it would have an analyst reflect on it while editing a skill it
+    may have nothing to do with, and the run would look entirely normal while
+    learning from it. The wizard shows the bucket, disabled, so the developer
+    can go and fix the labels — the only place the answer actually exists.
 
-    A question with **several** tags now belongs to each of them. It used to be
-    excluded beside the untagged ones, and the reason held while a run optimised
-    exactly one skill: training `billing` on a question tagged `billing` and
-    `reporting` attributes to `billing` a failure that may belong to the other.
-    A routing run optimises several descriptions together and scores each
-    question against all the skills it carries, so a question spanning two is
-    exactly the evidence that says where the boundary between their descriptions
-    belongs. Excluding those discarded the most informative questions in the set.
+    A question with **several** tags is where the modes part, and `mode` is a
+    required argument because getting it silently wrong is the whole hazard:
 
-    The consequence is that group sizes sum to more than the number of
-    questions. That is real and the wizard says so, rather than being hidden by
-    picking a group.
+      * ``isolated`` excludes it, as this function always did. The run optimises
+        one skill's body against the questions in its group, so training
+        `billing` on a question tagged `billing` *and* `reporting` attributes to
+        `billing` a failure that may belong entirely to the other — and the
+        other skill is neither sent to the agent nor editable, so nothing in the
+        run can tell the difference.
+      * ``routing`` puts it in **every** group it names. That mode optimises
+        competing descriptions together and scores each question against all of
+        its tags, so a question spanning two is precisely the evidence that says
+        where the boundary between their descriptions belongs. Excluding those
+        discarded the most informative questions in the set.
+
+    In routing the consequence is that group sizes sum to more than the number
+    of questions. That is real and the wizard says so, rather than being hidden
+    by picking a group.
 
     Skills come back sorted; the wizard renders them as a list and one that
     reshuffles between requests is unusable.
@@ -107,7 +113,7 @@ def group_by_skill(
     groups: dict[str, list[Candidate]] = {}
     unassignable: list[Candidate] = []
     for candidate in candidates:
-        if not candidate.skills:
+        if not candidate.skills or (mode != "routing" and len(candidate.skills) != 1):
             unassignable.append(candidate)
             continue
         for skill in candidate.skills:

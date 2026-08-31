@@ -113,7 +113,7 @@ export default function Wizard() {
     setPreviewing(true);
     setPreviewError(null);
     try {
-      const result = await api.importPreview(ids);
+      const result = await api.importPreview(ids, mode);
       if (seq !== previewSeq.current) return;
       setPreview(result);
       setSkill(null);
@@ -150,8 +150,11 @@ export default function Wizard() {
     const ids = sourceKey.split(",");
     const timer = setTimeout(() => loadPreview(ids), 300);
     return () => clearTimeout(timer);
+    // Refetched when the mode changes as well as the sources: the two modes
+    // disagree about a question tagged with several skills, so the groups the
+    // Skill step offers are the mode's and not the eval sets' alone.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey]);
+  }, [sourceKey, mode]);
 
   function chooseSkills(names, { touched = true } = {}) {
     setSkills(names);

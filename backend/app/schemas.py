@@ -865,9 +865,17 @@ class OptimizationRunPage(Page):
 
 
 class ImportPreviewRequest(BaseModel):
-    """Which eval sets to draw questions from (wizard step 1)."""
+    """Which eval sets to draw questions from, and for which mode.
+
+    `mode` decides what happens to a question tagged with several skills — an
+    isolated run cannot use one, a routing run needs it — so the preview cannot
+    be computed without it. The wizard asks for the mode on its first step for
+    this reason. It defaults to `isolated`, the narrower answer: a caller that
+    omits it gets the groups no run can be misled by.
+    """
 
     eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+    mode: str = "isolated"
 
 
 class PreviewQuestion(BaseModel):
@@ -913,8 +921,11 @@ class PreviewSource(BaseModel):
 
 class ImportPreview(BaseModel):
     groups: list[SkillGroup] = Field(default_factory=list)
-    # Questions with no skill tag, or with more than one. Shown, disabled, with
-    # the tags they do carry — the fix is in the eval set, not here.
+    # Questions this mode cannot place: no skill tag in either mode, and in
+    # isolated also more than one — that run edits a single skill's body, so a
+    # question belonging to two would attribute to the chosen one a failure that
+    # may be entirely the other's. Shown, disabled, with the tags they do carry
+    # — the fix is in the eval set, not here.
     ambiguous: list[PreviewQuestion] = Field(default_factory=list)
     sources: list[PreviewSource] = Field(default_factory=list)
 

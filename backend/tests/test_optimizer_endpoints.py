@@ -294,13 +294,14 @@ async def test_skill_check_reports_an_unreachable_agent_as_a_503(monkeypatch):
 # --- POST /optimization/import-preview --------------------------------------
 
 
-async def test_the_preview_groups_questions_by_skill(session):
+async def test_the_preview_groups_questions_by_skill_for_a_routing_run(session):
     eval_set, _ = await make_set(session, "set", questions=[
         ("q1", ["billing"]), ("q2", ["billing"]), ("q3", ["reporting"]),
         ("q4", []), ("q5", ["billing", "reporting"]),
     ])
     preview = await opt.import_preview(
-        ImportPreviewRequest(eval_set_ids=[eval_set.id]), subject="alice", session=session
+        ImportPreviewRequest(eval_set_ids=[eval_set.id], mode="routing"),
+        subject="alice", session=session,
     )
     by_name = {g.skill_name: g for g in preview.groups}
     assert sorted(by_name) == ["billing", "reporting"]
@@ -311,6 +312,28 @@ async def test_the_preview_groups_questions_by_skill(session):
     assert {q.question_id for q in by_name["reporting"].questions} == {"q3", "q5"}
     # Only the untagged one has nowhere to go.
     assert {q.question_id for q in preview.ambiguous} == {"q4"}
+
+
+async def test_the_preview_for_an_isolated_run_sets_a_two_tagged_question_aside(session):
+    """The mode reaches the grouping, so the Skill step offers what the run can use.
+
+    An isolated run edits one skill's body against its group. A question tagged
+    for two skills would put a failure that may be entirely the other's into
+    whichever the developer picked — so it is shown, disabled, beside the
+    untagged one rather than trained on.
+    """
+    eval_set, _ = await make_set(session, "set", questions=[
+        ("q1", ["billing"]), ("q2", ["billing"]), ("q3", ["reporting"]),
+        ("q4", []), ("q5", ["billing", "reporting"]),
+    ])
+    preview = await opt.import_preview(
+        ImportPreviewRequest(eval_set_ids=[eval_set.id], mode="isolated"),
+        subject="alice", session=session,
+    )
+    by_name = {g.skill_name: g for g in preview.groups}
+    assert {q.question_id for q in by_name["billing"].questions} == {"q1", "q2"}
+    assert {q.question_id for q in by_name["reporting"].questions} == {"q3"}
+    assert {q.question_id for q in preview.ambiguous} == {"q4", "q5"}
 
 
 async def test_a_source_the_caller_cannot_read_is_refused(session):

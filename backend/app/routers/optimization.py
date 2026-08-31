@@ -328,7 +328,7 @@ async def import_preview(
         )
         for q in questions
     ]
-    groups, ambiguous = dataset.group_by_skill(candidates)
+    groups, ambiguous = dataset.group_by_skill(candidates, mode=body.mode)
 
     per_set: dict[uuid.UUID, int] = {}
     for candidate in candidates:

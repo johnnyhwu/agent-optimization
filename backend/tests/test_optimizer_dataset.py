@@ -94,18 +94,20 @@ def test_a_question_id_containing_the_separator_is_still_unambiguous():
 # --- Grouping by skill ------------------------------------------------------
 
 
-def test_questions_are_grouped_by_their_one_skill():
+@pytest.mark.parametrize("mode", ["isolated", "routing"])
+def test_questions_are_grouped_by_their_one_skill(mode):
     groups, ambiguous = group_by_skill([
         candidate("q1", skills=("billing",)),
         candidate("q2", skills=("billing",)),
         candidate("q3", skills=("reporting",)),
-    ])
+    ], mode=mode)
     assert sorted(groups) == ["billing", "reporting"]
     assert [c.question_id for c in groups["billing"]] == ["q1", "q2"]
     assert ambiguous == []
 
 
-def test_a_question_with_no_skill_goes_to_the_ambiguous_bucket():
+@pytest.mark.parametrize("mode", ["isolated", "routing"])
+def test_a_question_with_no_skill_goes_to_the_ambiguous_bucket(mode):
     """It cannot be assigned, and guessing is worse than saying so.
 
     An unlabelled question put into a skill group by default would be reflected
@@ -115,13 +117,13 @@ def test_a_question_with_no_skill_goes_to_the_ambiguous_bucket():
     groups, ambiguous = group_by_skill([
         candidate("q1", skills=()),
         candidate("q2", skills=("billing",)),
-    ])
+    ], mode=mode)
     assert [c.question_id for c in ambiguous] == ["q1"]
     assert [c.question_id for c in groups["billing"]] == ["q2"]
 
 
-def test_a_question_with_several_skills_belongs_to_each_of_them():
-    """Two tags is evidence about both skills, and now it is used as such.
+def test_a_routing_run_puts_a_question_with_several_skills_in_each_group():
+    """Two tags is evidence about both skills, and a routing run uses it as such.
 
     It used to go to the ambiguous bucket beside the untagged ones, for a reason
     that held while a run optimised exactly one skill: training `billing` on a
@@ -136,18 +138,18 @@ def test_a_question_with_several_skills_belongs_to_each_of_them():
     """
     groups, ambiguous = group_by_skill([
         candidate("q1", skills=("billing", "reporting")),
-    ])
+    ], mode="routing")
 
     assert ambiguous == []
     assert [c.question_id for c in groups["billing"]] == ["q1"]
     assert [c.question_id for c in groups["reporting"]] == ["q1"]
 
 
-def test_only_an_untagged_question_is_unassignable_now():
+def test_only_an_untagged_question_is_unassignable_in_routing():
     groups, ambiguous = group_by_skill([
         candidate("q1", skills=()),
         candidate("q2", skills=("billing", "reporting")),
-    ])
+    ], mode="routing")
 
     assert [c.question_id for c in ambiguous] == ["q1"]
     assert set(groups) == {"billing", "reporting"}
@@ -166,7 +168,7 @@ def test_every_candidate_is_placed_somewhere():
         candidate("q3", skills=("billing", "x")),
         candidate("q4", skills=("reporting",)),
     ]
-    groups, ambiguous = group_by_skill(candidates)
+    groups, ambiguous = group_by_skill(candidates, mode="routing")
     placed = {c.item_key for group in groups.values() for c in group}
     placed |= {c.item_key for c in ambiguous}
 
@@ -178,7 +180,8 @@ def test_groups_come_back_in_a_stable_order():
     """The wizard lists skills; a list that reshuffles per request is unusable."""
     candidates = [candidate(f"q{i}", skills=(s,))
                   for i, s in enumerate(["reporting", "billing", "escalation"])]
-    assert list(group_by_skill(candidates)[0]) == ["billing", "escalation", "reporting"]
+    grouped = group_by_skill(candidates, mode="isolated")[0]
+    assert list(grouped) == ["billing", "escalation", "reporting"]
 
 
 # --- The default split ------------------------------------------------------
@@ -360,3 +363,40 @@ def test_an_empty_split_is_an_error_rather_than_a_crash():
     assert {i["code"] for i in issues if i["level"] == "error"} == {
         "train_too_small", "val_too_small"
     }
+
+
+def test_an_isolated_run_still_excludes_a_question_tagged_with_several_skills():
+    """The hazard that justified excluding them has not gone away for isolated.
+
+    An isolated run optimises one skill against the questions in its group.
+    Training `billing` on a question tagged `billing` *and* `reporting`
+    attributes to `billing` a failure that may belong entirely to the other, and
+    the run looks completely normal while doing it. Routing is what makes such a
+    question usable — it optimises both descriptions together and scores the
+    question against all of its tags — and that reasoning does not carry across
+    to a mode where the other skill is neither sent nor editable.
+    """
+    groups, ambiguous = group_by_skill([
+        candidate("q1", skills=("billing", "reporting")),
+        candidate("q2", skills=("billing",)),
+    ], mode="isolated")
+
+    assert [c.question_id for c in ambiguous] == ["q1"]
+    assert [c.question_id for c in groups["billing"]] == ["q2"]
+    assert "reporting" not in groups
+
+
+def test_the_two_modes_disagree_only_about_the_multi_tagged_question():
+    """Everything else about grouping is the mode's business to leave alone."""
+    candidates = [
+        candidate("q1", skills=("billing",)),
+        candidate("q2", skills=()),
+        candidate("q3", skills=("billing", "reporting")),
+    ]
+    isolated, iso_out = group_by_skill(candidates, mode="isolated")
+    routing, rout_out = group_by_skill(candidates, mode="routing")
+
+    assert [c.question_id for c in iso_out] == ["q2", "q3"]
+    assert [c.question_id for c in rout_out] == ["q2"]
+    assert [c.question_id for c in isolated["billing"]] == ["q1"]
+    assert [c.question_id for c in routing["billing"]] == ["q1", "q3"]
