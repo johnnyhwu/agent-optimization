@@ -116,7 +116,7 @@ export default function Wizard() {
       const result = await api.importPreview(ids, mode);
       if (seq !== previewSeq.current) return;
       setPreview(result);
-      setSkill(null);
+      setSkills([]);
       setSkillTouched(false);
       setSplit(null);
     } catch (e) {
@@ -142,7 +142,7 @@ export default function Wizard() {
     if (!sourceIds.length) {
       setPreview(null);
       setPreviewError(null);
-      setSkill(null);
+      setSkills([]);
       setSkillTouched(false);
       setSplit(null);
       return undefined;
