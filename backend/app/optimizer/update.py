@@ -41,6 +41,7 @@ from typing import Any, Mapping, Sequence
 from app.integrations.base import OptimizerClient
 from app.optimizer.analyst import run_analyst_minibatch
 from app.optimizer.skillio import (
+    DEFAULT_SKILL_BUDGET_CHARS,
     build_protection,
     reattach_paths,
     render_competing_skills,
@@ -246,7 +247,15 @@ def run_update_stage(
         )
 
     dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
-    skill_content = render_skill(files, dirs)
+    # Bounded in routing only. That mode takes several targets and the wizard
+    # ticks every usable skill by default, so `workspace_baseline` — and with it
+    # the *budgeted* competing block — is empty on the default path and the whole
+    # workspace arrives here instead. Isolated has one target and edits its body,
+    # so it must see the body: its prompt is byte-identical to what it was.
+    skill_content = render_skill(
+        files, dirs,
+        budget_chars=DEFAULT_SKILL_BUDGET_CHARS if mode == "routing" else None,
+    )
     # Analyst-only, deliberately. Merge and ranking open with the same
     # "## Current Skill" section, so folding this into `skill_content` would
     # have been a one-word change — and would then pay for the whole menu twice

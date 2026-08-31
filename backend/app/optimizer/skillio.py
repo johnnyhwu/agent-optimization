@@ -161,7 +161,12 @@ def reattach_paths(
     return {**patch, "edits": out}, placed, unplaced
 
 
-def render_skill(files: Mapping[str, str], skill_dir: str | Sequence[str]) -> str:
+def render_skill(
+    files: Mapping[str, str],
+    skill_dir: str | Sequence[str],
+    *,
+    budget_chars: int | None = None,
+) -> str:
     """The whole directory as the one document every vendored stage expects.
 
     SkillOpt's parameter is a single markdown file, and its analyst, merge and
@@ -176,13 +181,75 @@ def render_skill(files: Mapping[str, str], skill_dir: str | Sequence[str]) -> st
     optimising competing descriptions, and they are rendered as one document for
     the same reason they are optimised together: the analyst is choosing where
     the boundary between them falls.
+
+    `budget_chars` is `None` — unbounded — for isolated, which edits the body and
+    must therefore see the body: an analyst asked to target text it was never
+    shown produces edits that cannot land. Routing passes one, because it is the
+    mode that takes several targets and the wizard ticks every usable skill by
+    default, which puts every body of every skill in the workspace here, in full,
+    on the analyst call and again on each merge and the ranking call. This is the
+    same quantity `DEFAULT_COMPETING_BUDGET_CHARS` exists to bound, and it is the
+    larger half of it.
+
+    Over budget, whole files are dropped from the tail — references before entry
+    points, since the entry points are what the agent reads first and what
+    routing edits — and **every entry point's frontmatter is kept whole** even
+    when its body goes, because the description is the one text a routing edit
+    must reproduce exactly to land. What was left out is stated: a silent cap is
+    the same failure one level down, an analyst believing it has been shown a
+    skill in full and targeting a line that never arrived.
     """
     dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
     entries = [entry_point_for(d) for d in dirs if entry_point_for(d) in files]
     ordered = entries + sorted(path for path in files if path not in entries)
-    return "\n\n".join(
-        f"### File: {path}\n```markdown\n{files[path]}\n```" for path in ordered
-    )
+
+    def block(path: str, text: str) -> str:
+        return f"### File: {path}\n```markdown\n{text}\n```"
+
+    whole = [block(path, files[path]) for path in ordered]
+    if budget_chars is None or sum(len(b) for b in whole) + 2 * len(whole) <= budget_chars:
+        return "\n\n".join(whole)
+
+    # Frontmatter-only is the floor for an entry point: it is what a routing edit
+    # has to name, so it is reserved before anything else is allowed to spend.
+    def head_only(path: str) -> str:
+        span = frontmatter_span(files[path])
+        return block(path, files[path][: span[1]] if span else "")
+
+    floor = {path: head_only(path) for path in entries}
+    used = sum(len(text) for text in floor.values()) + 2 * len(floor)
+
+    kept: dict[str, str] = dict(floor)
+    dropped = 0
+    for path in ordered:
+        full = block(path, files[path])
+        cost = len(full) - len(kept.get(path, "")) + (0 if path in kept else 2)
+        if used + cost > budget_chars:
+            if path not in kept:
+                dropped += 1
+            continue
+        kept[path] = full
+        used += cost
+
+    rendered = "\n\n".join(kept[path] for path in ordered if path in kept)
+    folded = sum(1 for path in entries if kept[path] != block(path, files[path]))
+    notes = []
+    if folded:
+        notes.append(f"{folded} skill body/bodies not shown (description only)")
+    if dropped:
+        notes.append(f"{dropped} more file(s) not shown")
+    return rendered + (f"\n\n({'; '.join(notes)})" if notes else "")
+
+
+# The skill section's own cap, for the mode that can grow it without limit.
+#
+# `reflect_budget_chars` defaults to 200,000 and covers trajectories only; the
+# skill goes in front of it. 60,000 characters is roughly 15k tokens of skill
+# section — a workspace of a dozen ordinary skills fits whole, and one large
+# enough to refuse the call is folded to its descriptions instead of taking the
+# step's gradient with it. Only routing passes it: isolated edits the body and
+# has one target, so its prompt is unchanged.
+DEFAULT_SKILL_BUDGET_CHARS = 60_000
 
 
 # Enough for a few dozen descriptions, and a hard stop well short of the point

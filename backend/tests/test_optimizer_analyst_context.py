@@ -287,3 +287,87 @@ def test_a_routing_run_without_context_still_works():
 
     assert client.prompts("analyst")
     assert outcome.files == FILES
+
+
+# --- Bounding the skill section ----------------------------------------------
+#
+# `render_competing_skills` has a budget because the skill section sits in front
+# of `reflect_budget_chars` and is unbudgeted, and going over the optimizer
+# model's context window truncates nothing — the call is refused and the step
+# loses its gradient. `render_skill` is the *larger* half of that same section
+# and had no budget at all.
+#
+# It did not matter while a target was one skill. Routing takes several, the
+# wizard ticks every usable skill by default, and `workspace_baseline` is the
+# workspace minus the targets — so on the default path the competing block is
+# empty and every body of every skill in the workspace goes through
+# `render_skill` instead, in full, on the analyst call and again on each merge
+# and the ranking call. The one part with a cap contributes nothing and the part
+# without one carries everything.
+
+
+def wide_workspace(n=40, body_chars=4000):
+    return {
+        f"skill_{i:03d}/SKILL.md": (
+            f"---\nname: skill_{i:03d}\ndescription: Skill {i:03d} does things.\n---\n"
+            f"# Body {i:03d}\n" + ("filler line\n" * (body_chars // 12))
+        )
+        for i in range(n)
+    }
+
+
+def test_render_skill_is_unbounded_by_default():
+    """Isolated edits the body, so it must see the body. Nothing changes there."""
+    rendered = skillio.render_skill(FILES, SKILL_DIR)
+
+    assert "Quote figures in the account's own currency." in rendered
+    assert "Refunds settle in 5 days." in rendered
+
+
+def test_a_budget_keeps_every_targets_frontmatter_whole():
+    """The description is the one thing routing edits, and an edit must name its
+    exact current text to land. Truncating a frontmatter would ask the analyst to
+    target text it was never shown."""
+    files = wide_workspace()
+    dirs = sorted(p.split("/", 1)[0] for p in files)
+    rendered = skillio.render_skill(files, dirs, budget_chars=20_000)
+
+    assert len(rendered) <= 20_000
+    for i in range(len(dirs)):
+        assert f"description: Skill {i:03d} does things." in rendered
+
+
+def test_a_budget_says_how_much_it_dropped():
+    """A silent cap is the same bug one level down: the analyst would believe it
+    had been shown a skill in full and target a line that never arrived."""
+    files = wide_workspace()
+    dirs = sorted(p.split("/", 1)[0] for p in files)
+    rendered = skillio.render_skill(files, dirs, budget_chars=20_000)
+
+    assert "not shown" in rendered.lower()
+
+
+def test_a_workspace_that_fits_is_rendered_whole_and_says_nothing():
+    files = wide_workspace(n=2, body_chars=200)
+    dirs = sorted(p.split("/", 1)[0] for p in files)
+    rendered = skillio.render_skill(files, dirs, budget_chars=100_000)
+
+    assert "not shown" not in rendered.lower()
+    assert rendered == skillio.render_skill(files, dirs)
+
+
+def test_reference_files_are_dropped_before_an_entry_point_body():
+    """Order of sacrifice: the entry points are what the agent reads first and
+    what this mode edits, so a reference file goes before any of them is cut."""
+    files = {
+        "billing/SKILL.md": "---\nname: billing\ndescription: Invoices.\n---\n# Billing\nKEEP_THIS_BODY\n",
+        "reporting/SKILL.md": "---\nname: reporting\ndescription: Reports.\n---\n# Reporting\nKEEP_THIS_TOO\n",
+        "billing/references/long.md": "DROP_ME\n" + ("x" * 50_000),
+    }
+    rendered = skillio.render_skill(
+        files, ["billing", "reporting"], budget_chars=2_000
+    )
+
+    assert "KEEP_THIS_BODY" in rendered
+    assert "KEEP_THIS_TOO" in rendered
+    assert "DROP_ME" not in rendered
