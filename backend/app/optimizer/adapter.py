@@ -30,11 +30,11 @@ import statistics
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from app.config import settings
 from app.integrations import Seams
-from app.integrations.base import LlmOutputError, Trace, WorkspaceOverride
+from app.integrations.base import LlmOutputError, WorkspaceOverride
 from app.optimizer.detector import (
     build_markers,
     detect_activation,
