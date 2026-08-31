@@ -371,3 +371,104 @@ def test_reference_files_are_dropped_before_an_entry_point_body():
     assert "KEEP_THIS_BODY" in rendered
     assert "KEEP_THIS_TOO" in rendered
     assert "DROP_ME" not in rendered
+
+
+# --- The path the merge stage drops, end to end -------------------------------
+
+
+MULTI_FILES = {
+    "billing/SKILL.md": (
+        "---\nname: billing\ndescription: Invoices and balances.\n---\n"
+        "# Billing\nQuote figures in the account's currency.\n"
+    ),
+    "reporting/SKILL.md": (
+        "---\nname: reporting\ndescription: Revenue reports.\n---\n"
+        "# Reporting\nAlways name the period.\n"
+    ),
+}
+
+
+class PathLosingOptimizer:
+    """An optimizer whose analysts name a `path` and whose merge stage loses it.
+
+    Which is what the real one does: our routing analyst prompts require the
+    field and `vendor/prompts/merge_*.md` are upstream's, written for a skill
+    that is one document, and state a schema without it.
+    """
+
+    model_name = "scripted"
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        self._lock = threading.Lock()
+
+    def chat_optimizer(self, system, user, max_completion_tokens=16384,
+                       retries=3, stage="optimizer", timeout=None):
+        with self._lock:
+            self.calls.append({"stage": stage, "system": system, "user": user})
+        usage = {"calls": 1, "prompt_tokens": 10, "completion_tokens": 5}
+        edits = [
+            {"op": "replace", "target": "description: Invoices and balances.",
+             "content": "description: Invoices, balances and credit notes."},
+            {"op": "replace", "target": "description: Revenue reports.",
+             "content": "description: Revenue reports and period comparisons."},
+        ]
+        if stage == "ranking":
+            return json.dumps({"selected_indices": [0, 1]}), usage
+        if stage == "merge":
+            # The drop: no `path` on either edit.
+            return json.dumps({"reasoning": "merged", "edits": edits}), usage
+        # The analyst names one, as its prompt demands.
+        with_paths = [
+            {**edits[0], "path": "billing/SKILL.md"},
+            {**edits[1], "path": "reporting/SKILL.md"},
+        ]
+        return json.dumps(
+            {"batch_size": 1, "patch": {"reasoning": "", "edits": with_paths}}
+        ), usage
+
+
+def mixed_items(n=4):
+    """Half right, half wrong, so both analysts run and the final merge happens.
+
+    `merge_patches` returns a lone group untouched — that is why the bug was
+    intermittent — so a step that produced only failure edits never reaches the
+    call that drops the path.
+    """
+    out = items(n)
+    for i, item in enumerate(out):
+        item["hard"] = 1.0 if i % 2 else 0.0
+        item["soft"] = item["hard"]
+    return out
+
+
+def test_a_multi_target_routing_step_still_edits_both_descriptions():
+    """The whole chain, with the merge stage losing `path` as it really does.
+
+    Without re-attachment every edit here is `skipped_invalid_path`: there are
+    two entry points, so there is no "the skill document" to default to. The
+    candidate then comes back byte-identical to the skills in force and the step
+    reads as a rejected candidate rather than as a patch that was lost.
+    """
+    outcome = run_update_stage(
+        files=MULTI_FILES,
+        skill_dir=["billing", "reporting"],
+        mode="routing",
+        items=mixed_items(),
+        client=PathLosingOptimizer(),
+        edit_budget=4,
+        minibatch_size=2,
+        analyst_workers=1,
+        merge_batch_size=8,
+        seed=7,
+    )
+
+    assert [r["status"] for r in outcome.reports] == ["applied_replace", "applied_replace"]
+    assert outcome.n_edits_applied == 2
+    assert outcome.n_edits_unplaced == 0
+    assert "Invoices, balances and credit notes." in outcome.files["billing/SKILL.md"]
+    assert "period comparisons" in outcome.files["reporting/SKILL.md"]
+    # Each body is untouched: routing freezes them, and the edits landed in the
+    # frontmatter of the file the target actually belongs to.
+    assert "Quote figures in the account's currency." in outcome.files["billing/SKILL.md"]
+    assert "Always name the period." in outcome.files["reporting/SKILL.md"]
