@@ -367,3 +367,98 @@ def test_a_question_that_read_nothing_reports_an_empty_list():
 
     assert act.activated is False
     assert act.skills_read == []
+
+
+# --- where a marker is allowed to come from ---------------------------------
+#
+# Markers used to be the longest lines of the entry point and every reference
+# file *concatenated*. Reference files are where the prose lives, so their lines
+# are routinely the longest three — and then no marker came from `SKILL.md` at
+# all, and an agent that opened the entry point and nothing else scored as an
+# agent that had read no skill. Behind the gate that is a routing accuracy of
+# zero for every question tagged for the skill: `score_one` is a set equality,
+# the baseline is therefore `0.0` rather than `None` so `_baseline_step` raises
+# nothing, and every candidate ties it and is rejected. An hour of rollouts
+# drawing a flat line, recorded as ordinary rejections.
+#
+# The pre-flight cannot see it either: `entry_body_visible` looks only at
+# `SKILL.md`, so the probe marker is found and the run is waved through.
+
+PROSE = {
+    "billing/SKILL.md": (
+        "---\n"
+        "name: billing\n"
+        "description: Invoices, balances and refunds.\n"
+        "---\n"
+        "# Billing\n"
+        "Quote every figure in the account's own currency.\n"
+    ),
+    "billing/references/refunds.md": (
+        "# Refunds\n"
+        "A refund request must be filed within thirty days of the charge date.\n"
+        "A refund is prorated by the number of service days actually consumed.\n"
+        "A refund to a closed card is issued as account credit instead of cash.\n"
+    ),
+}
+
+
+def test_the_entry_point_always_keeps_a_marker_of_its_own():
+    """However much longer the prose in a reference file is."""
+    markers = skill_markers(PROSE, "billing")
+
+    assert any("Quote every figure in the account's own currency." in m for m in markers)
+
+
+def test_an_agent_that_opens_only_the_entry_point_has_read_the_skill():
+    """The reviewer's reproduction: correct routing, scored as no skill at all."""
+    entry_only = traj(turns=(("tool", PROSE["billing/SKILL.md"]),))
+
+    assert read_skills(entry_only, build_markers(PROSE)) == {"billing"}
+
+
+def test_a_reference_file_keeps_markers_of_its_own_too():
+    """The other half of the rule: reading a reference still proves a load."""
+    one_reference = traj(turns=(("tool", "A refund to a closed card is issued as account credit instead of cash."),))
+
+    assert read_skills(one_reference, build_markers(PROSE)) == {"billing"}
+
+
+# --- a line two skills share is evidence for neither -------------------------
+
+
+SHARED_LINE = "Escalate to a human whenever the account is flagged for review."
+BOILERPLATE = {
+    "billing/SKILL.md": (
+        "---\nname: billing\ndescription: Invoices and balances.\n---\n"
+        f"# Billing\n{SHARED_LINE}\nQuote every figure in the account's own currency.\n"
+    ),
+    "reporting/SKILL.md": (
+        "---\nname: reporting\ndescription: Monthly reports.\n---\n"
+        f"# Reporting\n{SHARED_LINE}\nCompare each period against the same period one year earlier.\n"
+    ),
+}
+
+
+def test_a_line_shared_by_two_skills_is_never_a_marker():
+    """`hard` is a set equality, so one false positive zeroes the question.
+
+    Two skills that share a boilerplate line would both read as opened on any
+    trace carrying it — and a question tagged for one of them then scores zero
+    for having "opened" the other.
+    """
+    markers = build_markers(BOILERPLATE)
+
+    assert not any(SHARED_LINE in m for m in markers["billing"])
+    assert not any(SHARED_LINE in m for m in markers["reporting"])
+
+
+def test_the_shared_line_alone_reads_as_no_skill_opened():
+    assert read_skills(traj(turns=(("tool", SHARED_LINE),)), build_markers(BOILERPLATE)) == set()
+
+
+def test_each_skill_is_still_detected_by_a_line_of_its_own():
+    """Dropping the shared line must not cost the skills their own evidence."""
+    markers = build_markers(BOILERPLATE)
+    billing = traj(turns=(("tool", "Quote every figure in the account's own currency."),))
+
+    assert read_skills(billing, markers) == {"billing"}

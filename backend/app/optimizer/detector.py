@@ -40,8 +40,9 @@ run that could not be seen into at all never gets past the pre-flight.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
-from typing import Mapping
+from typing import AbstractSet, Mapping
 
 from app.optimizer.skillio import frontmatter_span
 from app.optimizer.trajectory import Trajectory
@@ -50,9 +51,11 @@ from app.optimizer.trajectory import Trajectory
 # coincidence in half the traces ever recorded.
 MIN_MARKER_CHARS = 24
 
-# How many distinct body lines to look for per skill. One is enough to prove the
-# text arrived; a handful makes the detector robust to a step editing the line
-# it happened to pick.
+# How many distinct body lines to look for **per file** of a skill. One is enough
+# to prove the text arrived; a handful makes the detector robust to a step
+# editing the line it happened to pick. Per file rather than per skill because a
+# budget shared across the skill is a budget one file can spend entirely — see
+# `skill_markers`.
 MARKER_COUNT = 3
 
 _ENTRY = "SKILL.md"
@@ -77,20 +80,38 @@ class Activation:
     hit: str = "none"
 
 
-def _body_of(files: Mapping[str, str], skill_name: str) -> str:
-    """Everything of this skill that is not its frontmatter, as one blob."""
-    entry = f"{skill_name}/{_ENTRY}"
-    text = files.get(entry, "")
-    span = frontmatter_span(text)
-    body = text[span[1]:] if span else text
+def _body_files(files: Mapping[str, str], skill_name: str) -> dict[str, str]:
+    """This skill's body, file by file and never concatenated, entry point first.
 
-    # Reference files are body: reading one proves the skill was loaded, and
-    # skills routinely instruct exactly that ("for refunds, read
-    # references/refunds.md").
+    File by file because markers are picked per file, and that is the whole
+    point: over one blob the longest lines are whichever file has the longest
+    prose, which is almost always a reference. Entry point first because it is
+    the file most agents open, so it is the one that must never be crowded out.
+
+    Reference files are body: reading one proves the skill was loaded, and skills
+    routinely instruct exactly that ("for refunds, read references/refunds.md").
+    """
+    entry = f"{skill_name}/{_ENTRY}"
+    bodies: dict[str, str] = {}
+
+    text = files.get(entry)
+    if text is not None:
+        span = frontmatter_span(text)
+        bodies[entry] = text[span[1]:] if span else text
+
     for path, content in sorted(files.items()):
         if path != entry and path.startswith(f"{skill_name}/"):
-            body += "\n" + content
-    return body
+            bodies[path] = content
+    return bodies
+
+
+def _qualifying_lines(text: str) -> set[str]:
+    """The lines of one file long enough to be evidence, stripped and deduped."""
+    return {
+        stripped
+        for line in text.splitlines()
+        if len(stripped := line.strip()) >= MIN_MARKER_CHARS
+    }
 
 
 def skill_names(files: Mapping[str, str]) -> list[str]:
@@ -98,21 +119,38 @@ def skill_names(files: Mapping[str, str]) -> list[str]:
     return sorted({path.split("/", 1)[0] for path in files if "/" in path})
 
 
-def skill_markers(files: Mapping[str, str], skill_name: str) -> list[str]:
-    """Distinctive lines of one skill's body, longest first.
+def skill_markers(
+    files: Mapping[str, str], skill_name: str, *, exclude: AbstractSet[str] = frozenset()
+) -> list[str]:
+    """Distinctive lines of one skill's body: the longest few of **each file**.
 
     Longest first because a long line is both less likely to collide by chance
     and more likely to survive a step that rewords something shorter. Matching is
     line-based rather than on a fixed-size block of the file: a tool returning a
     file adds line numbers, elides the middle, or normalises whitespace, and any
     of those breaks one long block silently while leaving most lines intact.
+
+    Per file, and this is the part that is easy to get wrong. Picking the longest
+    lines of the body as a whole means one file can take every slot — and the
+    file that does is the reference, because references are where the prose
+    lives. The entry point then has no marker at all, and an agent that opens
+    `SKILL.md` and nothing else scores as an agent that read no skill: routing
+    accuracy of zero for every question tagged for it, a baseline of `0.0` rather
+    than the `None` that would abort the run, and every candidate rejected
+    against it for an hour. A budget per file gives every file the agent could
+    have opened its own evidence, and costs a few more substring searches per
+    rollout against a trace we are already holding in memory.
+
+    `exclude` drops lines that are not this skill's alone — see `build_markers`,
+    which is the only caller that can know that.
     """
-    lines = {
-        stripped
-        for line in _body_of(files, skill_name).splitlines()
-        if len(stripped := line.strip()) >= MIN_MARKER_CHARS
-    }
-    return sorted(lines, key=len, reverse=True)[:MARKER_COUNT]
+    markers: list[str] = []
+    for text in _body_files(files, skill_name).values():
+        lines = _qualifying_lines(text) - exclude
+        for line in sorted(lines, key=len, reverse=True)[:MARKER_COUNT]:
+            if line not in markers:
+                markers.append(line)
+    return markers
 
 
 def build_markers(files: Mapping[str, str]) -> dict[str, list[str]]:
@@ -121,8 +159,28 @@ def build_markers(files: Mapping[str, str]) -> dict[str, list[str]]:
     Worth hoisting: routing compares against the whole workspace on every item
     of every rollout, and in routing mode the other skills are frozen for the
     life of the run.
+
+    **A line two skills share is evidence for neither.** Skills are written from
+    the same house style and repeat each other's boilerplate ("Escalate to a
+    human whenever…"), and `read_skills` accepts a skill on any one marker — so a
+    shared line reads as *both* skills opened on any trace that carries it. Under
+    `hard`, which is a set equality, one such false positive scores the question
+    zero however well the agent actually routed. Lines are compared across every
+    qualifying line of every skill, not just the ones that got picked: a line
+    that is only a marker for one of them still matches the other's text.
+
+    A skill whose every line is shared ends with no markers and can never be
+    read. That is the direction `read_skills` already commits to as the safe one:
+    the alternative, matching nothing and calling it a hit, reports the skill as
+    read on every question.
     """
-    return {name: skill_markers(files, name) for name in skill_names(files)}
+    names = skill_names(files)
+    seen: Counter[str] = Counter()
+    for name in names:
+        for text in _body_files(files, name).values():
+            seen.update(_qualifying_lines(text))
+    shared = {line for line, count in seen.items() if count > 1}
+    return {name: skill_markers(files, name, exclude=shared) for name in names}
 
 
 def shown_to_model(trajectory: Trajectory) -> str:
