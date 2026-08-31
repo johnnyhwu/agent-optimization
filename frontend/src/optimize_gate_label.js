@@ -25,6 +25,7 @@
 //   rejected · score      isolated: answer accuracy did not beat the best so far
 //   rejected · routing    routing: the agent reached the right skills less often
 //   rejected · not measurable  routing: nothing in the split could be scored
+//   rejected · edits lost the merge stage returned edits naming no file, so none applied
 //   rejected · errors     validation never came back, so there was nothing to judge
 //   skipped · errors      the training batch never came back, so there was no candidate
 //   not judged            still running, or a step that ended before its gate
@@ -81,6 +82,15 @@ export function gateLabel(step) {
         reason: "not measurable",
         detail:
           "Routing accuracy could not be measured on this validation split: no question both produced a trace and carried a skill tag, so there was nothing to score. The edit was dropped rather than judged against a number that does not exist.",
+      });
+    }
+    if (state.gate_reject_reason === "edits_unattributable") {
+      return verdict({
+        tone: "warning",
+        label: "rejected",
+        reason: "edits lost",
+        detail:
+          "Every edit in this step's patch came back naming no file, so none of them could be applied and the candidate was identical to the skills in force. That is the pipeline losing the patch between merge and apply — not a judgement on the edits, which were never tried.",
       });
     }
     // The engine names the measurement that refused it, because the gate

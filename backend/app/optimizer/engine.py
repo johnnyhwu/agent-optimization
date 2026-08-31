@@ -867,6 +867,39 @@ async def _run_step(
     })
     await _check_cancel(run_id, store, cancel_event)
 
+    # A patch that landed nowhere because none of it named a file is a fault in
+    # the pipeline, not a verdict on the edits. Left to run on, it is invisible:
+    # the candidate is byte-identical to the skill in force, so the score cache
+    # answers with the baseline's own number, the gate sees a tie and rejects,
+    # and the step is recorded as one more rejected candidate — for an hour, on
+    # a run where nothing was ever tried.
+    #
+    # `_finish_unscored_step` and not the gate, for the reason its own docstring
+    # gives: the gate was never asked. It buys no validation rollout either,
+    # which is the other half of what this costs.
+    if outcome.n_edits_unplaced and outcome.n_edits_applied == 0:
+        await _finish_unscored_step(
+            store, step_id, seams=seams, state=state,
+            action="reject", reason="edits_unattributable",
+            edit_budget=edit_budget, candidate_hash=candidate_hash,
+            n_edits_merged=outcome.n_edits_merged,
+            n_edits_ranked=outcome.n_edits_ranked,
+            n_edits_applied=outcome.n_edits_applied,
+            n_edits_skipped=outcome.n_edits_skipped,
+            edit_reports=outcome.reports,
+            lines_added=lines_added, lines_removed=lines_removed,
+            files_touched=len(stats), n_answer_leaks=len(leaks),
+            skill_len=sum(len(text) for text in candidate.values()),
+            edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+        )
+        await publish({
+            "type": "gate_done", "step_no": step_no, "action": "reject",
+            "reject_reason": "edits_unattributable", "candidate_score": None,
+            "current_score": state.current_score, "best_score": state.best_score,
+            "from_cache": False,
+        })
+        return None
+
     # --- 3. validation rollout, against the candidate -----------------------
     cached = state.score_cache.get(candidate_hash)
     if cached is not None:

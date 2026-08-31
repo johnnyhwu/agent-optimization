@@ -62,6 +62,21 @@ test("a routing rollout that could not be scored says so, not that the edit lost
   assert.doesNotMatch(v.detail, /worse/);
 });
 
+test("a patch that named no file reads as lost, not as refused", () => {
+  // The merge stage can return edits with no `path`, and with several targets
+  // there is nothing to default one to. Every edit is dropped, the candidate
+  // equals the skill in force, and the gate ties. Labelling that "rejected ·
+  // routing" sends the developer to rewrite descriptions that were never tried.
+  const v = gateLabel({
+    gate_action: "reject", gate_reject_reason: "edits_unattributable",
+  });
+
+  assert.equal(v.label, "rejected");
+  assert.equal(v.reason, "edits lost");
+  assert.equal(v.tone, "warning");
+  assert.match(v.detail, /naming no file|never tried/i);
+});
+
 test("a validation split that never came back is not a bad edit", () => {
   const v = gateLabel({
     gate_action: "reject",

@@ -40,7 +40,12 @@ from typing import Any, Mapping, Sequence
 
 from app.integrations.base import OptimizerClient
 from app.optimizer.analyst import run_analyst_minibatch
-from app.optimizer.skillio import build_protection, render_competing_skills, render_skill
+from app.optimizer.skillio import (
+    build_protection,
+    reattach_paths,
+    render_competing_skills,
+    render_skill,
+)
 from app.optimizer.trajectory import (
     Trajectory,
     conversation_chars,
@@ -111,6 +116,12 @@ class UpdateOutcome:
     n_edits_applied: int
     n_edits_skipped: int
     edit_summary: str
+    # Edits the merge stage returned with no `path` that could not be placed
+    # from their `target` either. Nothing downstream can act on an edit that
+    # names no file, so this is counted rather than inferred from the reports:
+    # a step where it accounts for every skip is the pipeline losing the patch,
+    # not the gate refusing a candidate.
+    n_edits_unplaced: int = 0
     stage_calls: list[StageCallRecord] = field(default_factory=list)
     tokens: dict = field(default_factory=dict)
 
@@ -289,8 +300,14 @@ def run_update_stage(
     n_ranked = len(get_payload_items(selected, update_mode))
 
     protection = build_protection(files, skill_dir, mode)
+    # The merge stage drops `path` — its prompts are upstream's and state a
+    # schema without one — which only matters once there are several targets and
+    # no "the skill document" to default to. Put it back from the `target` text
+    # where that is decisive, before the applier sees the patch. `selected` is
+    # left as ranking returned it: it is what the page shows for that stage.
+    to_apply, _, unplaced = reattach_paths(selected, files, protection)
     candidate, reports = apply_patch_with_report(
-        files, selected, skill_dir=skill_dir, protection=protection
+        files, to_apply, skill_dir=skill_dir, protection=protection
     )
     applied = sum(1 for r in reports if r.get("status", "").startswith("applied"))
 
@@ -303,6 +320,7 @@ def run_update_stage(
         n_edits_ranked=n_ranked,
         n_edits_applied=applied,
         n_edits_skipped=len(reports) - applied,
+        n_edits_unplaced=unplaced,
         edit_summary=str(selected.get("reasoning") or "").strip(),
         stage_calls=stage_calls,
         tokens=dict(recorder.tokens),

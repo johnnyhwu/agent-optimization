@@ -95,6 +95,72 @@ def build_protection(
     raise ValueError(f"unknown optimization mode {mode!r}; expected 'isolated' or 'routing'")
 
 
+def reattach_paths(
+    patch: dict, files: Mapping[str, str], protection: Protection
+) -> tuple[dict, int, int]:
+    """Put back the `path` the merge stage drops, where the evidence is decisive.
+
+    Returns `(patch, placed, unplaced)` — a new patch, how many edits were given
+    a path, and how many were left without one for the applier to refuse.
+
+    **Why anything is missing.** Our routing analyst prompts require a `path` on
+    every edit. `vendor/prompts/merge_{failure,success,final}.md` are upstream's,
+    for a world where a skill is one document, and state a schema with no `path`
+    in it — so the three merge calls in `aggregate.merge_patches` emit edits that
+    have lost it, and `rank_and_select` picks by index and cannot put it back.
+    The merge prompts are not the place to fix this: they are vendored verbatim
+    (`VENDORED.md`), the override mechanism is keyed on mode and `merge_patches`
+    loads them without one, and asking a model to carry a field is a weaker
+    guarantee than deriving it.
+
+    With one target none of that showed: `entry_point` has a value and a
+    path-less edit means "the skill document". With several there is no such
+    referent, so every merged edit was refused, the candidate came back
+    identical to the skill in force, and an hour went into steps that recorded a
+    rejected candidate where what actually happened is that the patch was lost.
+
+    **The evidence that survives merge is `target`** — the exact text the edit
+    replaces, which merge has every reason to keep and none to invent. A target
+    found in exactly one file names that file. Anything else is left alone: a
+    target in two files, a target in none, and an `append`, which has no target
+    at all. Guessing there would write one skill's description into another,
+    which is worse than dropping the edit — the run continues, the gate scores
+    it, and the workspace ends up saying something no analyst proposed.
+
+    A **blank** path is not missing, it is malformed, and stays refused.
+    `_apply_edit_with_report` keeps those two apart so a typo cannot become a
+    silent write to `SKILL.md`; re-attaching over a blank would collapse them
+    here instead, one stage earlier.
+
+    Every file is searched, not only the entry points, so ambiguity is judged
+    over everything the analyst was shown. An edit placed on a frozen body is
+    still refused — by `protection`, with the reason that is actually true of it.
+    """
+    edits = patch.get("edits") if isinstance(patch, dict) else None
+    if not edits or len(protection.entry_points) < 2:
+        return patch, 0, 0
+
+    placed = unplaced = 0
+    out: list = []
+    for edit in edits:
+        if not isinstance(edit, dict) or edit.get("path") is not None:
+            out.append(edit)
+            continue
+        target = edit.get("target")
+        hits = (
+            sorted(path for path, text in files.items() if target in text)
+            if isinstance(target, str) and target.strip()
+            else []
+        )
+        if len(hits) == 1:
+            out.append({**edit, "path": hits[0]})
+            placed += 1
+        else:
+            out.append(edit)
+            unplaced += 1
+    return {**patch, "edits": out}, placed, unplaced
+
+
 def render_skill(files: Mapping[str, str], skill_dir: str | Sequence[str]) -> str:
     """The whole directory as the one document every vendored stage expects.
 

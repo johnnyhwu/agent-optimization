@@ -1865,3 +1865,136 @@ async def test_the_boundary_waits_for_the_end_of_the_epoch(monkeypatch):
     await _run_with_optimizer(store, monkeypatch, optimizer)
 
     assert optimizer.stages.count("slow_update") == 2
+
+
+# --- A patch the pipeline lost is not a candidate the gate refused ------------
+#
+# A routing run is the only way to get here: it is the mode that can carry
+# several targets, and several targets is what removes the entry point a
+# path-less edit used to default to.
+
+
+def routing_items(n, split="train", skills=("billing",)):
+    return [
+        Item(item_key=f"set:{split}_{i}", question=f"q{i}", ground_truth_response="gt",
+             ground_truth_reasoning="r", ordinal=i, gt_skills=tuple(skills))
+        for i in range(n)
+    ]
+
+
+def install_routing_rollout(monkeypatch, *, read=("billing",)):
+    """Every question answered, traced, and routed to `read`.
+
+    Routing accuracy therefore sits at a constant, which is what these tests
+    want: the candidate cannot win on the score, so whatever verdict the step
+    records is the one the code under test chose rather than a measurement.
+    """
+
+    async def fake_rollout(items, *, skill_files, mode, skill_name, seams, config,
+                           **kwargs):
+        rows = []
+        for i, item in enumerate(items):
+            row = ResultRow(item_key=item.item_key, correlation_id=f"c{i}", status="done")
+            row.verdict = "correct"
+            row.judge_score = 1.0
+            row.agent_latency_ms = 100 + i
+            row.activated = True
+            row.skills_read = list(read)
+            rows.append(row)
+        return rows
+
+    monkeypatch.setattr(engine, "run_rollout", fake_rollout)
+
+
+def routing_store(**overrides):
+    spec = make_spec(
+        mode="routing", total_steps=1, steps_per_epoch=1,
+        target_skills=["billing", "reporting"], **overrides,
+    )
+    return RecordingStore(spec, routing_items(2), routing_items(2, "val"))
+
+
+@pytest.mark.asyncio
+async def test_a_step_whose_every_edit_lost_its_path_is_not_recorded_as_a_gate_verdict(
+    monkeypatch,
+):
+    """`skipped_invalid_path` for the whole patch is a bug, not a decision.
+
+    The merge prompts are upstream's and carry no `path`, so a multi-target
+    routing step can come back with edits that name no file. `reattach_paths`
+    places what it can; what is left cannot be applied, the candidate is
+    byte-identical to the skill in force, and the score cache then answers with
+    the baseline's own number — so the gate sees a tie and rejects.
+
+    Recorded as `rejected · routing`, which reads as "the descriptions did not
+    help". It is not: nothing was tried. The run would spend its whole budget
+    drawing a flat line with nothing on screen naming the cause.
+    """
+    reports = [
+        {"index": 1, "op": "replace", "path": "", "path_defaulted": True,
+         "target": "description: Invoices.", "content_preview": "…",
+         "status": "skipped_invalid_path"},
+        {"index": 2, "op": "replace", "path": "", "path_defaulted": True,
+         "target": "description: Reports.", "content_preview": "…",
+         "status": "skipped_invalid_path"},
+    ]
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        return UpdateOutcome(
+            files=dict(files), patch={"reasoning": "stubbed", "edits": []},
+            reports=reports, minibatches=[], n_edits_merged=2, n_edits_ranked=2,
+            n_edits_applied=0, n_edits_skipped=2, n_edits_unplaced=2,
+            edit_summary="nothing could be placed", tokens={},
+        )
+
+    store = routing_store()
+    install_routing_rollout(monkeypatch)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    status, events = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert store.step(1)["gate_action"] == "reject"
+    assert store.step(1)["gate_reject_reason"] == "edits_unattributable"
+    # The edit reports are still stored: they are how anyone sees which stage
+    # lost the patch.
+    assert store.step(1)["edit_reports"] == reports
+    gate_events = [e for e in events if e.get("type") == "gate_done"]
+    assert gate_events and gate_events[-1]["reject_reason"] == "edits_unattributable"
+
+
+@pytest.mark.asyncio
+async def test_a_step_that_placed_some_of_its_edits_is_gated_normally(monkeypatch):
+    """The refusal is for a patch that landed nowhere at all.
+
+    One edit that could not be placed beside one that could is an ordinary
+    partial patch — there is a real candidate, so it is measured and gated like
+    any other.
+    """
+    reports = [
+        {"index": 1, "op": "replace", "path": "billing/SKILL.md", "path_defaulted": False,
+         "target": "x", "content_preview": "…", "status": "applied_replace"},
+        {"index": 2, "op": "replace", "path": "", "path_defaulted": True,
+         "target": "y", "content_preview": "…", "status": "skipped_invalid_path"},
+    ]
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        candidate = dict(files)
+        entry = "billing/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + "Mention the period.\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "stubbed", "edits": []},
+            reports=reports, minibatches=[], n_edits_merged=2, n_edits_ranked=2,
+            n_edits_applied=1, n_edits_skipped=1, n_edits_unplaced=1,
+            edit_summary="one of two landed", tokens={},
+        )
+
+    store = routing_store()
+    install_routing_rollout(monkeypatch)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["gate_reject_reason"] != "edits_unattributable"

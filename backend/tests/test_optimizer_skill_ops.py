@@ -934,3 +934,149 @@ def test_a_single_target_still_works_when_passed_as_a_bare_string():
 
     assert statuses(reports) == ["applied_replace"]
     assert "Just invoices." in out[ENTRY]
+
+
+# --- Re-attaching a path the merge stage dropped ------------------------------
+#
+# The routing analyst prompts demand a `path` on every edit. The merge prompts
+# are upstream's and state a schema without one, so `aggregate.merge_patches` —
+# three LLM calls — emits edits that have lost it, and `rank_and_select` picks
+# by index and cannot put it back.
+#
+# With one target that was invisible: `entry_point` has a value and a path-less
+# edit defaults to it. With several there is nothing to default to, so every
+# merged edit is refused as `skipped_invalid_path`, the candidate comes back
+# byte-identical to the skill in force, and the step is recorded as one more
+# rejected candidate rather than as the pipeline losing the patch.
+#
+# It is intermittent, which is what makes it expensive to find: a lone patch
+# passes through `_hierarchical_merge` untouched, and the final merge call only
+# runs when both analysts proposed something. So the same run works on some
+# steps and silently no-ops on others.
+#
+# `reattach_paths` puts the path back from the one piece of evidence that
+# survives merge — the `target` text — and refuses to guess when that evidence
+# is not decisive.
+
+
+def reattach(f, edits, *skills):
+    return skillio.reattach_paths({"edits": edits}, f, multi(f, *skills))
+
+
+def test_a_merged_edit_with_no_path_is_reattached_by_its_target():
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [{"op": "replace", "target": "description: Revenue reports.",
+          "content": "description: Revenue reports and period comparisons."}],
+        "billing", "reporting",
+    )
+
+    assert patch["edits"][0]["path"] == "reporting/SKILL.md"
+    assert (placed, unplaced) == (1, 0)
+
+
+def test_a_target_that_appears_in_two_files_is_never_guessed():
+    """Ambiguity is the case that must not be resolved by picking one.
+
+    Writing one skill's description into another is worse than dropping the
+    edit: the run keeps going, the gate scores it, and the workspace now says
+    something no analyst proposed.
+    """
+    shared = dict(MULTI)
+    shared["billing/SKILL.md"] = shared["billing/SKILL.md"] + "Pick the period.\n"
+    patch, placed, unplaced = reattach(
+        shared,
+        [{"op": "replace", "target": "Pick the period.", "content": "Pick the quarter."}],
+        "billing", "reporting",
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 1)
+
+
+def test_a_target_that_matches_nothing_is_left_unplaced():
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [{"op": "replace", "target": "description: Nothing here.", "content": "x"}],
+        "billing", "reporting",
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 1)
+
+
+def test_a_blank_path_is_refused_rather_than_reattached():
+    """A blank path is a malformed edit, not an upstream-shaped one.
+
+    `_apply_edit_with_report` keeps those two apart on purpose — collapsing them
+    turns a typo into a silent write to SKILL.md — and re-attaching over a blank
+    would collapse them here instead, one stage earlier.
+    """
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [{"op": "replace", "path": "", "target": "description: Revenue reports.",
+          "content": "description: Anything."}],
+        "billing", "reporting",
+    )
+
+    assert patch["edits"][0]["path"] == ""
+    assert (placed, unplaced) == (0, 0)
+
+
+def test_an_append_has_no_target_to_be_placed_by():
+    patch, placed, unplaced = reattach(
+        MULTI, [{"op": "append", "content": "- A new rule."}], "billing", "reporting",
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 1)
+
+
+def test_a_single_target_is_left_to_the_appliers_own_default():
+    """One entry point still means "the skill document", and that path is tested
+    elsewhere. Re-attaching there would change a behaviour that is not broken."""
+    f = files(**{ENTRY: FRONTMATTER + BODY})
+    patch, placed, unplaced = skillio.reattach_paths(
+        {"edits": [{"op": "append", "content": "4. Cite the period."}]}, f, routing(f)
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 0)
+
+
+def test_a_reattached_patch_moves_both_descriptions_at_once():
+    """The pass routing exists for: two competing descriptions, moved together,
+    from a merged patch that carries no paths at all."""
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [
+            {"op": "replace",
+             "target": "description: Invoices, balances, refunds and payment status.",
+             "content": "description: Invoices and balances only."},
+            {"op": "replace", "target": "description: Revenue reports.",
+             "content": "description: Revenue reports and period comparisons."},
+        ],
+        "billing", "reporting",
+    )
+    out, reports = apply_patch_with_report(
+        MULTI, patch, skill_dir=["billing", "reporting"],
+        protection=multi(MULTI, "billing", "reporting"),
+    )
+
+    assert (placed, unplaced) == (2, 0)
+    assert statuses(reports) == ["applied_replace", "applied_replace"]
+    assert "Invoices and balances only." in out["billing/SKILL.md"]
+    assert "period comparisons" in out["reporting/SKILL.md"]
+
+
+def test_the_original_patch_is_not_mutated():
+    """`run_update_stage` records the ranked patch for the page; re-attaching in
+    place would make the stored patch disagree with what the ranking returned."""
+    original = {"edits": [{"op": "replace", "target": "description: Revenue reports.",
+                           "content": "x"}]}
+    patch, _, _ = skillio.reattach_paths(
+        original, MULTI, multi(MULTI, "billing", "reporting")
+    )
+
+    assert "path" not in original["edits"][0]
+    assert patch["edits"][0]["path"] == "reporting/SKILL.md"
