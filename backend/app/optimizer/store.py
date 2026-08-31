@@ -118,9 +118,12 @@ class ResultRow:
     # the evaluation pages do, so nothing depends on this outliving the step.
     trace: Any = None
     # The same trace folded into one conversation. Built once during the
-    # rollout because both the detector and the reflect stage need it, and
-    # folding a fifteen-span trace twice per question is pure waste. In
-    # memory only, like `trace` above, and for the same reason.
+    # rollout because both the detector and the reflect stage need it —
+    # `adapter.run_rollout` writes it, `detector.detect_activation` reads it
+    # there and `reflection.build_analyst_items` reads it again minutes later —
+    # and folding a fifteen-span trace twice per question is pure waste. In
+    # memory only, like `trace` above, and for the same reason. Optional: a row
+    # rebuilt from a trace alone still works, the fold just happens later.
     trajectory: Any = None
 
 

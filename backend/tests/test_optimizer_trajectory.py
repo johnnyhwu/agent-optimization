@@ -457,3 +457,36 @@ def test_the_header_no_longer_carries_upstreams_dead_fields(gone):
     }
 
     assert gone not in format_trajectory_item(item, 1)
+
+
+# --- the fold the rollout already paid for ----------------------------------
+
+
+def test_a_row_that_carries_its_trajectory_is_not_folded_a_second_time():
+    """`adapter` folds the trace during the rollout and hangs it on the row.
+
+    The field exists so the reflect stage, which runs minutes later in the same
+    step, spends nothing re-deriving what is already in memory. Asserting object
+    identity rather than equality is the point: an equal-but-rebuilt trajectory
+    is exactly the waste this is here to remove.
+    """
+    row = _row("q1", agent_trace(steps=3))
+    row.trajectory = build_trajectory(row.trace)
+
+    items, _ = build_analyst_items([row], budget_chars=10_000_000)
+
+    assert items[0]["trajectory"] is row.trajectory
+
+
+def test_a_row_with_only_a_trace_is_still_folded_here():
+    """The field is an optimisation, never a requirement.
+
+    Nothing but a live rollout sets it — a resumed step, a replayed trace and
+    every test below build rows with a trace alone, and they must keep working.
+    """
+    row = _row("q1", agent_trace(steps=3))
+    assert row.trajectory is None
+
+    items, _ = build_analyst_items([row], budget_chars=10_000_000)
+
+    assert items[0]["trajectory"].turns

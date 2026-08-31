@@ -186,7 +186,12 @@ def build_analyst_items(
     if not usable:
         return [], {}
 
-    folded = [build_trajectory(row.trace) for row in usable]
+    # The rollout already folded this trace and hung it on the row
+    # (`adapter.run_rollout`), so the common path costs nothing here. The
+    # fallback is not dead code: a row built from a trace alone — a replay, a
+    # resumed step, every test in `test_optimizer_trajectory.py` — has no
+    # trajectory to inherit, and folding is cheaper than requiring one.
+    folded = [row.trajectory or build_trajectory(row.trace) for row in usable]
     headers = [
         _header_chars(row, questions.get(row.item_key, ""), ground_truths.get(row.item_key, ""))
         for row in usable
