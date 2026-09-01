@@ -242,8 +242,17 @@ class _Bucket:
     items: list[Mapping]
 
 
-def _skill_buckets(items: Sequence[Mapping], skill: str) -> tuple[list[_Bucket], int, int]:
-    """How `skill`'s own questions fared, plus `(tagged, reached)`."""
+def _skill_buckets(
+    items: Sequence[Mapping], skill: str,
+) -> tuple[list[_Bucket], int, int, int]:
+    """How `skill`'s own questions fared, plus `(tagged, measured, reached)`.
+
+    `measured` is separate from `tagged` for the same reason the header counts
+    them separately: a question whose trace never landed is not a question the
+    skill failed to attract. A skill whose every trace was lost would otherwise
+    be reported as "reached by 0 (0%)" — a description condemned on evidence
+    that does not exist, which is exactly the edit this digest should not invite.
+    """
     tagged = [i for i in items if skill in (i.get("gt_skills") or ())]
     reached, nothing, unmeasured = [], [], []
     instead: dict[tuple[str, ...], list[Mapping]] = {}
@@ -268,7 +277,7 @@ def _skill_buckets(items: Sequence[Mapping], skill: str) -> tuple[list[_Bucket],
         # how the agent routed, and counting it as a failure would invite an
         # edit against evidence that does not exist.
         buckets.append(_Bucket("· not measured (no trace landed)", unmeasured))
-    return buckets, len(tagged), len(reached)
+    return buckets, len(tagged), len(tagged) - len(unmeasured), len(reached)
 
 
 def _misfire_buckets(items: Sequence[Mapping], skill: str) -> list[_Bucket]:
@@ -304,7 +313,16 @@ def _render(buckets: Sequence[_Bucket], cap: int | None) -> list[str]:
 
 
 def _pct(part: int, whole: int) -> str:
+    """A share, or a dash when there was nothing to take a share of.
+
+    Never `0%` for an empty denominator: "none of them" and "none of nothing"
+    are different claims, and only one of them is about the skill.
+    """
     return f"{round(100 * part / whole)}%" if whole else "—"
+
+
+def _n(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
 def render_digest(
@@ -322,6 +340,17 @@ def render_digest(
     which is the number an edit to *that* description can move. Reporting one as
     the other is how a run ends up optimising against a figure it is not judged
     on.
+
+    `budget_chars` is honoured in two stages: every bucket loses depth together
+    down the cap ladder, and only when that bottoms out do whole sections go,
+    with a notice naming how many. It has a floor, the way
+    `truncate_trajectory`'s `min_keep` does — a header, one section and one
+    question is the smallest well-formed digest, and a budget under that is
+    exceeded rather than met. That floor is a few hundred characters against a
+    default of 120,000, and at the default a batch of 600 questions across a
+    dozen skills fits with room to spare; a budget small enough to hit it is a
+    misconfiguration, and returning a malformed matrix would serve it worse
+    than returning a slightly oversized one.
     """
     if not items:
         return ""
@@ -329,13 +358,13 @@ def render_digest(
     measured = [i for i in items if i.get("skills_read") is not None]
     exact = sum(1 for i in measured if float(i.get("hard") or 0.0))
     header = (
-        f"## Routing Results ({len(items)} questions, {len(measured)} measured, "
+        f"## Routing Results ({_n(len(items), 'question')}, {len(measured)} measured, "
         f"{_pct(exact, len(measured))} routed exactly right)"
     )
 
     sections: list[tuple[str, list[_Bucket]]] = []
     for skill in sorted(targets):
-        buckets, n_tagged, n_reached = _skill_buckets(items, skill)
+        buckets, n_tagged, n_measured, n_reached = _skill_buckets(items, skill)
         if not n_tagged:
             # Said out loud rather than omitted. A skill missing from the page
             # reads as one that is doing fine; a skill with no questions has no
@@ -345,9 +374,14 @@ def render_digest(
                 [],
             ))
             continue
+        # Over what was measured, never over what was tagged. The two differ
+        # only when traces went missing, and that is precisely when the
+        # difference matters.
+        lost = n_tagged - n_measured
         sections.append((
-            f"### {skill} — {n_tagged} tagged · reached by {n_reached} "
-            f"({_pct(n_reached, n_tagged)})",
+            f"### {skill} — {_n(n_tagged, 'question')} tagged · reached by "
+            f"{n_reached} of the {n_measured} measured ({_pct(n_reached, n_measured)})"
+            + (f" · {lost} not measured" if lost else ""),
             buckets,
         ))
         misfires = _misfire_buckets(items, skill)
@@ -363,13 +397,35 @@ def render_digest(
     # first ones being rendered whole and the last ones vanishing, so what the
     # analyst loses is depth in every group instead of whole groups it is never
     # told about.
-    for cap in _CAP_LADDER:
+    def render(cap: int | None, keep: int) -> str:
         body: list[str] = []
-        for title, buckets in sections:
+        for title, buckets in sections[:keep]:
             body.append(title)
             body.extend(_render(buckets, cap))
             body.append("")
-        text = "\n".join([header, ""] + body).rstrip() + "\n"
-        if len(text) <= budget_chars or cap == _CAP_LADDER[-1]:
+        dropped = len(sections) - keep
+        if dropped:
+            body.append(
+                f"({dropped} more section(s) omitted — this batch did not fit the "
+                "digest budget. The skills they describe are still editable and "
+                "still scored; you are simply not being shown their questions.)"
+            )
+        return "\n".join([header, ""] + body).rstrip() + "\n"
+
+    for cap in _CAP_LADDER:
+        text = render(cap, len(sections))
+        if len(text) <= budget_chars:
             return text
-    return text
+
+    # Every bucket is down to one question and it still does not fit, which
+    # takes an unusually small budget or an unusually wide workspace. Whole
+    # sections go now, and the notice says so — because the alternative is
+    # returning a prompt that overflows the optimizer's context window, and that
+    # does not truncate anything: the call is refused and the step loses its
+    # gradient entirely. A digest missing a section is worse than one that fits
+    # and better than none at all.
+    for keep in range(len(sections) - 1, 0, -1):
+        text = render(_CAP_LADDER[-1], keep)
+        if len(text) <= budget_chars:
+            return text
+    return render(_CAP_LADDER[-1], 1)

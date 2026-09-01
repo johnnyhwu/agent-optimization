@@ -91,6 +91,34 @@ def test_a_question_whose_trace_never_landed_is_reported_as_unmeasured_not_as_a_
     assert "not measured" in text.lower()
 
 
+def test_a_skill_whose_traces_all_went_missing_is_not_reported_as_never_reached():
+    # The percentage is over what was *measured*. Reported over what was tagged,
+    # a skill whose traces all failed to land reads as "reached by 0 (0%)" — a
+    # description condemned on evidence that does not exist, and an invitation
+    # to rewrite it. This is the same tri-state `routing_scores` keeps at the
+    # gate, held on the page the optimizer reads.
+    text = render_digest(
+        [item("a", tagged=["billing"], read=None)],
+        targets=["billing"],
+    )
+    assert "0%" not in text
+    assert "1 not measured" in text
+
+
+def test_a_skill_with_some_traces_missing_scores_over_the_rest():
+    text = render_digest(
+        [
+            item("a", tagged=["billing"], read=["billing"]),
+            item("b", tagged=["billing"], read=["reporting"]),
+            item("c", tagged=["billing"], read=None),
+        ],
+        targets=["billing"],
+    )
+    # One of the two that were measured, not one of the three that were tagged.
+    assert "1 of the 2 measured (50%)" in text
+    assert "1 not measured" in text
+
+
 def test_questions_that_misfired_into_a_skill_get_their_own_section():
     # The mirror image of a miss, and the one an activation-rate view cannot
     # see: this skill won a question that was not its job.
@@ -264,3 +292,35 @@ def test_a_genuinely_different_tool_catalogue_is_a_difference():
     b = [{"name": "search"}, {"name": "delete_everything"}]
     _, divergence = system_prompt_view([IDENTICAL, IDENTICAL], tools=[a, b])
     assert divergence.tools_diverged is True
+
+
+def test_the_default_budget_holds_a_large_workspace():
+    # 12 skills and 600 questions is past anything this platform has run, and
+    # the point of the number is that it does not need adjusting to survive
+    # one: going over the optimizer's context window truncates nothing, the
+    # call is refused, and the step loses its gradient entirely.
+    targets = [f"skill{i}" for i in range(12)]
+    items = [
+        item(f"q{i}", tagged=[targets[i % 12]], read=[targets[(i + 1) % 12]],
+             question="x" * 400)
+        for i in range(600)
+    ]
+    text = render_digest(items, targets)
+    assert len(text) <= DEFAULT_DIGEST_BUDGET_CHARS
+
+
+def test_whole_sections_go_only_after_every_bucket_is_down_to_one():
+    # Depth first, sections last: an analyst shown fewer examples per group can
+    # still see every group, and a group it is never told about is a
+    # description it edits blind.
+    targets = [f"skill{i}" for i in range(6)]
+    items = [
+        item(f"q{i}", tagged=[targets[i % 6]], read=[targets[i % 6]], question="x" * 200)
+        for i in range(120)
+    ]
+    roomy = render_digest(items, targets, budget_chars=6000)
+    assert all(f"### {t}" in roomy for t in targets)
+    assert "section(s) omitted" not in roomy
+
+    cramped = render_digest(items, targets, budget_chars=900)
+    assert "section(s) omitted" in cramped

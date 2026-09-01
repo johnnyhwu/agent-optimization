@@ -224,6 +224,50 @@ def test_the_user_prompt_is_unchanged_when_there_are_no_competitors():
     assert "Competing" not in before
 
 
+def test_an_isolated_prompt_is_byte_identical_however_many_routing_sections_exist():
+    """The rule every routing addition has to obey, stated once as an assertion.
+
+    Three sections now exist that isolated never sends — the competitors, the
+    agent's frozen setup and the routing digest — and each is passed by the same
+    mechanism: a parameter defaulting to empty, where empty means *absent* and
+    not "present and blank". A change that made any of them emit a heading, a
+    blank line or a stray newline on the isolated path would be invisible in
+    every other test here, because they all assert on what a prompt *contains*.
+
+    So this asserts on the whole string. It is the guard the routing work was
+    done under: an isolated run must not be able to tell that any of it happened.
+    """
+    baseline = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="failure", edit_budget=2, mode="patch",
+    )
+    with_all_the_routing_arguments_empty = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="failure", edit_budget=2, mode="patch",
+        competing_skills="", agent_setup="", routing_digest="",
+    )
+
+    assert baseline == with_all_the_routing_arguments_empty
+    assert baseline.startswith("## Current Skill\n")
+    for absent in ("FROZEN", "Routing Results", "Competing"):
+        assert absent not in baseline
+    # And the trajectories are still what it carries, which is the thing routing
+    # stopped sending — a digest that leaked into this path would replace them.
+    assert "## Failed Trajectories (2 total)" in baseline
+
+
+def test_the_success_prompt_is_byte_identical_too():
+    """The other half of the pair upstream splits into, checked the same way."""
+    baseline = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="success", edit_budget=2, mode="patch",
+    )
+    again = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="success", edit_budget=2, mode="patch",
+        competing_skills="", agent_setup="", routing_digest="",
+    )
+
+    assert baseline == again
+    assert "## Successful Trajectories (2 total)" in baseline
+
+
 # --- End to end through the update stage ------------------------------------
 
 

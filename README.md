@@ -57,6 +57,12 @@ a deployed build behind nginx — see [Deploying it](#deploying-it).
 > the code. This README is the operating manual; the spec is the design and
 > implementation record.
 >
+> **Optimize's `routing` mode no longer runs SkillOpt's algorithm.** It
+> optimises a one-line description rather than a skill body, which changes what
+> a minibatch, a merge and a trajectory are each worth — see
+> [`docs/routing-optimization.md`](docs/routing-optimization.md) for the three
+> arguments and what they cost. `isolated` mode is unchanged.
+>
 > ⚠️ **The `§` numbers in code comments are stale.** Around 179 comments cite an
 > older spec that has been deleted (it lives on in git history only). Their
 > numbering does **not** line up with today's `docs/spec.md` — a comment saying
@@ -753,6 +759,8 @@ Notes:
 | Body truncation, diagnosis prompt only (spec §4.4) | `backend/app/services/truncation.py` |
 | A trace folded into one conversation, for the analyst prompt | `backend/app/optimizer/trajectory.py` |
 | The analyst prompt itself (minibatch of trajectories) | `backend/app/optimizer/analyst.py` |
+| **Why routing mode leaves SkillOpt's algorithm** | [`docs/routing-optimization.md`](docs/routing-optimization.md) |
+| Routing's confusion matrix + the frozen agent setup | `backend/app/optimizer/routing_digest.py` |
 | Span input/output rendered as a chat exchange | `frontend/src/components/SpanPayload.jsx` |
 | Incorrect modes + regression + `phase` | `backend/app/services/aggregation.py` |
 | SSE hub | `backend/app/sse.py` |

@@ -186,6 +186,7 @@ Stage 4 補的是「手動驗證一個假設」，Stage 3 補的是**把那個�
 |---|---|
 | 資料 | 七張 `optimization_*` 表（migration `0009`）。**不動任何既有資料表**，Optimize 指向 eval 資料，eval 資料從不指回來 |
 | 兩種模式 | `isolated`（只送目標 skill、優化 body、保護 frontmatter）與 `routing`（送全部 skill、優化 frontmatter description、保護 body）。gate 在 routing 模式多一道 activation 守門 |
+| routing 已離開 SkillOpt 的演算法 | 被優化的是一行 description 而不是一份 body，所以 minibatch、merge 與 trajectory 各自的價值都變了：routing 每個 step 只做**一次** analyst 呼叫、成功與失敗**一起看**、送的是一份路由 confusion matrix 而不是 trajectory，並且不會走到 merge 與 ranking。三個論證與其代價寫在 [`docs/routing-optimization.md`](routing-optimization.md)。`isolated` 完全不受影響 |
 | 迴圈 | step 0 baseline → 每個 step：訓練 minibatch rollout → reflect → aggregate → clip 到 learning rate → apply → 驗證 rollout → gate。可取消、可續跑（backend 重啟後是 `interrupted` 而非 `failed`）|
 | 提前結束 | 四個條件、一套機制（`optimizer/stopping.py`）：訓練批次／驗證 split 的系統錯誤率連續超標、連續 N 步沒有新的最佳分數、驗證分數達標。預設值來自環境變數，wizard 可改，run 頁上以「Stops when」列出並附即時計數，結束後 `optimization_runs.stop_reason` 記下是哪一個。**系統錯誤只花掉那一個 step**：訓練批次超標就整步略過（不呼叫 analyst、不買驗證 rollout），驗證 split 超標就把候選原封不動丟掉（`gate_action='reject'`, `gate_reject_reason='val_errors'`）——沒有分數就沒有 gate 可言。超標的 rollout 不寫入任何 hard/soft，所以它既不會畫在圖上、不會進 skill hash 快取、也不會被 gate 讀到。唯一仍會讓整個 run `failed` 的是 baseline 量不準，因為之後每個數字都是跟它比較 |
 | activation 偵測 | 兩個策略（tool call 路徑 + skill 內容逐字比對），**不注入任何 token**；`activation = A OR B`，兩者都測不出來時回報「未知」而不是「否」|
