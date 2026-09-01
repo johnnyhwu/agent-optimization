@@ -292,42 +292,54 @@ def test_the_analyst_is_told_which_skills_were_read_and_which_were_wanted():
 def test_the_routing_facts_reach_the_prompt_the_analyst_reads():
     """A field on the item dict that nothing renders is not evidence.
 
-    This is the other half of the truncation argument: putting the facts in
-    structured fields only helps if the formatter prints them.
+    The facts are put in structured fields rather than left to be read out of a
+    conversation, and that only helps if what is rendered prints them. Routing
+    renders a digest now rather than a trajectory, so this asks the digest.
     """
-    from app.optimizer.analyst import format_trajectory_item
     from app.optimizer.reflection import analyst_item
+    from app.optimizer.routing_digest import render_digest
     from app.optimizer.trajectory import Trajectory
 
-    text = format_trajectory_item(
-        analyst_item(
-            row("k", {"reporting"}, verdict="correct"),
-            trajectory=Trajectory(), question="q", ground_truth="a",
-            mode="routing", gt_skills=("billing",),
-        ),
-        1,
+    text = render_digest(
+        [
+            analyst_item(
+                row("k", {"reporting"}, verdict="correct"),
+                trajectory=Trajectory(), question="the question", ground_truth="a",
+                mode="routing", gt_skills=("billing",),
+            )
+        ],
+        targets=["billing", "reporting"],
     )
 
+    # Which skill wanted it, which one it actually opened, and the question that
+    # says why either might have been reasonable.
     assert "billing" in text and "reporting" in text
+    assert "the question" in text
 
 
 def test_a_routing_failure_is_not_attributed_to_the_judge():
-    """The heading says where the verdict came from, and in routing it is not
-    the judge — the answer may well have been graded correct."""
-    from app.optimizer.analyst import format_trajectory_item
+    """A question graded correct that opened the wrong skill is a routing miss.
+
+    The judge has nothing to do with it, and a page or a prompt that says
+    otherwise sends the reader — or the analyst — to look at the answer instead
+    of the description. The digest never mentions the judge at all: it is built
+    from the tags and what was opened, and those are the whole of the verdict.
+    """
     from app.optimizer.reflection import analyst_item
+    from app.optimizer.routing_digest import render_digest
     from app.optimizer.trajectory import Trajectory
 
-    text = format_trajectory_item(
-        analyst_item(
-            row("k", {"reporting"}, verdict="correct"),
-            trajectory=Trajectory(), question="q", ground_truth="a",
-            mode="routing", gt_skills=("billing",),
-        ),
-        1,
+    item_ = analyst_item(
+        row("k", {"reporting"}, verdict="correct"),
+        trajectory=Trajectory(), question="q", ground_truth="a",
+        mode="routing", gt_skills=("billing",),
     )
+    text = render_digest([item_], targets=["billing", "reporting"])
 
-    assert "from the judge" not in text
+    assert "judge" not in text.lower()
+    # Correctly answered, wrongly routed: a miss for billing, not a success.
+    assert item_["hard"] == 0.0
+    assert "opened reporting instead" in text
 
 
 def test_an_unobservable_question_never_counts_against_the_candidate():

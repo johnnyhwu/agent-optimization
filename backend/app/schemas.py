@@ -787,6 +787,13 @@ class OptimizationStepSummary(BaseModel):
     n_edits_applied: int | None = None
     n_edits_skipped: int | None = None
     edit_summary: str | None = None
+    # Routing only, null everywhere else. What the analyst said is preventing
+    # correct routing that no description can fix, and whether the batch's
+    # questions genuinely ran under different agent setups. Both are the reason
+    # behind a symptom the overview would otherwise show without one: a column
+    # of "0 edits applied", or an accuracy that averaged two systems.
+    routing_blocked_by: str | None = None
+    setup_divergence: dict | None = None
     skill_len: int | None = None
     candidate_from_cache: bool = False
 

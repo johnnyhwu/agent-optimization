@@ -557,6 +557,16 @@ class OptimizationStep(Base):
     skill_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # The optimizer's own account of what it changed — the tooltip's second half.
     edit_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Routing only. The analyst's own answer to "this is not the descriptions'
+    # fault" — the agent is instructed to answer without consulting a skill,
+    # most often. A run whose every step reports "0 edits applied" has a reason,
+    # and until this column the reason was inside a minibatch's raw JSON.
+    routing_blocked_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Routing only, and set only when the batch's questions genuinely ran under
+    # different agent setups — a moved timestamp is not that. The step scored
+    # them as one system, which is a fact about the measurement rather than
+    # about the skill. `{n_prompts, n_variants, majority_share}`.
+    setup_divergence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     current_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     best_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)

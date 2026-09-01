@@ -40,6 +40,7 @@ from typing import Any, Mapping, Sequence
 
 from app.integrations.base import OptimizerClient
 from app.optimizer.analyst import run_analyst_minibatch
+from app.optimizer.routing_digest import render_digest, system_prompt_view
 from app.optimizer.skillio import (
     DEFAULT_SKILL_BUDGET_CHARS,
     build_protection,
@@ -71,7 +72,7 @@ class MinibatchRecord:
     """One analyst call, as `optimization_minibatches` stores it."""
 
     minibatch_no: int
-    source_type: str  # failure | success
+    source_type: str  # failure | success (isolated) | combined (routing)
     n_items: int
     item_keys: list[str]
     prompt_system: str
@@ -125,6 +126,17 @@ class UpdateOutcome:
     n_edits_unplaced: int = 0
     stage_calls: list[StageCallRecord] = field(default_factory=list)
     tokens: dict = field(default_factory=dict)
+    # Routing only. What the analyst said is preventing correct routing that no
+    # description can fix — an agent instructed to answer without consulting a
+    # skill, most often. Carried up rather than left inside `patch.reasoning`
+    # because the symptom otherwise is a run of steps reporting "0 edits
+    # applied" with the reason buried in a JSON blob nobody opens.
+    routing_blocked_by: str = ""
+    # Routing only. Set when the batch's questions were *not* all answered under
+    # the same agent setup — not merely that a timestamp moved, but that the
+    # variants differ too much to show as one. The step then scored two systems
+    # as though they were one, which is a fact about the measurement.
+    setup_divergence: dict | None = None
 
 
 class _Recorder:
@@ -284,10 +296,21 @@ def run_update_stage(
             analyst_workers=analyst_workers, failure_only=failure_only, seed=seed,
             update_mode=update_mode, truncation_by_item=truncation_by_item,
             meta_skill_context=meta_skill_context,
+            targets=dirs,
         )
         recorder.reset()
 
-        failure_patches = [p["patch"] for p in patches if p.get("source_type") == "failure"]
+        # `combined` is routing's, and it goes in the failure group because that
+        # is the one upstream treats as authoritative when both are populated.
+        # It never shares the stage with a success group — routing makes exactly
+        # one analyst call — so the priority never actually applies; what matters
+        # is that a lone patch reaches `merge_patches` in *a* group at all.
+        # Landing in neither, which is what an unrecognised stamp does, silently
+        # returns "no updates from either group" and the step loses its gradient.
+        failure_patches = [
+            p["patch"] for p in patches
+            if p.get("source_type") in ("failure", "combined")
+        ]
         success_patches = [p["patch"] for p in patches if p.get("source_type") == "success"]
 
         merged = merge_patches(
@@ -333,6 +356,20 @@ def run_update_stage(
         edit_summary=str(selected.get("reasoning") or "").strip(),
         stage_calls=stage_calls,
         tokens=dict(recorder.tokens),
+        # Taken from the analysts' own answers rather than from the merged
+        # patch: merge and ranking are upstream's and know nothing about these
+        # fields, so anything not read here is lost by the time a candidate
+        # exists. In routing there is exactly one analyst, so "the first that
+        # said anything" is simply "the one".
+        routing_blocked_by=next(
+            (str(p["routing_blocked_by"]).strip() for p in patches
+             if str(p.get("routing_blocked_by") or "").strip()),
+            "",
+        ),
+        setup_divergence=next(
+            (p["setup_divergence"] for p in patches if p.get("setup_divergence")),
+            None,
+        ),
     )
 
 
@@ -440,7 +477,7 @@ def _merge_level(user_prompt: str) -> int | None:
 def _reflect(
     *, skill_content, mode, items, recorder, edit_budget, minibatch_size,
     analyst_workers, failure_only, seed, update_mode, truncation_by_item,
-    meta_skill_context="", competing_skills="",
+    meta_skill_context="", competing_skills="", targets=(),
 ) -> tuple[list[MinibatchRecord], list[dict]]:
     """Split into minibatches and run one analyst call per group, in parallel.
 
@@ -448,17 +485,33 @@ def _reflect(
     the numbering — minibatches are numbered in submission order, not completion
     order, so the number on screen is stable across reruns of the same step —
     and the record built from the recorder's view of each call.
+
+    **Routing does not split at all.** Its parameter is one line of frontmatter,
+    so every group's edit is a `replace` of the same line: N groups produce N
+    mutually exclusive rewrites and the merge stage then chooses between them
+    having seen the edits but not one of the questions behind them. And its
+    failures and successes are two sides of the same boundary — what should have
+    come in, and what must not be lost — so splitting those asks one analyst to
+    narrow blind to the cost and another to widen blind to the misfires. One
+    call over the whole batch is both fixes at once, and it is affordable
+    because the digest costs about a line per question instead of a trajectory.
     """
-    failures = [i for i in items if not float(i.get("hard") or 0.0)]
-    successes = [] if failure_only else [i for i in items if float(i.get("hard") or 0.0)]
+    if mode == "routing":
+        # `failure_only` withholds the successes, which here are the constraint
+        # that stops a description narrowing until it wins nothing. There is
+        # nothing for it to usefully do, so it is ignored rather than honoured.
+        groups: list[tuple[str, list[dict]]] = [("combined", list(items))]
+    else:
+        failures = [i for i in items if not float(i.get("hard") or 0.0)]
+        successes = [] if failure_only else [i for i in items if float(i.get("hard") or 0.0)]
 
-    failures = _shuffle_for_minibatch(failures, seed)
-    successes = _shuffle_for_minibatch(successes, None if seed is None else seed + 1)
+        failures = _shuffle_for_minibatch(failures, seed)
+        successes = _shuffle_for_minibatch(successes, None if seed is None else seed + 1)
 
-    groups: list[tuple[str, list[dict]]] = (
-        [("failure", batch) for batch in _split_minibatches(failures, minibatch_size)]
-        + [("success", batch) for batch in _split_minibatches(successes, minibatch_size)]
-    )
+        groups = (
+            [("failure", batch) for batch in _split_minibatches(failures, minibatch_size)]
+            + [("success", batch) for batch in _split_minibatches(successes, minibatch_size)]
+        )
 
     def analyse(index: int, source_type: str, batch: list[dict]) -> tuple[MinibatchRecord, dict | None]:
         recorder.take()  # clear anything this pool thread carried from a previous batch
@@ -474,6 +527,7 @@ def _reflect(
                 update_mode=update_mode,
                 meta_skill_context=meta_skill_context,
                 competing_skills=competing_skills,
+                targets=targets,
             )
         except Exception as exc:  # noqa: BLE001 - one batch must not end the step
             error = f"{type(exc).__name__}: {exc}"
@@ -487,7 +541,7 @@ def _reflect(
             error = call["error"]
 
         chars_cut, entries = _truncation_for(batch, truncation_by_item)
-        chars_after = _batch_chars(batch)
+        chars_after = _batch_chars(batch, mode=mode, targets=targets)
         record = MinibatchRecord(
             minibatch_no=index,
             source_type=source_type,
@@ -521,14 +575,30 @@ def _reflect(
     return records, patches
 
 
-def _batch_chars(batch: Sequence[dict]) -> int:
+def _batch_chars(batch: Sequence[dict], *, mode: str = "isolated", targets=()) -> int:
     """How much text this minibatch carries, as the analyst received it.
 
     The setup is counted once where the batch shares one, because that is how
     many times it was sent. Counting it per trajectory would report a prompt
     several times the size of the one the model was given, on the page whose
     job is to say how much evidence the analyst had.
+
+    Routing sends a digest and no conversations, so measuring the trajectories
+    would report the size of the system prompt and call it the evidence. The
+    digest is what the analyst actually read, so that is what is measured — and
+    it is rendered again rather than remembered because it is a pure function of
+    the batch, which keeps the number and the prompt from drifting apart.
     """
+    if mode == "routing":
+        trajectories = [
+            item["trajectory"] for item in batch
+            if isinstance(item.get("trajectory"), Trajectory)
+        ]
+        setup, _ = system_prompt_view(
+            [t.system_prompt for t in trajectories], tools=[t.tools for t in trajectories],
+        )
+        return len(setup) + len(render_digest(batch, targets))
+
     trajectories = [
         item["trajectory"] for item in batch
         if isinstance(item.get("trajectory"), Trajectory)
