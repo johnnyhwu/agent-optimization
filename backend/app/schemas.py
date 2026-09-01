@@ -787,6 +787,13 @@ class OptimizationStepSummary(BaseModel):
     n_edits_applied: int | None = None
     n_edits_skipped: int | None = None
     edit_summary: str | None = None
+    # Routing only, null everywhere else. What the analyst said is preventing
+    # correct routing that no description can fix, and whether the batch's
+    # questions genuinely ran under different agent setups. Both are the reason
+    # behind a symptom the overview would otherwise show without one: a column
+    # of "0 edits applied", or an accuracy that averaged two systems.
+    routing_blocked_by: str | None = None
+    setup_divergence: dict | None = None
     skill_len: int | None = None
     candidate_from_cache: bool = False
 
@@ -1200,6 +1207,11 @@ class OptimizationRolloutDetail(BaseModel):
     """Part 1: one step, one split — the numbers, the questions, the analysts."""
 
     run_id: uuid.UUID
+    # The run's mode. The page describes a pipeline that differs between the
+    # two — routing makes one analyst call over the whole step and reaches
+    # neither merge nor ranking — and without this it explained the isolated one
+    # to everybody, including a reader looking at a step that never ran it.
+    mode: str = "isolated"
     step_no: int
     split: str
     epoch_no: int

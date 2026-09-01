@@ -18,17 +18,49 @@ import { callLabel, editCount, groupStageCalls, summarise } from "../../optimize
 // visits are about what an analyst concluded, and this answers the rarer and
 // more specific question — where did my edit go? An edit proposed by an analyst
 // and absent from the skill was dropped in exactly one of these calls.
+//
+// **A step with no stages has two different reasons, and they used to read as
+// one.** The old empty state said the step "ran before this page kept them",
+// which is true of a run from before the recording existed and false of every
+// routing step: those make one analyst call, and a single patch is returned
+// untouched by both stages without the model being called, so there is nothing
+// to record. Sending a reader to look for a migration problem that is not there
+// is worse than saying nothing.
+//
+// The applied/refused line moved out of the collapsible for the same reason it
+// was worth noticing: it lived in the non-empty branch, so exactly the steps
+// with no stages — every routing step — lost the one sentence saying what the
+// step actually did to the skill.
 
-export default function StageCalls({ stageCalls = [], nApplied, nSkipped, editSummary }) {
+export default function StageCalls({
+  stageCalls = [], nApplied, nSkipped, editSummary, mode = "isolated",
+}) {
   const groups = groupStageCalls(stageCalls);
+  const outcome = nApplied != null && (
+    <div className="opt-editoutcome">
+      <span>
+        The step applied <strong>{plural(nApplied, "edit")}</strong>
+        {nSkipped ? `, and ${nSkipped} were refused` : ""}
+        {editSummary ? ` — “${editSummary}”` : ""}
+      </span>
+    </div>
+  );
 
   if (!groups.length) {
     return (
-      <p className="opt-hint">
-        Merging and ranking were not recorded for this step — it ran before this
-        page kept them. What each analyst proposed is still below; what became of
-        it is in the skill diff.
-      </p>
+      <>
+        <p className="opt-hint">
+          {mode === "routing"
+            ? "There was no merging or ranking: a routing step makes one analyst " +
+              "call over its whole batch, and a single patch passes through both " +
+              "stages untouched. What it proposed is below, and what became of it " +
+              "is in the skill diff."
+            : "Merging and ranking were not recorded for this step — it ran before " +
+              "this page kept them. What each analyst proposed is still below; what " +
+              "became of it is in the skill diff."}
+        </p>
+        {outcome}
+      </>
     );
   }
 
@@ -60,15 +92,7 @@ export default function StageCalls({ stageCalls = [], nApplied, nSkipped, editSu
         </section>
       ))}
 
-      {nApplied != null && (
-        <div className="opt-editoutcome">
-          <span>
-            The step applied <strong>{plural(nApplied, "edit")}</strong>
-            {nSkipped ? `, and ${nSkipped} were refused` : ""}
-            {editSummary ? ` — “${editSummary}”` : ""}
-          </span>
-        </div>
-      )}
+      {outcome}
     </Collapsible>
   );
 }

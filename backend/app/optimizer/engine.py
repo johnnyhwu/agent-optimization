@@ -43,7 +43,7 @@ from app.integrations import Seams
 from app.optimizer.adapter import make_probe_marker, run_rollout, score_rollout
 from app.optimizer.gating import decide_gate
 from app.optimizer.hyperparams import resolve_algorithm
-from app.optimizer.reflection import build_analyst_items
+from app.optimizer.reflection import build_analyst_items, build_routing_items
 from app.optimizer.skillio import find_answer_leaks, per_file_stats, total_line_changes
 from app.optimizer.stopping import (
     STOP_FINISHED,
@@ -746,6 +746,10 @@ async def _run_step(
     batch = train_batch(
         train, epoch_no=epoch_no, step_in_epoch=step_in_epoch,
         batch_size=spec.batch_size, seed=config.get("seed"),
+        # Routing rewrites every target's description from one batch, so the
+        # batch has to carry evidence about every target. Empty for isolated,
+        # which has one target and nothing to interleave.
+        targets=_targets_of(spec) if spec.mode == "routing" else (),
     )
     train_summary = await _rollout(
         batch, spec=spec, skill_files=state.current_files, split="train",
@@ -778,17 +782,31 @@ async def _run_step(
     await _check_cancel(run_id, store, cancel_event)
 
     # --- 2. reflect, aggregate, clip, apply ---------------------------------
-    items, ledger = build_analyst_items(
-        train_summary.results,
-        questions={item.item_key: item.question for item in batch},
-        ground_truths={item.item_key: item.ground_truth_response for item in batch},
-        budget_chars=params["reflect_budget_chars"],
-        # So the analysts are split by the same definition of failure the gate
-        # enforces. A routing run reflecting on judge verdicts would be shown
-        # its routing failures under "answered correctly, so the routing worked".
-        mode=spec.mode,
-        gt_skills={item.item_key: item.gt_skills for item in batch},
-    )
+    questions = {item.item_key: item.question for item in batch}
+    ground_truths = {item.item_key: item.ground_truth_response for item in batch}
+    tags = {item.item_key: item.gt_skills for item in batch}
+    if spec.mode == "routing":
+        # No trajectory budget, because no trajectories. Sharing one out and
+        # dropping questions to satisfy it would leave the analyst a confusion
+        # matrix whose totals describe a batch larger than the rows beneath
+        # them — see `build_routing_items`.
+        items, ledger = build_routing_items(
+            train_summary.results,
+            questions=questions, ground_truths=ground_truths, gt_skills=tags,
+        ), {}
+    else:
+        items, ledger = build_analyst_items(
+            train_summary.results,
+            questions=questions,
+            ground_truths=ground_truths,
+            budget_chars=params["reflect_budget_chars"],
+            # So the analysts are split by the same definition of failure the
+            # gate enforces. A routing run reflecting on judge verdicts would be
+            # shown its routing failures under "answered correctly, so the
+            # routing worked".
+            mode=spec.mode,
+            gt_skills=tags,
+        )
     outcome = await asyncio.to_thread(
         run_update_stage,
         files=state.current_files,
@@ -890,7 +908,12 @@ async def _run_step(
             lines_added=lines_added, lines_removed=lines_removed,
             files_touched=len(stats), n_answer_leaks=len(leaks),
             skill_len=sum(len(text) for text in candidate.values()),
-            edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+            edit_summary=outcome.edit_summary,
+            # Routing only, and null on every isolated step. A step that
+            # applied nothing has a reason, and this is the only place it
+            # survives to reach the overview.
+            routing_blocked_by=outcome.routing_blocked_by or None,
+            setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
         )
         await publish({
             "type": "gate_done", "step_no": step_no, "action": "reject",
@@ -941,7 +964,12 @@ async def _run_step(
                 lines_added=lines_added, lines_removed=lines_removed,
                 files_touched=len(stats), n_answer_leaks=len(leaks),
                 skill_len=sum(len(text) for text in candidate.values()),
-                edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+                edit_summary=outcome.edit_summary,
+                # Routing only, and null on every isolated step. A step that
+                # applied nothing has a reason, and this is the only place it
+                # survives to reach the overview.
+                routing_blocked_by=outcome.routing_blocked_by or None,
+                setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
             )
             await publish({
                 "type": "gate_done", "step_no": step_no, "action": "reject",
@@ -970,7 +998,12 @@ async def _run_step(
                 lines_added=lines_added, lines_removed=lines_removed,
                 files_touched=len(stats), n_answer_leaks=len(leaks),
                 skill_len=sum(len(text) for text in candidate.values()),
-                edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+                edit_summary=outcome.edit_summary,
+                # Routing only, and null on every isolated step. A step that
+                # applied nothing has a reason, and this is the only place it
+                # survives to reach the overview.
+                routing_blocked_by=outcome.routing_blocked_by or None,
+                setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
             )
             await publish({
                 "type": "gate_done", "step_no": step_no, "action": "reject",
@@ -1024,6 +1057,11 @@ async def _run_step(
         n_answer_leaks=len(leaks),
         skill_len=sum(len(text) for text in candidate.values()),
         edit_summary=outcome.edit_summary,
+        # Routing only, and null on every isolated step. A step that applied
+        # nothing has a reason, and this is the only place it survives to reach
+        # the overview.
+        routing_blocked_by=outcome.routing_blocked_by or None,
+        setup_divergence=outcome.setup_divergence,
         current_score=gate.current_score, best_score=gate.best_score,
         tokens=outcome.tokens, completed_at=datetime.now(timezone.utc),
     )
@@ -1131,7 +1169,7 @@ async def _publish_rollout(publish: Publisher, step_no: int, summary) -> None:
 
 def train_batch(
     items: Sequence[Item], *, epoch_no: int, step_in_epoch: int,
-    batch_size: int, seed: int | None,
+    batch_size: int, seed: int | None, targets: Sequence[str] = (),
 ) -> list[Item]:
     """This step's slice of the training split.
 
@@ -1142,11 +1180,74 @@ def train_batch(
     Seeded, because the composition is never stored: a run resumed mid-epoch
     re-derives its batch, and an unseeded shuffle would quietly train on a
     different sample than the interrupted run had planned.
+
+    `targets` is routing's, and empty everywhere else. A routing step rewrites
+    the description of every skill under optimisation from whatever its batch
+    happened to contain, and a flat shuffle hands skill *i* about
+    `batch_size × nᵢ / n_train` questions. Routing groups are rarely even — forty
+    questions for one skill and three for another is ordinary — so the small
+    ones contribute nothing to most steps and have their descriptions rewritten
+    anyway, from the evidence of the skills that did turn up.
+
+    So the *ordering* is interleaved by skill instead of shuffled flat, and the
+    slicing above it is untouched. That is deliberate: an epoch covering the
+    split exactly once is a property of contiguous slices over a permutation,
+    and selecting per step instead would buy per-skill coverage by giving it up.
     """
-    ordered = list(items)
-    random.Random((seed or 0) + epoch_no).shuffle(ordered)
+    ordered = _stratify(items, targets, seed, epoch_no) if targets else list(items)
+    if not targets:
+        random.Random((seed or 0) + epoch_no).shuffle(ordered)
     start = (step_in_epoch - 1) * max(batch_size, 1)
     return ordered[start:start + max(batch_size, 1)]
+
+
+def _stratify(
+    items: Sequence[Item], targets: Sequence[str], seed: int | None, epoch_no: int,
+) -> list[Item]:
+    """The split reordered so consecutive questions belong to different skills.
+
+    A permutation, not a selection: every question appears exactly once, which
+    is what lets `train_batch` keep slicing contiguously.
+
+    Two details that are easy to get wrong and would be silent:
+
+    **A question tagged for several skills is placed once.** Routing files it
+    under every group it names — that overlap is precisely the evidence for
+    where a boundary belongs — so taking each group's queue naively would train
+    and score on it twice.
+
+    **A question tagged for nothing is still placed.** It cannot be scored
+    (`routing.routing_scores` leaves it out), but dropping it here would shrink
+    the split without saying so and stop the epoch covering it. Those trail the
+    rotation rather than joining it, having no stratum to belong to.
+    """
+    rng = random.Random((seed or 0) + epoch_no)
+    queues: dict[str, list[Item]] = {}
+    for skill in targets:
+        group = [i for i in items if skill in (i.gt_skills or ())]
+        rng.shuffle(group)
+        queues[skill] = group
+    untagged = [i for i in items if not set(i.gt_skills or ()) & set(targets)]
+    rng.shuffle(untagged)
+
+    ordered: list[Item] = []
+    placed: set[str] = set()
+    cursors = {skill: 0 for skill in targets}
+    while True:
+        moved = False
+        for skill in targets:
+            queue, index = queues[skill], cursors[skill]
+            while index < len(queue) and queue[index].item_key in placed:
+                index += 1
+            cursors[skill] = index
+            if index < len(queue):
+                ordered.append(queue[index])
+                placed.add(queue[index].item_key)
+                cursors[skill] = index + 1
+                moved = True
+        if not moved:
+            break
+    return ordered + untagged
 
 
 def skill_hash(files) -> str:

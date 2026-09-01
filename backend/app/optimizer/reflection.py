@@ -236,6 +236,62 @@ def build_analyst_items(
     return _drop_until_it_fits(items, for_conversations, ledger)
 
 
+def build_routing_items(
+    rows: Sequence[ResultRow],
+    *,
+    questions: Mapping[str, str] | None = None,
+    ground_truths: Mapping[str, str] | None = None,
+    gt_skills: Mapping[str, Sequence[str]] | None = None,
+) -> list[dict]:
+    """The same items, for a mode that sends no trajectories.
+
+    `build_analyst_items` folds every trace, shares a character budget out
+    between them, cuts each to its share and — when the batch still does not
+    fit — drops whole questions. All of that is care taken over text routing no
+    longer sends: the analyst reads a digest of roughly a line per question, so
+    the budget cannot bind, and a question dropped to satisfy it would be a
+    question missing from a confusion matrix that reports its own totals. The
+    counts would be right and the rows would not.
+
+    Two differences beyond the missing budget, and both are about not throwing
+    away evidence this mode can use:
+
+    **A row whose trace never landed is kept.** `build_analyst_items` drops it —
+    correctly, since a trajectory is the whole of what it was going to
+    contribute. Here the question and its tags survive the missing trace, and
+    the digest reports it as *not measured* rather than as a miss. Dropping it
+    would leave the analyst quietly reasoning about a smaller batch than the one
+    the gate scored.
+
+    **The preamble travels without the conversation.** The agent's system prompt
+    is printed once above the matrix, because a routing failure caused by the
+    agent's own instructions is indistinguishable from one caused by a bad
+    description until you can read them. So each item carries a `Trajectory`
+    holding the setup and no turns — enough for `analyst.run_analyst_minibatch`
+    to fold the setups together, and nothing that would end up in the prompt.
+    """
+    questions = questions or {}
+    ground_truths = ground_truths or {}
+    gt_skills = gt_skills or {}
+
+    items: list[dict] = []
+    for row in rows:
+        if row.status != "done":
+            continue
+        folded = row.trajectory or build_trajectory(row.trace)
+        items.append(
+            analyst_item(
+                row,
+                trajectory=Trajectory(tools=folded.tools, system_prompt=folded.system_prompt),
+                question=questions.get(row.item_key, ""),
+                ground_truth=ground_truths.get(row.item_key, ""),
+                mode="routing",
+                gt_skills=gt_skills.get(row.item_key, ()),
+            )
+        )
+    return items
+
+
 def _header_chars(row: ResultRow, question: str, ground_truth: str) -> int:
     """The uncuttable frame around one trajectory: task, both answers, verdict."""
     return (

@@ -123,3 +123,39 @@ export function truncationSummary(minibatch) {
 export function editsProposed(minibatch) {
   return minibatch.raw_output?.patch?.edits?.length ?? 0;
 }
+
+
+// --- How one analyst call is labelled ---------------------------------------
+//
+// `source_type` is a wire value with three possible words, and the header
+// rendered it raw beside a tone chosen by `x === "success" ? "success" :
+// "warning"`. That ternary predates routing's `combined`, which is neither a
+// failure batch nor a success one — it is the whole step, both verdicts
+// together — and it would have been badged in the failure colour.
+//
+// A map rather than a function because `ui_vocabulary.test.js` reads
+// `tone={MAP[k] || "neutral"}` and cannot read `tone={someFn(x)}`
+// (`frontend/CLAUDE.md`), and an unreadable tone is one the closed-vocabulary
+// check silently skips.
+
+export const SOURCE_TONE = {
+  success: "success",
+  failure: "warning",
+  combined: "info",
+};
+
+export const SOURCE_LABEL = {
+  success: "successes",
+  failure: "failures",
+  combined: "the whole step",
+};
+
+/** What to call one analyst call, given how many the step made.
+ *
+ * "Minibatch 0" over the only call a routing step makes reads as the first of
+ * several and invites a reader to look for the rest.
+ */
+export function minibatchLabel(minibatch, { mode = "isolated" } = {}) {
+  if (mode === "routing") return "The step's analyst call";
+  return `Minibatch ${minibatch?.minibatch_no ?? 0}`;
+}

@@ -23,6 +23,9 @@ the edit-budget clipping, and the merge and ranking stages that follow.
 """
 from __future__ import annotations
 
+from typing import Sequence
+
+from app.optimizer.routing_digest import render_digest, system_prompt_view
 from app.optimizer.trajectory import (
     Trajectory,
     render_conversation,
@@ -48,7 +51,17 @@ def analyst_system_prompt(source_type: str, mode: str) -> str:
     mode, because that — not the benchmark — is what changes the question being
     asked. Falling through to the generic prompt would ask a routing run to
     rewrite a body it is forbidden to touch.
+
+    Routing has one prompt rather than two. Upstream's pair exists because a
+    failure and a success are different questions about a *body* — what to add,
+    and what not to disturb. About a decision boundary they are two halves of
+    one question: the failures are what should have come in, the successes what
+    must not be lost. Asked separately, one analyst proposes a narrowing blind
+    to what it breaks and the other a widening blind to the misfires, and the
+    merge stage then picks between them without seeing a single question.
     """
+    if source_type == "combined":
+        return load_prompt("analyst", mode)
     name = "analyst_error" if source_type == "failure" else "analyst_success"
     return load_prompt(name, mode)
 
@@ -164,6 +177,8 @@ def build_user_prompt(
     step_buffer_context: str = "",
     meta_skill_context: str = "",
     competing_skills: str = "",
+    agent_setup: str = "",
+    routing_digest: str = "",
 ) -> str:
     """The analyst's user message. Section order is upstream's, verbatim.
 
@@ -173,9 +188,32 @@ def build_user_prompt(
     being compared with. Empty for isolated runs, which send one skill to the
     agent and so present no choice to inform — and empty means *absent*, so an
     isolated prompt is byte-for-byte what it was before this existed.
+
+    `agent_setup` and `routing_digest` are routing's, and the same rule holds:
+    both default to empty and empty means absent, so an isolated prompt is
+    unchanged by their existence. When the digest is present it *replaces* the
+    trajectory section rather than joining it — a routing decision is made from
+    descriptions before the agent acts, so the run that followed is evidence
+    about the answer and not about the choice being optimised.
+
+    The setup goes first because it is the only part the analyst cannot change.
+    A routing failure whose cause is the agent's own instructions ("answer
+    directly; do not open a skill") looks exactly like one caused by a bad
+    description, and an analyst that never sees the instructions will keep
+    rewriting descriptions against a cause no description controls.
     """
     update_mode = normalize_update_mode(mode)
-    user = f"## Current Skill\n{skill_content}\n\n"
+    user = ""
+    if agent_setup.strip():
+        user += (
+            "## The agent's setup (FROZEN — you cannot change this)\n"
+            "Every question below was answered under this. You cannot edit it. If the "
+            "routing failures are caused by what it says rather than by the "
+            "descriptions, say so in `routing_blocked_by` instead of editing a "
+            "description to compensate.\n\n"
+            f"{agent_setup.rstrip()}\n\n"
+        )
+    user += f"## Current Skill\n{skill_content}\n\n"
 
     if competing_skills.strip():
         user += f"{competing_skills.rstrip()}\n\n"
@@ -199,6 +237,9 @@ def build_user_prompt(
     if optimizer_ctx:
         user += optimizer_ctx + "\n\n"
 
+    if routing_digest.strip():
+        return user + routing_digest.rstrip() + "\n"
+
     heading = "Failed" if source_type == "failure" else "Successful"
     user += f"## {heading} Trajectories ({len(items)} total)\n{format_minibatch(items)}"
     return user
@@ -215,23 +256,45 @@ def run_analyst_minibatch(
     step_buffer_context: str = "",
     meta_skill_context: str = "",
     competing_skills: str = "",
+    targets: Sequence[str] = (),
 ) -> dict | None:
     """One optimizer call over one minibatch. `None` when it had nothing to say.
 
     Mirrors `vendor/reflect.py:run_error_analyst_minibatch` — same model call,
     same JSON extraction, same clip to the edit budget, same `source_type` stamp
     that decides which group the patch is merged in later.
+
+    A `combined` call is routing's, and it carries the digest instead of the
+    trajectories. `targets` names the skills the matrix is grouped by; without
+    it the digest would have no sections, so it is required in that mode and
+    ignored in every other.
     """
     if not items:
         return None
     normalized = normalize_update_mode(update_mode)
     system = analyst_system_prompt(source_type, mode)
+
+    agent_setup = digest = ""
+    divergence = None
+    if source_type == "combined":
+        trajectories = [
+            item["trajectory"] for item in items
+            if isinstance(item.get("trajectory"), Trajectory)
+        ]
+        agent_setup, divergence = system_prompt_view(
+            [t.system_prompt for t in trajectories],
+            tools=[t.tools for t in trajectories],
+        )
+        digest = render_digest(items, targets)
+
     user = build_user_prompt(
         skill_content, items,
         source_type=source_type, edit_budget=edit_budget, mode=update_mode,
         step_buffer_context=step_buffer_context,
         meta_skill_context=meta_skill_context,
         competing_skills=competing_skills,
+        agent_setup=agent_setup,
+        routing_digest=digest,
     )
 
     # Exceptions travel. Upstream swallows them and returns `None`, which is
@@ -246,6 +309,17 @@ def run_analyst_minibatch(
     result = extract_json(response)
     if result and "patch" in result:
         result["source_type"] = source_type
+        if divergence is not None and divergence.diverged:
+            # Carried out with the patch rather than left in the prompt, because
+            # "these questions were not all answered under the same agent" is a
+            # fact about the *step* — the routing accuracy it is gated on mixed
+            # two systems — and the only place a reader would ever see it is the
+            # run overview.
+            result["setup_divergence"] = {
+                "n_prompts": divergence.n_prompts,
+                "n_variants": divergence.n_variants,
+                "majority_share": divergence.majority_share,
+            }
         if not is_full_rewrite_minibatch_mode(normalized):
             truncate_payload(result["patch"], edit_budget, normalized)
         return result

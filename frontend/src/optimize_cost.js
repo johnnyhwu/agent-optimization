@@ -24,16 +24,24 @@
  * Exported because the wizard says it in words beside the field ("a batch of 16
  * in groups of 8 is up to 3 calls"), and two implementations of the same
  * sentence would eventually quote two different numbers on one screen.
+ *
+ * Routing is one call, and neither the split nor the minibatch size applies to
+ * it. Its parameter is a single line of frontmatter, so every group would
+ * return a complete rewrite of that one line and the merge stage would be
+ * choosing between them having seen the edits and none of the questions — and
+ * its failures and successes are the two sides of one boundary, which is not a
+ * thing two analysts can each be shown half of.
  */
-export function analystCallsPerStep(questionsPerStep, minibatchSize) {
+export function analystCallsPerStep(questionsPerStep, minibatchSize, mode = "isolated") {
   const perStep = Math.max(0, count(questionsPerStep));
-  const group = Math.max(1, count(minibatchSize));
   if (!perStep) return 0;
+  if (mode === "routing") return 1;
+  const group = Math.max(1, count(minibatchSize));
   return Math.ceil(perStep / group) + (perStep >= 2 ? 1 : 0);
 }
 
 export function estimateRun({
-  nTrain, nVal, epochs, batchSize, minibatchSize,
+  nTrain, nVal, epochs, batchSize, minibatchSize, mode = "isolated",
 } = {}) {
   const train = count(nTrain);
   const val = count(nVal);
@@ -51,9 +59,13 @@ export function estimateRun({
   // it answers its batch and then the whole validation split again.
   const agentCalls = val + totalSteps * (perStep + val);
 
-  const analystPerStep = analystCallsPerStep(perStep, group);
-  // Plus one merge (aggregate) and one ranking (clip) per step.
-  const optimizerCallsMax = totalSteps * (analystPerStep + 2);
+  const analystPerStep = analystCallsPerStep(perStep, group, mode);
+  // Plus one merge (aggregate) and one ranking (clip) per step — except in
+  // routing, where the single analyst patch is returned untouched by both
+  // (`_hierarchical_merge` short-circuits a one-element list, `rank_and_select`
+  // a pool already inside its budget) without the model being called at all.
+  const stagesPerStep = mode === "routing" ? 0 : 2;
+  const optimizerCallsMax = totalSteps * (analystPerStep + stagesPerStep);
 
   return {
     stepsPerEpoch,
@@ -76,16 +88,17 @@ export function estimateRun({
 // derivation is a number nobody can check — the two questions it always draws
 // are "does that include validation?" and "is that per epoch?".
 export function explainRun({
-  nTrain, nVal, epochs, batchSize, minibatchSize,
+  nTrain, nVal, epochs, batchSize, minibatchSize, mode = "isolated",
 } = {}) {
   const train = count(nTrain);
   const val = count(nVal);
   const passes = Math.max(1, count(epochs));
   const batch = Math.max(1, count(batchSize));
   const group = Math.max(1, count(minibatchSize));
-  const e = estimateRun({ nTrain, nVal, epochs, batchSize, minibatchSize });
+  const e = estimateRun({ nTrain, nVal, epochs, batchSize, minibatchSize, mode });
   const perStep = Math.min(batch, train);
-  const analystPerStep = analystCallsPerStep(perStep, group);
+  const analystPerStep = analystCallsPerStep(perStep, group, mode);
+  const routing = mode === "routing";
 
   return {
     steps:
@@ -100,14 +113,19 @@ export function explainRun({
       "One judge call grades one agent answer, so this is the agent count "
       + `again: ${e.judgeCalls.toLocaleString()}. It is named separately `
       + "because leaving it out halves an estimate.",
-    optimizerCalls:
-      `Per step: ${analystPerStep} analyst call(s) — ${perStep} question(s) in `
-      + `minibatches of ${group}, with failures and successes reflected on `
-      + "separately — plus one merge and one ranking. "
-      + `${e.totalSteps} × (${analystPerStep} + 2) = `
-      + `${e.optimizerCallsMax.toLocaleString()} at most. These run on the `
-      + "largest model configured and each carries a minibatch of traces, so "
-      + "this small number is usually the large bill.",
+    optimizerCalls: routing
+      ? `Per step: one analyst call carrying all ${perStep} question(s) at once, `
+        + "and no merge or ranking — with a single patch both stages return their "
+        + `input untouched without calling the model. ${e.totalSteps} × 1 = `
+        + `${e.optimizerCallsMax.toLocaleString()}. These run on the largest model `
+        + "configured, so this small number is usually the large bill."
+      : `Per step: ${analystPerStep} analyst call(s) — ${perStep} question(s) in `
+        + `minibatches of ${group}, with failures and successes reflected on `
+        + "separately — plus one merge and one ranking. "
+        + `${e.totalSteps} × (${analystPerStep} + 2) = `
+        + `${e.optimizerCallsMax.toLocaleString()} at most. These run on the `
+        + "largest model configured and each carries a minibatch of traces, so "
+        + "this small number is usually the large bill.",
   };
 }
 

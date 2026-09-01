@@ -224,6 +224,50 @@ def test_the_user_prompt_is_unchanged_when_there_are_no_competitors():
     assert "Competing" not in before
 
 
+def test_an_isolated_prompt_is_byte_identical_however_many_routing_sections_exist():
+    """The rule every routing addition has to obey, stated once as an assertion.
+
+    Three sections now exist that isolated never sends — the competitors, the
+    agent's frozen setup and the routing digest — and each is passed by the same
+    mechanism: a parameter defaulting to empty, where empty means *absent* and
+    not "present and blank". A change that made any of them emit a heading, a
+    blank line or a stray newline on the isolated path would be invisible in
+    every other test here, because they all assert on what a prompt *contains*.
+
+    So this asserts on the whole string. It is the guard the routing work was
+    done under: an isolated run must not be able to tell that any of it happened.
+    """
+    baseline = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="failure", edit_budget=2, mode="patch",
+    )
+    with_all_the_routing_arguments_empty = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="failure", edit_budget=2, mode="patch",
+        competing_skills="", agent_setup="", routing_digest="",
+    )
+
+    assert baseline == with_all_the_routing_arguments_empty
+    assert baseline.startswith("## Current Skill\n")
+    for absent in ("FROZEN", "Routing Results", "Competing"):
+        assert absent not in baseline
+    # And the trajectories are still what it carries, which is the thing routing
+    # stopped sending — a digest that leaked into this path would replace them.
+    assert "## Failed Trajectories (2 total)" in baseline
+
+
+def test_the_success_prompt_is_byte_identical_too():
+    """The other half of the pair upstream splits into, checked the same way."""
+    baseline = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="success", edit_budget=2, mode="patch",
+    )
+    again = build_user_prompt(
+        "SKILL BODY HERE", items(2), source_type="success", edit_budget=2, mode="patch",
+        competing_skills="", agent_setup="", routing_digest="",
+    )
+
+    assert baseline == again
+    assert "## Successful Trajectories (2 total)" in baseline
+
+
 # --- End to end through the update stage ------------------------------------
 
 
@@ -257,15 +301,30 @@ def test_an_isolated_run_is_told_nothing_about_other_skills():
         assert "Monthly revenue reports" not in prompt
 
 
-def test_merge_and_ranking_are_not_given_the_competitors():
-    """They combine and choose among edits; neither makes a routing judgement.
+def test_a_routing_step_reaches_neither_merge_nor_ranking():
+    """There is one analyst call, so there is nothing to combine or choose among.
 
-    Both prompts open with the same "## Current Skill" section, so it would have
-    been easy to fold the block in there and pay for it three times per step on
-    the most expensive model in the run.
+    This used to be stated the weaker way — that the competitors never reach
+    those two prompts — because routing ran them and the block would otherwise
+    have been paid for three times a step on the most expensive model in the
+    run. Routing now makes a single call over the whole batch, and
+    `_hierarchical_merge` returns a lone patch untouched while `rank_and_select`
+    returns a pool inside its budget untouched, both without calling the model.
+    So the stages are not merely uninformed: they do not happen, and asserting
+    the old sentence would pass over an empty list forever.
     """
     client, _ = run(mode="routing", context_files=BASELINE, items=items(2))
 
+    assert client.prompts("analyst")
+    assert client.prompts("merge") == []
+    assert client.prompts("ranking") == []
+
+
+def test_an_isolated_step_still_merges_and_the_competitors_stay_out_of_it():
+    """The original guard, on the mode that still runs those stages."""
+    client, _ = run(mode="isolated", items=items(9), minibatch_size=2)
+
+    assert client.prompts("merge")
     for stage in ("merge", "ranking"):
         for prompt in client.prompts(stage):
             assert "Monthly revenue reports" not in prompt
@@ -389,11 +448,22 @@ MULTI_FILES = {
 
 
 class PathLosingOptimizer:
-    """An optimizer whose analysts name a `path` and whose merge stage loses it.
+    """An optimizer that proposes two good edits and names no `path` on either.
 
-    Which is what the real one does: our routing analyst prompts require the
-    field and `vendor/prompts/merge_*.md` are upstream's, written for a skill
-    that is one document, and state a schema without it.
+    `path` goes missing for two different reasons and the fix is the same one.
+    Upstream's `vendor/prompts/merge_*.md` are written for a skill that is one
+    document and state a schema without the field, so any edit through a merge
+    comes back stripped — that is the isolated and multi-minibatch story, and it
+    is why `reattach_paths` exists. Routing no longer reaches a merge, and the
+    field can still be absent for the plainer reason: the analyst did not write
+    it, however firmly its prompt asked. Either way an edit naming no file is
+    `skipped_invalid_path` when there are two entry points and no "the skill
+    document" to default to — the candidate comes back byte-identical to the
+    skill in force and the step reads as a rejected candidate rather than as a
+    patch that was lost on the way.
+
+    So this drops the field at *every* stage, which covers both routes into the
+    same failure.
     """
 
     model_name = "scripted"
@@ -416,16 +486,8 @@ class PathLosingOptimizer:
         if stage == "ranking":
             return json.dumps({"selected_indices": [0, 1]}), usage
         if stage == "merge":
-            # The drop: no `path` on either edit.
             return json.dumps({"reasoning": "merged", "edits": edits}), usage
-        # The analyst names one, as its prompt demands.
-        with_paths = [
-            {**edits[0], "path": "billing/SKILL.md"},
-            {**edits[1], "path": "reporting/SKILL.md"},
-        ]
-        return json.dumps(
-            {"batch_size": 1, "patch": {"reasoning": "", "edits": with_paths}}
-        ), usage
+        return json.dumps({"batch_size": 1, "patch": {"reasoning": "", "edits": edits}}), usage
 
 
 def mixed_items(n=4):
@@ -443,12 +505,16 @@ def mixed_items(n=4):
 
 
 def test_a_multi_target_routing_step_still_edits_both_descriptions():
-    """The whole chain, with the merge stage losing `path` as it really does.
+    """The whole chain, with `path` missing exactly as it goes missing in life.
 
     Without re-attachment every edit here is `skipped_invalid_path`: there are
     two entry points, so there is no "the skill document" to default to. The
     candidate then comes back byte-identical to the skills in force and the step
     reads as a rejected candidate rather than as a patch that was lost.
+
+    Routing reaches this through its analyst rather than through a merge it no
+    longer runs, which is why `PathLosingOptimizer` drops the field at every
+    stage — the recovery has to hold on whichever call omitted it.
     """
     outcome = run_update_stage(
         files=MULTI_FILES,

@@ -16,7 +16,7 @@ import {
   IconX,
 } from "../icons.jsx";
 import { secs } from "../../duration.js";
-import { groupResults, outcomeOf } from "../../optimize_rollout.js";
+import { groupResults, minibatchLabel, outcomeOf } from "../../optimize_rollout.js";
 import { gateLabel } from "../../optimize_gate_label.js";
 import Fact from "./Fact.jsx";
 import ReflectorIO from "./ReflectorIO.jsx";
@@ -280,13 +280,18 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
         {/* The step's own stages, not any minibatch's — which is why they are
             here and not in the list beside the analyst calls. One merge and one
             ranking serve the whole step, and a row labelled like a minibatch
-            would claim an analyst saw something it did not. */}
+            would claim an analyst saw something it did not.
+
+            A routing step has none: it makes a single analyst call and both
+            stages return one patch untouched. `mode` is what lets the empty
+            state say that instead of blaming the run's age. */}
         {split === "train" && (
           <StageCalls
             stageCalls={detail.stage_calls}
             nApplied={detail.n_edits_applied}
             nSkipped={detail.n_edits_skipped}
             editSummary={detail.edit_summary}
+            mode={detail.mode}
           />
         )}
       </Card>
@@ -311,6 +316,7 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
                 split={split}
                 selection={selection}
                 onSelect={setSelection}
+                mode={detail.mode}
               />
             ))}
           </div>
@@ -327,6 +333,7 @@ export default function RolloutDetail({ runId, stepNo, split, onBack, onPickSpli
               nApplied={detail.n_edits_applied}
               nSkipped={detail.n_edits_skipped}
               onOpenSkill={onOpenSkill}
+              mode={detail.mode}
             />
           )}
           {selectedResult && (
@@ -407,7 +414,7 @@ function Legend({ outcomes }) {
   );
 }
 
-function Group({ group, split, selection, onSelect }) {
+function Group({ group, split, selection, onSelect, mode }) {
   const { minibatch, counts } = group;
   const selected =
     selection?.kind === "minibatch" && selection.no === group.minibatch_no;
@@ -419,7 +426,7 @@ function Group({ group, split, selection, onSelect }) {
           className={selected ? "opt-rollout-group-head selected" : "opt-rollout-group-head"}
           onClick={() => onSelect({ kind: "minibatch", no: minibatch.minibatch_no })}
         >
-          <strong>Minibatch {minibatch.minibatch_no}</strong>
+          <strong>{minibatchLabel(minibatch, { mode })}</strong>
           <span className="muted">
             {minibatch.n_items} items · {counts.incorrect + counts.partial} failed
           </span>

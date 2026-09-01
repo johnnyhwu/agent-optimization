@@ -10,6 +10,7 @@ import { plural } from "../../plural.js";
 import { charLabel, skillTree } from "../../skill_tree.js";
 import { evalSetLabel } from "../../eval_set_label.js";
 import { checkFor, sharedQuestionCount, skillStatus } from "../../optimize_wizard.js";
+import { routingSkillWarnings } from "../../optimize_routing_warnings.js";
 
 // Wizard step 3: the imported questions, grouped by the skill they are tagged
 // with. Picking a group is picking what the run optimises.
@@ -113,6 +114,16 @@ export default function SkillGroups({
             : " An isolated run optimises one skill, so such a question is trained on under whichever you pick."}
         </p>
       )}
+
+      {/* Selections a routing run cannot recover from, on the step where the fix
+          is one click away. Both are about a skill that is inside the run's
+          arithmetic without being inside its control, which produces a
+          confident wrong number rather than an error. */}
+      {routingSkillWarnings({ mode, skills: chosen, preview }).map((warning) => (
+        <Banner key={warning.id} tone={warning.tone} title={warning.title}>
+          {warning.body}
+        </Banner>
+      ))}
 
       {groups.map((group) => (
         <SkillCard

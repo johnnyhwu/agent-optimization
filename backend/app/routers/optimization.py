@@ -912,6 +912,8 @@ def _step_summary(step: OptimizationStep, rollouts: dict) -> OptimizationStepSum
         n_edits_applied=step.n_edits_applied,
         n_edits_skipped=step.n_edits_skipped,
         edit_summary=step.edit_summary,
+        routing_blocked_by=step.routing_blocked_by,
+        setup_divergence=step.setup_divergence,
         skill_len=step.skill_len,
         candidate_from_cache=step.candidate_from_cache,
         current_score=_num(step.current_score),
@@ -1212,6 +1214,7 @@ async def get_rollout_detail(
 
     return OptimizationRolloutDetail(
         run_id=run_id,
+        mode=run.mode,
         step_no=step_no,
         split=split,
         epoch_no=step.epoch_no,
