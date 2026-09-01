@@ -144,6 +144,7 @@ different order each call is not an agent that was told something different.
 
 ### Misfired into billing — 8 questions tagged elsewhere opened it
 ← tagged reporting (8)
+- 上個月的報表怎麼匯出？
 ```
 
 Grouped rather than listed, because the grouping *is* the finding: a blurred
@@ -164,9 +165,21 @@ Five decisions inside it:
   how the agent routed. `routing_scores` already leaves those out of the score;
   counting them as failures in the prompt would invite an edit against evidence
   that does not exist.
-- **A target with no questions still gets a section saying so.** Omitting it
-  reads as "this one is fine". It is not fine — it has no evidence at all, and
-  it is still rewritable, so it would be edited from the other skills' evidence.
+- **A target with no questions still gets a section saying so — and still gets
+  its misfires.** Omitting it reads as "this one is fine". It is not fine: it
+  has no evidence at all and is still rewritable, so it would be edited from
+  the other skills' evidence. The misfire block is the half that must not be
+  skipped with it, because a skill with no questions of its own that is winning
+  everyone else's is the over-broad description at its worst, and the misfires
+  are then the *only* evidence about it there is.
+
+- **A question tagged for nothing is not a routing success.** `analyst_item`
+  has no routing verdict to give one, so `hard` falls back to the judge's — a
+  statement about the *answer*. The header counts exactly what
+  `routing.routing_scores` counts (measured **and** tagged) and names the
+  untagged remainder separately, because `_stratify` keeps those questions and
+  places them at the tail, so a late step in an epoch can be made largely of
+  them. Read from `hard`, such a batch would report as perfectly routed.
 
 - **A skill whose traces all went missing is not "reached by 0 (0%)".** Every
   percentage is over what was *measured*, never over what was tagged. The two

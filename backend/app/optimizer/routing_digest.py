@@ -355,11 +355,25 @@ def render_digest(
     if not items:
         return ""
 
-    measured = [i for i in items if i.get("skills_read") is not None]
+    # Exactly what `routing.routing_scores` counts, and for the same two
+    # reasons: a trace that never landed measured nothing, and a question
+    # carrying no tags has no right answer to be judged against. The second is
+    # the one that bites — `analyst_item` has no routing verdict to give an
+    # untagged question, so it falls back to the *judge's*, and reading that
+    # field here would report a batch nobody could route as perfectly routed.
+    # `_stratify` keeps untagged questions and places them at the tail, so a
+    # late step in an epoch can be made largely of them.
+    measured = [
+        i for i in items
+        if i.get("skills_read") is not None and (i.get("gt_skills") or ())
+    ]
     exact = sum(1 for i in measured if float(i.get("hard") or 0.0))
+    untagged = sum(1 for i in items if not (i.get("gt_skills") or ()))
     header = (
         f"## Routing Results ({_n(len(items), 'question')}, {len(measured)} measured, "
-        f"{_pct(exact, len(measured))} routed exactly right)"
+        f"{_pct(exact, len(measured))} routed exactly right"
+        + (f" · {untagged} tagged for no skill under optimisation" if untagged else "")
+        + ")"
     )
 
     sections: list[tuple[str, list[_Bucket]]] = []
@@ -373,17 +387,22 @@ def render_digest(
                 f"### {skill} — no questions in this batch are tagged for it",
                 [],
             ))
-            continue
-        # Over what was measured, never over what was tagged. The two differ
-        # only when traces went missing, and that is precisely when the
-        # difference matters.
-        lost = n_tagged - n_measured
-        sections.append((
-            f"### {skill} — {_n(n_tagged, 'question')} tagged · reached by "
-            f"{n_reached} of the {n_measured} measured ({_pct(n_reached, n_measured)})"
-            + (f" · {lost} not measured" if lost else ""),
-            buckets,
-        ))
+        else:
+            # Over what was measured, never over what was tagged. The two differ
+            # only when traces went missing, and that is precisely when the
+            # difference matters.
+            lost = n_tagged - n_measured
+            sections.append((
+                f"### {skill} — {_n(n_tagged, 'question')} tagged · reached by "
+                f"{n_reached} of the {n_measured} measured ({_pct(n_reached, n_measured)})"
+                + (f" · {lost} not measured" if lost else ""),
+                buckets,
+            ))
+        # Outside the branch above, because a skill with no questions of its own
+        # is exactly where the misfires are the *only* evidence there is. That
+        # is the over-broad description at its worst — one that has attracted
+        # every other skill's questions — and skipping its misfires would leave
+        # its section saying there is nothing here to learn from.
         misfires = _misfire_buckets(items, skill)
         if misfires:
             total = sum(len(b.items) for b in misfires)

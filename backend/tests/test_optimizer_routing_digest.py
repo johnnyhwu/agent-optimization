@@ -324,3 +324,63 @@ def test_whole_sections_go_only_after_every_bucket_is_down_to_one():
 
     cramped = render_digest(items, targets, budget_chars=900)
     assert "section(s) omitted" in cramped
+
+
+# --- questions the gate cannot score ----------------------------------------
+
+
+def untagged(key, *, read, correct, question="q?"):
+    """A question carrying no tags, in the shape `analyst_item` produces one.
+
+    `routing_scores` skips these (`if not tagged: continue`), and `analyst_item`
+    has no routing verdict to give them, so it falls back to the judge's — which
+    is a statement about the *answer*. The digest must not read that field as
+    though it were a routing outcome.
+    """
+    return {
+        "id": key,
+        "hard": 1.0 if correct else 0.0,
+        "task_description": question,
+        "gt_skills": [],
+        "skills_read": read,
+    }
+
+
+def test_a_question_tagged_for_nothing_is_not_counted_as_routed_correctly():
+    # `_stratify` deliberately keeps untagged questions in the split, and places
+    # them at the tail — so a late step in an epoch can be made almost entirely
+    # of them. Their `hard` is the judge's verdict, and counting it here would
+    # report a batch nobody could route as perfectly routed.
+    text = render_digest(
+        [untagged(f"q{i}", read=["billing"], correct=True) for i in range(4)],
+        targets=["billing", "reporting"],
+    )
+    assert "100%" not in text
+    assert "0 measured" in text
+
+
+def test_the_header_says_when_questions_carry_no_tag_to_be_right_about():
+    # Otherwise the batch reads as one whose traces went missing, which is a
+    # different problem with a different fix — this one is fixed in the dataset.
+    text = render_digest(
+        [untagged("a", read=["billing"], correct=True)],
+        targets=["billing"],
+    )
+    assert "tagged for no skill under optimisation" in text
+
+
+def test_a_skill_with_no_questions_of_its_own_still_reports_what_misfired_into_it():
+    # The over-broad description, at its worst: `billing` attracts every one of
+    # `reporting`'s questions and has none of its own, so the only evidence
+    # about it *is* the misfires. Reported as "no questions tagged for it" alone,
+    # its section says there is nothing to learn on the page whose job is to
+    # tell the analyst to narrow it.
+    text = render_digest(
+        [
+            item(f"q{i}", tagged=["reporting"], read=["billing"], question=f"stolen {i}")
+            for i in range(5)
+        ],
+        targets=["billing", "reporting"],
+    )
+    assert "### Misfired into billing" in text
+    assert "← tagged reporting (5)" in text
