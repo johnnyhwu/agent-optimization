@@ -37,7 +37,7 @@ presenting it as everyone's.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from app.optimizer.skillio import _opcodes
@@ -85,6 +85,12 @@ class Divergence:
     """
 
     n_prompts: int = 0
+    # How many of them carried no system prompt at all. Counted rather than
+    # quietly excluded: the block is headed "every question below was answered
+    # under this", and a batch where half the rows recorded no setup did not
+    # agree about anything — it was only half observed. Same rule the matrix
+    # below it follows for a missing trace.
+    n_missing: int = 0
     n_variants: int = 0
     majority_share: float = 1.0
     diverged: bool = False
@@ -109,20 +115,83 @@ def _normalise_tools(tools: Sequence[Any] | None) -> tuple:
     return tuple(sorted(names))
 
 
-def _common_lines(variants: Sequence[list[str]]) -> list[str]:
+# The largest DP table one fold pair may build, after the shared head and tail
+# have been trimmed off. `_opcodes` is an O(n×m) table in pure Python, so a pair
+# still differing over hundreds of lines once their common ends are gone costs
+# seconds — per pair, across every variant, twice per step. Two prompts that far
+# apart are also exactly the ones `SIMILARITY_FLOOR` refuses to splice, so the
+# budget and the floor say the same thing and the expensive way of finding out
+# is skipped.
+_MAX_FOLD_CELLS = 250_000
+
+
+def _fold_opcodes(before: list[str], after: list[str]) -> list[tuple] | None:
+    """`_opcodes` with the common head and tail trimmed off first.
+
+    Two agent setups from one batch are near-identical by construction — that is
+    the premise of folding them — so the interesting part is a handful of lines
+    in an otherwise shared document. `_opcodes` does not know that: it fills the
+    whole `n × m` table, which for a 1,200-line preamble is 1.4 million Python
+    cells *per pair*, and this fold runs over every variant and then again for
+    `_batch_chars`.
+
+    Trimming is exact, not an approximation: when the first lines of both
+    sequences are equal some optimal LCS matches them, so the trimmed ends can
+    be re-attached as `equal` runs without changing the result. `_opcodes` itself
+    is deliberately left alone — `frontend/src/diff.js` draws the same
+    alignment, and this is a local concern, not a diff one.
+
+    `None` means "further apart than is worth folding", which the caller reads
+    the same way it reads a similarity below the floor.
+    """
+    n, m = len(before), len(after)
+    head = 0
+    while head < n and head < m and before[head] == after[head]:
+        head += 1
+    tail = 0
+    while (
+        tail < n - head and tail < m - head
+        and before[n - 1 - tail] == after[m - 1 - tail]
+    ):
+        tail += 1
+
+    if (n - head - tail) * (m - head - tail) > _MAX_FOLD_CELLS:
+        return None
+    if not head and not tail:
+        return _opcodes(before, after)
+
+    out: list[tuple] = []
+    if head:
+        out.append(("equal", 0, head, 0, head))
+    out.extend(
+        (tag, i1 + head, i2 + head, j1 + head, j2 + head)
+        for tag, i1, i2, j1, j2 in _opcodes(before[head:n - tail], after[head:m - tail])
+    )
+    if tail:
+        out.append(("equal", n - tail, n, m - tail, m))
+    return out
+
+
+def _common_lines(variants: Sequence[list[str]]) -> list[str] | None:
     """The lines every variant has, in order.
 
     Folded pairwise because `_opcodes` is pairwise. Intersecting an *ordered*
     subsequence repeatedly is what keeps the result a real skeleton — a set
     intersection would lose the order and let the marker land in the wrong place.
+
+    `None` when two of them are too far apart to fold, which the caller treats
+    exactly as it treats a similarity below the floor.
     """
     common = list(variants[0])
     for variant in variants[1:]:
         if not common:
             break
+        opcodes = _fold_opcodes(common, variant)
+        if opcodes is None:
+            return None
         common = [
             line
-            for tag, i1, i2, _, _ in _opcodes(common, variant)
+            for tag, i1, i2, _, _ in opcodes
             if tag == "equal"
             for line in common[i1:i2]
         ]
@@ -141,7 +210,9 @@ def _gaps(common: list[str], lines: list[str]) -> list[list[str]]:
         gaps[0] = list(lines)
         return gaps
     index = 0
-    for tag, i1, i2, j1, j2 in _opcodes(common, lines):
+    # Never `None` here: `_common_lines` already folded this pair and returned,
+    # so the trimmed middle is at most the one it measured.
+    for tag, i1, i2, j1, j2 in _fold_opcodes(common, lines) or _opcodes(common, lines):
         if tag == "equal":
             index = i2
         else:
@@ -152,13 +223,26 @@ def _gaps(common: list[str], lines: list[str]) -> list[list[str]]:
 def _varies_marker(segments: list[list[str]], n_prompts: int) -> str:
     """One elision, illustrated by a couple of the values it stands for."""
     seen: list[str] = []
+    absent = False
     for segment in segments:
         text = "\n".join(segment).strip()
-        if text and text not in seen:
+        if not text:
+            # Named, not skipped. This marker is only reached because the
+            # segments differ, so an empty one means the runs that carried
+            # nothing here — and "some agents were told this and others were
+            # not" is the single most routing-relevant thing this fold can
+            # find. Dropping it left the marker claiming one distinct value for
+            # a difference that was entirely about presence.
+            absent = True
+        elif text not in seen:
             seen.append(text)
-    samples = " / ".join(f'"{s}"' for s in seen[:_MAX_SAMPLES])
-    count = f"{len(seen)} distinct values across {n_prompts} runs"
-    return f"«varies ({count}), e.g. {samples}»" if samples else f"«varies ({count})»"
+
+    values = len(seen) + (1 if absent else 0)
+    shown = seen[:_MAX_SAMPLES - 1] if absent else seen[:_MAX_SAMPLES]
+    samples = [f'"{s}"' for s in shown] + (["absent"] if absent else [])
+    count = f"{_n(values, 'distinct value')} across {_n(n_prompts, 'run')}"
+    joined = " / ".join(samples)
+    return f"«varies ({count}), e.g. {joined}»" if joined else f"«varies ({count})»"
 
 
 def system_prompt_view(
@@ -174,41 +258,61 @@ def system_prompt_view(
       run of differing ones replaced by a `«varies»` marker naming a couple of
       the values. This is the timestamp and workspace-id case, and it is
       **not** reported as divergence: nothing about the agent changed;
-    * many that do not — no splice. A prompt assembled from lines that never
+    * many that do not — or that are too far apart for `_fold_opcodes` to fold
+      within its budget, which is the same condition arrived at more cheaply —
+      no splice. A prompt assembled from lines that never
       appeared together is a document no question was answered under, and an
       analyst reasoning from it is reasoning about a system that does not
       exist. The majority variant is printed whole and labelled as a stand-in,
       and `diverged` is set so the run can say so out loud.
     """
     texts = [p for p in prompts if p]
+    missing = len(prompts) - len(texts)
     tools_diverged = len({_normalise_tools(t) for t in (tools or [])}) > 1
     if not texts:
-        return "", Divergence(n_prompts=len(prompts), tools_diverged=tools_diverged)
+        return "", Divergence(
+            n_prompts=len(prompts), n_missing=missing, n_variants=0,
+            majority_share=0.0, tools_diverged=tools_diverged,
+        )
 
     counts: dict[str, int] = {}
     for text in texts:
         counts[text] = counts.get(text, 0) + 1
     variants = list(counts)
     majority, majority_n = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
+    # Shares are over every question the block speaks for, not over the ones
+    # that recorded a setup. The section is headed "every question below was
+    # answered under this", so a batch half of which recorded nothing is a
+    # batch this block half describes — and a `majority_share` of 1.0 over the
+    # recorded half would report it as uniform.
     base = Divergence(
-        n_prompts=len(texts),
+        n_prompts=len(prompts),
+        n_missing=missing,
         n_variants=len(variants),
-        majority_share=majority_n / len(texts),
+        majority_share=majority_n / len(prompts),
         tools_diverged=tools_diverged,
+    )
+    unrecorded = (
+        f"(the setup for {missing} of {len(prompts)} questions was not recorded; "
+        f"what follows is the {len(texts)} that were)\n"
+        if missing else ""
     )
 
     if len(variants) == 1:
-        return majority, base
+        return unrecorded + majority, base
 
     split = [v.splitlines() for v in variants]
     common = _common_lines(split)
     longest = max(len(lines) for lines in split)
-    if not longest or len(common) / longest < SIMILARITY_FLOOR:
+    if common is None or not longest or len(common) / longest < SIMILARITY_FLOOR:
         header = (
             f"(representative — the setup {majority_n} of {len(texts)} questions ran "
             f"under; {len(variants)} variants differ too much to show as one)\n"
         )
-        return header + majority, Divergence(**{**base.__dict__, "diverged": True})
+        return (
+            unrecorded + header + majority,
+            replace(base, diverged=True),
+        )
 
     per_variant = [_gaps(common, lines) for lines in split]
     out: list[str] = []
@@ -221,7 +325,7 @@ def system_prompt_view(
             out.append(_varies_marker(segments, len(texts)))
         if index < len(common):
             out.append(common[index])
-    return "\n".join(out) + "\n", base
+    return unrecorded + "\n".join(out) + "\n", base
 
 
 # --- the confusion matrix ---------------------------------------------------

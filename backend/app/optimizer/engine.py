@@ -965,11 +965,11 @@ async def _run_step(
                 files_touched=len(stats), n_answer_leaks=len(leaks),
                 skill_len=sum(len(text) for text in candidate.values()),
                 edit_summary=outcome.edit_summary,
-            # Routing only, and null on every isolated step. A step that
-            # applied nothing has a reason, and this is the only place it
-            # survives to reach the overview.
-            routing_blocked_by=outcome.routing_blocked_by or None,
-            setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
+                # Routing only, and null on every isolated step. A step that
+                # applied nothing has a reason, and this is the only place it
+                # survives to reach the overview.
+                routing_blocked_by=outcome.routing_blocked_by or None,
+                setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
             )
             await publish({
                 "type": "gate_done", "step_no": step_no, "action": "reject",
@@ -999,11 +999,11 @@ async def _run_step(
                 files_touched=len(stats), n_answer_leaks=len(leaks),
                 skill_len=sum(len(text) for text in candidate.values()),
                 edit_summary=outcome.edit_summary,
-            # Routing only, and null on every isolated step. A step that
-            # applied nothing has a reason, and this is the only place it
-            # survives to reach the overview.
-            routing_blocked_by=outcome.routing_blocked_by or None,
-            setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
+                # Routing only, and null on every isolated step. A step that
+                # applied nothing has a reason, and this is the only place it
+                # survives to reach the overview.
+                routing_blocked_by=outcome.routing_blocked_by or None,
+                setup_divergence=outcome.setup_divergence, tokens=outcome.tokens,
             )
             await publish({
                 "type": "gate_done", "step_no": step_no, "action": "reject",

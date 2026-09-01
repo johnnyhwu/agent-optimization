@@ -37,6 +37,11 @@ optimisation:
   description can make an agent open a skill it has been told not to consult.
   Check `## The agent's setup` before proposing anything.
 * **· not measured** — no trace landed. No evidence either way; ignore them.
+* **"tagged for no skill under optimisation"** in the header — questions tagged
+  only for skills you cannot edit. There is no right answer for them here, so
+  they are outside every percentage on the page. If they are most of the batch,
+  the run is being scored on questions it cannot win; say so in
+  `routing_blocked_by`.
 * **Misfired into this skill** — questions belonging elsewhere that opened it
   anyway. This is the half that a "how often was the skill used" view cannot
   see, and it is what an over-broad description produces.
@@ -101,7 +106,7 @@ Respond ONLY with a valid JSON object (no markdown fences, no extra text):
   "routing_summary": [
     {"pattern": "<a class of question and where it is going wrong>", "count": <int>}
   ],
-  "routing_blocked_by": "<what outside the descriptions is preventing correct routing, or null>",
+  "routing_blocked_by": "<what outside the descriptions is preventing correct routing — omit the key entirely when nothing is>",
   "patch": {
     "reasoning": "<what the current descriptions get wrong about when each skill applies>",
     "edits": [

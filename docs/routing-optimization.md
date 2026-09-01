@@ -117,7 +117,7 @@ equality across the batch and a single injected timestamp defeats it, so
 | --- | --- |
 | one distinct prompt | printed verbatim |
 | common lines ÷ longest ≥ `SIMILARITY_FLOOR` (0.7) | shared lines verbatim, differing runs replaced by a `«varies»` marker with up to two samples |
-| below the floor | **no splice.** The majority variant whole, labelled as a stand-in, and `diverged` set |
+| below the floor, or too far apart to fold cheaply | **no splice.** The majority variant whole, labelled as a stand-in, and `diverged` set |
 
 The third case is the one worth defending. A prompt assembled from lines that
 never appeared together is a document no question was answered under, and an
@@ -128,6 +128,30 @@ overview — the same class of finding as `workspace-drift`.
 
 Tool catalogues are compared name-sorted: a server returning its tools in a
 different order each call is not an agent that was told something different.
+
+Three details the fold is deliberately explicit about, each found by reviewing
+it rather than by writing it:
+
+- **A `«varies»` marker names an absence as one of its values.** When the
+  differing segment is empty in some runs the marker reads `…, e.g. "Do not
+  open a skill; answer directly." / absent»`. An instruction given to half a
+  batch and withheld from the other half is a confound sitting directly on the
+  measurement — reporting it as one value that moved would hide the half that
+  never had it.
+- **Questions whose setup was never recorded are counted, not dropped.** The
+  block is headed "every question below was answered under this", so a batch
+  where three of five rows carried no system prompt opens with `(the setup for
+  3 of 5 questions was not recorded; what follows is the 2 that were)`, and
+  `majority_share` is taken over all five. The same rule the matrix below it
+  follows for a missing trace: unmeasured is not agreement.
+- **The fold trims before it folds.** `_opcodes` fills a full `n × m` table, and
+  the timestamp case — every prompt distinct, which is the case this exists for
+  — folds once per variant and then again for `_batch_chars`. A 1,200-line
+  preamble over 40 questions took ~17 seconds a side. `_fold_opcodes` strips the
+  shared head and tail first, which is exact rather than approximate, and
+  declines outright (`_MAX_FOLD_CELLS`) when what is left is still large — two
+  prompts that far apart are the ones the floor refuses to splice anyway, so the
+  budget and the floor say the same thing.
 
 ### The confusion matrix
 
@@ -173,6 +197,12 @@ Five decisions inside it:
   everyone else's is the over-broad description at its worst, and the misfires
   are then the *only* evidence about it there is.
 
+- **`routing_blocked_by` filters the ways of writing "nothing".** The response
+  schema shows the field as a quoted string with `or null` inside the quotes, so
+  a model answering it literally writes the word. `_blocking_reason` rejects
+  `null` / `none` / `n/a` / `-` and friends, because a run overview announcing
+  that the optimizer reported “null” is the one warning on that page nobody can
+  act on.
 - **A question tagged for nothing is not a routing success.** `analyst_item`
   has no routing verdict to give one, so `hard` falls back to the judge's — a
   statement about the *answer*. The header counts exactly what

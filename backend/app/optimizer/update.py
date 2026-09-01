@@ -362,8 +362,9 @@ def run_update_stage(
         # exists. In routing there is exactly one analyst, so "the first that
         # said anything" is simply "the one".
         routing_blocked_by=next(
-            (str(p["routing_blocked_by"]).strip() for p in patches
-             if str(p.get("routing_blocked_by") or "").strip()),
+            (reason for reason in
+             (_blocking_reason(p.get("routing_blocked_by")) for p in patches)
+             if reason),
             "",
         ),
         setup_divergence=next(
@@ -375,6 +376,20 @@ def run_update_stage(
 
 # The order the pipeline runs them in, which is also the order they are read in.
 _STAGE_ORDER = ["merge_failure", "merge_success", "merge_final", "ranking", "merge"]
+
+
+# Ways of writing "nothing", from a field whose schema shows it as a quoted
+# string with `or null` inside the quotes. A model answering that literally
+# writes the word, and the run overview then reports “null” as the thing no
+# description can fix — a warning with nothing behind it, on the page whose
+# whole job is warnings that mean something.
+_NOT_A_REASON = {"", "null", "none", "nil", "n/a", "na", "-", "--", "nothing", "false"}
+
+
+def _blocking_reason(value) -> str:
+    """What the analyst named as outside the descriptions' reach, if anything."""
+    text = str(value or "").strip()
+    return "" if text.lower().strip(".") in _NOT_A_REASON else text
 
 
 def _stage_calls(calls: list[dict], update_mode: str) -> list[StageCallRecord]:

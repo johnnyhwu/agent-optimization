@@ -340,3 +340,22 @@ def test_an_analyst_naming_something_outside_the_descriptions_is_recorded():
 def test_nothing_blocking_leaves_the_field_empty_rather_than_inventing_a_reason():
     outcome = run()
     assert not outcome.routing_blocked_by
+
+
+def test_a_json_null_written_as_a_word_is_not_a_reason():
+    """`"routing_blocked_by": "null"` is a filled-in field, not a blocked run.
+
+    The response schema shows the field as `"<what is blocking, or null>"` —
+    quoted, like every other string in the template — so a model answering it
+    literally writes the word rather than a JSON `null`. Taken at face value
+    the run overview then announces that the optimizer reported “null” as the
+    thing no description can fix, which is the only warning on that page nobody
+    can act on.
+    """
+    for sentinel in ("null", "None", "N/A", "n/a", "-", "  none  "):
+        client = Recorder(analyst={
+            "batch_size": 4,
+            "routing_blocked_by": sentinel,
+            "patch": {"reasoning": "the descriptions are fine", "edits": []},
+        })
+        assert not run(client=client).routing_blocked_by, sentinel

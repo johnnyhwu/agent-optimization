@@ -384,3 +384,97 @@ def test_a_skill_with_no_questions_of_its_own_still_reports_what_misfired_into_i
     )
     assert "### Misfired into billing" in text
     assert "← tagged reporting (5)" in text
+
+
+# --- what the fold says about itself ----------------------------------------
+#
+# Three findings from a second review pass, all of them the same shape as the
+# ones before: the fold is honest about what it *can* see and quiet about what
+# it could not.
+
+
+def test_a_line_present_in_some_runs_and_absent_in_others_says_it_was_absent():
+    """The elision has to name the absence, not just the text.
+
+    An instruction given to half the batch and withheld from the other half is
+    the single most routing-relevant thing a setup fold can find — it is a
+    confound sitting directly on the measurement. Rendering it as `«varies (1
+    distinct values), e.g. "…"»` reads as one value that moved, and hides that
+    some agents were never told it at all.
+    """
+    with_line = "line one\nDo not open a skill; answer directly.\nline two\nline three"
+    without = "line one\nline two\nline three"
+
+    text, _ = system_prompt_view([with_line, without])
+
+    assert "Do not open a skill" in text
+    assert "1 distinct values" not in text
+    assert "absent" in text
+
+
+def test_a_marker_over_two_real_values_still_counts_two():
+    head = "\n".join(f"head line {i}" for i in range(10))
+    text, _ = system_prompt_view(
+        [f"{head}\nclock 01\ntail", f"{head}\nclock 02\ntail"],
+    )
+    assert "2 distinct values" in text
+    assert "absent" not in text
+
+
+def test_questions_whose_setup_was_never_recorded_are_counted_not_dropped():
+    """`n_prompts` is how many questions the block speaks for, not how many it read.
+
+    The section is headed "Every question below was answered under this". When
+    three of five rows carried no system prompt, that sentence is false for
+    three of them, and a `majority_share` of 1.0 over the two that did records
+    the batch as uniform. Same rule as the matrix above it: unmeasured is not
+    agreement.
+    """
+    text, divergence = system_prompt_view(["same", "same", "", "", None])
+
+    assert divergence.n_prompts == 5
+    assert divergence.n_missing == 3
+    assert divergence.majority_share == 2 / 5
+    assert "3 of 5" in text
+
+
+def test_a_setup_recorded_for_every_question_reports_none_missing():
+    text, divergence = system_prompt_view(["same", "same"])
+    assert divergence.n_missing == 0
+    assert text == "same"
+
+
+# --- the cost of folding ----------------------------------------------------
+
+
+def test_folding_a_long_setup_across_a_large_batch_is_not_quadratic():
+    """The fold runs twice per step, on the path this module was written for.
+
+    A per-run timestamp makes every prompt distinct, which is the case
+    `system_prompt_view` exists to handle — and it is also the case with the
+    most variants to fold. The fold is pairwise LCS, so an untrimmed
+    implementation is O(variants × lines²): a 1,200-line agent preamble over 40
+    questions took ~17 seconds here, and `_batch_chars` renders it a second
+    time, on the largest batch the digest advertises holding.
+
+    Bounded loosely because it is a shape check, not a benchmark — the
+    untrimmed version misses it by more than an order of magnitude.
+    """
+    import time
+
+    base = [f"Rule {i}: consult the right skill before answering." for i in range(1_200)]
+    prompts = []
+    for k in range(40):
+        lines = list(base)
+        lines[7] = f"Current time: 2026-09-01T10:{k:02d}:00Z"
+        prompts.append("\n".join(lines))
+
+    started = time.perf_counter()
+    text, divergence = system_prompt_view(prompts)
+    elapsed = time.perf_counter() - started
+
+    assert divergence.n_variants == 40
+    assert not divergence.diverged
+    assert "«varies" in text  # the one varying line was elided, not spliced
+    assert "Rule 1199" in text
+    assert elapsed < 3.0, f"folding took {elapsed:.1f}s"
