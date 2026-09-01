@@ -4,7 +4,13 @@ import { plural, pluralise } from "../../plural.js";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import { Collapsible } from "../SpanPayload.jsx";
-import { editsProposed, truncationSummary } from "../../optimize_rollout.js";
+import {
+  SOURCE_LABEL,
+  SOURCE_TONE,
+  editsProposed,
+  minibatchLabel,
+  truncationSummary,
+} from "../../optimize_rollout.js";
 
 // One analyst call, opened up: what it concluded, what it asked for, and — for
 // anyone who needs it — exactly what it was shown.
@@ -27,7 +33,7 @@ import { editsProposed, truncationSummary } from "../../optimize_rollout.js";
 // and differs in exactly the way that mattered.
 
 export default function ReflectorIO({
-  minibatch, editReports = [], nApplied, nSkipped, onOpenSkill,
+  minibatch, editReports = [], nApplied, nSkipped, onOpenSkill, mode = "isolated",
 }) {
   const cut = truncationSummary(minibatch);
   const edits = editsProposed(minibatch);
@@ -36,9 +42,9 @@ export default function ReflectorIO({
   return (
     <div className="opt-reflector">
       <div className="opt-reflector-head">
-        <strong>Minibatch {minibatch.minibatch_no}</strong>
-        <Badge tone={minibatch.source_type === "success" ? "success" : "warning"} size="sm">
-          {minibatch.source_type}
+        <strong>{minibatchLabel(minibatch, { mode })}</strong>
+        <Badge tone={SOURCE_TONE[minibatch.source_type] || "neutral"} size="sm">
+          {SOURCE_LABEL[minibatch.source_type] || minibatch.source_type}
         </Badge>
         <span className="muted">{minibatch.n_items} questions</span>
         <span className="muted">{plural(edits, "edit")} proposed</span>
@@ -192,11 +198,16 @@ function PatchList({ patch, reports = [], nApplied, nSkipped, onOpenSkill }) {
       {/* The step's outcome, not this minibatch's: the analysts' patches are
           merged and ranked before anything is applied, so an edit proposed here
           may be collapsed into another one's. Saying whose count it is stops
-          the two numbers looking like they disagree. */}
+          the two numbers looking like they disagree.
+
+          In routing the two populations are the same one — a single call, no
+          merge — so the framing is dropped rather than sending a reader to
+          reconcile a difference that cannot exist. */}
       {nApplied != null && (
         <div className="opt-editoutcome">
           <span>
-            Across the whole step: <strong>{plural(nApplied, "edit")} applied</strong>
+            {mode === "routing" ? "" : "Across the whole step: "}
+            <strong>{plural(nApplied, "edit")} applied</strong>
             {nSkipped ? `, ${nSkipped} refused` : ""}
           </span>
           {onOpenSkill && (

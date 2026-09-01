@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estimateRun, explainRun } from "./optimize_cost.js";
+import { analystCallsPerStep, estimateRun, explainRun } from "./optimize_cost.js";
 
 // What the wizard's last step promises before anyone presses Start.
 //
@@ -74,12 +74,37 @@ test("the optimizer's calls scale with the minibatch split, not with the batch",
 
 test("a minibatch bigger than the batch still splits failures from successes", () => {
   // The tempting simplification is that an oversized minibatch means one
-  // analyst call. It does not: a batch with one right answer and one wrong one
-  // becomes two groups whatever the size, because the two are reflected on with
-  // different prompts. Estimating one call here understates the most expensive
-  // model in the run on every single step.
+  // analyst call. In isolated mode it does not: a batch with one right answer
+  // and one wrong one becomes two groups whatever the size, because the two are
+  // reflected on with different prompts. Estimating one call here understates
+  // the most expensive model in the run on every single step.
   const e = estimateRun({ ...base, nTrain: 4, batchSize: 4, minibatchSize: 50 });
   assert.equal(e.optimizerCallsMax, 2 + 2);
+});
+
+test("routing is one analyst call a step, and no merge or ranking", () => {
+  // The split above is what routing gave up: a description is one line, so
+  // every group would return a complete rewrite of it and the merge would pick
+  // between them blind. One call means nothing to merge and nothing to rank,
+  // and both stages return their input untouched without calling the model.
+  const e = estimateRun({
+    ...base, nTrain: 40, batchSize: 8, minibatchSize: 8, epochs: 1, mode: "routing",
+  });
+  assert.equal(e.stepsPerEpoch, 5);
+  assert.equal(e.optimizerCallsMax, 5);
+});
+
+test("routing ignores the minibatch size entirely", () => {
+  const small = estimateRun({ ...base, nTrain: 8, batchSize: 8, minibatchSize: 1, mode: "routing" });
+  const large = estimateRun({ ...base, nTrain: 8, batchSize: 8, minibatchSize: 50, mode: "routing" });
+  assert.equal(small.optimizerCallsMax, large.optimizerCallsMax);
+});
+
+test("analystCallsPerStep is one for routing whatever it is given", () => {
+  assert.equal(analystCallsPerStep(40, 4, "routing"), 1);
+  assert.equal(analystCallsPerStep(40, 4, "isolated"), 11);
+  // No questions is still no call.
+  assert.equal(analystCallsPerStep(0, 4, "routing"), 0);
 });
 
 test("the estimate degrades to zero rather than to NaN when the wizard is half-filled", () => {

@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  SOURCE_TONE,
   editsProposed,
   groupResults,
+  minibatchLabel,
   outcomeOf,
   truncationSummary,
 } from "./optimize_rollout.js";
@@ -217,4 +219,25 @@ test("an analyst call that failed proposed nothing rather than crashing", () => 
   // down with a blank screen instead.
   assert.equal(editsProposed({ raw_output: null, error: "APITimeoutError" }), 0);
   assert.equal(editsProposed({ raw_output: {} }), 0);
+});
+
+// --- Labelling one analyst call ---------------------------------------------
+
+test("a combined routing call is not badged as a failure", () => {
+  // The tone used to be `x === "success" ? "success" : "warning"`, so routing's
+  // `combined` — which is both verdicts over the whole step — would have come
+  // out in the failure colour, and the word beside it read as an alarm.
+  assert.equal(SOURCE_TONE.combined, "info");
+  assert.equal(SOURCE_TONE.failure, "warning");
+  assert.equal(SOURCE_TONE.success, "success");
+});
+
+test("an unknown source type falls back rather than picking a colour for it", () => {
+  assert.equal(SOURCE_TONE.something_new ?? "neutral", "neutral");
+});
+
+test("a routing step's one call is not numbered like the first of several", () => {
+  assert.equal(minibatchLabel({ minibatch_no: 0 }, { mode: "routing" }), "The step's analyst call");
+  assert.equal(minibatchLabel({ minibatch_no: 0 }, { mode: "isolated" }), "Minibatch 0");
+  assert.equal(minibatchLabel({ minibatch_no: 3 }, { mode: "isolated" }), "Minibatch 3");
 });

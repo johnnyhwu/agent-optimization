@@ -1207,6 +1207,11 @@ class OptimizationRolloutDetail(BaseModel):
     """Part 1: one step, one split — the numbers, the questions, the analysts."""
 
     run_id: uuid.UUID
+    # The run's mode. The page describes a pipeline that differs between the
+    # two — routing makes one analyst call over the whole step and reaches
+    # neither merge nor ranking — and without this it explained the isolated one
+    # to everybody, including a reader looking at a step that never ran it.
+    mode: str = "isolated"
     step_no: int
     split: str
     epoch_no: int

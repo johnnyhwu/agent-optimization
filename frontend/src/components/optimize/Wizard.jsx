@@ -13,6 +13,7 @@ import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
 import { counts, makeSplit } from "../../optimize_split.js";
+import { routingReviewWarnings } from "../../optimize_routing_warnings.js";
 import { analystCallsPerStep, estimateRun, explainRun } from "../../optimize_cost.js";
 import {
   HYPER_FIELDS,
@@ -419,6 +420,8 @@ export default function Wizard() {
             values={hyperValues}
             errors={hyperErrors}
             impls={defaults.impls}
+            gateMetric={config.gate_metric || defaults.defaults?.gate_metric || "hard"}
+            onHyperValue={(key, value) => setHyper({ ...hyper, [key]: String(value) })}
           />
         )}
       </div>
@@ -910,7 +913,10 @@ function budgetHelp(chars) {
   return `≈ ${est.low.toLocaleString()}–${est.high.toLocaleString()} tokens. ${base}`;
 }
 
-function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHyper, values, errors, impls }) {
+function ReviewStep({
+  name, onName, skills, mode, split, defaults, hyper, onHyper, values, errors, impls,
+  gateMetric, onHyperValue,
+}) {
   const c = counts(split);
   // The effective values, which are the typed ones when they parse and the
   // server's defaults when the field has not been touched. A field mid-edit —
@@ -943,6 +949,9 @@ function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHype
     epochs,
     batchSize: batch,
     minibatchSize: values.minibatch_size,
+    // Routing makes one analyst call a step and reaches neither merge nor
+    // ranking, so an estimate blind to the mode overstates it by roughly three.
+    mode,
   };
   const estimate = estimable ? estimateRun(estimateInput) : null;
   // The derivation behind each number, for the `?` beside it. Generated from the
@@ -950,8 +959,33 @@ function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHype
   // cannot drift into confidently explaining a formula that has changed.
   const explain = estimable ? explainRun(estimateInput) : null;
 
+  // Settings a routing run cannot recover from, while they are still settable.
+  // Rendered here rather than decided here: the rules are a pure module so
+  // `node --test` can reach them (`frontend/CLAUDE.md`).
+  const routing = routingReviewWarnings({
+    mode, skills, split, values: { ...values, gate_metric: gateMetric },
+  });
+
   return (
     <>
+      {routing.map((warning) => (
+        <Banner key={warning.id} tone={warning.tone} title={warning.title}>
+          {warning.body}
+          {warning.suggestion ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="opt-inline-action"
+                onClick={() => onHyperValue("batch_size", warning.suggestion)}
+              >
+                Use {warning.suggestion}
+              </button>
+            </>
+          ) : null}
+        </Banner>
+      ))}
+
       <FormSection title="Name this run">
         <Field label="Name" help="Optional. The list falls back to the time it started.">
           <input value={name} onChange={(e) => onName(e.target.value)} placeholder={`Tune ${skills[0] || "this skill"}`} />
@@ -978,7 +1012,15 @@ function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHype
         </Field>
         <Field
           label="Batch size"
-          help="Questions per step. Set it to the size of the training split and one epoch is one step."
+          help={
+            mode === "routing"
+              ? "Questions per step, drawn so that every skill under optimisation is " +
+                "represented — each description is rewritten from what its step saw, " +
+                "so a skill absent from the batch would be edited on the others' evidence."
+              : "Questions per step, drawn at random from the training split and " +
+                "reshuffled each epoch. Set it to the size of the split and one epoch " +
+                "is one step."
+          }
           error={errors.batch_size}
         >
           <input
@@ -991,7 +1033,14 @@ function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHype
         </Field>
         <Field
           label="Learning rate"
-          help="The most edits one step may apply. This is the whole meaning of the word here."
+          help={
+            "The most edits one step may apply — the whole meaning of the word here. " +
+            "Fixed for the run; it does not decay." +
+            (mode === "routing"
+              ? " One description is one edit, so set it to at least the number of " +
+                "skills you are optimising."
+              : "")
+          }
           error={errors.learning_rate}
         >
           <input
@@ -1033,7 +1082,17 @@ function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHype
           adjust from anywhere you could see. */}
       <FormSection
         title="How much the analyst is shown"
-        description="Each step sends the optimizer one prompt per minibatch: the skill, then the trajectories of the questions in it. These two decide how many prompts there are and how big each one gets."
+        description={
+          mode === "routing"
+            ? "Each step sends the optimizer one prompt: the skills, the descriptions " +
+              "they compete against, and every question in the step with the skills it " +
+              "was tagged for beside the ones the agent opened. No trajectories — a " +
+              "routing decision is made before the agent acts — so there is nothing " +
+              "here to size."
+            : "Each step sends the optimizer one prompt per minibatch: the skill, then " +
+              "the trajectories of the questions in it. These two decide how many " +
+              "prompts there are and how big each one gets."
+        }
       >
         {/* Separate from the training batch size in the engine since the
             beginning, and absent from this form since the beginning — which
@@ -1043,42 +1102,56 @@ function ReviewStep({ name, onName, skills, mode, split, defaults, hyper, onHype
             minibatch of 8 is up to four analyst calls rather than one. */}
         <Field
           label="Analyst batch size"
-          help={analystHelp(values.batch_size, values.minibatch_size)}
-          error={errors.minibatch_size}
+          help={
+            mode === "routing"
+              ? "Routing sends the whole step to one analyst. A description is a " +
+                "single line, so splitting the step would produce one complete " +
+                "rewrite of it per group and nothing downstream could see the " +
+                "questions behind them to choose between them."
+              : analystHelp(values.batch_size, values.minibatch_size)
+          }
+          error={mode === "routing" ? null : errors.minibatch_size}
         >
           <input
             type="number"
             min={HYPER_FIELDS.minibatch_size.min}
-            value={raw("minibatch_size")}
+            value={mode === "routing" ? (values.batch_size ?? "") : raw("minibatch_size")}
             onChange={set("minibatch_size")}
-            aria-invalid={errors.minibatch_size ? "true" : undefined}
+            disabled={mode === "routing"}
+            aria-invalid={
+              mode !== "routing" && errors.minibatch_size ? "true" : undefined
+            }
           />
         </Field>
-        <Field
-          label="Trajectory budget"
-          help={budgetHelp(values.reflect_budget_chars)}
-          error={errors.reflect_budget_chars}
-        >
-          <input
-            type="number"
-            min={HYPER_FIELDS.reflect_budget_chars.min}
-            step={10000}
-            value={raw("reflect_budget_chars")}
-            onChange={set("reflect_budget_chars")}
-            aria-invalid={errors.reflect_budget_chars ? "true" : undefined}
-          />
-        </Field>
-        <Banner tone="info" title="Leave the model room to answer">
-          This budget is <em>input</em>, and it is not the whole prompt: the
-          skill goes in front of it, and the analyst's reply can run to 16,000
-          tokens on top. The rule is the upper estimate above, plus the skill,
-          plus 16,000, under your optimizer model's context window. Going over
-          truncates nothing — the model refuses the call, and the step loses
-          that minibatch's gradient entirely.
-          {" "}Traces in Chinese or Japanese cost far more tokens per character
-          than this estimate assumes; treat the upper figure as a floor there,
-          or lower the budget.
-        </Banner>
+        {mode !== "routing" && (
+          <>
+          <Field
+            label="Trajectory budget"
+            help={budgetHelp(values.reflect_budget_chars)}
+            error={errors.reflect_budget_chars}
+          >
+            <input
+              type="number"
+              min={HYPER_FIELDS.reflect_budget_chars.min}
+              step={10000}
+              value={raw("reflect_budget_chars")}
+              onChange={set("reflect_budget_chars")}
+              aria-invalid={errors.reflect_budget_chars ? "true" : undefined}
+            />
+          </Field>
+          <Banner tone="info" title="Leave the model room to answer">
+            This budget is <em>input</em>, and it is not the whole prompt: the
+            skill goes in front of it, and the analyst's reply can run to 16,000
+            tokens on top. The rule is the upper estimate above, plus the skill,
+            plus 16,000, under your optimizer model's context window. Going over
+            truncates nothing — the model refuses the call, and the step loses
+            that minibatch's gradient entirely.
+            {" "}Traces in Chinese or Japanese cost far more tokens per character
+            than this estimate assumes; treat the upper figure as a floor there,
+            or lower the budget.
+          </Banner>
+          </>
+        )}
       </FormSection>
 
       {/* When the run stops before it has run out of steps.

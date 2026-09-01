@@ -840,6 +840,15 @@
 }
 .opt-stoprule-note { margin: var(--space-2) 0 0; font-size: var(--text-caption); color: var(--muted); line-height: 1.5; }
 
+/* An action inside a banner's sentence: "…consider a batch size of 80. Use 80."
+   Inline rather than a button under the text, because it is the same thought as
+   the sentence it ends and a block-level control would read as a second one. */
+.opt-inline-action {
+  padding: 0; border: 0; background: none; font: inherit; font-weight: var(--fw-medium);
+  color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.opt-inline-action:hover { text-decoration-thickness: 2px; }
+
 /* What will end this run. A row of chips beside the meter rather than another
    entry in `.opt-runfacts`, because these are not settings being reported —
    they are conditions being tested, and every one of them carries a count that

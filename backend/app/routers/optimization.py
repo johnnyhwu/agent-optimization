@@ -1214,6 +1214,7 @@ async def get_rollout_detail(
 
     return OptimizationRolloutDetail(
         run_id=run_id,
+        mode=run.mode,
         step_no=step_no,
         split=split,
         epoch_no=step.epoch_no,

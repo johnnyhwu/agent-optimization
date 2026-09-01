@@ -130,6 +130,62 @@ export function runWarnings(run, steps) {
     });
   }
 
+  // Routing only, and all three are the same shape as `workspace-drift` above:
+  // the run completes, the chart draws, and the number it draws does not mean
+  // what a reader takes it to mean.
+  if (run.mode === "routing") {
+    // The optimizer's own account of why editing a description cannot help.
+    // Quoted rather than paraphrased: it names the thing to go and change, and
+    // a summary of it would be this page guessing.
+    const blocked = list.filter((s) => (s.routing_blocked_by || "").trim());
+    if (blocked.length) {
+      const reasons = [...new Set(blocked.map((s) => s.routing_blocked_by.trim()))];
+      out.push({
+        id: "routing-blocked",
+        tone: "warning",
+        title: "The optimizer says the descriptions are not what is wrong",
+        body:
+          `On ${label(blocked)} it reported: “${reasons[0]}”` +
+          (reasons.length > 1 ? ` (and ${reasons.length - 1} other reason(s))` : "") +
+          ". Routing can only change which skill a question reaches; if something " +
+          "outside the descriptions is deciding that, no edit here will move the " +
+          "score and the steps will keep applying nothing.",
+      });
+    }
+
+    // Not "the prompts were not identical" — a moved timestamp is not a
+    // different agent, and the backend only records this when the variants
+    // differ too much to render as one.
+    const mixed = list.filter((s) => s.setup_divergence);
+    if (mixed.length) {
+      const worst = mixed[0].setup_divergence;
+      out.push({
+        id: "setup-divergence",
+        tone: "warning",
+        title: "The agent was not told the same thing on every question",
+        body:
+          `${label(mixed)} answered questions under ${worst.n_variants} materially ` +
+          `different system prompts (${worst.n_prompts} questions, the largest group ` +
+          `holding ${pct(worst.majority_share)}). The step scored them as one routing ` +
+          "accuracy and the optimizer read them as one batch, so both describe an " +
+          "average of two systems rather than either of them.",
+      });
+    }
+
+    if (run.config?.failure_only) {
+      out.push({
+        id: "routing-failure-only",
+        tone: "info",
+        title: "This run's “failures only” setting was ignored",
+        body:
+          "That setting withholds the correctly-routed questions from the " +
+          "optimizer. In routing they are the constraint that stops a description " +
+          "being narrowed until it wins nothing, so the run showed the optimizer " +
+          "both anyway.",
+      });
+    }
+  }
+
   return out;
 }
 
