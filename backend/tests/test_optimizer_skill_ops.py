@@ -634,3 +634,449 @@ def test_the_counts_never_exceed_what_the_edit_could_possibly_be():
         n_after = len(after.splitlines())
         assert added - removed == n_after - n_before, (before, after)
         assert added <= n_after and removed <= n_before, (before, after)
+
+
+# --- Recognising the frontmatter block --------------------------------------
+#
+# `_frontmatter_span` is the foundation four separate things stand on, and all
+# four fail *silently* when it answers "no frontmatter" about a file that has
+# one:
+#
+#   * the wizard marks the skill unavailable for routing, and `POST /runs`
+#     refuses it — the visible failure, and the least damaging;
+#   * `_mode_spans` freezes the **whole file** in routing mode, so a run that
+#     started anyway would have every edit discarded and draw a flat line;
+#   * `detector._markers` cannot separate body from frontmatter, so a menu
+#     listing this skill's description scores as the skill having been *loaded*
+#     — activation reads 100% before anything has been optimised;
+#   * `adapter.inject_probe_marker` would put the pre-flight marker above the
+#     opening `---`. That one already scans lines itself and is the reason this
+#     whole family of bugs was noticed.
+#
+# The cases below are ordinary files, not adversarial ones: a `SKILL.md` edited
+# on Windows, checked out with `core.autocrlf`, or saved by an editor that
+# writes a BOM. Each of them used to report no frontmatter at all.
+
+FM_BODY = "# Billing skill\nInvoices and balances.\n"
+
+
+def span_of(text: str):
+    return skillio.frontmatter_span(text)
+
+
+def test_frontmatter_is_recognised_with_unix_newlines():
+    text = FRONTMATTER + FM_BODY
+    assert span_of(text) == (0, len(FRONTMATTER))
+
+
+def test_frontmatter_is_recognised_with_windows_newlines():
+    """CRLF is not an edge case; it is what `core.autocrlf=true` checks out."""
+    text = (FRONTMATTER + FM_BODY).replace("\n", "\r\n")
+    span = span_of(text)
+    assert span is not None
+    assert text[span[0]:span[1]].startswith("---")
+    assert "description:" in text[span[0]:span[1]]
+    assert text[span[1]:].lstrip().startswith("# Billing skill"), "body starts after it"
+
+
+def test_frontmatter_is_recognised_behind_a_byte_order_mark():
+    """Editors write a BOM; it must not hide the `---` on the line behind it."""
+    text = "﻿" + FRONTMATTER + FM_BODY
+    span = span_of(text)
+    assert span is not None
+    assert "description:" in text[span[0]:span[1]]
+    assert text[span[1]:].startswith("# Billing skill")
+
+
+def test_a_blank_line_above_the_delimiter_is_still_not_frontmatter():
+    """The boundary of what "the same file" means, and it is worth stating.
+
+    CRLF and a BOM are tolerated above because the author cannot see them: the
+    same keystrokes produce either, depending on the editor and the checkout. A
+    blank first line is not that — it is a line the author put there, the file
+    no longer *opens* with `---`, and every frontmatter parser these skills are
+    written against reads it as prose. Tolerating it here would make this
+    platform disagree with the agent actually loading the file.
+    """
+    assert span_of("\n" + FRONTMATTER + FM_BODY) is None
+
+
+def test_frontmatter_delimiters_may_carry_trailing_whitespace():
+    text = "---  \nname: billing\ndescription: Invoices.\n---\t\n" + FM_BODY
+    span = span_of(text)
+    assert span is not None
+    assert text[span[1]:].startswith("# Billing skill")
+
+
+def test_frontmatter_closing_delimiter_at_end_of_file_still_counts():
+    """A file that is nothing but frontmatter, with no trailing newline."""
+    text = "---\nname: billing\ndescription: Invoices.\n---"
+    span = span_of(text)
+    assert span == (0, len(text))
+
+
+def test_an_unclosed_delimiter_is_not_frontmatter():
+    """The one case that must keep answering "no".
+
+    An opening `---` with nothing closing it is a horizontal rule or a truncated
+    file, not a YAML block. Treating it as one would let routing mode edit
+    whatever happened to follow.
+    """
+    assert span_of("---\nname: billing\n" + FM_BODY) is None
+
+
+def test_a_delimiter_that_is_not_at_the_top_is_not_frontmatter():
+    assert span_of(FM_BODY + "---\nname: billing\n---\n") is None
+
+
+def test_a_file_with_no_delimiters_has_no_frontmatter():
+    assert span_of(FM_BODY) is None
+
+
+def test_an_empty_file_has_no_frontmatter():
+    assert span_of("") is None
+
+
+def test_a_horizontal_rule_alone_is_not_frontmatter():
+    """`---` twice with prose between them is still not a YAML block start.
+
+    It is, in fact, indistinguishable from one by shape alone — which is why
+    the rule is positional: only a block that *opens the file* counts.
+    """
+    assert span_of("Some prose.\n\n---\n\nMore prose.\n\n---\n") is None
+
+
+def test_has_frontmatter_agrees_across_newline_dialects():
+    """The wizard's verdict must not depend on who last saved the file."""
+    for text in (FRONTMATTER + FM_BODY, (FRONTMATTER + FM_BODY).replace("\n", "\r\n")):
+        assert skillio.has_frontmatter({ENTRY: text}, SKILL) is True
+
+
+def test_routing_protects_the_body_of_a_crlf_skill_and_still_edits_the_description():
+    """The consequence that matters: a CRLF skill is optimisable at all.
+
+    Before, `_mode_spans` saw no frontmatter here and froze the entire file, so
+    every routing edit came back `skipped_protected_region` — a run that spent
+    an hour and changed nothing.
+    """
+    text = (FRONTMATTER + FM_BODY).replace("\n", "\r\n")
+    f = files(**{ENTRY: text})
+
+    out, reports = apply(
+        f,
+        [{
+            "op": "replace",
+            "path": ENTRY,
+            "target": "description: Invoices, balances, refunds and payment status.",
+            "content": "description: Customer invoices and outstanding balances.",
+        }],
+        protection=routing(f),
+    )
+    assert statuses(reports) == ["applied_replace"]
+    assert "description: Customer invoices" in out[ENTRY]
+    assert "# Billing skill" in out[ENTRY], "the body survives"
+
+    out2, reports2 = apply(
+        f,
+        [{"op": "replace", "path": ENTRY, "target": "Invoices and balances.", "content": "Nope."}],
+        protection=routing(f),
+    )
+    assert statuses(reports2) == ["skipped_protected_region"]
+    assert out2 == f
+
+
+def test_the_probe_marker_lands_below_the_frontmatter_of_a_crlf_skill():
+    """Two implementations of "where does the body start" must agree.
+
+    `inject_probe_marker` scans lines; `_frontmatter_span` returns offsets. They
+    are used on the same file — one to place the pre-flight marker, the other to
+    decide what routing may edit — and a disagreement puts the marker inside the
+    YAML block, handing the agent server a skill it cannot parse.
+    """
+    from app.optimizer.adapter import inject_probe_marker
+
+    text = (FRONTMATTER + FM_BODY).replace("\n", "\r\n")
+    marked = inject_probe_marker({ENTRY: text}, SKILL, "probe-deadbeef")[ENTRY]
+
+    span = span_of(text)
+    assert span is not None
+    front = text[span[0]:span[1]]
+    assert "probe-deadbeef" not in front
+    marker_at = marked.index("probe-deadbeef")
+    assert marker_at > marked.index("description:"), "below the frontmatter"
+    assert marker_at < marked.index("# Billing skill"), "above the body"
+
+
+# --- Routing across several skills at once ----------------------------------
+#
+# A routing run optimises the descriptions of several skills *together*, because
+# they compete: widening one narrows the others by implication, and a run that
+# could only touch one would either take the boundary from a description it was
+# not allowed to move, or move it and be scored against a workspace half of
+# which was frozen against it.
+#
+# What must not follow from that is a licence to edit anything else. Each target
+# gives up exactly its own description; every body, and every file of every
+# other skill, is as protected as it was with a single target.
+
+MULTI = {
+    "billing/SKILL.md": FRONTMATTER + BODY,
+    "billing/references/refunds.md": "# Refunds\n- Prorated.\n",
+    "reporting/SKILL.md": (
+        "---\nname: reporting\ndescription: Revenue reports.\n---\n# Reporting\n"
+        "1. Pick the period.\n"
+    ),
+    "shipping/SKILL.md": (
+        "---\nname: shipping\ndescription: Carriers.\n---\n# Shipping\n1. Track it.\n"
+    ),
+}
+
+
+def multi(f, *skills):
+    return skillio.build_protection(f, skill_dir=list(skills), mode="routing")
+
+
+def apply_multi(f, edits, *skills):
+    return apply_patch_with_report(
+        f, {"edits": edits}, skill_dir=list(skills), protection=multi(f, *skills)
+    )
+
+
+def test_each_target_can_have_its_own_description_edited():
+    out, reports = apply_multi(
+        MULTI,
+        [
+            {"op": "replace", "path": "billing/SKILL.md",
+             "target": "description: Invoices, balances, refunds and payment status.",
+             "content": "description: Invoices and balances only."},
+            {"op": "replace", "path": "reporting/SKILL.md",
+             "target": "description: Revenue reports.",
+             "content": "description: Revenue reports and period comparisons."},
+        ],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["applied_replace", "applied_replace"]
+    assert "Invoices and balances only." in out["billing/SKILL.md"]
+    assert "period comparisons" in out["reporting/SKILL.md"]
+
+
+def test_a_skill_that_is_not_a_target_cannot_be_written_to():
+    """The boundary of the licence. `shipping` is in the workspace so the agent
+    can choose it, which is not the same as the run being allowed to rewrite it.
+
+    Caught by the path check rather than the read-only list, which is the
+    stronger of the two: `path` is model output that becomes a key in the
+    override sent to the agent server, so "outside every directory this run was
+    given" is refused before anything looks at what the file is. Same verdict
+    the single-target case gives a sibling skill.
+    """
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "replace", "path": "shipping/SKILL.md",
+          "target": "description: Carriers.", "content": "description: Everything."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_invalid_path"]
+    assert out == MULTI
+
+
+def test_every_targets_body_is_still_frozen():
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "replace", "path": "reporting/SKILL.md",
+          "target": "1. Pick the period.", "content": "1. Guess."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_protected_region"]
+    assert out == MULTI
+
+
+def test_a_reference_file_of_a_target_is_still_read_only():
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "append", "path": "billing/references/refunds.md", "content": "- More."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_readonly_file"]
+
+
+def test_an_edit_naming_no_path_is_refused_when_there_are_several_targets():
+    """With one target, a missing `path` means "the skill" and is defaulted.
+
+    With several there is no such thing, and guessing one would silently write
+    another skill's description into this one. It is refused instead.
+    """
+    out, reports = apply_multi(
+        MULTI,
+        [{"op": "replace", "target": "description: Revenue reports.",
+          "content": "description: Anything."}],
+        "billing", "reporting",
+    )
+
+    assert statuses(reports) == ["skipped_invalid_path"]
+    assert out == MULTI
+
+
+def test_a_single_target_still_works_when_passed_as_a_bare_string():
+    """Every existing caller passes one skill name; none of them should change."""
+    f = files(**{ENTRY: FRONTMATTER + BODY})
+    out, reports = apply(
+        f,
+        [{"op": "replace", "path": ENTRY,
+          "target": "description: Invoices, balances, refunds and payment status.",
+          "content": "description: Just invoices."}],
+        protection=routing(f),
+    )
+
+    assert statuses(reports) == ["applied_replace"]
+    assert "Just invoices." in out[ENTRY]
+
+
+# --- Re-attaching a path the merge stage dropped ------------------------------
+#
+# The routing analyst prompts demand a `path` on every edit. The merge prompts
+# are upstream's and state a schema without one, so `aggregate.merge_patches` —
+# three LLM calls — emits edits that have lost it, and `rank_and_select` picks
+# by index and cannot put it back.
+#
+# With one target that was invisible: `entry_point` has a value and a path-less
+# edit defaults to it. With several there is nothing to default to, so every
+# merged edit is refused as `skipped_invalid_path`, the candidate comes back
+# byte-identical to the skill in force, and the step is recorded as one more
+# rejected candidate rather than as the pipeline losing the patch.
+#
+# It is intermittent, which is what makes it expensive to find: a lone patch
+# passes through `_hierarchical_merge` untouched, and the final merge call only
+# runs when both analysts proposed something. So the same run works on some
+# steps and silently no-ops on others.
+#
+# `reattach_paths` puts the path back from the one piece of evidence that
+# survives merge — the `target` text — and refuses to guess when that evidence
+# is not decisive.
+
+
+def reattach(f, edits, *skills):
+    return skillio.reattach_paths({"edits": edits}, f, multi(f, *skills))
+
+
+def test_a_merged_edit_with_no_path_is_reattached_by_its_target():
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [{"op": "replace", "target": "description: Revenue reports.",
+          "content": "description: Revenue reports and period comparisons."}],
+        "billing", "reporting",
+    )
+
+    assert patch["edits"][0]["path"] == "reporting/SKILL.md"
+    assert (placed, unplaced) == (1, 0)
+
+
+def test_a_target_that_appears_in_two_files_is_never_guessed():
+    """Ambiguity is the case that must not be resolved by picking one.
+
+    Writing one skill's description into another is worse than dropping the
+    edit: the run keeps going, the gate scores it, and the workspace now says
+    something no analyst proposed.
+    """
+    shared = dict(MULTI)
+    shared["billing/SKILL.md"] = shared["billing/SKILL.md"] + "Pick the period.\n"
+    patch, placed, unplaced = reattach(
+        shared,
+        [{"op": "replace", "target": "Pick the period.", "content": "Pick the quarter."}],
+        "billing", "reporting",
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 1)
+
+
+def test_a_target_that_matches_nothing_is_left_unplaced():
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [{"op": "replace", "target": "description: Nothing here.", "content": "x"}],
+        "billing", "reporting",
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 1)
+
+
+def test_a_blank_path_is_refused_rather_than_reattached():
+    """A blank path is a malformed edit, not an upstream-shaped one.
+
+    `_apply_edit_with_report` keeps those two apart on purpose — collapsing them
+    turns a typo into a silent write to SKILL.md — and re-attaching over a blank
+    would collapse them here instead, one stage earlier.
+    """
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [{"op": "replace", "path": "", "target": "description: Revenue reports.",
+          "content": "description: Anything."}],
+        "billing", "reporting",
+    )
+
+    assert patch["edits"][0]["path"] == ""
+    assert (placed, unplaced) == (0, 0)
+
+
+def test_an_append_has_no_target_to_be_placed_by():
+    patch, placed, unplaced = reattach(
+        MULTI, [{"op": "append", "content": "- A new rule."}], "billing", "reporting",
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 1)
+
+
+def test_a_single_target_is_left_to_the_appliers_own_default():
+    """One entry point still means "the skill document", and that path is tested
+    elsewhere. Re-attaching there would change a behaviour that is not broken."""
+    f = files(**{ENTRY: FRONTMATTER + BODY})
+    patch, placed, unplaced = skillio.reattach_paths(
+        {"edits": [{"op": "append", "content": "4. Cite the period."}]}, f, routing(f)
+    )
+
+    assert "path" not in patch["edits"][0]
+    assert (placed, unplaced) == (0, 0)
+
+
+def test_a_reattached_patch_moves_both_descriptions_at_once():
+    """The pass routing exists for: two competing descriptions, moved together,
+    from a merged patch that carries no paths at all."""
+    patch, placed, unplaced = reattach(
+        MULTI,
+        [
+            {"op": "replace",
+             "target": "description: Invoices, balances, refunds and payment status.",
+             "content": "description: Invoices and balances only."},
+            {"op": "replace", "target": "description: Revenue reports.",
+             "content": "description: Revenue reports and period comparisons."},
+        ],
+        "billing", "reporting",
+    )
+    out, reports = apply_patch_with_report(
+        MULTI, patch, skill_dir=["billing", "reporting"],
+        protection=multi(MULTI, "billing", "reporting"),
+    )
+
+    assert (placed, unplaced) == (2, 0)
+    assert statuses(reports) == ["applied_replace", "applied_replace"]
+    assert "Invoices and balances only." in out["billing/SKILL.md"]
+    assert "period comparisons" in out["reporting/SKILL.md"]
+
+
+def test_the_original_patch_is_not_mutated():
+    """`run_update_stage` records the ranked patch for the page; re-attaching in
+    place would make the stored patch disagree with what the ranking returned."""
+    original = {"edits": [{"op": "replace", "target": "description: Revenue reports.",
+                           "content": "x"}]}
+    patch, _, _ = skillio.reattach_paths(
+        original, MULTI, multi(MULTI, "billing", "reporting")
+    )
+
+    assert "path" not in original["edits"][0]
+    assert patch["edits"][0]["path"] == "reporting/SKILL.md"

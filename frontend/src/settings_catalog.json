@@ -187,6 +187,28 @@
     "endpoint_key": null
   },
   {
+    "key": "gate_metric",
+    "group": "optimization",
+    "kind": "text",
+    "label": "Gate score",
+    "help": "Which number decides whether a step's edit is kept: 'hard' counts a question only when it is completely right, 'soft' gives partial credit, 'mixed' weighs the two. Routing runs usually want soft or mixed \u2014 a strict set match over a few dozen questions can sit flat.",
+    "minimum": null,
+    "maximum": null,
+    "optional": false,
+    "endpoint_key": null
+  },
+  {
+    "key": "mixed_weight",
+    "group": "optimization",
+    "kind": "float",
+    "label": "Weight on partial credit",
+    "help": "Only used when the gate score is 'mixed'. 0 is hard alone, 1 is soft alone.",
+    "minimum": 0,
+    "maximum": 1,
+    "optional": false,
+    "endpoint_key": null
+  },
+  {
     "key": "slow_update",
     "group": "optimization",
     "kind": "bool",

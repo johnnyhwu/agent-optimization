@@ -70,18 +70,45 @@ def conversation_from_trace(trace: Trace | None) -> Trajectory:
 
 
 def analyst_item(row: ResultRow, *, trajectory: Trajectory, question: str,
-                 ground_truth: str) -> dict:
+                 ground_truth: str, mode: str = "isolated",
+                 gt_skills: Sequence[str] = ()) -> dict:
     """One rollout result in the shape the minibatch formatter expects.
 
     `hard` is what splits the batch into the failure analyst's group and the
-    success analyst's, so it comes from the judge's verdict rather than from the
-    score: a partially-correct answer is a failure to learn from, not a success
-    to reinforce.
+    success analyst's (`update._reflect`), so it has to be the thing the run is
+    optimising — otherwise the analysts are shown one definition of failure
+    while the gate enforces another, and the disagreement is silent.
+
+      * **isolated** optimises the body against the answers, so `hard` is the
+        judge's verdict rather than its score: a partially-correct answer is a
+        failure to learn from, not a success to reinforce.
+      * **routing** optimises the description against which skill was opened,
+        so `hard` is whether this question reached exactly the skills it was
+        tagged with. A question answered correctly *despite* opening the wrong
+        skill is a routing failure — sent to the success analyst it would be
+        presented under "These questions were answered correctly, so the routing
+        worked", which is the opposite of what happened. And a wrong answer that
+        routed correctly is a routing *success*: the body is at fault, a
+        description edit cannot fix it, and inviting one produces exactly the
+        narrowing the gate exists to refuse.
+
+    A routing question that could not be measured — no trajectory, or no tags —
+    keeps the judge's verdict. It has to land in some group, and the judge is
+    the only signal there is; `routing_scores` leaves it out of the score, so it
+    cannot move the gate either way.
 
     `fail_reason` is the judge's own comment — the same sentence the Evaluation
-    page shows under "Judge" — and it is labelled as the judge's in the prompt,
-    because an analyst told only "this failed" cannot tell a wrong answer from a
-    right one that was graded strictly.
+    page shows under "Judge" — in isolated mode, because an analyst told only
+    "this failed" cannot tell a wrong answer from one graded strictly. In
+    routing mode it says which skills were wanted and which were opened, which
+    is the whole of what went wrong.
+
+    `gt_skills` and `skills_read` also travel as fields of their own rather than
+    being left for the model to read out of the trajectory. The evidence for
+    them lives in tool results, and `trajectory.truncate_trajectory` cuts those
+    first when a minibatch is over budget — so on the long trajectories where a
+    routing failure is most likely to hide, the proof of it is the first thing
+    to go.
 
     The gold answer travels as `reference_text`, rendered under "Ground-truth
     Response". Showing it is deliberate and it is why the analyst prompts forbid
@@ -89,13 +116,33 @@ def analyst_item(row: ResultRow, *, trajectory: Trajectory, question: str,
     what right looked like, and the defence against memorisation is the held-out
     split plus the leak check on the diff, not withholding the evidence.
     """
+    answered_well = row.verdict == "correct"
+    wanted = sorted(gt_skills)
+    read = sorted(row.skills_read) if row.skills_read is not None else None
+
+    routed_well = None
+    if mode == "routing" and wanted and read is not None:
+        routed_well = set(read) == set(wanted)
+
+    if routed_well is None:
+        hard = 1.0 if answered_well else 0.0
+        fail_reason = (row.judge_comment or "") if not answered_well else ""
+    else:
+        hard = 1.0 if routed_well else 0.0
+        fail_reason = "" if routed_well else (
+            f"the question is tagged {', '.join(wanted) or '(nothing)'} but the agent "
+            f"read {', '.join(read) or 'no skill at all'}"
+        )
+
     return {
         "id": row.item_key,
-        "hard": 1.0 if row.verdict == "correct" else 0.0,
+        "hard": hard,
         "soft": float(row.judge_score or 0.0),
         "task_description": question,
         "reference_text": ground_truth,
-        "fail_reason": (row.judge_comment or "") if row.verdict != "correct" else "",
+        "fail_reason": fail_reason,
+        "gt_skills": wanted,
+        "skills_read": read,
         "n_turns": len(trajectory.turns),
         "agent_response": row.agent_response or "",
         "trajectory": trajectory,
@@ -109,6 +156,8 @@ def build_analyst_items(
     ground_truths: Mapping[str, str] | None = None,
     budget_chars: int = DEFAULT_REFLECT_BUDGET_CHARS,
     min_keep: int = DEFAULT_MIN_KEEP,
+    mode: str = "isolated",
+    gt_skills: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[list[dict], dict[str, list[dict]]]:
     """Every scored row with a trace, folded and cut to a fair share of one budget.
 
@@ -131,12 +180,18 @@ def build_analyst_items(
     """
     questions = questions or {}
     ground_truths = ground_truths or {}
+    gt_skills = gt_skills or {}
 
     usable = [row for row in rows if row.status == "done" and row.trace is not None]
     if not usable:
         return [], {}
 
-    folded = [build_trajectory(row.trace) for row in usable]
+    # The rollout already folded this trace and hung it on the row
+    # (`adapter.run_rollout`), so the common path costs nothing here. The
+    # fallback is not dead code: a row built from a trace alone — a replay, a
+    # resumed step, every test in `test_optimizer_trajectory.py` — has no
+    # trajectory to inherit, and folding is cheaper than requiring one.
+    folded = [row.trajectory or build_trajectory(row.trace) for row in usable]
     headers = [
         _header_chars(row, questions.get(row.item_key, ""), ground_truths.get(row.item_key, ""))
         for row in usable
@@ -173,6 +228,8 @@ def build_analyst_items(
                 trajectory=trimmed,
                 question=questions.get(row.item_key, ""),
                 ground_truth=ground_truths.get(row.item_key, ""),
+                mode=mode,
+                gt_skills=gt_skills.get(row.item_key, ()),
             )
         )
 

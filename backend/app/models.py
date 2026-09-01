@@ -344,7 +344,14 @@ class OptimizationRun(Base):
     # them), which analyst prompts run, what the gate additionally guards, and
     # which half of SKILL.md the optimizer may edit.
     mode: Mapped[str] = mapped_column(Text, nullable=False)
+    # The first target, and the only one for an isolated run. Kept as its own
+    # column because every screen, download name and log line reads it, and
+    # because every run created before routing could take several has one.
     skill_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Every skill this run may edit, `skill_name` included. Null on runs that
+    # predate multiple targets, which read as `[skill_name]` — so nothing has to
+    # be backfilled and an old run resumes unchanged.
+    target_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # Same split as `runs`: no response model reads `secrets`, which is what
     # makes "credentials never leave the server" structural rather than a habit.
@@ -449,6 +456,12 @@ class OptimizationItem(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     ground_truth_response: Mapped[str] = mapped_column(Text, nullable=False)
     ground_truth_reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    # The skill tags this question carried when the run started — what routing
+    # accuracy scores the agent's choice against. Snapshotted for the same
+    # reason as the question itself, and nullable because every run created
+    # before routing accuracy existed has none: null is "this run did not
+    # record them", which is not the same claim as the empty list.
+    ground_truth_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     # What the picker showed when this run was configured, frozen. The live
@@ -605,8 +618,20 @@ class OptimizationRollout(Base):
     n_agent_error: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     n_judge_error: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
+    # The judge's verdict on the answers. What an isolated run is gated on, and
+    # what a routing run still measures and plots without gating on it.
     hard: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     soft: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    # Whether the agent reached for the skills the question was tagged with:
+    # `routing_hard` is the strict set match, `routing_soft` the F1 over the two
+    # sets. What a routing run is gated on, and meaningful only there — an
+    # isolated run over tagged questions writes real numbers here, because the
+    # scoring path is deliberately one path in both modes, and nothing reads
+    # them. Null when nothing could be measured and on every run that predates
+    # the columns — never zero, which would read as "it routed everything
+    # wrong".
+    routing_hard: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    routing_soft: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     activation_rate: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     n_activated: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 

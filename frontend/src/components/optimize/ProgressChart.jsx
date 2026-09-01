@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Badge from "../ui/Badge.jsx";
 import { chartModel } from "../../optimize_chart.js";
 import { gateLabel } from "../../optimize_gate_label.js";
+import { accuracyLabel } from "../../optimize_chart.js";
 
 // The run, as a picture. Hand-written SVG: this repo has no chart library, no
 // router and no state library, and a dependency whose whole job is to draw
@@ -76,6 +77,9 @@ const SERIES = [
 
 export default function ProgressChart({
   steps, totalSteps, bestStep, metric, onPick, pinned,
+  // Which accuracy this run is gated on. It decides both the line drawn and
+  // the axis title, so the two cannot disagree about what is on screen.
+  mode = "isolated",
   yMode = "fit", show, onToggleSeries,
 }) {
   const svgRef = useRef(null);
@@ -99,9 +103,9 @@ export default function ProgressChart({
 
   const model = useMemo(
     () => chartModel(steps, {
-      width: panelWidth, height: HEIGHT, totalSteps, bestStep, metric, yMode, show,
+      width: panelWidth, height: HEIGHT, totalSteps, bestStep, metric, yMode, show, mode,
     }),
-    [steps, panelWidth, totalSteps, bestStep, metric, yMode, show],
+    [steps, panelWidth, totalSteps, bestStep, metric, yMode, show, mode],
   );
 
   // Keep the pinned step in view when it moves under the keyboard. Only when it
@@ -193,7 +197,8 @@ export default function ProgressChart({
           role="img"
           tabIndex={0}
           aria-label={
-            `Accuracy by step. ${steps.length} steps measured` +
+            `${accuracyLabel(mode, { legacy: model.legacyMetric })} by step.` +
+            ` ${steps.length} steps measured` +
             (bestStep != null ? `, best at step ${bestStep}.` : ".") +
             " Use the left and right arrow keys to pin a step." +
             " The table below carries the same numbers."
@@ -285,7 +290,8 @@ export default function ProgressChart({
             textAnchor="middle"
             transform={`translate(13, ${model.plot.top + model.plot.height / 2}) rotate(-90)`}
           >
-            Accuracy{model.zoomed ? " (zoomed)" : ""}
+            {accuracyLabel(mode, { legacy: model.legacyMetric })}
+            {model.zoomed ? " (zoomed)" : ""}
           </text>
           <text
             className="opt-chart-axis"

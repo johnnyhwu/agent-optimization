@@ -27,7 +27,7 @@ them. The frontmatter is a head region and is a veto, never an anchor.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from skillopt.types import Edit as EditType, Patch as PatchType
@@ -60,34 +60,92 @@ class Protection:
     regions above are protected unconditionally and are not described here; this
     only carries the parts that depend on the mode.
 
-    `protect` is resolved against `entry_point` only:
+    `protect` is resolved against the entry points only:
       * ``"frontmatter"`` — isolated mode. The body is optimised; the
         description cannot be validated by the gate when only one skill is sent,
         so it is frozen.
       * ``"body"`` — routing mode. The description is optimised; the body is
         frozen so a routing run cannot quietly become a body-optimising one.
       * ``"none"`` — no mode-dependent protection (upstream's behaviour).
+
+    `entry_points` is a set because a routing run optimises the descriptions of
+    several skills together — they compete, so widening one narrows the others
+    by implication, and a run allowed to move only one boundary would be scored
+    against a workspace half of which was frozen against it. What does not
+    follow is a wider licence: each target gives up its own description and
+    nothing else.
     """
 
-    entry_point: str
+    entry_points: frozenset[str] = field(default_factory=frozenset)
     protect: str = "none"
     readonly: frozenset[str] = field(default_factory=frozenset)
     allow_append: bool = True
+
+    @property
+    def entry_point(self) -> str | None:
+        """The single entry point, for the callers that can only have one.
+
+        `None` when there are several: "the skill document" has no referent
+        then, and every use of this is a place that must say which one.
+        """
+        return next(iter(self.entry_points)) if len(self.entry_points) == 1 else None
 
 
 def _frontmatter_span(text: str) -> tuple[int, int] | None:
     """`(start, end)` of the leading YAML frontmatter block, or None.
 
-    Duplicated deliberately from `app.optimizer.skillio` rather than imported:
-    this package must not depend on ours, so the fork stays a leaf.
+    The single implementation: `app.optimizer.skillio.frontmatter_span`
+    delegates here, so the dependency runs ours -> vendored and the fork stays a
+    leaf.
+
+    Scanned line by line rather than matched against `"---\\n"`, because that
+    literal recognises only one *encoding* of a file authors write identically,
+    and each miss is silent. A `SKILL.md` checked out with `core.autocrlf` opens
+    `---\\r\\n`; one saved by an editor that writes a BOM opens `\\ufeff---`.
+    Both have a description, both used to report having none — which marks the
+    skill unavailable for routing, freezes the whole file against routing edits
+    (`_mode_spans`), and lets the detector count a menu listing the description
+    as proof the skill was *loaded*.
+
+    Only differences the author cannot see are tolerated. A blank line **above**
+    the opening delimiter is not one of them: the first line is then empty
+    rather than `---`, which is a different document, and every frontmatter
+    parser this platform's skills are written against reads it that way too. So
+    the rules are:
+
+      * a delimiter is a line whose stripped text is exactly ``---``, so CRLF
+        and trailing whitespace are the same delimiter as a bare one;
+      * a leading BOM is skipped — it is a byte, not a line;
+      * the block must **open the file**. Anything above it, blank or prose,
+        makes a later ``---`` a horizontal rule; an opening delimiter with
+        nothing closing it is a rule or a truncated file. Both answer None,
+        because reading either as frontmatter would hand routing mode a licence
+        to edit the body.
+
+    Offsets are returned into the *original* string: callers slice `text` with
+    them (`_mode_spans`, `detector._markers`), so any skipping done here must
+    not shift what the numbers mean.
     """
-    if not text.startswith("---\n"):
+    if not text:
         return None
-    close = text.find("\n---\n", 3)
-    if close != -1:
-        return (0, close + len("\n---\n"))
-    if text.endswith("\n---"):
-        return (0, len(text))
+
+    lines = text.split("\n")
+
+    # The opening delimiter is the first line, allowing for a BOM in front of it.
+    if lines[0].lstrip("﻿").rstrip() != "---":
+        return None
+
+    for index in range(1, len(lines)):
+        if lines[index].rstrip() != "---":
+            continue
+        # Character offset of the end of this line, plus its newline when the
+        # file has one there. `+ 1` per line consumed is the separator `split`
+        # removed; the final `+ 1` is the newline after the closing delimiter,
+        # which a file ending at the delimiter does not have.
+        end = sum(len(lines[i]) + 1 for i in range(index)) + len(lines[index])
+        return (0, end + 1 if index + 1 < len(lines) else end)
+
+    # Opened and never closed: a horizontal rule, or a file cut short.
     return None
 
 
@@ -105,7 +163,7 @@ def _marker_spans(text: str) -> list[tuple[int, int]]:
 
 def _mode_spans(text: str, path: str, protection: Protection) -> list[tuple[int, int]]:
     """The mode-dependent protected ranges. Empty for every non-entry-point file."""
-    if path != protection.entry_point or protection.protect == "none":
+    if path not in protection.entry_points or protection.protect == "none":
         return []
     front = _frontmatter_span(text)
     if protection.protect == "frontmatter":
@@ -176,8 +234,14 @@ def _edit_fields(edit: EditType | dict) -> tuple[str, str, str]:
     return op, content, target
 
 
-def _normalise_path(raw: str, skill_dir: str) -> str | None:
-    """The path this edit may write to, or None if it escapes the skill.
+def _normalise_path(raw: str, skill_dir: str | Sequence[str]) -> str | None:
+    """The path this edit may write to, or None if it escapes every skill.
+
+    `skill_dir` is one directory or several: a routing run optimises a set of
+    skills together, and an edit is in bounds when it names a file inside any
+    one of them. It is still bounded — a path outside all of them is refused
+    exactly as before, which is what keeps LLM output from authoring a write
+    outside the directories this run was given.
 
     Kept here rather than imported from `app.optimizer.skillio` so the vendored
     package has no dependency on ours; `skillio.validate_skill_path` delegates
@@ -196,10 +260,12 @@ def _normalise_path(raw: str, skill_dir: str) -> str | None:
     normalised = posixpath.normpath(candidate)
     if normalised in (".", "..") or normalised.startswith("../"):
         return None
-    prefix = f"{skill_dir}/"
-    if not normalised.startswith(prefix) or normalised == prefix:
-        return None
-    return normalised
+    dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
+    for directory in dirs:
+        prefix = f"{directory}/"
+        if normalised.startswith(prefix) and normalised != prefix:
+            return normalised
+    return None
 
 
 def _apply_edit_with_report(
@@ -215,6 +281,11 @@ def _apply_edit_with_report(
     # skill document", which here is the entry point. An edit with a *blank*
     # path is a malformed one and is rejected — the two must not collapse into
     # the same case, or a typo becomes a silent write to SKILL.md.
+    #
+    # With several targets there is no "the skill document" to default to, and
+    # guessing one would write one skill's description into another. The edit is
+    # refused instead: `entry_point` is None there, which falls through to the
+    # invalid-path branch below.
     defaulted = raw_path is None
     path = protection.entry_point if defaulted else _normalise_path(raw_path, skill_dir)
 
@@ -250,7 +321,7 @@ def _apply_edit_with_report(
         # An emptied entry point is a deleted skill by another name: the agent
         # would be sent a skill with no instructions and every later step would
         # optimise a blank file.
-        if path == protection.entry_point and not new_text.strip():
+        if path in protection.entry_points and not new_text.strip():
             report["status"] = "skipped_would_empty_entry_point"
             return files, report
         report["status"] = status

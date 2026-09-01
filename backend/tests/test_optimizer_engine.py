@@ -235,7 +235,11 @@ def install_update(monkeypatch, *, edits_line="2. Mention the period.", applied=
 
     def fake_update(*, files, skill_dir, mode, items, client, edit_budget, **kwargs):
         candidate = dict(files)
-        entry = f"{skill_dir}/SKILL.md"
+        # `skill_dir` is one directory or several — a routing run optimising
+        # competing descriptions passes the whole set. The first is the run's
+        # primary target, which is what these tests assert against.
+        first = skill_dir if isinstance(skill_dir, str) else list(skill_dir)[0]
+        entry = f"{first}/SKILL.md"
         candidate[entry] = candidate.get(entry, "") + edits_line + "\n"
         return UpdateOutcome(
             files=candidate,
@@ -269,12 +273,22 @@ def install_noop_update(monkeypatch):
     monkeypatch.setattr(engine, "run_update_stage", fake_update)
 
 
-def install_preflight(monkeypatch, *, activated=True):
+def install_preflight(monkeypatch, *, activated=True, verified=True):
+    """A pre-flight that clears, unless a test asks for one that does not.
+
+    `verified` defaults to True because that is what a working agent produces
+    and what every test here is otherwise about: the pre-flight now stops any
+    run that has not *seen* the agent read the copy it was sent, so a helper
+    that left it unset would fail every run in this file for a reason none of
+    them are testing.
+    """
+
     async def fake_probe(*args, **kwargs):
         row = ResultRow(item_key="probe", correlation_id="p", status="done")
         row.activated = activated
-        row.detector_hit = "tool_path" if activated else "none"
+        row.detector_hit = "tool" if activated else "none"
         row.skills_read = ["billing"] if activated else []
+        row.override_verified = verified
         return [row]
 
     monkeypatch.setattr(engine, "probe_activation", fake_probe)
@@ -914,50 +928,35 @@ async def test_a_resumed_run_keeps_counting_refusals_from_before_the_restart(mon
 
 
 @pytest.mark.asyncio
-async def test_routing_refuses_to_start_when_the_skill_cannot_be_seen(monkeypatch):
-    """A routing run with no detector signal cannot measure its own outcome.
+@pytest.mark.parametrize("mode", ["isolated", "routing"])
+async def test_a_run_refuses_to_start_when_the_agent_cannot_be_seen(monkeypatch, mode):
+    """One rule for both modes, and for isolated that is a change.
 
-    Its gate compares activation rates. If nothing can observe activation, every
-    comparison is against `None` and the run degenerates into an accuracy-only
-    run that is *also* forbidden from editing the body — an hour spent, nothing
-    learned. Better to say so in the first ten seconds.
+    Isolated used to carry on here. Its gate was judge accuracy, which is
+    measurable whether or not the agent announces what it read, so a silent
+    detector cost it one column in the UI and nothing else — and refusing would
+    have locked out every agent whose traces did not name skill file paths.
+
+    What that reasoning left out is that the same silence also hides whether the
+    candidate reached the agent at all. Such a run can spend an hour measuring
+    the skill already deployed on the agent, and report the resulting flat line
+    as a finding. The column was worth losing; the measurement is not.
+
+    So the pre-flight now asks one question in both modes — did we *see* the
+    agent read the copy we sent — and a run that cannot answer it stops before
+    it buys anything. `tests/test_optimizer_preflight_override.py` holds the
+    detail of what counts as an answer.
     """
-    store = RecordingStore(make_spec(mode="routing"), make_items(4), make_items(4, "val"))
+    store = RecordingStore(make_spec(mode=mode), make_items(4), make_items(4, "val"))
     Scores({}).install(monkeypatch, store)
-    install_preflight(monkeypatch, activated=False)
+    install_preflight(monkeypatch, activated=False, verified=None)
     install_update(monkeypatch)
 
     status, events = await run(store, monkeypatch)
 
     assert status == "failed"
-    assert not store.steps
-    preflight = next(e for e in events if e["type"] == "preflight")
-    assert preflight["ok"] is False
-
-
-@pytest.mark.asyncio
-async def test_isolated_warns_about_a_silent_detector_and_carries_on(monkeypatch):
-    """Isolated mode does not need the detector to reach a verdict.
-
-    Its gate is accuracy, and accuracy is measurable whether or not the agent
-    announces which file it read. Aborting here would block the common case —
-    an agent whose traces do not name skill paths — from using the feature at
-    all, so the honest move is to say the activation column will read 'unknown'.
-    """
-    store = RecordingStore(make_spec(mode="isolated", total_steps=1, steps_per_epoch=1),
-                           make_items(2), make_items(2, "val"))
-    Scores({(0, "val"): (2, 1), (1, "train"): (2, 1), (1, "val"): (2, 2)}).install(
-        monkeypatch, store
-    )
-    install_preflight(monkeypatch, activated=False)
-    install_update(monkeypatch)
-
-    status, events = await run(store, monkeypatch)
-
-    preflight = next(e for e in events if e["type"] == "preflight")
-    assert preflight["ok"] is False
-    assert status == "completed"
-    assert store.steps
+    assert not store.steps, "nothing was bought"
+    assert next(e for e in events if e["type"] == "preflight")["ok"] is False
 
 
 def _detector_of(store):
@@ -966,21 +965,20 @@ def _detector_of(store):
 
 
 @pytest.mark.asyncio
-async def test_a_successful_probe_makes_the_detector_trusted(monkeypatch):
-    """The whole point of the probe, and for a long time the one thing it skipped.
+async def test_the_probe_records_what_it_found_for_a_resumed_run(monkeypatch):
+    """The probe is bought once, so what it found has to outlive this process.
 
-    `detect_activation` only answers "no" when the caller has established that a
-    detector *would* have fired against this agent; otherwise silence is
-    `None` — unknown — and `score_rollout` leaves unknowns out of the fraction
-    instead of averaging them in as zeros. Both halves are deliberate, and
-    together they are only correct if something ever flips the flag.
+    It runs on a fresh start only — re-probing on every restart would bill an
+    agent call per restart and could abort a half-finished routing run over one
+    transient trace failure — so a run resumed after a backend restart reads the
+    verdict back rather than establishing it again.
 
-    Nothing did. The probe proved the detector works, wrote `preflight.ok` for
-    the UI, and left `detectable` at its default, so every rollout treated "the
-    agent read nothing" as "we could not tell". A question that called no tool at
-    all fell out of the denominator, and nine questions reading the skill beside
-    one that ignored it reported 100% — the one number that had to be believable,
-    quietly excluding the case it exists to catch.
+    There used to be a `detectable` flag here as well, and it was the thing that
+    decided whether a later "nothing was seen" meant *no* or *unknown*. It is
+    gone: the detector now answers `False` for a trajectory that landed carrying
+    no body text and `None` only when nothing landed at all, which is sound
+    because a run whose agent cannot be seen into does not get past the
+    pre-flight at all.
     """
     store = RecordingStore(make_spec(total_steps=1, steps_per_epoch=1),
                            make_items(2), make_items(2, "val"))
@@ -992,9 +990,33 @@ async def test_a_successful_probe_makes_the_detector_trusted(monkeypatch):
 
     await run(store, monkeypatch)
 
-    assert _detector_of(store)["detectable"] is True
-    # And in memory, which is what the steps this process goes on to run read.
-    assert store.spec.detector["detectable"] is True
+    preflight = _detector_of(store)["preflight"]
+    assert preflight["ok"] is True
+    assert "detectable" not in _detector_of(store)
+
+
+@pytest.mark.asyncio
+async def test_a_detector_key_from_an_older_run_is_carried_not_rejected(monkeypatch):
+    """A run created before this shape existed must still resume.
+
+    `detector` is a JSONB column holding whatever the run was created with, and
+    rows in the wild carry `detectable` and `path_patterns` — settings nothing
+    reads any more. Stripping them would be a migration; failing on them would
+    strand every in-flight run at the moment this deploys.
+    """
+    spec = make_spec(total_steps=1, steps_per_epoch=1)
+    spec.detector.update({"detectable": True, "path_patterns": [r"skills/([a-z]+)/"]})
+    store = RecordingStore(spec, make_items(2), make_items(2, "val"))
+    Scores({(0, "val"): (2, 1), (1, "train"): (2, 1), (1, "val"): (2, 2)}).install(
+        monkeypatch, store
+    )
+    install_preflight(monkeypatch, activated=True)
+    install_update(monkeypatch)
+
+    status, _ = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert _detector_of(store)["path_patterns"] == [r"skills/([a-z]+)/"]
 
 
 @pytest.mark.asyncio
@@ -1843,3 +1865,136 @@ async def test_the_boundary_waits_for_the_end_of_the_epoch(monkeypatch):
     await _run_with_optimizer(store, monkeypatch, optimizer)
 
     assert optimizer.stages.count("slow_update") == 2
+
+
+# --- A patch the pipeline lost is not a candidate the gate refused ------------
+#
+# A routing run is the only way to get here: it is the mode that can carry
+# several targets, and several targets is what removes the entry point a
+# path-less edit used to default to.
+
+
+def routing_items(n, split="train", skills=("billing",)):
+    return [
+        Item(item_key=f"set:{split}_{i}", question=f"q{i}", ground_truth_response="gt",
+             ground_truth_reasoning="r", ordinal=i, gt_skills=tuple(skills))
+        for i in range(n)
+    ]
+
+
+def install_routing_rollout(monkeypatch, *, read=("billing",)):
+    """Every question answered, traced, and routed to `read`.
+
+    Routing accuracy therefore sits at a constant, which is what these tests
+    want: the candidate cannot win on the score, so whatever verdict the step
+    records is the one the code under test chose rather than a measurement.
+    """
+
+    async def fake_rollout(items, *, skill_files, mode, skill_name, seams, config,
+                           **kwargs):
+        rows = []
+        for i, item in enumerate(items):
+            row = ResultRow(item_key=item.item_key, correlation_id=f"c{i}", status="done")
+            row.verdict = "correct"
+            row.judge_score = 1.0
+            row.agent_latency_ms = 100 + i
+            row.activated = True
+            row.skills_read = list(read)
+            rows.append(row)
+        return rows
+
+    monkeypatch.setattr(engine, "run_rollout", fake_rollout)
+
+
+def routing_store(**overrides):
+    spec = make_spec(
+        mode="routing", total_steps=1, steps_per_epoch=1,
+        target_skills=["billing", "reporting"], **overrides,
+    )
+    return RecordingStore(spec, routing_items(2), routing_items(2, "val"))
+
+
+@pytest.mark.asyncio
+async def test_a_step_whose_every_edit_lost_its_path_is_not_recorded_as_a_gate_verdict(
+    monkeypatch,
+):
+    """`skipped_invalid_path` for the whole patch is a bug, not a decision.
+
+    The merge prompts are upstream's and carry no `path`, so a multi-target
+    routing step can come back with edits that name no file. `reattach_paths`
+    places what it can; what is left cannot be applied, the candidate is
+    byte-identical to the skill in force, and the score cache then answers with
+    the baseline's own number — so the gate sees a tie and rejects.
+
+    Recorded as `rejected · routing`, which reads as "the descriptions did not
+    help". It is not: nothing was tried. The run would spend its whole budget
+    drawing a flat line with nothing on screen naming the cause.
+    """
+    reports = [
+        {"index": 1, "op": "replace", "path": "", "path_defaulted": True,
+         "target": "description: Invoices.", "content_preview": "…",
+         "status": "skipped_invalid_path"},
+        {"index": 2, "op": "replace", "path": "", "path_defaulted": True,
+         "target": "description: Reports.", "content_preview": "…",
+         "status": "skipped_invalid_path"},
+    ]
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        return UpdateOutcome(
+            files=dict(files), patch={"reasoning": "stubbed", "edits": []},
+            reports=reports, minibatches=[], n_edits_merged=2, n_edits_ranked=2,
+            n_edits_applied=0, n_edits_skipped=2, n_edits_unplaced=2,
+            edit_summary="nothing could be placed", tokens={},
+        )
+
+    store = routing_store()
+    install_routing_rollout(monkeypatch)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    status, events = await run(store, monkeypatch)
+
+    assert status == "completed"
+    assert store.step(1)["gate_action"] == "reject"
+    assert store.step(1)["gate_reject_reason"] == "edits_unattributable"
+    # The edit reports are still stored: they are how anyone sees which stage
+    # lost the patch.
+    assert store.step(1)["edit_reports"] == reports
+    gate_events = [e for e in events if e.get("type") == "gate_done"]
+    assert gate_events and gate_events[-1]["reject_reason"] == "edits_unattributable"
+
+
+@pytest.mark.asyncio
+async def test_a_step_that_placed_some_of_its_edits_is_gated_normally(monkeypatch):
+    """The refusal is for a patch that landed nowhere at all.
+
+    One edit that could not be placed beside one that could is an ordinary
+    partial patch — there is a real candidate, so it is measured and gated like
+    any other.
+    """
+    reports = [
+        {"index": 1, "op": "replace", "path": "billing/SKILL.md", "path_defaulted": False,
+         "target": "x", "content_preview": "…", "status": "applied_replace"},
+        {"index": 2, "op": "replace", "path": "", "path_defaulted": True,
+         "target": "y", "content_preview": "…", "status": "skipped_invalid_path"},
+    ]
+
+    def fake_update(*, files, skill_dir, **kwargs):
+        candidate = dict(files)
+        entry = "billing/SKILL.md"
+        candidate[entry] = candidate.get(entry, "") + "Mention the period.\n"
+        return UpdateOutcome(
+            files=candidate, patch={"reasoning": "stubbed", "edits": []},
+            reports=reports, minibatches=[], n_edits_merged=2, n_edits_ranked=2,
+            n_edits_applied=1, n_edits_skipped=1, n_edits_unplaced=1,
+            edit_summary="one of two landed", tokens={},
+        )
+
+    store = routing_store()
+    install_routing_rollout(monkeypatch)
+    install_preflight(monkeypatch)
+    monkeypatch.setattr(engine, "run_update_stage", fake_update)
+
+    await run(store, monkeypatch)
+
+    assert store.step(1)["gate_reject_reason"] != "edits_unattributable"

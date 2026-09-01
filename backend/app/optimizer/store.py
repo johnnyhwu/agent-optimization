@@ -48,6 +48,11 @@ class Item:
     question_pk: uuid.UUID | None = None
     source_eval_set_id: uuid.UUID | None = None
     ordinal: int = 0
+    # The skills this question should have routed to, as the run pinned them.
+    # Empty for a question with no tags, and for every run created before
+    # routing accuracy existed — both of which score as unmeasurable rather
+    # than as wrong.
+    gt_skills: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,8 @@ class RunSpec:
 
     id: uuid.UUID
     mode: str
+    # The first target. Every screen, download name and log line reads this, and
+    # it is what an isolated run optimises.
     skill_name: str
     config: dict
     secrets: dict
@@ -69,6 +76,10 @@ class RunSpec:
     # The agent config version pinned when the run was created. Each step
     # records what it actually saw, so a mid-run deploy is visible.
     workspace_version: str | None = None
+    # Every skill this run may edit, `skill_name` first. One entry unless a
+    # routing run is moving competing descriptions together; empty on a spec
+    # built before that existed, which `_targets_of` reads as `[skill_name]`.
+    target_skills: tuple[str, ...] = ()
 
 
 @dataclass
@@ -106,6 +117,14 @@ class ResultRow:
     # for data we already have. Detail views read the trace live, the same way
     # the evaluation pages do, so nothing depends on this outliving the step.
     trace: Any = None
+    # The same trace folded into one conversation. Built once during the
+    # rollout because both the detector and the reflect stage need it —
+    # `adapter.run_rollout` writes it, `detector.detect_activation` reads it
+    # there and `reflection.build_analyst_items` reads it again minutes later —
+    # and folding a fifteen-span trace twice per question is pure waste. In
+    # memory only, like `trace` above, and for the same reason. Optional: a row
+    # rebuilt from a trace alone still works, the fold just happens later.
+    trajectory: Any = None
 
 
 @dataclass
@@ -125,6 +144,12 @@ class RolloutSummary:
     n_judge_error: int = 0
     hard: float | None = None
     soft: float | None = None
+    # How well the agent routed: `routing_hard` is the strict set match against
+    # the questions' tags, `routing_soft` the F1. None on an isolated rollout,
+    # which is not measuring a choice, and None when nothing was measurable —
+    # never 0.0, which would read as "it routed everything wrong".
+    routing_hard: float | None = None
+    routing_soft: float | None = None
     activation_rate: float | None = None
     n_activated: int = 0
     latency_min_ms: int | None = None
@@ -230,6 +255,7 @@ class DbOptimizationStore:
             id=run.id,
             mode=run.mode,
             skill_name=run.skill_name,
+            target_skills=tuple(run.target_skills or [run.skill_name]),
             config=run.config or {},
             secrets=run.secrets or {},
             initial_skill=dict(run.initial_skill or {}),
@@ -259,6 +285,7 @@ class DbOptimizationStore:
                 question_pk=row.question_pk,
                 source_eval_set_id=row.source_eval_set_id,
                 ordinal=row.ordinal,
+                gt_skills=tuple(row.ground_truth_skills or ()),
             )
             for row in rows
         ]
@@ -288,6 +315,15 @@ class DbOptimizationStore:
         The validation scores come from the rollouts rather than from
         `steps.current_score`, because a rejected step's own score is not on the
         step row — the gate leaves `current_score` at the value that survived.
+
+        **Which pair of columns those are is the run's mode.** A routing run is
+        gated on routing accuracy and an isolated one on the judge's, and the
+        cache exists to let a step skip a validation rollout when its candidate
+        is byte-identical to one already measured. Seeded from the wrong family,
+        a resumed routing run would compare a cached judge score against a
+        routing `current_score` — two different measurements on one axis — and
+        could pin `best_score` at a number no candidate can reach, then hand out
+        that candidate as the run's best.
         """
         steps = (
             await self.session.scalars(
@@ -320,6 +356,9 @@ class DbOptimizationStore:
             ).all()
         }
 
+        run = await self.session.get(OptimizationRun, run_id)
+        routing = bool(run and run.mode == "routing")
+
         initial = files_by_step.get((0, "initial"), {})
         state = ResumeState(
             last_step_no=steps[-1].step_no,
@@ -332,10 +371,19 @@ class DbOptimizationStore:
             candidate = files_by_step.get((step.step_no, "candidate"))
             rollout = val_scores.get(step.id)
             if step.candidate_hash and rollout is not None:
-                state.score_cache[step.candidate_hash] = (
-                    float(rollout.hard or 0.0), float(rollout.soft or 0.0),
-                    None if rollout.activation_rate is None else float(rollout.activation_rate),
-                )
+                hard = rollout.routing_hard if routing else rollout.hard
+                soft = rollout.routing_soft if routing else rollout.soft
+                # A rollout that produced no gating score is not a zero — it is
+                # a step that was never judged (its split was refused, or
+                # nothing in it could be scored). Caching 0.0 for it would have
+                # a resumed run treat the candidate as measured and terrible
+                # instead of measuring it.
+                if hard is not None:
+                    state.score_cache[step.candidate_hash] = (
+                        float(hard), float(soft or 0.0),
+                        None if rollout.activation_rate is None
+                        else float(rollout.activation_rate),
+                    )
             if step.step_no == 0:
                 state.current_score = float(step.current_score or 0.0)
                 state.best_score = float(step.best_score or 0.0)
@@ -394,6 +442,8 @@ class DbOptimizationStore:
             n_judge_error=summary.n_judge_error,
             hard=summary.hard,
             soft=summary.soft,
+            routing_hard=summary.routing_hard,
+            routing_soft=summary.routing_soft,
             activation_rate=summary.activation_rate,
             n_activated=summary.n_activated,
             latency_min_ms=summary.latency_min_ms,

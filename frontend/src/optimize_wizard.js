@@ -104,11 +104,109 @@ export function skillStatus(check, mode) {
 // as long as the slowest request takes. Selecting the first immediately and
 // moving off it if it turns out to be ineligible is the behaviour that reads as
 // "already filled in" rather than "still loading".
-export function defaultSkill(groups, checks, mode) {
+export function defaultSkills(groups, checks, mode) {
   const names = (groups || []).map((g) => g.skill_name);
-  if (!names.length) return null;
-  const usable = names.find((name) => skillStatus(checkFor(checks, name), mode).state === "ready");
-  return usable ?? names[0];
+  if (!names.length) return [];
+
+  const usable = names.filter(
+    (name) => skillStatus(checkFor(checks, name), mode).state === "ready",
+  );
+
+  // Routing optimises the descriptions of several skills together, because they
+  // compete: widening one narrows the others by implication, so a run permitted
+  // to move a single boundary is scored against a workspace that was frozen
+  // against it. Selecting all of them is the default that matches the
+  // measurement. Isolated sends one skill to the agent and edits its body, so
+  // two targets there would be two experiments sharing a chart.
+  if (mode === "routing") {
+    // Nothing usable still selects something, for the reason the single-skill
+    // version did: the footer explains why the *selected* skill is blocked, and
+    // an empty selection would put "pick a skill" there instead — which is not
+    // what is wrong.
+    return usable.length ? usable : names.slice(0, 1);
+  }
+  return [usable[0] ?? names[0]];
+}
+
+// How many questions are counted under more than one skill.
+//
+// A question tagged for two skills now appears in both groups, so the counts on
+// this step deliberately sum to more than the number of questions imported. The
+// alternative was what the wizard used to do — exclude it entirely — which
+// threw away exactly the questions that say where the boundary between two
+// descriptions belongs. So it is stated rather than hidden.
+export function sharedQuestionCount(groups) {
+  const seen = new Set();
+  const shared = new Set();
+  for (const group of groups || []) {
+    for (const question of group.questions || []) {
+      if (seen.has(question.item_key)) shared.add(question.item_key);
+      seen.add(question.item_key);
+    }
+  }
+  return shared.size;
+}
+
+// How many questions were imported, counting each one once.
+//
+// Not the sum of the groups: a question tagged for two skills is filed under
+// both, so adding the group sizes reports more questions than exist — "13
+// questions read" from a set of ten. `sharedQuestionCount` says how much they
+// overlap, on the step where that is the point; this says how many there are,
+// on the step where *that* is.
+export function previewQuestionCount(preview) {
+  const keys = new Set();
+  for (const group of preview?.groups || []) {
+    for (const question of group.questions || []) keys.add(question.item_key);
+  }
+  for (const question of preview?.ambiguous || []) keys.add(question.item_key);
+  return keys.size;
+}
+
+// --- Which score the gate compares ------------------------------------------
+//
+// One number decides whether a step's candidate is kept, and `gate_metric`
+// picks which. It has existed in the API since the beginning and has never been
+// on this form, which made it settable only through an environment variable —
+// so in practice every run used `hard`.
+//
+// Routing is what makes that a real choice. Its `hard` is a strict set match
+// between the skills a question was tagged for and the skills the agent opened,
+// and over a few dozen validation questions that moves in large steps and can
+// sit at zero for the first several — leaving the gate's "strictly greater"
+// nothing to work with. `soft` scores partial credit, so there is a direction
+// to move in.
+export const GATE_METRICS = [
+  {
+    id: "hard",
+    label: "Exact",
+    help:
+      "A question counts only when it is completely right: the answer matches in " +
+      "an isolated run, or the agent opened exactly the skills it was tagged for " +
+      "in a routing one. Strict, and on a small validation split it can sit flat " +
+      "for several steps with nothing for the gate to compare.",
+  },
+  {
+    id: "soft",
+    label: "Partial credit",
+    help:
+      "The judge's score out of one in an isolated run; how much of the tagged " +
+      "set the agent actually opened, against how much of what it opened belonged, " +
+      "in a routing one. Moves in smaller steps, so an improvement shows up " +
+      "before it is complete.",
+  },
+  {
+    id: "mixed",
+    label: "Both, weighted",
+    help:
+      "A weighted average of the two above. Use it when exact is too coarse to " +
+      "move but you still want most of the decision resting on it.",
+  },
+];
+
+/** Whether the weight input applies to the chosen metric. */
+export function needsMixedWeight(metric) {
+  return metric === "mixed";
 }
 
 // --- Hyperparameters --------------------------------------------------------
@@ -311,8 +409,17 @@ export function blockingReason(state) {
   // so this is where a missing skill, a missing directory, an unreachable agent
   // and a mode the skill cannot serve are all reported.
   if (id === "skill") {
-    if (!state.skill) return "Pick the skill this run optimises.";
-    return skillStatus(checkFor(state.checks, state.skill), state.mode).reason;
+    const selected = state.skills || [];
+    if (!selected.length) return "Pick the skill this run optimises.";
+    // The first one that is actually a problem, not simply the first chosen.
+    // The footer has one line, and naming a skill that is fine while Start
+    // stays disabled is the version of this that sends people looking in the
+    // wrong place.
+    for (const name of selected) {
+      const reason = skillStatus(checkFor(state.checks, name), state.mode).reason;
+      if (reason) return reason;
+    }
+    return null;
   }
 
   if (id === "split") {

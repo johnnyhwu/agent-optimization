@@ -3,17 +3,21 @@ import assert from "node:assert/strict";
 
 import { makeSplit } from "./optimize_split.js";
 import {
+  GATE_METRICS,
   STEPS,
   blockingReason,
   checkFor,
   cleanConfig,
   configFrom,
-  defaultSkill,
+  defaultSkills,
   defaultText,
   extraConfig,
   furthestStep,
   hyperState,
+  needsMixedWeight,
   parseCount,
+  previewQuestionCount,
+  sharedQuestionCount,
   skillStatus,
   tokenEstimate,
 } from "./optimize_wizard.js";
@@ -60,7 +64,7 @@ const checksOf = (...entries) =>
 const ready = (over = {}) => ({
   sourceIds: ["a"],
   preview: { groups: [] },
-  skill: "writer",
+  skills: ["writer"],
   split: splitOf(20, 10),
   limits: {},
   checks: checksOf(okCheck("writer")),
@@ -84,7 +88,7 @@ test("a check belongs to the skill it was run for, and to no other", () => {
 test("changing the skill cannot inherit the previous skill's check", () => {
   // The bug: pick A, check runs, go back, pick B — and the wizard showed A's
   // files while the footer validated B against A's frontmatter flag.
-  const state = ready({ skill: "router", checks: checksOf(okCheck("writer")) });
+  const state = ready({ skills: ["router"], checks: checksOf(okCheck("writer")) });
   assert.match(blockingReason({ ...state, stepIndex: index("skill") }), /Checking the agent/);
 });
 
@@ -180,19 +184,35 @@ test("the first skill is selected before any check has come back", () => {
   // old one — a wall of tables with nothing chosen — for as long as the slowest
   // request takes.
   const groups = [{ skill_name: "billing" }, { skill_name: "reporting" }];
-  assert.equal(defaultSkill(groups, {}, "isolated"), "billing");
+  assert.deepEqual(defaultSkills(groups, {}, "isolated"), ["billing"]);
 });
 
-test("routing skips a skill it cannot edit and takes the first that it can", () => {
+test("routing skips a skill it cannot edit and takes every one that it can", () => {
   const groups = [{ skill_name: "billing" }, { skill_name: "reporting" }];
   const checks = checksOf(
     okCheck("billing", { has_frontmatter: false }),
     okCheck("reporting"),
   );
-  assert.equal(defaultSkill(groups, checks, "routing"), "reporting");
-  // The same pair in isolated mode keeps the first: frontmatter is irrelevant
-  // there, and reordering the default would be unexplained.
-  assert.equal(defaultSkill(groups, checks, "isolated"), "billing");
+  assert.deepEqual(defaultSkills(groups, checks, "routing"), ["reporting"]);
+  // The same pair in isolated mode keeps the first and only the first:
+  // frontmatter is irrelevant there, and it sends one skill to the agent.
+  assert.deepEqual(defaultSkills(groups, checks, "isolated"), ["billing"]);
+});
+
+test("routing takes every usable skill, because descriptions compete", () => {
+  // Widening one narrows the others by implication, so a run permitted to move
+  // one boundary is scored against a workspace frozen against it. Selecting all
+  // of them is the default that matches what the mode measures.
+  const groups = [
+    { skill_name: "billing" }, { skill_name: "reporting" }, { skill_name: "shipping" },
+  ];
+  const checks = checksOf(
+    okCheck("billing"), okCheck("reporting"), okCheck("shipping"),
+  );
+  assert.deepEqual(
+    defaultSkills(groups, checks, "routing"),
+    ["billing", "reporting", "shipping"],
+  );
 });
 
 test("with nothing usable the default still names a skill, so the reason can be shown", () => {
@@ -201,12 +221,12 @@ test("with nothing usable the default still names a skill, so the reason can be 
   // its blocking reason to be the sentence in the footer.
   const groups = [{ skill_name: "billing" }];
   const checks = checksOf(okCheck("billing", { has_frontmatter: false }));
-  assert.equal(defaultSkill(groups, checks, "routing"), "billing");
+  assert.deepEqual(defaultSkills(groups, checks, "routing"), ["billing"]);
 });
 
 test("no groups means no default", () => {
-  assert.equal(defaultSkill([], {}, "isolated"), null);
-  assert.equal(defaultSkill(undefined, {}, "isolated"), null);
+  assert.deepEqual(defaultSkills([], {}, "isolated"), []);
+  assert.deepEqual(defaultSkills(undefined, {}, "isolated"), []);
 });
 
 // --- Reachability -----------------------------------------------------------
@@ -220,7 +240,7 @@ test("reachability follows the prerequisite chain, one step at a time", () => {
 
   // A skill picked but not yet cleared by the agent stops here — the check is
   // part of this step now, not of a later one.
-  const picking = { ...loaded, skill: "writer", split: splitOf(20, 10), limits: {} };
+  const picking = { ...loaded, skills: ["writer"], split: splitOf(20, 10), limits: {} };
   assert.equal(furthestStep(picking), index("skill"));
 
   assert.equal(furthestStep(ready()), index("review"));
@@ -228,7 +248,7 @@ test("reachability follows the prerequisite chain, one step at a time", () => {
 
 test("a check for the wrong skill does not unlock the rest of the wizard", () => {
   // This is what returned 5 the moment any check existed.
-  const state = ready({ skill: "router", checks: checksOf(okCheck("writer")) });
+  const state = ready({ skills: ["router"], checks: checksOf(okCheck("writer")) });
   assert.equal(furthestStep(state), index("skill"));
 });
 
@@ -236,7 +256,7 @@ test("clearing the skill walks reachability back rather than leaving a blank ste
   // Reload the preview and the skill and split go with it. The old wizard kept
   // `check`, so every step stayed reachable and the split step rendered an
   // empty body under "Pick a skill first."
-  const state = ready({ skill: null, split: null });
+  const state = ready({ skills: [], split: null });
   assert.equal(furthestStep(state), index("skill"));
 });
 
@@ -485,4 +505,105 @@ test("an analyst batch size is validated like every other number now", () => {
   const { errors } = hyperState({ minibatch_size: "1x" }, {});
 
   assert.ok(errors.minibatch_size);
+});
+
+// --- Several skills in one routing run --------------------------------------
+//
+// Descriptions compete: widening one narrows the others by implication, so a
+// routing run moves them together. The wizard's job is to make that the
+// default rather than something to discover — and to be honest about what it
+// costs to read, since a question tagged for two skills is now counted under
+// both.
+
+test("a question tagged for two skills is counted under both, and said so", () => {
+  // The counts deliberately sum to more than the number of questions. Hiding
+  // that would mean picking one group for the question, which is what the
+  // wizard used to do by excluding it entirely.
+  const groups = [
+    { skill_name: "billing", questions: [{ item_key: "a" }, { item_key: "b" }] },
+    { skill_name: "reporting", questions: [{ item_key: "b" }, { item_key: "c" }] },
+  ];
+
+  assert.equal(sharedQuestionCount(groups), 1);
+});
+
+test("no overlap reports none, so the note stays off in the ordinary case", () => {
+  const groups = [
+    { skill_name: "billing", questions: [{ item_key: "a" }] },
+    { skill_name: "reporting", questions: [{ item_key: "b" }] },
+  ];
+
+  assert.equal(sharedQuestionCount(groups), 0);
+});
+
+// --- Which score the gate compares ------------------------------------------
+
+test("the gate metric is one of the three the server accepts", () => {
+  assert.deepEqual(GATE_METRICS.map((m) => m.id), ["hard", "soft", "mixed"]);
+});
+
+test("every gate metric explains what it compares", () => {
+  for (const metric of GATE_METRICS) {
+    assert.ok(metric.label, `${metric.id} has a label`);
+    assert.ok(metric.help.length > 30, `${metric.id} says what it means`);
+  }
+});
+
+test("the mixed weight is only asked for when it is used", () => {
+  assert.equal(needsMixedWeight("hard"), false);
+  assert.equal(needsMixedWeight("soft"), false);
+  assert.equal(needsMixedWeight("mixed"), true);
+});
+
+test("the skill step is blocked until something is selected", () => {
+  const state = { stepIndex: 2, sourceIds: ["s"], preview: { groups: [] }, skills: [] };
+  assert.match(blockingReason(state), /Pick the skill/);
+});
+
+test("the skill step reports the first selected skill that cannot be used", () => {
+  // With several selected, the footer has one line. It names a skill that is
+  // actually blocking rather than the first one chosen, so the sentence and the
+  // Start button agree about why nothing is happening.
+  const state = {
+    stepIndex: 2,
+    sourceIds: ["s"],
+    preview: { groups: [{ skill_name: "billing" }, { skill_name: "plain" }] },
+    skills: ["billing", "plain"],
+    mode: "routing",
+    checks: checksOf(okCheck("billing"), okCheck("plain", { has_frontmatter: false })),
+  };
+
+  assert.match(blockingReason(state), /plain|frontmatter|description/i);
+});
+
+test("every selected skill being usable blocks nothing", () => {
+  const state = {
+    stepIndex: 2,
+    sourceIds: ["s"],
+    preview: { groups: [{ skill_name: "billing" }, { skill_name: "reporting" }] },
+    skills: ["billing", "reporting"],
+    mode: "routing",
+    checks: checksOf(okCheck("billing"), okCheck("reporting")),
+  };
+
+  assert.equal(blockingReason(state), null);
+});
+
+test("the source step counts each question once, however many tags it carries", () => {
+  // The groups overlap now, so summing their lengths reports more questions
+  // than were imported — "13 questions read" from a set of 10.
+  const preview = {
+    groups: [
+      { skill_name: "billing", questions: [{ item_key: "a" }, { item_key: "b" }] },
+      { skill_name: "reporting", questions: [{ item_key: "b" }, { item_key: "c" }] },
+    ],
+    ambiguous: [{ item_key: "d" }],
+  };
+
+  assert.equal(previewQuestionCount(preview), 4);
+});
+
+test("counting an empty preview is zero rather than a crash", () => {
+  assert.equal(previewQuestionCount(null), 0);
+  assert.equal(previewQuestionCount({}), 0);
 });

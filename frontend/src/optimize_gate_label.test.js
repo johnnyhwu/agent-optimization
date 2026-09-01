@@ -26,11 +26,55 @@ test("a rejection on score names the number it had to beat", () => {
   assert.match(v.detail, /90%/);
 });
 
-test("a rejection on activation explains the guard it hit", () => {
-  const v = gateLabel({ gate_action: "reject", gate_reject_reason: "activation" });
+test("a routing rejection names the score it was measured on", () => {
+  // The gate compares routing accuracy in a routing run and judge accuracy in
+  // an isolated one, and a reader looking at "rejected · score" has to be able
+  // to tell which number moved. There is no `activation` reason any more: the
+  // guard it named was replaced by measuring the routing itself.
+  const v = gateLabel({
+    gate_action: "reject", gate_reject_reason: "routing", best_score: 0.62,
+  });
 
-  assert.equal(v.short, "rejected · activation");
-  assert.match(v.detail, /less often/);
+  assert.equal(v.short, "rejected · routing");
+  assert.match(v.detail, /routing accuracy/i);
+  assert.match(v.detail, /62%/);
+});
+
+test("an isolated rejection is named for the judge", () => {
+  const v = gateLabel({
+    gate_action: "reject", gate_reject_reason: "accuracy", best_score: 0.4,
+  });
+
+  assert.equal(v.short, "rejected · score");
+  assert.match(v.detail, /answer accuracy/i);
+});
+
+test("a routing rollout that could not be scored says so, not that the edit lost", () => {
+  // Nothing to gate on: no trace landed, or no question in the split carried a
+  // skill tag. Reading that as "your edit scored worse" sends the developer to
+  // rewrite a description that was never measured.
+  const v = gateLabel({
+    gate_action: "reject", gate_reject_reason: "routing_unmeasured",
+  });
+
+  assert.equal(v.label, "rejected");
+  assert.match(v.detail, /could not be measured|nothing to score/i);
+  assert.doesNotMatch(v.detail, /worse/);
+});
+
+test("a patch that named no file reads as lost, not as refused", () => {
+  // The merge stage can return edits with no `path`, and with several targets
+  // there is nothing to default one to. Every edit is dropped, the candidate
+  // equals the skill in force, and the gate ties. Labelling that "rejected ·
+  // routing" sends the developer to rewrite descriptions that were never tried.
+  const v = gateLabel({
+    gate_action: "reject", gate_reject_reason: "edits_unattributable",
+  });
+
+  assert.equal(v.label, "rejected");
+  assert.equal(v.reason, "edits lost");
+  assert.equal(v.tone, "warning");
+  assert.match(v.detail, /naming no file|never tried/i);
 });
 
 test("a validation split that never came back is not a bad edit", () => {

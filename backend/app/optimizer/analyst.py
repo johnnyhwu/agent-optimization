@@ -73,9 +73,28 @@ def format_trajectory_item(item: dict, ordinal: int, *, include_preamble: bool =
     if reference:
         parts.append(f"#### Ground-truth Response\n{reference}")
 
+    # Which skills the question belonged to and which the agent actually opened.
+    # Stated as its own section rather than left to be read out of the tool
+    # results in the conversation below, because those are the first thing
+    # `truncate_trajectory` cuts when a minibatch is over budget — so on exactly
+    # the long trajectories where a routing failure hides, the evidence for it
+    # would be the part that did not survive.
+    wanted, read = item.get("gt_skills"), item.get("skills_read")
+    if wanted and read is not None:
+        parts.append(
+            "#### Routing\n"
+            f"- tagged for: {', '.join(wanted)}\n"
+            f"- skills the agent read: {', '.join(read) or '(none)'}"
+        )
+
     fail_reason = str(item.get("fail_reason") or "").strip()
     if fail_reason:
-        parts.append(f"#### Failure Reason (from the judge)\n{fail_reason}")
+        # Named for where the verdict came from. In a routing run it is not the
+        # judge — the answer may well have been graded correct while the agent
+        # opened the wrong skill, and attributing that to the judge would send
+        # the analyst looking at the answer instead of the description.
+        source = "routing" if (wanted and read is not None) else "the judge"
+        parts.append(f"#### Failure Reason (from {source})\n{fail_reason}")
 
     trajectory = item.get("trajectory")
     if isinstance(trajectory, Trajectory):
@@ -144,10 +163,22 @@ def build_user_prompt(
     mode: str,
     step_buffer_context: str = "",
     meta_skill_context: str = "",
+    competing_skills: str = "",
 ) -> str:
-    """The analyst's user message. Section order is upstream's, verbatim."""
+    """The analyst's user message. Section order is upstream's, verbatim.
+
+    `competing_skills` is the one section upstream has no equivalent of, because
+    upstream has no routing mode: it is the menu of other skills this
+    description is competing against, and it sits directly under the skill it is
+    being compared with. Empty for isolated runs, which send one skill to the
+    agent and so present no choice to inform — and empty means *absent*, so an
+    isolated prompt is byte-for-byte what it was before this existed.
+    """
     update_mode = normalize_update_mode(mode)
     user = f"## Current Skill\n{skill_content}\n\n"
+
+    if competing_skills.strip():
+        user += f"{competing_skills.rstrip()}\n\n"
 
     if is_full_rewrite_minibatch_mode(update_mode):
         user += (
@@ -183,6 +214,7 @@ def run_analyst_minibatch(
     update_mode: str = "patch",
     step_buffer_context: str = "",
     meta_skill_context: str = "",
+    competing_skills: str = "",
 ) -> dict | None:
     """One optimizer call over one minibatch. `None` when it had nothing to say.
 
@@ -199,6 +231,7 @@ def run_analyst_minibatch(
         source_type=source_type, edit_budget=edit_budget, mode=update_mode,
         step_buffer_context=step_buffer_context,
         meta_skill_context=meta_skill_context,
+        competing_skills=competing_skills,
     )
 
     # Exceptions travel. Upstream swallows them and returns `None`, which is

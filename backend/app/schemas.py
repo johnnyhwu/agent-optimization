@@ -743,6 +743,13 @@ class OptimizationStepSummary(BaseModel):
 
     train_hard: float | None = None
     train_soft: float | None = None
+    # How well the agent routed, when the run measured it. Meaningful only for a
+    # routing run: an isolated one over tagged questions scores through the same
+    # path and writes real numbers that nothing reads. Null when nothing could be
+    # measured and on anything that predates routing accuracy — never 0.0, which
+    # would draw a collapse that never happened.
+    train_routing_hard: float | None = None
+    train_routing_soft: float | None = None
     train_activation_rate: float | None = None
     train_n_scored: int | None = None
     train_n_items: int | None = None
@@ -755,6 +762,8 @@ class OptimizationStepSummary(BaseModel):
 
     val_hard: float | None = None
     val_soft: float | None = None
+    val_routing_hard: float | None = None
+    val_routing_soft: float | None = None
     val_activation_rate: float | None = None
     val_n_scored: int | None = None
     val_n_items: int | None = None
@@ -812,6 +821,11 @@ class OptimizationRunOut(BaseModel):
     status: str
     mode: str
     skill_name: str
+    # Every skill this run may edit. One entry for an isolated run and for a
+    # routing run with a single target; several when a routing run is moving
+    # competing descriptions together. Read `skill_name` for the headline and
+    # this for what the run is actually allowed to touch.
+    target_skills: list[str] = Field(default_factory=list)
     num_epochs: int
     batch_size: int
     steps_per_epoch: int
@@ -853,9 +867,17 @@ class OptimizationRunPage(Page):
 
 
 class ImportPreviewRequest(BaseModel):
-    """Which eval sets to draw questions from (wizard step 1)."""
+    """Which eval sets to draw questions from, and for which mode.
+
+    `mode` decides what happens to a question tagged with several skills — an
+    isolated run cannot use one, a routing run needs it — so the preview cannot
+    be computed without it. The wizard asks for the mode on its first step for
+    this reason. It defaults to `isolated`, the narrower answer: a caller that
+    omits it gets the groups no run can be misled by.
+    """
 
     eval_set_ids: list[uuid.UUID] = Field(default_factory=list)
+    mode: str = "isolated"
 
 
 class PreviewQuestion(BaseModel):
@@ -901,8 +923,11 @@ class PreviewSource(BaseModel):
 
 class ImportPreview(BaseModel):
     groups: list[SkillGroup] = Field(default_factory=list)
-    # Questions with no skill tag, or with more than one. Shown, disabled, with
-    # the tags they do carry — the fix is in the eval set, not here.
+    # Questions this mode cannot place: no skill tag in either mode, and in
+    # isolated also more than one — that run edits a single skill's body, so a
+    # question belonging to two would attribute to the chosen one a failure that
+    # may be entirely the other's. Shown, disabled, with the tags they do carry
+    # — the fix is in the eval set, not here.
     ambiguous: list[PreviewQuestion] = Field(default_factory=list)
     sources: list[PreviewSource] = Field(default_factory=list)
 
@@ -1042,21 +1067,35 @@ class OptimizationSecrets(BaseModel):
 
 
 class DetectorConfig(BaseModel):
-    """How a run decides whether the agent actually used the skill.
+    """Deliberately empty: there is nothing left to configure here.
 
-    `path_patterns` are regexes matched against tool-call arguments; blank means
-    the shipped default. `detectable` says the agent's traces are known to name
-    skill file paths, which turns the content-matching fallback off.
+    It carried `path_patterns` — regexes matched against tool-call arguments —
+    and `detectable`, which said the agent's traces are known to name skill file
+    paths. Both belonged to a detector that read tool-call *arguments* to decide
+    whether a skill had been loaded, and that has been replaced by one that
+    looks for the skill's own text in what the agent was shown
+    (`optimizer/detector.py`). Neither has a reader.
+
+    The model stays so that a caller still sending them is accepted and they are
+    dropped, rather than refused: a script written last month should not fail
+    against this. Pydantic ignores unknown keys, which is exactly the behaviour
+    wanted here.
+
+    The run's `detector` column is still written — by the pre-flight, with what
+    it found — so a resumed run can read the verdict back without paying for a
+    second probe.
     """
-
-    path_patterns: list[str] = Field(default_factory=list)
-    detectable: bool = False
 
 
 class OptimizationRunCreate(BaseModel):
     name: str | None = None
     mode: str = "isolated"
     skill_name: str
+    # Routing optimises descriptions, and descriptions compete: widening one
+    # narrows the others by implication, so a run may name several skills and
+    # move the boundaries together. Empty means "just `skill_name`", which is
+    # what every isolated run and every caller written before this sends.
+    skill_names: list[str] = Field(default_factory=list)
     # `item_key`s, as the split editor produced them. A key may appear in both:
     # the wizard offers "also add to validation" deliberately.
     train: list[str] = Field(default_factory=list)
@@ -1097,6 +1136,10 @@ class OptimizationResultOut(BaseModel):
     # agent look like one that ignored its skill.
     activated: bool | None = None
     skills_read: list[str] | None = None
+    # What the question was tagged for, as the run pinned it. Read beside
+    # `skills_read` this is the whole of a routing verdict for one question:
+    # wanted these, opened those.
+    ground_truth_skills: list[str] | None = None
     detector_hit: str | None = None
     trace_ready: bool = False
     trace_error: str | None = None

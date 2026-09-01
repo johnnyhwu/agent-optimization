@@ -27,9 +27,10 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 from app.optimizer.vendor.skill import (
+    _ENTRY_POINT_NAME,
     Protection,
     _frontmatter_span,
     _normalise_path,
@@ -58,37 +59,114 @@ def has_frontmatter(files: Mapping[str, str], skill_dir: str) -> bool:
 
 
 def build_protection(
-    files: Mapping[str, str], skill_dir: str, mode: str
+    files: Mapping[str, str], skill_dir: str | Sequence[str], mode: str
 ) -> Protection:
     """What step-level edits may not touch, for one optimization mode.
 
     The two modes are mirror images, which is the whole reason they can share
     every other stage of the algorithm:
 
-      * ``isolated`` optimises the **body**. Only this skill is sent to the
-        agent, so there is no routing decision for a description to influence
-        and an edit to it could not be validated by the gate.
-      * ``routing`` optimises the **description**. The body is frozen — and so
-        is every other file, since only ``SKILL.md`` has a frontmatter — so a
-        routing run cannot quietly become a body-optimising one judged by the
-        routing guard.
+      * ``isolated`` optimises the **body** of one skill. Only that skill is
+        sent to the agent, so there is no routing decision for a description to
+        influence and an edit to it could not be validated by the gate.
+      * ``routing`` optimises the **descriptions**, of one skill or of several
+        together. Every body is frozen — and so is every other file, since only
+        ``SKILL.md`` has a frontmatter — so a routing run cannot quietly become
+        a body-optimising one judged by the routing score.
+
+    Several targets is routing's case alone, and it exists because descriptions
+    compete: widening one narrows the others by implication, so a run permitted
+    to move only one boundary is scored against a workspace that was frozen
+    against it. Each target still gives up exactly its own description.
     """
-    entry = entry_point_for(skill_dir)
+    dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
+    entries = frozenset(entry_point_for(d) for d in dirs)
     if mode == "routing":
         return Protection(
-            entry_point=entry,
+            entry_points=entries,
             protect="body",
-            readonly=frozenset(p for p in files if p != entry),
+            readonly=frozenset(p for p in files if p not in entries),
             # An `append` has no well-defined insertion point inside a `---`
             # block; guessing one hands the agent server unparseable YAML.
             allow_append=False,
         )
     if mode == "isolated":
-        return Protection(entry_point=entry, protect="frontmatter")
+        return Protection(entry_points=entries, protect="frontmatter")
     raise ValueError(f"unknown optimization mode {mode!r}; expected 'isolated' or 'routing'")
 
 
-def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
+def reattach_paths(
+    patch: dict, files: Mapping[str, str], protection: Protection
+) -> tuple[dict, int, int]:
+    """Put back the `path` the merge stage drops, where the evidence is decisive.
+
+    Returns `(patch, placed, unplaced)` — a new patch, how many edits were given
+    a path, and how many were left without one for the applier to refuse.
+
+    **Why anything is missing.** Our routing analyst prompts require a `path` on
+    every edit. `vendor/prompts/merge_{failure,success,final}.md` are upstream's,
+    for a world where a skill is one document, and state a schema with no `path`
+    in it — so the three merge calls in `aggregate.merge_patches` emit edits that
+    have lost it, and `rank_and_select` picks by index and cannot put it back.
+    The merge prompts are not the place to fix this: they are vendored verbatim
+    (`VENDORED.md`), the override mechanism is keyed on mode and `merge_patches`
+    loads them without one, and asking a model to carry a field is a weaker
+    guarantee than deriving it.
+
+    With one target none of that showed: `entry_point` has a value and a
+    path-less edit means "the skill document". With several there is no such
+    referent, so every merged edit was refused, the candidate came back
+    identical to the skill in force, and an hour went into steps that recorded a
+    rejected candidate where what actually happened is that the patch was lost.
+
+    **The evidence that survives merge is `target`** — the exact text the edit
+    replaces, which merge has every reason to keep and none to invent. A target
+    found in exactly one file names that file. Anything else is left alone: a
+    target in two files, a target in none, and an `append`, which has no target
+    at all. Guessing there would write one skill's description into another,
+    which is worse than dropping the edit — the run continues, the gate scores
+    it, and the workspace ends up saying something no analyst proposed.
+
+    A **blank** path is not missing, it is malformed, and stays refused.
+    `_apply_edit_with_report` keeps those two apart so a typo cannot become a
+    silent write to `SKILL.md`; re-attaching over a blank would collapse them
+    here instead, one stage earlier.
+
+    Every file is searched, not only the entry points, so ambiguity is judged
+    over everything the analyst was shown. An edit placed on a frozen body is
+    still refused — by `protection`, with the reason that is actually true of it.
+    """
+    edits = patch.get("edits") if isinstance(patch, dict) else None
+    if not edits or len(protection.entry_points) < 2:
+        return patch, 0, 0
+
+    placed = unplaced = 0
+    out: list = []
+    for edit in edits:
+        if not isinstance(edit, dict) or edit.get("path") is not None:
+            out.append(edit)
+            continue
+        target = edit.get("target")
+        hits = (
+            sorted(path for path, text in files.items() if target in text)
+            if isinstance(target, str) and target.strip()
+            else []
+        )
+        if len(hits) == 1:
+            out.append({**edit, "path": hits[0]})
+            placed += 1
+        else:
+            out.append(edit)
+            unplaced += 1
+    return {**patch, "edits": out}, placed, unplaced
+
+
+def render_skill(
+    files: Mapping[str, str],
+    skill_dir: str | Sequence[str],
+    *,
+    budget_chars: int | None = None,
+) -> str:
     """The whole directory as the one document every vendored stage expects.
 
     SkillOpt's parameter is a single markdown file, and its analyst, merge and
@@ -97,15 +175,160 @@ def render_skill(files: Mapping[str, str], skill_dir: str) -> str:
     only formatting: the analyst is told to name a `path` on every edit, and the
     only way it can name one correctly is by having seen the list.
 
-    `SKILL.md` comes first because it is the file the agent reads first, and a
-    model reading top-down should meet the entry point before its references.
+    Each `SKILL.md` comes first because it is the file the agent reads first,
+    and a model reading top-down should meet the entry points before their
+    references. Several directories arrive together when a routing run is
+    optimising competing descriptions, and they are rendered as one document for
+    the same reason they are optimised together: the analyst is choosing where
+    the boundary between them falls.
+
+    `budget_chars` is `None` — unbounded — for isolated, which edits the body and
+    must therefore see the body: an analyst asked to target text it was never
+    shown produces edits that cannot land. Routing passes one, because it is the
+    mode that takes several targets and the wizard ticks every usable skill by
+    default, which puts every body of every skill in the workspace here, in full,
+    on the analyst call and again on each merge and the ranking call. This is the
+    same quantity `DEFAULT_COMPETING_BUDGET_CHARS` exists to bound, and it is the
+    larger half of it.
+
+    Over budget, whole files are dropped from the tail — references before entry
+    points, since the entry points are what the agent reads first and what
+    routing edits — and **every entry point's frontmatter is kept whole** even
+    when its body goes, because the description is the one text a routing edit
+    must reproduce exactly to land. What was left out is stated: a silent cap is
+    the same failure one level down, an analyst believing it has been shown a
+    skill in full and targeting a line that never arrived.
     """
-    entry = entry_point_for(skill_dir)
-    ordered = [entry] if entry in files else []
-    ordered += sorted(path for path in files if path != entry)
-    return "\n\n".join(
-        f"### File: {path}\n```markdown\n{files[path]}\n```" for path in ordered
-    )
+    dirs = [skill_dir] if isinstance(skill_dir, str) else list(skill_dir)
+    entries = [entry_point_for(d) for d in dirs if entry_point_for(d) in files]
+    ordered = entries + sorted(path for path in files if path not in entries)
+
+    def block(path: str, text: str) -> str:
+        return f"### File: {path}\n```markdown\n{text}\n```"
+
+    whole = [block(path, files[path]) for path in ordered]
+    if budget_chars is None or sum(len(b) for b in whole) + 2 * len(whole) <= budget_chars:
+        return "\n\n".join(whole)
+
+    # Frontmatter-only is the floor for an entry point: it is what a routing edit
+    # has to name, so it is reserved before anything else is allowed to spend.
+    def head_only(path: str) -> str:
+        span = frontmatter_span(files[path])
+        return block(path, files[path][: span[1]] if span else "")
+
+    floor = {path: head_only(path) for path in entries}
+    used = sum(len(text) for text in floor.values()) + 2 * len(floor)
+
+    kept: dict[str, str] = dict(floor)
+    dropped = 0
+    for path in ordered:
+        full = block(path, files[path])
+        cost = len(full) - len(kept.get(path, "")) + (0 if path in kept else 2)
+        if used + cost > budget_chars:
+            if path not in kept:
+                dropped += 1
+            continue
+        kept[path] = full
+        used += cost
+
+    rendered = "\n\n".join(kept[path] for path in ordered if path in kept)
+    folded = sum(1 for path in entries if kept[path] != block(path, files[path]))
+    notes = []
+    if folded:
+        notes.append(f"{folded} skill body/bodies not shown (description only)")
+    if dropped:
+        notes.append(f"{dropped} more file(s) not shown")
+    return rendered + (f"\n\n({'; '.join(notes)})" if notes else "")
+
+
+# The skill section's own cap, for the mode that can grow it without limit.
+#
+# `reflect_budget_chars` defaults to 200,000 and covers trajectories only; the
+# skill goes in front of it. 60,000 characters is roughly 15k tokens of skill
+# section — a workspace of a dozen ordinary skills fits whole, and one large
+# enough to refuse the call is folded to its descriptions instead of taking the
+# step's gradient with it. Only routing passes it: isolated edits the body and
+# has one target, so its prompt is unchanged.
+DEFAULT_SKILL_BUDGET_CHARS = 60_000
+
+
+# Enough for a few dozen descriptions, and a hard stop well short of the point
+# where the skill section could crowd out the model's room to answer. The
+# trajectory budget (`reflect_budget_chars`) covers trajectories only — the
+# skill goes in front of it, unbudgeted — so a workspace that grows without
+# limit would otherwise grow this prompt without limit too, and going over the
+# context window truncates nothing: the call is refused and the step loses its
+# gradient.
+DEFAULT_COMPETING_BUDGET_CHARS = 8_000
+
+
+def description_of(text: str) -> str:
+    """The `description` field of a skill's frontmatter, as one line.
+
+    Deliberately not a YAML parse. This runs over every skill on the agent,
+    including ones this platform never validated, and a single malformed file
+    would otherwise take out the whole block — for a field that is one line in
+    every skill that has one. A folded or block description (`description: >`)
+    keeps only its first line here, which is what a routing menu shows anyway.
+    """
+    span = frontmatter_span(text)
+    if span is None:
+        return ""
+    for line in text[span[0]:span[1]].splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower() == "description":
+            return value.strip().strip("\"'")
+    return ""
+
+
+def render_competing_skills(
+    files: Mapping[str, str],
+    *,
+    budget_chars: int = DEFAULT_COMPETING_BUDGET_CHARS,
+) -> str:
+    """The other skills on the agent, as the menu the routing analyst competes in.
+
+    Routing optimises a description so that it wins a choice, and both routing
+    analyst prompts ask the model to distinguish this skill from "the *other*
+    descriptions you were shown". Until this existed, nothing was shown: the
+    analyst received the target skill's directory alone and was asked to
+    differentiate it from competitors it had never seen.
+
+    **Descriptions only.** Bodies are the bulk of a workspace and say nothing
+    about when a skill should be chosen — the description is the entire basis on
+    which the agent chooses — so sending them would spend the unbudgeted part of
+    the prompt on text that cannot inform the judgement.
+
+    A skill with no description is still named. It competes whether or not it
+    explains itself, and omitting it would read as "there is no such skill".
+
+    Over budget, the tail is dropped and the block says how many went with it: an
+    analyst comparing against a subset while believing it has the set is the
+    failure this whole function exists to fix, one level down.
+    """
+    entries: list[tuple[str, str]] = []
+    for path, text in sorted(files.items()):
+        if not path.endswith(f"/{_ENTRY_POINT_NAME}"):
+            continue
+        entries.append((path.split("/", 1)[0], description_of(text)))
+    if not entries:
+        return ""
+
+    heading = "## Competing Skills\n"
+    lines: list[str] = []
+    used = len(heading)
+    for index, (name, description) in enumerate(entries):
+        line = f"- {name}: {description}\n" if description else f"- {name}: (no description)\n"
+        # Leave room for the omission notice itself, or it could be the thing
+        # that does not fit.
+        remaining = len(entries) - index
+        notice = f"({remaining} more not shown)\n" if remaining else ""
+        if used + len(line) + len(notice) > budget_chars:
+            lines.append(f"({remaining} more not shown)\n")
+            break
+        lines.append(line)
+        used += len(line)
+    return heading + "".join(lines)
 
 
 def _opcodes(before: list[str], after: list[str]) -> list[tuple[str, int, int, int, int]]:

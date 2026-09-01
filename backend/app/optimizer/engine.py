@@ -41,7 +41,6 @@ from typing import Awaitable, Callable, Sequence
 from app.config import settings
 from app.integrations import Seams
 from app.optimizer.adapter import make_probe_marker, run_rollout, score_rollout
-from app.optimizer.detector import DEFAULT_PATH_PATTERNS
 from app.optimizer.gating import decide_gate
 from app.optimizer.hyperparams import resolve_algorithm
 from app.optimizer.reflection import build_analyst_items
@@ -79,7 +78,6 @@ class _State:
 
     current_files: dict[str, str]
     current_score: float = 0.0
-    current_activation: float | None = None
     best_files: dict[str, str] = field(default_factory=dict)
     best_score: float = 0.0
     best_step: int = 0
@@ -198,11 +196,10 @@ async def _execute(
                 run_id, spec=spec, items=val or train, store=store, seams=seams,
                 publish=publish, cancel_event=cancel_event,
             )
-            # An override that never arrives makes both modes unmeasurable, so
-            # this one stops every run; a silent detector only stops routing.
-            if preflight.override_ignored:
-                return "failed", preflight.message, "failed"
-            if not preflight.detector_ok and spec.mode == "routing":
+            # One rule, both modes: unless this run has *seen* the agent read
+            # the copy it was sent, nothing it goes on to measure means
+            # anything.
+            if not preflight.ok:
                 return "failed", preflight.message, "failed"
             await _baseline_step(
                 run_id, spec=spec, val=val, store=store, seams=seams,
@@ -284,9 +281,9 @@ def probe_question(question: str, skill_name: str) -> str:
     trace either as that observation's output or in the next generation's
     messages. Either way the marker becomes visible.
 
-    The **directory** name, never a file path: a path in the prompt is a path
-    the agent can echo into a tool call, and the tool-path detector would then
-    be matching our own instruction rather than the agent's behaviour.
+    The **directory** name, never a file path. A path in the prompt is a path
+    the agent can echo, and an instruction quoted back is not evidence of
+    anything the agent did.
     """
     return f"{question}\n\n(you must first read the {skill_name} skill)"
 
@@ -308,7 +305,12 @@ async def probe_activation(
     """
     if not items:
         return []
-    item = items[0]
+    # The first question that carries a skill tag, not simply the first. The
+    # probe asks the agent to read a named skill and then looks for that skill's
+    # text coming back; a question tagged for nothing gives the instruction no
+    # subject. Falls back to the first item, because an untagged split is still
+    # worth probing for the override check even though it cannot be scored.
+    item = next((i for i in items if i.gt_skills), items[0])
     return await run_rollout(
         [replace(item, question=probe_question(item.question, spec.skill_name))],
         skill_files=spec.initial_skill,
@@ -319,24 +321,33 @@ async def probe_activation(
         workspace_baseline=spec.workspace_baseline,
         cancel_event=cancel_event,
         concurrency=1,
-        detectable=bool(spec.detector.get("detectable")),
-        path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
         probe_marker=make_probe_marker(),
     )
 
 
+def _workspace_saturated(spec: RunSpec, skills_read: Sequence[str]) -> bool:
+    """Did one question put most of the workspace in front of the agent?
+
+    A majority rather than all of it: an agent may hold a couple of skills back
+    for reasons of its own, and the finding is "this agent does not route", which
+    a two-thirds share establishes as well as a clean sweep. Below that it is an
+    agent making a choice — badly or well — which is what a routing run is for.
+
+    A single-skill workspace can never be saturated. Every agent shows its one
+    skill, and calling that "no routing decision" would be true and useless.
+    """
+    workspace = {**(spec.workspace_baseline or {}), **spec.initial_skill}
+    names = {path.split("/", 1)[0] for path in workspace if "/" in path}
+    if len(names) < 2:
+        return False
+    return len({s for s in skills_read} & names) * 3 >= len(names) * 2
+
+
 @dataclass
 class PreflightResult:
-    """What the probe established, and whether the run may go on.
+    """Whether this run can measure anything at all, and what to say if not."""
 
-    Two independent findings, kept apart because they have different
-    consequences. `detector_ok` is about what we can *see* and only routing
-    depends on it. `override_ignored` is about whether the experiment is
-    possible at all, and stops both modes.
-    """
-
-    detector_ok: bool
-    override_ignored: bool
+    ok: bool
     message: str
 
 
@@ -344,31 +355,27 @@ async def _preflight(
     run_id, *, spec: RunSpec, items, store: OptimizationStore, seams: Seams,
     publish: Publisher, cancel_event: asyncio.Event,
 ) -> PreflightResult:
-    """Can this run observe whether the agent used the skill at all — and did the
-    agent use *our* copy of it?
+    """Did we see the agent read the copy of the skill this run sent it?
 
-    The two modes need very different answers. Routing's gate *compares
-    activation rates*, so a routing run that cannot see activation has no way to
-    measure its own outcome — it would spend an hour and produce a number that
-    means nothing. Isolated's gate is accuracy, which is measurable either way,
-    so a silent detector there costs it one column in the UI and nothing else.
-    Aborting isolated runs on this would lock out every agent whose traces do
-    not happen to name skill file paths.
+    One question, and the same one in both modes. It used to be two, with
+    different consequences: whether activation was observable, which stopped
+    routing only, and whether the override was applied, which stopped both. The
+    asymmetry was there because isolated's gate is judge accuracy — measurable
+    whether or not the agent says what it read — so refusing there would have
+    locked out every agent whose traces do not name skill file paths, to buy a
+    column in the UI.
 
-    **A successful probe turns the detector's absence into evidence.** That is
-    what this function is for, and until now it was the one thing it did not do.
-    `detect_activation` will only answer `False` when the caller has said a
-    detector demonstrably works against this agent — otherwise "nothing was seen"
-    is `None`, unknown, and `score_rollout` leaves unknowns out of the fraction
-    rather than averaging them in as zeros. Both halves of that are right. What
-    was missing is the connection: the probe proved the detector fires, wrote
-    `preflight.ok` for the UI, and never set `detectable`, which is the flag the
-    detector actually reads. It therefore stayed `False` on every run ever
-    executed, and a question where the agent called no tool at all scored
-    `None` and dropped out of the denominator. Nine questions reading the skill
-    and one reading nothing reported 100%, which is exactly the number that
-    cannot be trusted — a rate is worthless if the questions it is quietly
-    excluding are the ones it exists to catch.
+    What that left out is that the same silence also hides whether the candidate
+    reached the agent at all. An isolated run that cannot be seen into can spend
+    an hour measuring the skill already deployed and report the flat line as a
+    finding. The column was worth losing; the measurement was not.
+
+    **A successful probe is what makes "nothing was seen" mean something.** The
+    detector answers `False` for a trajectory that landed and carried no body
+    text, and `None` only when nothing landed at all. That is sound because a
+    run whose agent cannot be seen into does not get this far — which is the
+    pre-flight's job, and the reason it is bought before the first step rather
+    than inferred from the steps themselves.
 
     **The second finding is whether the override was applied at all.** The probe
     ships a marker that exists only in the copy we sent (`adapter`), so its
@@ -382,8 +389,6 @@ async def _preflight(
     reporting that as a violation would lock out working agents.
     """
     rows = await probe_activation(items, spec=spec, seams=seams, cancel_event=cancel_event)
-    observed = [row for row in rows if getattr(row, "activated", None) is not None]
-    ok = any(row.activated for row in observed)
     hit = rows[0].detector_hit if rows else "none"
     skills_read = (rows[0].skills_read or []) if rows else []
 
@@ -394,57 +399,77 @@ async def _preflight(
     # already applied that last condition, so a `False` here means the trace
     # carried the skill's text and our marker was not in it.
     verified = rows[0].override_verified if rows else None
-    # `hit == "none"` cannot coexist with a legitimate `False` — the detector
-    # reports `content` whenever body text was seen, which is the same condition
-    # `verify_probe_marker` requires before it will answer `False` at all. Kept
-    # anyway: this branch hard-fails a run somebody is paying for, and two
-    # independent conditions agreeing is cheap insurance against a later change
-    # to either one.
-    override_ignored = verified is False and hit != "none"
-
-    # In memory for the steps this process is about to run, and persisted below
-    # for the ones a restart will run — the probe is bought once, on a fresh
-    # start only, so a resumed run has to read this decision back rather than
-    # re-establish it.
+    # Carried forward as it arrived. The probe is bought once, on a fresh start
+    # only, so what it found has to be readable by a resumed run — and a run
+    # created before this shape existed may carry keys nothing reads any more,
+    # which are kept rather than stripped so resuming one cannot fail on them.
     detector = {**spec.detector}
-    if ok:
-        detector["detectable"] = True
-        spec.detector["detectable"] = True
 
-    if override_ignored:
+    # An agent that shows every skill's body on every question is not making a
+    # routing decision — it sees the whole workspace whatever any description
+    # says. Optimising a description against it changes nothing, and the way
+    # that presents is the worst kind: routing accuracy pinned near zero because
+    # every skill counts as read on every question, every candidate rejected,
+    # for an hour, with nothing on screen saying why. The probe's trace already
+    # answers this, so the check costs nothing.
+    saturated = (
+        spec.mode == "routing"
+        and hit == "system_prompt"
+        and _workspace_saturated(spec, skills_read)
+    )
+
+    # The probe is one agent call and one judge call, and either can fail for
+    # reasons that say nothing about the override: a timeout, a 500, a judge
+    # reply that would not parse. `override_verified` is `None` for all of them
+    # because the check never ran, which is indistinguishable at this point from
+    # a trace that carried no skill content — so the failure is read here, where
+    # the difference is still visible, and quoted rather than diagnosed.
+    failed = rows[0] if rows and rows[0].status == "failed" else None
+
+    if failed is not None:
+        ok = False
         message = (
-            f"the agent read the skill ({hit}) but answered from its own copy: the "
-            "marker this run sent was not in the trace, though SKILL.md's own text "
-            "was. The agent server is most likely not applying metadata.skills, so "
-            "every step would measure the deployed skill instead of the candidate — "
-            "the run is stopped rather than spending an hour to produce a flat "
-            "line. The one innocent explanation is an agent that strips HTML "
-            "comments while building its prompt; the marker is a comment, and "
-            "nothing else distinguishes the two copies."
+            "the pre-flight question did not come back: "
+            f"{failed.error_message or failed.failure_kind or 'the call failed'}. "
+            "Nothing was measured, so nothing is known yet about whether this "
+            "agent applies the skills a run sends it — fix the call and start "
+            "the run again."
         )
-    elif ok and verified is True:
-        message = f"the agent read the skill we sent ({hit})"
-    elif ok:
-        # `ok` is the activation detector's verdict alone. Saying "we sent" on
-        # the strength of it would assert the very thing the marker check
-        # declined to conclude — and this sentence is what somebody would quote
-        # back after discovering a run had measured the deployed skill all along.
+    elif saturated:
+        ok = False
         message = (
-            f"the agent read the skill ({hit}), but the override could not be "
-            "verified: the trace does not show SKILL.md's own text, so there was "
-            "nowhere for this run's marker to appear. Accuracy is measured "
-            "normally; nothing here proves the candidate reached the agent."
+            f"the agent was shown {len(skills_read)} of this workspace's skills in "
+            "its system prompt on a single question, so it is not choosing between "
+            "them — it has all of them, whatever any description says. A routing "
+            "run would optimise a field that changes nothing the agent does. Use "
+            "isolated mode to optimise this skill's body instead."
         )
-    elif spec.mode == "routing":
+    elif verified is True:
+        ok = True
+        message = f"the agent read the skill we sent it ({hit})"
+    elif verified is False:
+        ok = False
         message = (
-            "no activation could be detected on the probe question. A routing run "
-            "is gated on activation, so it cannot measure whether a description "
-            "edit helped — fix the detector settings, or use isolated mode."
+            "the agent read the skill but answered from its own copy: the marker "
+            "this run sent was not in the trace, though SKILL.md's own text was. "
+            "The agent server is most likely not applying metadata.skills, so "
+            "every step would measure the deployed skill instead of the candidate. "
+            "The one innocent explanation is an agent that strips HTML comments "
+            "while building its prompt; the marker is a comment, and nothing else "
+            "distinguishes the two copies. See docs/agent-server-api.md §4."
         )
     else:
+        ok = False
         message = (
-            "no activation could be detected on the probe question. Accuracy is "
-            "still measured normally; the activation column will read 'unknown'."
+            "this run could not confirm that the agent used the skill it was sent. "
+            "Two things produce that and the trace cannot tell them apart: the "
+            "agent server is not applying metadata.skills (docs/agent-server-api.md "
+            "§4, acceptance check ④), or it applies it but its trace records no "
+            "skill content — no tool result, no system prompt — so there was "
+            "nowhere for this run's marker to appear. Either way every step would "
+            "be measuring something this platform cannot see, so the run is stopped "
+            "here rather than after an hour of rollouts that could not have shown "
+            "anything."
         )
 
     await store.finish_run(run_id, detector={
@@ -457,9 +482,7 @@ async def _preflight(
         "skills_read": skills_read, "override_verified": verified,
         "message": message,
     })
-    return PreflightResult(
-        detector_ok=ok, override_ignored=override_ignored, message=message
-    )
+    return PreflightResult(ok=ok, message=message)
 
 
 # --- Steps ------------------------------------------------------------------
@@ -506,11 +529,19 @@ async def _baseline_step(
     )
 
     score = _score_of(summary, spec)
+    if score is None:
+        # Routing, and the baseline could not be scored at all. Every later step
+        # is a comparison against this number, so there is nothing to build on.
+        raise RunAborted(
+            "the baseline routing accuracy could not be measured: no validation "
+            "question both produced a trace and carried skill tags. Tag the "
+            "questions with the skills they belong to, or run in isolated mode."
+        )
     state.current_score = state.best_score = score
     state.best_step = 0
-    state.current_activation = summary.activation_rate
+    pair = _gate_pair(summary, spec)
     state.score_cache[content_hash] = (
-        summary.hard or 0.0, summary.soft or 0.0, summary.activation_rate
+        pair[0], pair[1], summary.activation_rate
     )
 
     await store.finish_step(
@@ -599,6 +630,9 @@ async def _epoch_boundary(
         run_epoch_boundary,
         files=state.current_files,
         prev_files=state.epoch_files.get(epoch_no - 1, {}),
+        # The primary target only. The boundary writes its guidance into a
+        # marker block in the *body*, which routing freezes and isolated has
+        # exactly one of — so there is no second skill for it to write into.
         skill_dir=spec.skill_name,
         items=[{"id": item.item_key, "question": item.question} for item in val],
         results_prev=await store.load_val_results(run_id, previous),
@@ -749,11 +783,19 @@ async def _run_step(
         questions={item.item_key: item.question for item in batch},
         ground_truths={item.item_key: item.ground_truth_response for item in batch},
         budget_chars=params["reflect_budget_chars"],
+        # So the analysts are split by the same definition of failure the gate
+        # enforces. A routing run reflecting on judge verdicts would be shown
+        # its routing failures under "answered correctly, so the routing worked".
+        mode=spec.mode,
+        gt_skills={item.item_key: item.gt_skills for item in batch},
     )
     outcome = await asyncio.to_thread(
         run_update_stage,
         files=state.current_files,
-        skill_dir=spec.skill_name,
+        # Every target: a routing run moves competing descriptions together, and
+        # one permitted to edit only the first would be scored against a
+        # workspace the other half of which was frozen against it.
+        skill_dir=_targets_of(spec),
         mode=spec.mode,
         items=items,
         client=seams.optimizer,
@@ -765,6 +807,11 @@ async def _run_step(
         seed=config.get("seed"),
         truncation_by_item=ledger,
         meta_skill_context=state.meta_skill_text,
+        # The same skills the rollout just sent to the agent. A routing
+        # description is optimised to win a choice, so the analyst has to see
+        # what it is choosing against; `run_update_stage` ignores this in
+        # isolated mode, where there is no choice.
+        context_files=spec.workspace_baseline,
     )
     for record in outcome.minibatches:
         await store.record_minibatch(
@@ -820,10 +867,43 @@ async def _run_step(
     })
     await _check_cancel(run_id, store, cancel_event)
 
+    # A patch that landed nowhere because none of it named a file is a fault in
+    # the pipeline, not a verdict on the edits. Left to run on, it is invisible:
+    # the candidate is byte-identical to the skill in force, so the score cache
+    # answers with the baseline's own number, the gate sees a tie and rejects,
+    # and the step is recorded as one more rejected candidate — for an hour, on
+    # a run where nothing was ever tried.
+    #
+    # `_finish_unscored_step` and not the gate, for the reason its own docstring
+    # gives: the gate was never asked. It buys no validation rollout either,
+    # which is the other half of what this costs.
+    if outcome.n_edits_unplaced and outcome.n_edits_applied == 0:
+        await _finish_unscored_step(
+            store, step_id, seams=seams, state=state,
+            action="reject", reason="edits_unattributable",
+            edit_budget=edit_budget, candidate_hash=candidate_hash,
+            n_edits_merged=outcome.n_edits_merged,
+            n_edits_ranked=outcome.n_edits_ranked,
+            n_edits_applied=outcome.n_edits_applied,
+            n_edits_skipped=outcome.n_edits_skipped,
+            edit_reports=outcome.reports,
+            lines_added=lines_added, lines_removed=lines_removed,
+            files_touched=len(stats), n_answer_leaks=len(leaks),
+            skill_len=sum(len(text) for text in candidate.values()),
+            edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+        )
+        await publish({
+            "type": "gate_done", "step_no": step_no, "action": "reject",
+            "reject_reason": "edits_unattributable", "candidate_score": None,
+            "current_score": state.current_score, "best_score": state.best_score,
+            "from_cache": False,
+        })
+        return None
+
     # --- 3. validation rollout, against the candidate -----------------------
     cached = state.score_cache.get(candidate_hash)
     if cached is not None:
-        hard, soft, activation = cached
+        hard, soft, _ = cached
         from_cache = True
         # A cached score is one this run already measured and accepted as
         # trustworthy — a refused split never reaches the cache — so it counts
@@ -871,25 +951,60 @@ async def _run_step(
             })
             return None
 
-        hard = val_summary.hard or 0.0
-        soft = val_summary.soft or 0.0
-        activation = val_summary.activation_rate
-        state.score_cache[candidate_hash] = (hard, soft, activation)
+        pair = _gate_pair(val_summary, spec)
+        if pair is None:
+            # Routing, and not one validation question could be scored: every
+            # trace was missing, or none of them carried skill tags. Handled
+            # exactly like a refused split, and for the same reason — there is
+            # no number, so there is no gate, and accepting an edit here would
+            # be accepting it on no evidence at all.
+            await _finish_unscored_step(
+                store, step_id, seams=seams, state=state,
+                action="reject", reason="routing_unmeasured",
+                edit_budget=edit_budget, candidate_hash=candidate_hash,
+                n_edits_merged=outcome.n_edits_merged,
+                n_edits_ranked=outcome.n_edits_ranked,
+                n_edits_applied=outcome.n_edits_applied,
+                n_edits_skipped=outcome.n_edits_skipped,
+                edit_reports=outcome.reports,
+                lines_added=lines_added, lines_removed=lines_removed,
+                files_touched=len(stats), n_answer_leaks=len(leaks),
+                skill_len=sum(len(text) for text in candidate.values()),
+                edit_summary=outcome.edit_summary, tokens=outcome.tokens,
+            )
+            await publish({
+                "type": "gate_done", "step_no": step_no, "action": "reject",
+                "reject_reason": "routing_unmeasured", "candidate_score": None,
+                "current_score": state.current_score, "best_score": state.best_score,
+                "from_cache": False,
+            })
+            return None
+
+        hard, soft = pair
+        state.score_cache[candidate_hash] = (hard, soft, val_summary.activation_rate)
         from_cache = False
 
     # --- 4. the gate --------------------------------------------------------
     gate = decide_gate(
-        mode=spec.mode, step_no=step_no,
-        cand_hard=hard, cand_soft=soft, cand_activation=activation,
-        current_score=state.current_score, current_activation=state.current_activation,
+        step_no=step_no,
+        cand_hard=hard, cand_soft=soft,
+        current_score=state.current_score,
         best_score=state.best_score, best_step=state.best_step,
         metric=params["gate_metric"],
         mixed_weight=params["mixed_weight"],
     )
 
+    # Named for the measurement that actually refused it. The gate compares one
+    # number and does not know which it is; the run does, and the step row is
+    # read by a page showing two lines — so "rejected · score" against that
+    # chart is a question rather than an answer. Resolved here rather than
+    # threaded through five components as a prop.
+    reject_reason = gate.reject_reason
+    if reject_reason == "accuracy" and spec.mode == "routing":
+        reject_reason = "routing"
+
     if gate.accepted:
         state.current_files = candidate
-        state.current_activation = activation
         state.parent_step_no = step_no
     if gate.action == "accept_new_best":
         state.best_files = candidate
@@ -900,7 +1015,7 @@ async def _run_step(
     await store.finish_step(
         step_id, status="done", edit_budget=edit_budget,
         workspace_version=await _agent_version(seams),
-        gate_action=gate.action, gate_reject_reason=gate.reject_reason,
+        gate_action=gate.action, gate_reject_reason=reject_reason,
         candidate_hash=candidate_hash, candidate_from_cache=from_cache,
         n_edits_merged=outcome.n_edits_merged, n_edits_ranked=outcome.n_edits_ranked,
         n_edits_applied=outcome.n_edits_applied, n_edits_skipped=outcome.n_edits_skipped,
@@ -914,7 +1029,7 @@ async def _run_step(
     )
     await publish({
         "type": "gate_done", "step_no": step_no, "action": gate.action,
-        "reject_reason": gate.reject_reason, "candidate_score": gate.candidate_score,
+        "reject_reason": reject_reason, "candidate_score": gate.candidate_score,
         "current_score": gate.current_score, "best_score": gate.best_score,
         "from_cache": from_cache,
     })
@@ -976,12 +1091,14 @@ async def _rollout(
         workspace_baseline=spec.workspace_baseline,
         cancel_event=cancel_event,
         concurrency=int(config.get("concurrency") or settings.run_concurrency),
-        detectable=bool(spec.detector.get("detectable")),
-        path_patterns=spec.detector.get("path_patterns") or DEFAULT_PATH_PATTERNS,
         on_progress=item_done,
     )
     summary = score_rollout(
         rows, split=split, skill_step_no=skill_step_no, error_threshold=error_share,
+        # Routing accuracy is scored against each question's own tags, so the
+        # items travel with the rows. Isolated passes them too and simply has
+        # nothing tagged to compare, which keeps one code path.
+        items=items,
     )
     if summary.aborted:
         # A split that "failed" because the stop button was pressed is not a
@@ -1038,11 +1155,43 @@ def skill_hash(files) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _score_of(summary, spec: RunSpec) -> float:
+def _targets_of(spec: RunSpec) -> list[str]:
+    """Every skill this run may edit, for a spec of any age.
+
+    `target_skills` is empty on a run created before routing could name several,
+    and those had exactly one target: the name they recorded.
+    """
+    return list(spec.target_skills or (spec.skill_name,))
+
+
+def _gate_pair(summary, spec: RunSpec) -> tuple[float, float] | None:
+    """The `(hard, soft)` this run's gate compares, or None if unmeasurable.
+
+    The whole of the mode's difference at the gate, in one place. An isolated run
+    is about whether the skill's body produces better answers, so it is gated on
+    the judge. A routing run is about whether the agent reaches for the right
+    skill, so it is gated on routing accuracy — and improving the routing while
+    the answers get worse is a *pass*, because what is inside the skill is not
+    what a description edit can fix.
+
+    None only for routing, and it means nothing could be scored: no trajectory
+    landed, or none of the questions carried tags. There is no number to gate on
+    then, and inventing a zero would read as "it routed everything wrong".
+    """
+    if spec.mode == "routing":
+        if summary.routing_hard is None:
+            return None
+        return float(summary.routing_hard), float(summary.routing_soft or 0.0)
+    return float(summary.hard or 0.0), float(summary.soft or 0.0)
+
+
+def _score_of(summary, spec: RunSpec) -> float | None:
     params = resolve_algorithm(spec.config)
+    pair = _gate_pair(summary, spec)
+    if pair is None:
+        return None
     return select_gate_score(
-        summary.hard or 0.0, summary.soft or 0.0,
-        params["gate_metric"], params["mixed_weight"],
+        pair[0], pair[1], params["gate_metric"], params["mixed_weight"],
     )
 
 

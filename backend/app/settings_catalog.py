@@ -197,6 +197,22 @@ CATALOG: tuple[SettingSpec, ...] = (
         minimum=1,
     ),
     SettingSpec(
+        key="gate_metric", setting="optimizer_gate_metric", group="optimization", kind="text",
+        label="Gate score",
+        help=(
+            "Which number decides whether a step's edit is kept: 'hard' counts a "
+            "question only when it is completely right, 'soft' gives partial "
+            "credit, 'mixed' weighs the two. Routing runs usually want soft or "
+            "mixed — a strict set match over a few dozen questions can sit flat."
+        ),
+    ),
+    SettingSpec(
+        key="mixed_weight", setting="optimizer_mixed_weight", group="optimization",
+        kind="float", label="Weight on partial credit",
+        help="Only used when the gate score is 'mixed'. 0 is hard alone, 1 is soft alone.",
+        minimum=0, maximum=1,
+    ),
+    SettingSpec(
         key="slow_update", setting="optimizer_slow_update", group="optimization", kind="bool",
         label="Slow update", help="Once per epoch, write guidance into a protected block of the skill.",
     ),
@@ -311,8 +327,6 @@ EXCLUDED_SETTINGS: dict[str, str] = {
     "optimizer_analyst_workers": "no control on any form yet",
     "optimizer_merge_batch_size": "no control on any form yet",
     "optimizer_scheduler": "no control on any form yet",
-    "optimizer_gate_metric": "no control on any form yet",
-    "optimizer_mixed_weight": "no control on any form yet",
     "optimizer_failure_only": "no control on any form yet",
     # Containment boundaries. Every one of these bounds what one request may do
     # to the process; a user who can raise their own limit does not have one.
