@@ -273,3 +273,20 @@ test("an isolated run honours failure_only, so nothing is said about it", () => 
       .includes("routing-failure-only"),
   );
 });
+
+test("the divergence warning quotes the worst step, not whichever came first", () => {
+  // Reporting step 1's spread under a heading that names steps 1 and 2 states
+  // something about step 2 that was never measured. Naming several steps means
+  // the numbers have to be the widest of them, and say so.
+  const warnings = runWarnings(
+    { mode: "routing" },
+    [
+      { step_no: 1, setup_divergence: { n_variants: 2, n_prompts: 10, majority_share: 0.9 } },
+      { step_no: 2, setup_divergence: { n_variants: 7, n_prompts: 40, majority_share: 0.3 } },
+    ],
+  );
+  const found = warnings.find((w) => w.id === "setup-divergence");
+  assert.match(found.body, /7 variants over 40 questions/);
+  assert.match(found.body, /30%/);
+  assert.match(found.body, /widest spread/);
+});

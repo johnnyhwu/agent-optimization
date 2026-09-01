@@ -158,17 +158,25 @@ export function runWarnings(run, steps) {
     // differ too much to render as one.
     const mixed = list.filter((s) => s.setup_divergence);
     if (mixed.length) {
-      const worst = mixed[0].setup_divergence;
+      // Actually the worst, and said to be one of several when it is. Quoting
+      // the first step's numbers under a heading naming five of them attributes
+      // one step's spread to four measurements that did not have it — the same
+      // kind of confident, wrong number the rest of this file exists to catch.
+      const worst = mixed
+        .map((s) => s.setup_divergence)
+        .reduce((a, b) => (b.majority_share < a.majority_share ? b : a));
       out.push({
         id: "setup-divergence",
         tone: "warning",
         title: "The agent was not told the same thing on every question",
         body:
-          `${label(mixed)} answered questions under ${worst.n_variants} materially ` +
-          `different system prompts (${worst.n_prompts} questions, the largest group ` +
-          `holding ${pct(worst.majority_share)}). The step scored them as one routing ` +
-          "accuracy and the optimizer read them as one batch, so both describe an " +
-          "average of two systems rather than either of them.",
+          `${label(mixed)} answered questions under materially different system ` +
+          `prompts. ${mixed.length > 1 ? "The widest spread was " : "There were "}` +
+          `${worst.n_variants} variants over ${worst.n_prompts} questions, the ` +
+          `largest group holding ${pct(worst.majority_share)}. Each such step ` +
+          "scored its questions as one routing accuracy and the optimizer read " +
+          "them as one batch, so both describe an average of two systems rather " +
+          "than either of them.",
       });
     }
 
