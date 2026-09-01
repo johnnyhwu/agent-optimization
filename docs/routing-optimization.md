@@ -134,7 +134,7 @@ different order each call is not an agent that was told something different.
 ```
 ## Routing Results (168 questions, 160 measured, 71% routed exactly right)
 
-### billing — 42 tagged · reached by 31 (74%)
+### billing — 42 questions tagged · reached by 31 of the 41 measured (76%) · 1 not measured
 ✓ opened billing (31)
 - 退款要多久才會入帳？
 ✗ opened reporting instead (8)
@@ -150,7 +150,7 @@ Grouped rather than listed, because the grouping *is* the finding: a blurred
 boundary between two descriptions is a visible block rather than a pattern to
 infer from a hundred rows.
 
-Four decisions inside it:
+Five decisions inside it:
 
 - **Two different percentages, labelled apart.** The header carries the *gated*
   metric — the exact set match `routing.py` scores — over measured questions
