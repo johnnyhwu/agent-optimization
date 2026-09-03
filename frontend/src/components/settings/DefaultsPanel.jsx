@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api.js";
-import Banner from "../ui/Banner.jsx";
+import Banner, { BannerDetail } from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
 import Field, { FormSection } from "../ui/Field.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
@@ -162,7 +162,13 @@ export default function DefaultsPanel({ onOutline }) {
     onOutline?.(JSON.parse(outlineKey));
   }, [outlineKey, onOutline]);
 
-  if (error) return <div className="error">{error}</div>;
+  if (error) {
+    return (
+      <Banner tone="error" className="is-block" title="Could not load your settings">
+        <BannerDetail>{error}</BannerDetail>
+      </Banner>
+    );
+  }
   if (!data || !form) return <Skeleton variant="row" count={6} />;
 
   const unseen = new Set(data.unseen);

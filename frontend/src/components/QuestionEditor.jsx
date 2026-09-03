@@ -5,6 +5,7 @@ import { parseSkillCell, skillToText } from "../upload_parse.js";
 import { skillNote } from "../skill_tags.js";
 import { useToast } from "./Toast.jsx";
 import Button from "./ui/Button.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Owner-only question editing (§6.11 locked set: edit only). Demonstrates the
 // optimistic-lock 409 flow — version is held from load and sent on save.
@@ -104,7 +105,11 @@ export default function QuestionEditor({ evalSet, onClose }) {
         </>
       }
     >
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not save this question">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       <div className="field field-fill">
         <div className="pane-editor">

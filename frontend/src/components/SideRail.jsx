@@ -63,7 +63,14 @@ export default function SideRail({ section, collapsed, onToggle }) {
                 className={`rail-item${section === id ? " active" : ""}`}
                 href={to}
                 aria-current={section === id ? "page" : undefined}
-                title={collapsed ? label : undefined}
+                // Unconditional, because the rail collapses two ways and only
+                // one of them is this state. Below 1100px a media query hides
+                // `.rail-label` whatever the developer's saved preference is,
+                // and the tooltip was tied to the preference — so on a narrow
+                // window these were three unlabelled icons with no accessible
+                // name at all. A title on an expanded item costs nothing; a
+                // missing one costs the whole navigation.
+                title={label}
               >
                 <Icon size={17} />
                 <span className="rail-label">{label}</span>

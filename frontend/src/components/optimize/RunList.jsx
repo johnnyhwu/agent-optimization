@@ -7,6 +7,7 @@ import Skeleton from "../ui/Skeleton.jsx";
 import { IconPlus, IconSparkles } from "../icons.jsx";
 import { stepProgress } from "../../optimize_steps.js";
 import { runStartedAt, runTitle } from "../../optimize_run_label.js";
+import Banner, { BannerDetail } from "../ui/Banner.jsx";
 
 // The left rail of the Optimize section: every run this person can see, newest
 // first. One run is one complete optimization — a dataset, a skill, and the
@@ -77,7 +78,11 @@ export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, re
         </div>
       )}
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <Banner tone="error" className="is-block" title="Could not load the run list">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
       {!runs && !error && <Skeleton variant="row" count={4} />}
 
       {runs && runs.length > 0 && (

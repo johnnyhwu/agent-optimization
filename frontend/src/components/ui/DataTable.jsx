@@ -27,6 +27,10 @@ export default function DataTable({
   rowClassName,
   rowActions,
   actionsWidth = 76,
+  // The narrowest the row is allowed to get before the table scrolls sideways
+  // instead of squeezing its `1fr` columns to nothing. Opt-in per table: a table
+  // of short cells has no floor to declare and gets none.
+  minWidth,
   empty,
   staggerWithin = 0,
 }) {
@@ -49,7 +53,14 @@ export default function DataTable({
   if (rows.length === 0 && empty) return empty;
 
   return (
-    <div className="ui-table" role="table">
+    <div
+      className="ui-table"
+      role="table"
+      // Read by `.ui-table-head` / `.ui-table-row`, so the header and the body
+      // rows take the same floor from one declaration and cannot drift apart —
+      // the same reason the track list is defined once above.
+      style={minWidth ? { "--ui-table-min": `${minWidth}px` } : undefined}
+    >
       <div className="ui-table-head" role="row" style={{ gridTemplateColumns: template }}>
         {selectable && <span role="columnheader" aria-label={selectLabel} />}
         {columns.map((c) => (

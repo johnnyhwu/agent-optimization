@@ -5,6 +5,7 @@ import { overrideCounts } from "../workspace_util.js";
 import ElapsedTimer from "./ElapsedTimer.jsx";
 import { isTimeout } from "../failure.js";
 import { plural } from "../plural.js";
+import { relativeStamp } from "../timestamp.js";
 
 // Left column of the playground: this session's attempts, newest first.
 //
@@ -22,13 +23,6 @@ import { plural } from "../plural.js";
 function overrideLabel(a) {
   const { files } = overrideCounts(a);
   return files ? `edited: ${files} file${files === 1 ? "" : "s"}` : "skill override";
-}
-
-function relative(iso) {
-  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return `${Math.floor(seconds)}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  return new Date(iso).toLocaleTimeString();
 }
 
 function dotClass(a) {
@@ -121,7 +115,7 @@ export default function AttemptList({
                 tell two attempts apart. */}
             <div className="qtext" title={a.question}>{a.question}</div>
             <div className="qid">
-              {relative(a.created_at)} · <span className={`qphase ${a.phase}`}>{note(a)}</span>
+              {relativeStamp(a.created_at)} · <span className={`qphase ${a.phase}`}>{note(a)}</span>
               {/* One slot for the agent's time, counting up while the question
                   is out and settling on the measured value when it lands — so
                   "how long has this been going" and "how long did it take" are

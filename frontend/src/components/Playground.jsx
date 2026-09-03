@@ -24,6 +24,7 @@ import { adoptFetched, mergeAttempt, pruneById } from "../attempt_state.js";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Whether the attempt list is collapsed to a rail. Persisted, and separate from
 // the side rail's own setting: reading a trace and picking between attempts are
@@ -752,7 +753,11 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         }
       />
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" className="is-block" title="The playground hit a problem">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       {form && (
         <AgentConnectionBar

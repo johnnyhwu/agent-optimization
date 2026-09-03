@@ -5,6 +5,7 @@ import { useToast } from "./Toast.jsx";
 import { IconDownload, IconRefresh } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Downloading an eval set (§6.13 card action).
 //
@@ -201,7 +202,11 @@ export default function DownloadDialog({ evalSet, subject, seedRunIds = [], onCl
         </>
       }
     >
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not prepare the download">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       <div className="dl-artefact">
         <span className="muted">You’ll get</span>

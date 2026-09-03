@@ -13,6 +13,7 @@ import Skeleton from "./ui/Skeleton.jsx";
 import { IconAlert, IconGear, IconPlay } from "./icons.jsx";
 import { useDebounced } from "../useDebounced.js";
 import { coverageWarning, skillCoverage } from "../skill_coverage.js";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
 // the deployment's environment. Prefilled from GET /run-config/defaults so the
@@ -232,7 +233,11 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
         </>
       }
     >
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not start the run">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
       {!form && <Skeleton variant="text" count={4} />}
 
       {form && (

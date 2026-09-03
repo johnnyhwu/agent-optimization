@@ -9,6 +9,7 @@ import { setServerTime } from "../useElapsed.js";
 import Badge from "./ui/Badge.jsx";
 import Button from "./ui/Button.jsx";
 import { IconAlert, IconSend } from "./icons.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Bottom tier (§6.13): three columns. Left = question list (per-mode incorrect),
 // middle = trace + diagnosis + caveat, right = span detail. Clicking a question
@@ -320,7 +321,11 @@ export default function RunDetail({
 
   return (
     <div className="page-fill">
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" className="is-block" title="Could not load these results">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
       {results && liveRunId && (
         <RunStatusBar
           results={results}
