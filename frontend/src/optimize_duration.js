@@ -108,20 +108,29 @@ export function runDuration(run, steps = []) {
 }
 
 /**
- * A run-length duration, to two units.
+ * A run-length duration, to the minute.
  *
  * Not `formatDuration` from `useElapsed.js`, which is for the seconds a single
- * question spends with the agent: its largest unit is the minute, so an
- * hour-and-a-bit run reads "83m 12s" — a number the reader has to divide before
- * it means anything. Seconds are dropped once there is an hour to report, for
- * the same reason that one does: at that scale they are noise.
+ * question spends with the agent. A run is measured in hours, and its seconds
+ * are noise at every scale it is read at — but they were not merely useless,
+ * they moved the page. This string is live while a run goes, it sits in a
+ * `.opt-fact-sub` inside a fixed-width grid cell, and `running for 1m 01s` is
+ * wide enough to wrap where `running for 59s` did not: the facts row grew 16.5px
+ * and pushed everything under it down, once a minute, for the length of the run.
+ *
+ * Reporting to the minute is most of the fix — the value now changes 60 times
+ * less often — and `.opt-fact-sub` not wrapping is the rest of it, because
+ * `59m` to `1h 00m` is still two characters wider.
+ *
+ * The sub-minute case is a phrase rather than `0m`, which reads as a stopped
+ * clock or a bug. It costs the one place a second would have been informative,
+ * and buys a header that does not move.
  */
 export function formatSpan(ms) {
   if (ms == null || !Number.isFinite(ms)) return null;
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
