@@ -28,14 +28,30 @@ ITEM_KEY_SEP = ":"
 
 DEFAULT_TRAIN_SHARE = 0.7
 
-# Below these a run is refused. On a validation split of three, one question is
-# 33 percentage points: the gate would accept and reject on coin flips, and an
-# hour of agent calls would buy nothing anyone can act on.
-MIN_TRAIN = 8
-MIN_VAL = 5
+# Below these a run is refused, and the numbers are as low as they can be
+# because what they encode is arithmetic rather than judgement: a training split
+# of nothing gives the reflect stage an empty minibatch to find a pattern in,
+# and a validation split of nothing gives the gate no comparison to accept or
+# reject a candidate on. One question in each is enough for the machinery to
+# mean something. Whether it is enough to *learn* anything is a different
+# question, and one the developer is entitled to answer for themselves — see
+# SOFT_* below.
+#
+# These were 8 and 5, which was the honest advice above stated as a refusal. It
+# cost the case it should have served best: trying three questions to see
+# whether a run works at all, before spending an hour of agent calls on sixty.
+MIN_TRAIN = 1
+MIN_VAL = 1
 
-# Below these it runs, with a warning. Workable, but every figure carries a wide
-# enough error bar that the developer should know before they start.
+# Below these it runs, with the warning that used to be the refusal. On a
+# validation split of three, one question is 33 percentage points: the gate
+# accepts and rejects on coin flips. That is worth knowing and not worth
+# blocking, because a developer smoke-testing the pipeline already knows it.
+SOFT_TRAIN = 8
+SOFT_VAL = 5
+
+# Below these it runs, with a milder warning. Workable, but every figure carries
+# a wide enough error bar that the developer should know before they start.
 WARN_TRAIN = 20
 WARN_VAL = 10
 
@@ -169,6 +185,13 @@ def default_split(
 def split_issues(train_keys: Sequence[str], val_keys: Sequence[str]) -> list[dict]:
     """What is wrong with a split: `error` blocks the run, `warning` does not.
 
+    Size is three tiers rather than two, and the middle one is the point: an
+    empty column is arithmetically impossible to run and is refused, everything
+    above that runs. A split of three questions is a bad experiment and a
+    perfectly good smoke test, and only the developer knows which one they are
+    doing — so the size rules say what is true about the numbers and leave the
+    decision where it belongs.
+
     The overlap case is the interesting one. Putting a question in both splits
     is a deliberate feature — with few questions a developer may want one
     counted twice — and it also breaks the gate, because a question the skill
@@ -181,10 +204,19 @@ def split_issues(train_keys: Sequence[str], val_keys: Sequence[str]) -> list[dic
 
     if n_train < MIN_TRAIN:
         issues.append({
-            "level": "error", "code": "train_too_small",
+            "level": "error", "code": "train_empty",
             "message": (
-                f"the training split has {n_train} questions; at least {MIN_TRAIN} "
-                "are needed for a minibatch to say anything about a pattern"
+                "the training split is empty; there has to be at least one "
+                "question for a minibatch to reflect on"
+            ),
+        })
+    elif n_train < SOFT_TRAIN:
+        issues.append({
+            "level": "warning", "code": "train_too_small",
+            "message": (
+                f"the training split has {n_train} questions; below {SOFT_TRAIN} "
+                "a minibatch is a handful of unrelated cases, and the edit it "
+                "produces is fitted to whichever one happened to be in it"
             ),
         })
     elif n_train < WARN_TRAIN:
@@ -198,10 +230,19 @@ def split_issues(train_keys: Sequence[str], val_keys: Sequence[str]) -> list[dic
 
     if n_val < MIN_VAL:
         issues.append({
-            "level": "error", "code": "val_too_small",
+            "level": "error", "code": "val_empty",
             "message": (
-                f"the validation split has {n_val} questions; at least {MIN_VAL} "
-                "are needed before an accuracy comparison means anything"
+                "the validation split is empty; the gate has nothing to compare "
+                "a candidate against"
+            ),
+        })
+    elif n_val < SOFT_VAL:
+        issues.append({
+            "level": "warning", "code": "val_too_small",
+            "message": (
+                f"the validation split has {n_val} questions; below {SOFT_VAL} "
+                f"one answer moves accuracy by {100 / n_val:.0f} points, so the "
+                "gate is closer to a coin flip than a measurement"
             ),
         })
     elif n_val < WARN_VAL:

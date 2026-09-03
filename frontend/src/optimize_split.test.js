@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SORT,
   actionsFor,
+  canStart,
   counts,
   duplicate,
   exclude,
@@ -13,6 +14,16 @@ import {
   sortQuestions,
   splitIssues,
 } from "./optimize_split.js";
+
+// What `/optimization/defaults` sends, spelled out once. Passing it explicitly
+// rather than leaning on the defaults is the point of the last test in this
+// file: these thresholds belong to the server, and a copy here would drift from
+// the one the create endpoint enforces.
+const LIMITS = {
+  min_train: 1, min_val: 1,
+  soft_train: 8, soft_val: 5,
+  warn_train: 20, warn_val: 10,
+};
 
 const q = (id, extra = {}) => ({
   item_key: id,
@@ -187,22 +198,52 @@ test("the counts report each column and the overlap separately", () => {
   assert.equal(c.excluded, 1);
 });
 
-test("a split below the minimum reports an error that blocks Start", () => {
+test("an empty column reports an error that blocks Start", () => {
   // The server refuses it too. The point of checking here is that the developer
   // finds out while they can still fix it, rather than on a 400 after filling in
   // three more screens.
-  const issues = splitIssues(split(["a", "b"], ["c"]), { min_train: 8, min_val: 5 });
+  //
+  // Empty is the *only* size that blocks. It is not a judgement about how good
+  // the run would be: with no training questions a minibatch does not exist,
+  // and with no validation questions the gate has nothing to compare.
+  const issues = splitIssues(split([], []), LIMITS);
   const codes = issues.filter((i) => i.level === "error").map((i) => i.code);
-  assert.ok(codes.includes("train_too_small"));
-  assert.ok(codes.includes("val_too_small"));
+  assert.ok(codes.includes("train_empty"));
+  assert.ok(codes.includes("val_empty"));
+});
+
+test("a tiny split warns but still starts", () => {
+  // The case the old floor of 8/5 refused, and the reason it was lowered:
+  // three questions is a bad experiment and a perfectly good check that the
+  // pipeline works before an hour of agent calls is spent on sixty.
+  const issues = splitIssues(split(["a", "b", "c"], ["d", "e"]), LIMITS);
+  assert.equal(issues.filter((i) => i.level === "error").length, 0);
+  assert.deepEqual(
+    issues.map((i) => i.code).sort(),
+    ["train_too_small", "val_too_small"],
+  );
+  assert.ok(canStart(split(["a", "b", "c"], ["d", "e"]), LIMITS));
+});
+
+test("each column raises exactly one size issue", () => {
+  // Three tiers, and a column belongs to one of them. A split of six training
+  // questions is very small *and* thin, and saying so twice would put two boxes
+  // on screen describing one number.
+  for (const [n, expected] of [[0, "train_empty"], [3, "train_too_small"],
+                               [12, "train_small"], [30, null]]) {
+    const train = Array.from({ length: n }, (_, i) => `t${i}`);
+    const val = Array.from({ length: 10 }, (_, i) => `v${i}`);
+    const codes = splitIssues(split(train, val), LIMITS)
+      .map((i) => i.code)
+      .filter((c) => c.startsWith("train"));
+    assert.deepEqual(codes, expected ? [expected] : [], `train of ${n}`);
+  }
 });
 
 test("a workable split warns without blocking", () => {
   const train = Array.from({ length: 10 }, (_, i) => `t${i}`);
   const val = Array.from({ length: 6 }, (_, i) => `v${i}`);
-  const issues = splitIssues(split(train, val), {
-    min_train: 8, min_val: 5, warn_train: 20, warn_val: 10,
-  });
+  const issues = splitIssues(split(train, val), LIMITS);
   assert.equal(issues.filter((i) => i.level === "error").length, 0);
   assert.ok(issues.some((i) => i.level === "warning"));
 });
@@ -210,9 +251,7 @@ test("a workable split warns without blocking", () => {
 test("overlap is a warning and names the questions", () => {
   const train = Array.from({ length: 20 }, (_, i) => `t${i}`);
   const val = [...Array.from({ length: 10 }, (_, i) => `v${i}`), "t0"];
-  const issues = splitIssues(split(train, val), {
-    min_train: 8, min_val: 5, warn_train: 20, warn_val: 10,
-  });
+  const issues = splitIssues(split(train, val), LIMITS);
   const overlap = issues.find((i) => i.code === "overlap");
   assert.equal(overlap.level, "warning");
   assert.deepEqual(overlap.item_keys, ["t0"]);
@@ -222,9 +261,7 @@ test("a comfortable split produces no issues at all", () => {
   const train = Array.from({ length: 40 }, (_, i) => `t${i}`);
   const val = Array.from({ length: 20 }, (_, i) => `v${i}`);
   assert.deepEqual(
-    splitIssues(split(train, val), {
-      min_train: 8, min_val: 5, warn_train: 20, warn_val: 10,
-    }),
+    splitIssues(split(train, val), LIMITS),
     [],
   );
 });
@@ -234,20 +271,21 @@ test("every issue carries something to do about it", () => {
   // leaves the developer holding an accurate sentence and no next move, which
   // is how three of these were read as decoration.
   const cases = [
-    splitIssues(split(["a"], ["b"]), { min_train: 8, min_val: 5 }),
+    splitIssues(split([], []), LIMITS),
+    splitIssues(split(["a"], ["b"]), LIMITS),
     splitIssues(
       split(
         Array.from({ length: 10 }, (_, i) => `t${i}`),
         Array.from({ length: 6 }, (_, i) => `v${i}`),
       ),
-      { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+      LIMITS,
     ),
     splitIssues(
       split(
         Array.from({ length: 20 }, (_, i) => `t${i}`),
         [...Array.from({ length: 10 }, (_, i) => `v${i}`), "t0"],
       ),
-      { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+      LIMITS,
     ),
   ];
   const all = cases.flat();
@@ -264,9 +302,7 @@ test("every issue carries something to do about it", () => {
 test("an issue's suggestion names the number of questions to move", () => {
   // "Add more questions" is the version that was already there. The arithmetic
   // is the part the developer would otherwise do at the top of the screen.
-  const [tooSmall] = splitIssues(split(["a", "b"], ["c", "d", "e", "f", "g"]), {
-    min_train: 8, min_val: 5,
-  });
+  const [tooSmall] = splitIssues(split(["a", "b"], ["c", "d", "e", "f", "g"]), LIMITS);
   assert.equal(tooSmall.code, "train_too_small");
   assert.match(tooSmall.suggestion, /6 more question/);
 });
@@ -276,6 +312,6 @@ test("the browser's thresholds come from the server, not from a copy", () => {
   // and enable Start on a request that 400s.
   const train = Array.from({ length: 9 }, (_, i) => `t${i}`);
   const val = Array.from({ length: 6 }, (_, i) => `v${i}`);
-  const strict = splitIssues(split(train, val), { min_train: 12, min_val: 5 });
+  const strict = splitIssues(split(train, val), { ...LIMITS, soft_train: 12 });
   assert.ok(strict.some((i) => i.code === "train_too_small"));
 });

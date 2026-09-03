@@ -52,7 +52,7 @@ export const api = {
     },
     judge_prompt: { system: "You are a judge.", user: "Grade this." },
     judge_score_threshold: 0.7,
-    limits: { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+    limits: { min_train: 1, min_val: 1, soft_train: 8, soft_val: 5, warn_train: 20, warn_val: 10 },
     impls: {
       agent: "http", judge: "anthropic", trace: "http",
       workspace: "local", optimizer: "anthropic",

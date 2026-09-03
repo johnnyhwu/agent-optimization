@@ -30,6 +30,11 @@ export const SUGGESTED_QUESTIONS_PER_SKILL = 8;
 // large for the gate to find a direction in.
 export const SMALL_VAL_SPLIT = 30;
 
+// At or under this many, one untagged validation question stops being noise in
+// the baseline and starts being most of it — and all of them being untagged
+// aborts the run outright. See the warning that uses it.
+export const TINY_VAL_SPLIT = 4;
+
 /** The batch size a routing run wants: 8 per skill, or the whole split. */
 export function suggestedBatchSize(trainSize, skills) {
   const n = (skills || []).length;
@@ -184,6 +189,30 @@ export function routingReviewWarnings({ mode, skills = [], split, values = {} })
         "can sit at zero for the first several — and the gate keeps a candidate only " +
         "when it is strictly better, so every one gets rejected. F1 scores partial " +
         "credit, which gives it a direction to follow.",
+    });
+  }
+
+  // The one failure on this screen that is not a matter of degree. Routing is
+  // scored against each question's own skill tags, read back out of its trace,
+  // so a validation question that carries no tags or produces no trace
+  // contributes nothing to the baseline. When *every* one of them is like that
+  // the engine cannot measure a baseline at all and aborts the run before step
+  // 1 (`optimizer/engine.py`, "the baseline routing accuracy could not be
+  // measured"). On a split of twenty that takes a broken eval set; on a split
+  // of two it takes one untagged question, which is why this only appears down
+  // here — the split floor is 1, so this is now reachable by ordinary use.
+  if (valSize && valSize <= TINY_VAL_SPLIT) {
+    out.push({
+      id: "tiny-val-routing",
+      tone: "warning",
+      title: "A validation split this small can stop the run before it starts",
+      body:
+        `Routing is graded against each question's own skill tags, so a ` +
+        `validation question with no tags — or one whose trace does not come ` +
+        `back — counts for nothing. With ${valSize} of them, one such question ` +
+        "is most of the gate and all of them being like that aborts the run " +
+        "rather than scoring it. Check that every question in the Validation " +
+        "column is tagged for the skills it belongs to.",
     });
   }
 

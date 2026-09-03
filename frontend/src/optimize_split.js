@@ -16,7 +16,10 @@
 //     than a bin and why excluded questions stay listed.
 //   * **The size thresholds come from the server.** A copy here would drift
 //     from the one the create endpoint enforces, and Start would be enabled on
-//     a request that 400s.
+//     a request that 400s. There are three tiers of them, and only the first —
+//     an empty column — refuses the run. Small is a warning, because a split of
+//     three questions is a bad experiment and a perfectly good smoke test, and
+//     only the developer knows which one they are doing.
 
 export const DEFAULT_SORT = "question_id";
 
@@ -172,8 +175,10 @@ function issue({ level, code, title, summary, detail, suggestion, ...rest }) {
 
 export function splitIssues(split, limits = {}) {
   const {
-    min_train: minTrain = 8,
-    min_val: minVal = 5,
+    min_train: minTrain = 1,
+    min_val: minVal = 1,
+    soft_train: softTrain = 8,
+    soft_val: softVal = 5,
     warn_train: warnTrain = 20,
     warn_val: warnVal = 10,
   } = limits;
@@ -183,17 +188,32 @@ export function splitIssues(split, limits = {}) {
   if (train < minTrain) {
     issues.push(issue({
       level: "error",
+      code: "train_empty",
+      title: "Nothing to train on",
+      summary: "The training column is empty.",
+      detail:
+        "Each step reflects on one minibatch of training questions and looks "
+        + "for what the failures have in common. With no questions there is no "
+        + "minibatch, so there is nothing for a step to be about.",
+      suggestion:
+        "Move at least one question into Training, or go back a step and pick "
+        + "an eval set with questions tagged for this skill.",
+    }));
+  } else if (train < softTrain) {
+    issues.push(issue({
+      level: "warning",
       code: "train_too_small",
-      title: "Too few training questions to run",
-      summary: `${train} in the training column; ${minTrain} is the minimum.`,
+      title: "The training split is very small",
+      summary: `${train} in the training column; ${softTrain} or more is where an edit starts describing a pattern.`,
       detail:
         "Each step reflects on one minibatch at a time and looks for what the "
         + "failures have in common. Below this many questions a minibatch is a "
         + "handful of unrelated cases, and the edit it produces is fitted to "
         + "whichever one happened to be in it.",
       suggestion:
-        `Move ${minTrain - train} more question(s) into Training, or go back a `
-        + "step and pick an eval set with more questions tagged for this skill.",
+        "Fine for a quick check that the run works at all. For a run whose "
+        + `result you intend to keep, move ${softTrain - train} more question(s) `
+        + "into Training.",
     }));
   } else if (train < warnTrain) {
     issues.push(issue({
@@ -216,17 +236,33 @@ export function splitIssues(split, limits = {}) {
   if (val < minVal) {
     issues.push(issue({
       level: "error",
+      code: "val_empty",
+      title: "Nothing to validate against",
+      summary: "The validation column is empty.",
+      detail:
+        "Validation is what decides whether an edit is kept: after each step "
+        + "the candidate skill is scored on this column and dropped unless it "
+        + "improves. With no questions there is no score, so there is no gate.",
+      suggestion:
+        "Move at least one question from Training into Validation. Taking it "
+        + "from Training is better than duplicating it: a question in both "
+        + "columns is not held out.",
+    }));
+  } else if (val < softVal) {
+    issues.push(issue({
+      level: "warning",
       code: "val_too_small",
-      title: "Too few validation questions to run",
-      summary: `${val} in the validation column; ${minVal} is the minimum.`,
+      title: "The gate is closer to a coin flip than a measurement",
+      summary: `${val} validation question(s), so one answer moves accuracy by ${Math.round(100 / val)} points.`,
       detail:
         "Validation is what decides whether an edit is kept. With this few "
         + "questions the comparison is not a measurement — one question "
-        + "answering differently would swing the verdict on its own.",
+        + "answering differently swings the verdict on its own, so the run can "
+        + "keep a bad edit and reject a good one for reasons of chance.",
       suggestion:
-        `Move ${minVal - val} question(s) from Training into Validation. Taking `
-        + "them from Training is better than duplicating them: a question in "
-        + "both columns is not held out.",
+        "Fine for a quick check that the run works at all. For a run whose "
+        + `result you intend to keep, move ${softVal - val} more question(s) `
+        + "from Training into Validation.",
     }));
   } else if (val < warnVal) {
     issues.push(issue({
