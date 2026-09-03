@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SORT,
   actionsFor,
+  bulkLabels,
   canStart,
   counts,
   duplicate,
@@ -182,6 +183,33 @@ test("an unknown key is a no-op rather than an error", () => {
 });
 
 // --- What the buttons offer -------------------------------------------------
+
+test("`Exclude all` does not promise the run when the copies stay in the other column", () => {
+  // `exclude` takes the copy whose column it was pressed on. So on a column
+  // whose questions are also in the other one — which is what `Also add all`
+  // produces, and the likeliest thing to have been pressed just before — the
+  // run keeps every one of them, and the old wording ("Exclude all 2 from this
+  // run") claimed the opposite. That is the same promise the row's ✕ was fixed
+  // for in this change; the column button had kept it.
+  const both = split(["a", "b"], ["a", "b"]);
+  assert.equal(
+    bulkLabels(both, "train").exclude,
+    "Remove all 2 from training (2 of them stay in validation)",
+  );
+  assert.deepEqual(excludeAll(both, "train").excluded, [], "the label's claim, checked");
+
+  // No overlap: the questions really do leave the run, and it says so.
+  const apart = split(["a", "b"], ["c"]);
+  assert.equal(bulkLabels(apart, "train").exclude, "Exclude all 2 from this run");
+  assert.deepEqual(excludeAll(apart, "train").excluded, ["a", "b"]);
+});
+
+test("the other two column labels count the column and name the target", () => {
+  const s = split(["a", "b", "c"], []);
+  assert.equal(bulkLabels(s, "train").move, "Move all 3 to validation");
+  assert.equal(bulkLabels(s, "train").duplicate, "Also add all 3 to validation (keep them here)");
+  assert.equal(bulkLabels(s, "val").move, "Move all 0 to training");
+});
 
 test("a question already in the other column cannot be moved or duplicated there", () => {
   // Both would be no-ops. A button that looks available and does nothing is

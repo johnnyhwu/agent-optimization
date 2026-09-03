@@ -129,6 +129,34 @@ export function excludeAll(split, column) {
   return [...split[column]].reduce((acc, key) => exclude(acc, key, column), split);
 }
 
+/**
+ * What the three column-wide buttons say they will do.
+ *
+ * Separate from `actionsFor` because the labels are not the row's with a number
+ * in front: `Exclude all` is the one that has to be careful. `exclude` takes the
+ * copy it was pressed on, so on a column whose questions also sit in the other
+ * one, "Exclude all 60 from this run" removes them from this column and the run
+ * keeps every one of them — the same promise the row's ✕ used to break, made
+ * sixty times. The count of copies that survive is in the label when there are
+ * any, and the label stops claiming the run.
+ */
+export function bulkLabels(split, column) {
+  const target = other(column);
+  const there = target === "val" ? "validation" : "training";
+  const here = column === "train" ? "training" : "validation";
+  const n = split[column].length;
+  const inTarget = new Set(split[target]);
+  const staying = split[column].filter((k) => inTarget.has(k)).length;
+  return {
+    move: `Move all ${n} to ${there}`,
+    duplicate: `Also add all ${n} to ${there} (keep them here)`,
+    exclude:
+      staying > 0
+        ? `Remove all ${n} from ${here} (${staying} of them stay in ${there})`
+        : `Exclude all ${n} from this run`,
+  };
+}
+
 // What the three icon buttons on a row may do, and why not when they may not.
 // A disabled control with no explanation is a puzzle, so every refusal carries
 // the sentence its tooltip shows.

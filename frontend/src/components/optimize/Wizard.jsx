@@ -222,6 +222,13 @@ export default function Wizard() {
   // One card clicked: a radio in isolated mode, a checkbox in routing.
   function toggleSkill(skillName) {
     if (mode !== "routing") {
+      // Clicking the card that is already selected is not a change, and acting
+      // on it as if it were costs the developer their work: `chooseSkills`
+      // rebuilds the split from the preview, so every move, copy and exclusion
+      // made on step 4 goes back to the proposed 70/30 — and, since the rebuild
+      // also clears the undo history, there is nothing left to take it back
+      // with. The same click on a radio the browser owns does nothing at all.
+      if (skills.length === 1 && skills[0] === skillName) return;
       chooseSkills([skillName]);
       return;
     }

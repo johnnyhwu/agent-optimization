@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_SORT,
   actionsFor,
+  bulkLabels,
   counts,
   duplicate,
   duplicateAll,
@@ -223,27 +224,32 @@ function QuestionCell({ q, inBoth = false }) {
 function Column({ title, hint, column, questions, split, onChange }) {
   const toward = column === "train" ? "val" : "train";
   const MoveIcon = column === "train" ? IconMoveRight : IconMoveLeft;
-  const there = toward === "val" ? "validation" : "training";
   const n = questions.length;
 
   // The same three actions as a row, applied to the column. `n` is in every
   // label because "Move all" over a collapsed sixty-row list is a click whose
   // consequences are off-screen, and the number is the cheapest way to say how
   // much is about to happen.
+  //
+  // The labels come from `bulkLabels` rather than being written here, because
+  // one of them has to know the split: `Exclude all` takes the copy in this
+  // column, so where the questions are also in the other one, the run keeps
+  // them and the button must not say otherwise.
+  const labels = bulkLabels(split, column);
   const bulk = [
     {
       icon: <MoveIcon size={15} />,
-      label: `Move all ${n} to ${there}`,
+      label: labels.move,
       run: () => moveAll(split, column, toward),
     },
     {
       icon: <IconCopyPlus size={15} />,
-      label: `Also add all ${n} to ${there} (keep them here)`,
+      label: labels.duplicate,
       run: () => duplicateAll(split, column, toward),
     },
     {
       icon: <IconX size={15} />,
-      label: `Exclude all ${n} from this run`,
+      label: labels.exclude,
       run: () => excludeAll(split, column),
     },
   ];
