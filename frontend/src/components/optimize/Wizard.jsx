@@ -6,6 +6,7 @@ import DefaultsNotice from "../settings/DefaultsNotice.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Field, { FormSection } from "../ui/Field.jsx";
+import NumberInput from "../ui/NumberInput.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconCheck, IconPlay, IconRefresh } from "../icons.jsx";
 import { plural } from "../../plural.js";
@@ -650,9 +651,8 @@ function ModeStep({ mode, onMode, config, onConfig, defaults, impls }) {
         label="Request timeout (seconds)"
         help="How long one question may take before the run counts it as failed."
       >
-        <input
-          type="number"
-          min={1}
+        <NumberInput
+                    min={1}
           value={config.agent_timeout_s ?? ""}
           onChange={set("agent_timeout_s")}
           placeholder={defaults.agent_timeout_s}
@@ -771,8 +771,8 @@ function SettingsStep({ defaults, config, onConfig, secrets, onSecrets, mode }) 
             label="Weight on partial credit"
             help="Between 0 and 1. At 0 this is the exact score; at 1 it is partial credit alone."
           >
-            <input
-              type="number" min="0" max="1" step="0.1"
+            <NumberInput
+              min="0" max="1" step="0.1"
               value={config.mixed_weight ?? ""}
               onChange={set("mixed_weight")}
               placeholder={String(d.mixed_weight ?? 0.5)}
@@ -841,9 +841,8 @@ function StopRule({ children }) {
 function PercentInput({ field, raw, set, errors, placeholder }) {
   return (
     <span className="opt-stoprule-input">
-      <input
-        type="number"
-        min={HYPER_FIELDS[field].min}
+      <NumberInput
+                min={HYPER_FIELDS[field].min}
         max={HYPER_FIELDS[field].max}
         value={raw(field)}
         onChange={set(field)}
@@ -859,9 +858,8 @@ function PercentInput({ field, raw, set, errors, placeholder }) {
 function CountInput({ field, raw, set, errors }) {
   return (
     <span className="opt-stoprule-input">
-      <input
-        type="number"
-        min={HYPER_FIELDS[field].min}
+      <NumberInput
+                min={HYPER_FIELDS[field].min}
         value={raw(field)}
         onChange={set(field)}
         aria-label={ariaLabel(field)}
@@ -1001,9 +999,8 @@ function ReviewStep({
           help="One pass over the whole training split."
           error={errors.num_epochs}
         >
-          <input
-            type="number"
-            min={HYPER_FIELDS.num_epochs.min}
+          <NumberInput
+                        min={HYPER_FIELDS.num_epochs.min}
             max={HYPER_FIELDS.num_epochs.max}
             value={raw("num_epochs")}
             onChange={set("num_epochs")}
@@ -1023,9 +1020,8 @@ function ReviewStep({
           }
           error={errors.batch_size}
         >
-          <input
-            type="number"
-            min={HYPER_FIELDS.batch_size.min}
+          <NumberInput
+                        min={HYPER_FIELDS.batch_size.min}
             value={raw("batch_size")}
             onChange={set("batch_size")}
             aria-invalid={errors.batch_size ? "true" : undefined}
@@ -1043,9 +1039,8 @@ function ReviewStep({
           }
           error={errors.learning_rate}
         >
-          <input
-            type="number"
-            min={HYPER_FIELDS.learning_rate.min}
+          <NumberInput
+                        min={HYPER_FIELDS.learning_rate.min}
             value={raw("learning_rate")}
             onChange={set("learning_rate")}
             aria-invalid={errors.learning_rate ? "true" : undefined}
@@ -1065,9 +1060,8 @@ function ReviewStep({
           } at a time. Raise it only as far as the agent server can take.`}
           error={errors.concurrency}
         >
-          <input
-            type="number"
-            min={HYPER_FIELDS.concurrency.min}
+          <NumberInput
+                        min={HYPER_FIELDS.concurrency.min}
             max={HYPER_FIELDS.concurrency.max}
             value={raw("concurrency")}
             onChange={set("concurrency")}
@@ -1112,9 +1106,8 @@ function ReviewStep({
           }
           error={mode === "routing" ? null : errors.minibatch_size}
         >
-          <input
-            type="number"
-            min={HYPER_FIELDS.minibatch_size.min}
+          <NumberInput
+                        min={HYPER_FIELDS.minibatch_size.min}
             value={mode === "routing" ? (values.batch_size ?? "") : raw("minibatch_size")}
             onChange={set("minibatch_size")}
             disabled={mode === "routing"}
@@ -1130,9 +1123,8 @@ function ReviewStep({
             help={budgetHelp(values.reflect_budget_chars)}
             error={errors.reflect_budget_chars}
           >
-            <input
-              type="number"
-              min={HYPER_FIELDS.reflect_budget_chars.min}
+            <NumberInput
+                            min={HYPER_FIELDS.reflect_budget_chars.min}
               step={10000}
               value={raw("reflect_budget_chars")}
               onChange={set("reflect_budget_chars")}

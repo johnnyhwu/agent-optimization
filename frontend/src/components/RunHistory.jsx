@@ -19,6 +19,7 @@ import EmptyState from "./ui/EmptyState.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
 import Toolbar, { SegmentedControl } from "./ui/Toolbar.jsx";
+import NumberInput from "./ui/NumberInput.jsx";
 import {
   IconFileText, IconInbox, IconPlay, IconStop, IconTrash,
 } from "./icons.jsx";
@@ -286,8 +287,7 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
               {mode === "last_n" && (
                 <>
                   <span className="ui-toolbar-label">in the last</span>
-                  <input
-                    type="number"
+                  <NumberInput
                     min="1"
                     value={lastN}
                     onChange={(e) => setLastN(Number(e.target.value))}

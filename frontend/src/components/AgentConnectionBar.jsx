@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { IconAlert, IconRefresh, IconTarget } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
+import NumberInput from "./ui/NumberInput.jsx";
 
 // Which agent the playground is talking to.
 //
@@ -156,9 +157,8 @@ export default function AgentConnectionBar({
           </div>
           <div className="field agent-bar-timeout">
             <label htmlFor="agent-timeout">Timeout (sec)</label>
-            <input
+            <NumberInput
               id="agent-timeout"
-              type="number"
               min="1"
               value={timeout_s}
               onChange={(e) => setTimeout_s(e.target.value)}
