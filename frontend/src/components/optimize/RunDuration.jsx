@@ -19,10 +19,11 @@ import { useTick } from "../../useElapsed.js";
 // alice" alone rather than a dangling separator in front of it. Composing it
 // here keeps that case beside the rule that produces it.
 //
-// `label.title` is dropped from the markup: it explained what the span measured
-// on hover, and the element it was on is now one of two lines rather than the
-// number itself. The explanation lives in the run header beside the number it
-// is about.
+// `label.title` stays on the duration line. It is the only place two of the
+// four cases are explained at all: why an interrupted run's span stops at the
+// last finished step, and — for a run that was resumed — how much of its
+// wall-clock span was spent waiting rather than working. Neither sentence has
+// another home on the page.
 function Label({ run, steps, by }) {
   const label = durationLabel(run, steps);
   // Two lines, always — including the empty one when a run has no duration to
@@ -36,7 +37,9 @@ function Label({ run, steps, by }) {
   // is then the same whatever the number says.
   return (
     <>
-      <span className="opt-rundur">{label ? label.text : ""}</span>
+      <span className="opt-rundur" title={label ? label.title : undefined}>
+        {label ? label.text : ""}
+      </span>
       <span className="opt-rundur">by {by}</span>
     </>
   );

@@ -687,7 +687,7 @@ function ModeStep({ mode, onMode, config, onConfig, defaults, impls }) {
         help="How long one question may take before the run counts it as failed."
       >
         <NumberInput
-                    min={1}
+          min={1}
           value={config.agent_timeout_s ?? ""}
           onChange={set("agent_timeout_s")}
           placeholder={defaults.agent_timeout_s}
@@ -877,7 +877,7 @@ function PercentInput({ field, raw, set, errors, placeholder }) {
   return (
     <span className="opt-stoprule-input">
       <NumberInput
-                min={HYPER_FIELDS[field].min}
+        min={HYPER_FIELDS[field].min}
         max={HYPER_FIELDS[field].max}
         value={raw(field)}
         onChange={set(field)}
@@ -894,7 +894,7 @@ function CountInput({ field, raw, set, errors }) {
   return (
     <span className="opt-stoprule-input">
       <NumberInput
-                min={HYPER_FIELDS[field].min}
+        min={HYPER_FIELDS[field].min}
         value={raw(field)}
         onChange={set(field)}
         aria-label={ariaLabel(field)}
@@ -1035,7 +1035,7 @@ function ReviewStep({
           error={errors.num_epochs}
         >
           <NumberInput
-                        min={HYPER_FIELDS.num_epochs.min}
+            min={HYPER_FIELDS.num_epochs.min}
             max={HYPER_FIELDS.num_epochs.max}
             value={raw("num_epochs")}
             onChange={set("num_epochs")}
@@ -1056,7 +1056,7 @@ function ReviewStep({
           error={errors.batch_size}
         >
           <NumberInput
-                        min={HYPER_FIELDS.batch_size.min}
+            min={HYPER_FIELDS.batch_size.min}
             value={raw("batch_size")}
             onChange={set("batch_size")}
             aria-invalid={errors.batch_size ? "true" : undefined}
@@ -1075,7 +1075,7 @@ function ReviewStep({
           error={errors.learning_rate}
         >
           <NumberInput
-                        min={HYPER_FIELDS.learning_rate.min}
+            min={HYPER_FIELDS.learning_rate.min}
             value={raw("learning_rate")}
             onChange={set("learning_rate")}
             aria-invalid={errors.learning_rate ? "true" : undefined}
@@ -1096,7 +1096,7 @@ function ReviewStep({
           error={errors.concurrency}
         >
           <NumberInput
-                        min={HYPER_FIELDS.concurrency.min}
+            min={HYPER_FIELDS.concurrency.min}
             max={HYPER_FIELDS.concurrency.max}
             value={raw("concurrency")}
             onChange={set("concurrency")}
@@ -1142,7 +1142,7 @@ function ReviewStep({
           error={mode === "routing" ? null : errors.minibatch_size}
         >
           <NumberInput
-                        min={HYPER_FIELDS.minibatch_size.min}
+            min={HYPER_FIELDS.minibatch_size.min}
             value={mode === "routing" ? (values.batch_size ?? "") : raw("minibatch_size")}
             onChange={set("minibatch_size")}
             disabled={mode === "routing"}
@@ -1159,7 +1159,7 @@ function ReviewStep({
             error={errors.reflect_budget_chars}
           >
             <NumberInput
-                            min={HYPER_FIELDS.reflect_budget_chars.min}
+              min={HYPER_FIELDS.reflect_budget_chars.min}
               step={10000}
               value={raw("reflect_budget_chars")}
               onChange={set("reflect_budget_chars")}

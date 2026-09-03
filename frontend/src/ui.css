@@ -812,30 +812,34 @@
 .opt-fact dt { font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .opt-fact dd { margin: 0; font-size: var(--text-ui); font-weight: var(--fw-semibold); color: var(--text); font-variant-numeric: tabular-nums; }
 .opt-fact dd code { font-family: var(--font-mono); font-size: var(--text-body); }
-/* One line, always, whatever the number in it says.
+.opt-fact-sub { font-size: var(--text-micro); color: var(--muted); }
+/* The two halves of the Started fact's subtitle, on a line each, and the reason
+   the run header stops moving while a run is watched.
+
    `.opt-runfacts` is a fixed grid (`auto-fit, minmax(120px, 1fr)`), so a longer
-   string here does not widen its cell — it wraps inside it, and the row grows.
-   That is fine for the static facts and was not fine for the Started one, whose
-   subtitle is a live duration: the row gained 16.5px the moment "59s" became
-   "1m 01s" and shoved the chart and the step table down with it, repeatedly,
-   while the run was being watched.
-   `formatSpan` reporting to the minute cuts how often the string changes;
-   these two declarations are what stop the change from moving anything. The
-   tabular figures keep every digit the same width, so 1h 09m and 1h 10m are the
-   same box, and the ellipsis is what a very long one does instead of wrapping. */
-.opt-fact-sub {
-  font-size: var(--text-micro); color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-/* The two halves of the Started fact's subtitle, on a line each. See
-   RunDuration.jsx: one line could not hold both without wrapping, and not
-   wrapping cost "by alice" to an ellipsis. `min-height` rather than relying on
-   the content, so the empty first line of a run with no duration yet still
-   occupies its row and the header does not grow when one appears. */
+   string does not widen its cell — it wraps inside it, and the row grows. The
+   row gained 16.5px the moment "59s" became "1m 01s" and shoved the chart and
+   the step table down with it, once a minute, for the length of the run.
+   `formatSpan` reporting to the minute cuts how often the string changes; these
+   declarations are what stop the change from moving anything.
+
+   Deliberately scoped to these two spans rather than to `.opt-fact-sub`. That
+   class is every fact's subtitle on two pages, and several of them are genuinely
+   longer than their cell — `avg · median 2.5s · max 12.4s` on the rollout page —
+   where wrapping is how they stay readable and an ellipsis would silently eat
+   half a measurement. Only this one subtitle is live, so only this one needs to
+   be pinned.
+
+   One line each, because one line could not hold both without wrapping, and not
+   wrapping cost "by alice" to an ellipsis (measured at 520, 620 and 760px).
+   `min-height` rather than relying on the content, so the empty first line of a
+   run with no duration yet still occupies its row and the header does not grow
+   when one appears. The tabular figures keep every digit the same width, so
+   1h 09m and 1h 10m are the same box. */
 .opt-rundur {
   display: block; min-height: 1.4em;
-  overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Live state: everything below this line moves while you watch it. */
