@@ -125,11 +125,7 @@ export default function App() {
             <div className="topbar-inner">
               {/* Where you are, once. See Breadcrumb for why this replaced the
                   section title that used to sit here. */}
-              <Breadcrumb
-                route={route}
-                evalSet={resolved}
-                label={sectionTitle(route.section)}
-              />
+              <Breadcrumb route={route} evalSet={resolved} />
               <UserMenu
                 subject={subject}
                 users={users}

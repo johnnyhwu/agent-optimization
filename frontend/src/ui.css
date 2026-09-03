@@ -152,8 +152,17 @@
      column is what gives — at 768px it resolved to about 16px, which ellipsises
      every run name down to nothing. A floor plus a scrollbar keeps the data
      readable at a width this file already claims to support; `--ui-table-min`
-     is set per table by DataTable and defaults to "no floor". */
+     is set per table by DataTable and defaults to "no floor".
+
+     `overflow-y` is declared because leaving it out does not leave it alone:
+     with one axis set, the other computes to `auto` rather than `visible`. The
+     rows animate in from `translateY(10px)`, which measured 10px of vertical
+     overflow during the staggered entry — enough to flash a vertical scrollbar
+     on every load and every appended page. `hidden` is what this element had
+     before, as `overflow: hidden`, and is still what it wants: nothing here
+     scrolls vertically, and the rounded corners need the clip. */
   overflow-x: auto;
+  overflow-y: hidden;
 }
 .ui-table-head,
 .ui-table-row {
@@ -943,7 +952,11 @@
 
 /* The step bar: all six, always, in order. */
 .opt-wizard { display: flex; flex-direction: column; gap: var(--space-5); flex: 1 1 0; min-height: 0; }
-.opt-steps { list-style: none; margin: 0; padding-block: 0; display: flex; gap: var(--space-1); overflow-x: auto; }
+/* `overflow-y` spelled out because it is not `visible` and never was: with one
+   axis set the other computes to `auto`. Written as what it already resolves to,
+   so this is a no-op that makes the next reader's decision visible rather than
+   accidental. */
+.opt-steps { list-style: none; margin: 0; padding-block: 0; display: flex; gap: var(--space-1); overflow-x: auto; overflow-y: auto; }
 .opt-step { flex: 1 1 0; min-width: 120px; }
 .opt-step button {
   display: flex; align-items: center; gap: var(--space-2); width: 100%;
@@ -1397,7 +1410,8 @@
 /* `scrollbar-gutter` so that the row of pixels a scrollbar occupies is reserved
    whether or not there is one: without it, a run that grows past the panel's
    width mid-afternoon shifts the whole card as the bar appears. */
-.opt-chart-frame { position: relative; overflow-x: auto; scrollbar-gutter: stable; }
+/* Same: `overflow-y: auto` is what this already computed to. */
+.opt-chart-frame { position: relative; overflow-x: auto; overflow-y: auto; scrollbar-gutter: stable; }
 
 /* The hover readout, above the plot rather than floating over it. It has had
    all three positions: in the flow underneath, where it pushed the pinned card

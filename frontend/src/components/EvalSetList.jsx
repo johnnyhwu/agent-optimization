@@ -211,6 +211,7 @@ export default function EvalSetList({ onOpen, subject }) {
               // Stagger only within a page: restarting the animation for every
               // card on each append would flash the whole grid.
               index={i % PAGE_SIZE}
+              pinnedLabel={metadataKey}
               onOpen={() => onOpen(s)}
               onDownload={() => setDownloadSet(s)}
               onEditQuestions={() => setEditSet(s)}
@@ -273,7 +274,7 @@ export default function EvalSetList({ onOpen, subject }) {
   );
 }
 
-function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigure, onDelete }) {
+function SetCard({ set: s, index, pinnedLabel, onOpen, onDownload, onEditQuestions, onConfigure, onDelete }) {
   const owner = s.my_role === "owner";
   const members = (s.roles || []).length;
   // "Nobody has looked at how this set is graded yet" — not "your judge prompt is
@@ -286,7 +287,14 @@ function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigu
   // of the band, the one thing anyone reads *across* the cards. The rest are
   // still reachable: the row carries the full list as its tooltip, and the set's
   // own page shows them all.
-  const allLabels = Object.entries(s.metadata || {});
+  //
+  // The key being filtered on sorts first, so the card can never hide the one
+  // label that explains why it is in the results — a set with five keys whose
+  // `env` came fourth would otherwise match "env: staging" and show nothing
+  // saying so.
+  const allLabels = Object.entries(s.metadata || {}).sort(
+    ([a], [b]) => (b === pinnedLabel) - (a === pinnedLabel),
+  );
   const labels = allLabels.slice(0, 3);
   const hiddenLabels = allLabels.length - labels.length;
 

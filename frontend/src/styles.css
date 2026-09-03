@@ -399,8 +399,14 @@ select { cursor: pointer; }
    with the content's right edge instead of the window's. */
 .topbar-inner {
   max-width: var(--page-max); margin: 0 auto;
-  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  display: flex; align-items: center; gap: var(--space-3);
 }
+/* `margin-left: auto` rather than `justify-content: space-between` on the row:
+   the breadcrumb renders nothing on a page with no trail, and `space-between`
+   with a single child aligns it to the *start* — which would have walked the
+   user menu across to the left edge on four of the five sections. Pushing the
+   menu itself right is true whether it has a sibling or not. */
+.topbar-inner > .userbox { margin-left: auto; }
 /* `.topbar-title` used to be here, repeating the section name the rail already
    marks as current. See Breadcrumb.jsx. */
 .userbox { display: flex; align-items: center; gap: var(--space-1); }

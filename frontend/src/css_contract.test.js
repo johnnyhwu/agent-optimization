@@ -728,3 +728,43 @@ test("no text is smaller than the bottom of the type scale", () => {
     `text below the ${floor}px floor of the scale:\n  ${offenders.join("\n  ")}`,
   );
 });
+
+test("a rule that scrolls one axis says what the other one does", () => {
+  // `overflow-x: auto` on its own does not leave the other axis alone. Per the
+  // spec, when one axis is not `visible` the other computes to `auto` too — so
+  // declaring one makes the element a scroll container in *both* directions,
+  // silently.
+  //
+  // `.ui-table` was given `overflow-x: auto` so a wide table could scroll
+  // instead of crushing its columns. That made `overflow-y` `auto` as well, and
+  // the rows animate in from `translateY(10px)`: measured in headless Chromium,
+  // 10px of vertical overflow during the staggered entry, which flashes a
+  // vertical scrollbar on every load and every appended page on any platform
+  // with classic scrollbars.
+  //
+  // So: if a rule declares one axis, it declares the other, and the intent is
+  // written down rather than inherited from a spec rule nobody remembers.
+  //
+  // Scoped to `overflow-x` declared alone, which is the asymmetry that bit.
+  // `overflow-y: auto` on a tall pane is the idiom this codebase uses in five
+  // places and the horizontal `auto` it implies is inert there — nothing is
+  // laid out to exceed those panes sideways. The reverse is not inert: a rule
+  // reaches for `overflow-x` precisely because its content is wider than its
+  // box, and the vertical axis it silently opens is the one every entry
+  // animation, hover lift and focus ring moves things along.
+  const offenders = [];
+  for (const [file, css] of Object.entries(stripped)) {
+    for (const [selector, decls] of topLevelDeclarations(css)) {
+      if (decls.has("overflow-x") && !decls.has("overflow-y") && !decls.has("overflow")) {
+        offenders.push(`${file}: "${selector}"`);
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these scroll horizontally and leave the vertical axis to chance:\n  ` +
+      `${offenders.join("\n  ")}\n\nThe undeclared axis computes to \`auto\`, ` +
+      `not \`visible\`. Say which you meant.`,
+  );
+});

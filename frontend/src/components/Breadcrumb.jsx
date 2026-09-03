@@ -18,11 +18,21 @@ import { IconChevronRight } from "./icons.jsx";
 // muted crumb and a page title are the conventional pair, and the crumb is the
 // route while the heading is the thing.
 //
-// A section with no trail renders its own name as a single crumb, so the bar is
-// never empty. The last crumb deliberately does *not* repeat the incorrect
-// mode: the detail view's own meta line already carries it, and a crumb's job
-// is to name the place, not to describe it.
-export default function Breadcrumb({ route, evalSet, label }) {
+// A trail of one is not a trail, and it renders nothing. On the top tier — and
+// on Playground, Optimize and Settings — the only crumb there is to draw is the
+// page's own name, which the <h1> is already saying about ninety pixels below
+// it. Moving the duplication from the section title into the crumb would have
+// been no better than leaving it where it was; it would have been worse, since
+// the two would now match word for word. The rail marks the section, the
+// heading names the page, and the bar stays quiet until there is somewhere to
+// go back to.
+//
+// The last crumb deliberately does *not* repeat the incorrect mode: the detail
+// view's own meta line already carries it, and a crumb's job is to name the
+// place, not to describe it.
+export default function Breadcrumb({ route, evalSet }) {
+  // Only the evaluation route has depth today. A section that grows some adds
+  // its crumbs here; until then it has a heading and that is all it needs.
   const crumbs = [];
   if (route.section === "evaluation") {
     crumbs.push({
@@ -39,9 +49,9 @@ export default function Breadcrumb({ route, evalSet, label }) {
       const n = route.runIds.length;
       crumbs.push({ label: n === 1 ? "1 run" : `${n} runs compared`, to: null });
     }
-  } else {
-    crumbs.push({ label, to: null });
   }
+
+  if (crumbs.length < 2) return null;
 
   return (
     <nav className="breadcrumb" aria-label="Breadcrumb">
