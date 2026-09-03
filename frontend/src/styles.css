@@ -402,8 +402,21 @@ select { cursor: pointer; }
    height the layout knows if the page stops at the window rather than growing
    with the step's content. Its own rule rather than `.page-fill`, because that
    class appends a spacer after its last child and the wizard's last child is
-   the footer, which has to end flush against the bottom. */
-.page:has(> .opt-wizard) { flex: 1 1 0; min-height: 0; }
+   the footer, which has to end flush against the bottom.
+
+   It also gives up its horizontal padding and its `max-width`, which move down
+   to a wrapper inside each of the wizard's three rows. The reason is the scroll
+   container: `.opt-wizard-body` is the only thing on this route that scrolls,
+   and while it sat inside the gutter the wheel did nothing in the 44px at
+   either edge of the window — and in far more than that on a wide screen, where
+   this box is centred inside `--page-max` with dead space on both sides.
+   `.main` has `overflow-y: auto` but nothing to scroll here, so the event had
+   nowhere to go. Full-bleed, the scroll region reaches both edges and the
+   content stays exactly where it was. */
+.page:has(> .opt-wizard) {
+  flex: 1 1 0; min-height: 0;
+  max-width: none; padding-left: 0; padding-right: 0;
+}
 /* A section that wants the leftover height rather than its natural one — the
    three-column views. min-height: 0 keeps the columns scrolling internally
    instead of growing the page. */

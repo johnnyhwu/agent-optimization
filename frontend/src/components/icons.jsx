@@ -111,6 +111,15 @@ export const IconRefresh = (p) => (
     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
   </S>
 );
+// Undo. The arrowhead points back into the curve rather than along it, which is
+// what distinguishes it from IconRefresh at 15px — the two are otherwise the
+// same gesture, and "redo the whole thing" is not what this button does.
+export const IconUndo = (p) => (
+  <S {...p}>
+    <polyline points="3 7 3 13 9 13" />
+    <path d="M3.5 13a8 8 0 1 1 2.3 6" />
+  </S>
+);
 // The record of what a run used — deliberately not IconGear, which means
 // *editable* config on the eval-set cards.
 export const IconFileText = (p) => (

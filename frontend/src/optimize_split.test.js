@@ -4,15 +4,30 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SORT,
   actionsFor,
+  bulkLabels,
+  canStart,
   counts,
   duplicate,
+  duplicateAll,
   exclude,
+  excludeAll,
   makeSplit,
   move,
+  moveAll,
   restore,
   sortQuestions,
   splitIssues,
 } from "./optimize_split.js";
+
+// What `/optimization/defaults` sends, spelled out once. Passing it explicitly
+// rather than leaning on the defaults is the point of the last test in this
+// file: these thresholds belong to the server, and a copy here would drift from
+// the one the create endpoint enforces.
+const LIMITS = {
+  min_train: 1, min_val: 1,
+  soft_train: 8, soft_val: 5,
+  warn_train: 20, warn_val: 10,
+};
 
 const q = (id, extra = {}) => ({
   item_key: id,
@@ -61,7 +76,7 @@ test("duplicating a question that is already in the other column changes nothing
   assert.deepEqual(after.val, ["a", "b"]);
 });
 
-test("excluding removes a question from both columns and remembers it", () => {
+test("excluding without naming a column takes the question out of the run", () => {
   // Exclude means "not in this run", not "delete from the eval set" — which is
   // why the button is an ✕ and not a bin, and why the question has to come back.
   const after = exclude(split(["a", "b"], ["a", "c"]), "a");
@@ -70,10 +85,86 @@ test("excluding removes a question from both columns and remembers it", () => {
   assert.deepEqual(after.excluded, ["a"]);
 });
 
-test("restoring puts a question back into the training column", () => {
+test("excluding from one column leaves the copy in the other alone", () => {
+  // The ✕ used to clear both columns whichever row it was pressed on, so a
+  // question that had just been copied to validation vanished from there too,
+  // with nothing on screen to say so. The button is on a row; it acts on that
+  // row.
+  const after = exclude(split(["a", "b"], ["a", "c"]), "a", "train");
+  assert.deepEqual(after.train, ["b"]);
+  assert.deepEqual(after.val, ["a", "c"], "the validation copy is still there");
+  assert.deepEqual(after.excluded, [], "and the run has not lost the question");
+});
+
+test("excluding the last copy is what puts a question in the drawer", () => {
+  const once = exclude(split(["a"], ["a"]), "a", "train");
+  assert.deepEqual(once.excluded, []);
+  const twice = exclude(once, "a", "val");
+  assert.deepEqual(twice.excluded, ["a"]);
+  assert.deepEqual(twice.train, []);
+  assert.deepEqual(twice.val, []);
+});
+
+test("excluding a question the drawer already holds does not list it twice", () => {
+  const after = exclude(split(["b"], ["c"], ["a"]), "a");
+  assert.deepEqual(after.excluded, ["a"]);
+});
+
+test("restoring puts a question back into the training column by default", () => {
   const after = restore(split(["b"], ["c"], ["a"]), "a");
   assert.ok(after.train.includes("a"));
   assert.deepEqual(after.excluded, []);
+});
+
+test("restoring can name the column instead", () => {
+  // The drawer's rows offer both, so that putting a question back into
+  // validation is one click rather than restore-then-move.
+  const after = restore(split(["b"], ["c"], ["a"]), "a", "val");
+  assert.deepEqual(after.val, ["c", "a"]);
+  assert.ok(!after.train.includes("a"));
+  assert.deepEqual(after.excluded, []);
+});
+
+// --- The same three things, to a whole column -------------------------------
+
+test("moving a whole column empties it into the other one", () => {
+  // The case that motivated this: sixty questions is sixty clicks.
+  const after = moveAll(split(["a", "b", "c"], ["d"]), "train", "val");
+  assert.deepEqual(after.train, []);
+  assert.deepEqual(after.val, ["d", "a", "b", "c"]);
+});
+
+test("copying a whole column leaves it where it is", () => {
+  const after = duplicateAll(split(["a", "b"], ["c"]), "train", "val");
+  assert.deepEqual(after.train, ["a", "b"]);
+  assert.deepEqual(after.val, ["c", "a", "b"]);
+  // Which is the overlap case, and the editor says so — deliberately, because
+  // it is what the developer asked for.
+  assert.equal(counts(after).overlap, 2);
+});
+
+test("a bulk copy does not duplicate what is already in the target", () => {
+  const after = duplicateAll(split(["a", "b"], ["a"]), "train", "val");
+  assert.deepEqual(after.val, ["a", "b"]);
+});
+
+test("excluding a whole column leaves questions that are also in the other one", () => {
+  // `excludeAll` is a fold over the per-row exclude, so it inherits the rule
+  // that a question with a copy elsewhere has not left the run. Anything else
+  // would make "clear this column" quietly destructive.
+  const after = excludeAll(split(["a", "b"], ["a"]), "train");
+  assert.deepEqual(after.train, []);
+  assert.deepEqual(after.val, ["a"]);
+  assert.deepEqual(after.excluded, ["b"]);
+});
+
+test("a bulk operation reads the column it is about to change", () => {
+  // `moveAll` empties the list it is iterating. Folding over the live split
+  // rather than a snapshot of the keys skips every other question.
+  const before = split(["a", "b", "c", "d", "e"], []);
+  const after = moveAll(before, "train", "val");
+  assert.equal(after.val.length, 5);
+  assert.deepEqual(before.train, ["a", "b", "c", "d", "e"], "and does not mutate");
 });
 
 test("every operation returns a new object rather than mutating", () => {
@@ -92,6 +183,33 @@ test("an unknown key is a no-op rather than an error", () => {
 });
 
 // --- What the buttons offer -------------------------------------------------
+
+test("`Exclude all` does not promise the run when the copies stay in the other column", () => {
+  // `exclude` takes the copy whose column it was pressed on. So on a column
+  // whose questions are also in the other one — which is what `Also add all`
+  // produces, and the likeliest thing to have been pressed just before — the
+  // run keeps every one of them, and the old wording ("Exclude all 2 from this
+  // run") claimed the opposite. That is the same promise the row's ✕ was fixed
+  // for in this change; the column button had kept it.
+  const both = split(["a", "b"], ["a", "b"]);
+  assert.equal(
+    bulkLabels(both, "train").exclude,
+    "Remove all 2 from training (2 of them stay in validation)",
+  );
+  assert.deepEqual(excludeAll(both, "train").excluded, [], "the label's claim, checked");
+
+  // No overlap: the questions really do leave the run, and it says so.
+  const apart = split(["a", "b"], ["c"]);
+  assert.equal(bulkLabels(apart, "train").exclude, "Exclude all 2 from this run");
+  assert.deepEqual(excludeAll(apart, "train").excluded, ["a", "b"]);
+});
+
+test("the other two column labels count the column and name the target", () => {
+  const s = split(["a", "b", "c"], []);
+  assert.equal(bulkLabels(s, "train").move, "Move all 3 to validation");
+  assert.equal(bulkLabels(s, "train").duplicate, "Also add all 3 to validation (keep them here)");
+  assert.equal(bulkLabels(s, "val").move, "Move all 0 to training");
+});
 
 test("a question already in the other column cannot be moved or duplicated there", () => {
   // Both would be no-ops. A button that looks available and does nothing is
@@ -187,22 +305,52 @@ test("the counts report each column and the overlap separately", () => {
   assert.equal(c.excluded, 1);
 });
 
-test("a split below the minimum reports an error that blocks Start", () => {
+test("an empty column reports an error that blocks Start", () => {
   // The server refuses it too. The point of checking here is that the developer
   // finds out while they can still fix it, rather than on a 400 after filling in
   // three more screens.
-  const issues = splitIssues(split(["a", "b"], ["c"]), { min_train: 8, min_val: 5 });
+  //
+  // Empty is the *only* size that blocks. It is not a judgement about how good
+  // the run would be: with no training questions a minibatch does not exist,
+  // and with no validation questions the gate has nothing to compare.
+  const issues = splitIssues(split([], []), LIMITS);
   const codes = issues.filter((i) => i.level === "error").map((i) => i.code);
-  assert.ok(codes.includes("train_too_small"));
-  assert.ok(codes.includes("val_too_small"));
+  assert.ok(codes.includes("train_empty"));
+  assert.ok(codes.includes("val_empty"));
+});
+
+test("a tiny split warns but still starts", () => {
+  // The case the old floor of 8/5 refused, and the reason it was lowered:
+  // three questions is a bad experiment and a perfectly good check that the
+  // pipeline works before an hour of agent calls is spent on sixty.
+  const issues = splitIssues(split(["a", "b", "c"], ["d", "e"]), LIMITS);
+  assert.equal(issues.filter((i) => i.level === "error").length, 0);
+  assert.deepEqual(
+    issues.map((i) => i.code).sort(),
+    ["train_too_small", "val_too_small"],
+  );
+  assert.ok(canStart(split(["a", "b", "c"], ["d", "e"]), LIMITS));
+});
+
+test("each column raises exactly one size issue", () => {
+  // Three tiers, and a column belongs to one of them. A split of six training
+  // questions is very small *and* thin, and saying so twice would put two boxes
+  // on screen describing one number.
+  for (const [n, expected] of [[0, "train_empty"], [3, "train_too_small"],
+                               [12, "train_small"], [30, null]]) {
+    const train = Array.from({ length: n }, (_, i) => `t${i}`);
+    const val = Array.from({ length: 10 }, (_, i) => `v${i}`);
+    const codes = splitIssues(split(train, val), LIMITS)
+      .map((i) => i.code)
+      .filter((c) => c.startsWith("train"));
+    assert.deepEqual(codes, expected ? [expected] : [], `train of ${n}`);
+  }
 });
 
 test("a workable split warns without blocking", () => {
   const train = Array.from({ length: 10 }, (_, i) => `t${i}`);
   const val = Array.from({ length: 6 }, (_, i) => `v${i}`);
-  const issues = splitIssues(split(train, val), {
-    min_train: 8, min_val: 5, warn_train: 20, warn_val: 10,
-  });
+  const issues = splitIssues(split(train, val), LIMITS);
   assert.equal(issues.filter((i) => i.level === "error").length, 0);
   assert.ok(issues.some((i) => i.level === "warning"));
 });
@@ -210,9 +358,7 @@ test("a workable split warns without blocking", () => {
 test("overlap is a warning and names the questions", () => {
   const train = Array.from({ length: 20 }, (_, i) => `t${i}`);
   const val = [...Array.from({ length: 10 }, (_, i) => `v${i}`), "t0"];
-  const issues = splitIssues(split(train, val), {
-    min_train: 8, min_val: 5, warn_train: 20, warn_val: 10,
-  });
+  const issues = splitIssues(split(train, val), LIMITS);
   const overlap = issues.find((i) => i.code === "overlap");
   assert.equal(overlap.level, "warning");
   assert.deepEqual(overlap.item_keys, ["t0"]);
@@ -222,9 +368,7 @@ test("a comfortable split produces no issues at all", () => {
   const train = Array.from({ length: 40 }, (_, i) => `t${i}`);
   const val = Array.from({ length: 20 }, (_, i) => `v${i}`);
   assert.deepEqual(
-    splitIssues(split(train, val), {
-      min_train: 8, min_val: 5, warn_train: 20, warn_val: 10,
-    }),
+    splitIssues(split(train, val), LIMITS),
     [],
   );
 });
@@ -234,20 +378,21 @@ test("every issue carries something to do about it", () => {
   // leaves the developer holding an accurate sentence and no next move, which
   // is how three of these were read as decoration.
   const cases = [
-    splitIssues(split(["a"], ["b"]), { min_train: 8, min_val: 5 }),
+    splitIssues(split([], []), LIMITS),
+    splitIssues(split(["a"], ["b"]), LIMITS),
     splitIssues(
       split(
         Array.from({ length: 10 }, (_, i) => `t${i}`),
         Array.from({ length: 6 }, (_, i) => `v${i}`),
       ),
-      { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+      LIMITS,
     ),
     splitIssues(
       split(
         Array.from({ length: 20 }, (_, i) => `t${i}`),
         [...Array.from({ length: 10 }, (_, i) => `v${i}`), "t0"],
       ),
-      { min_train: 8, min_val: 5, warn_train: 20, warn_val: 10 },
+      LIMITS,
     ),
   ];
   const all = cases.flat();
@@ -264,9 +409,7 @@ test("every issue carries something to do about it", () => {
 test("an issue's suggestion names the number of questions to move", () => {
   // "Add more questions" is the version that was already there. The arithmetic
   // is the part the developer would otherwise do at the top of the screen.
-  const [tooSmall] = splitIssues(split(["a", "b"], ["c", "d", "e", "f", "g"]), {
-    min_train: 8, min_val: 5,
-  });
+  const [tooSmall] = splitIssues(split(["a", "b"], ["c", "d", "e", "f", "g"]), LIMITS);
   assert.equal(tooSmall.code, "train_too_small");
   assert.match(tooSmall.suggestion, /6 more question/);
 });
@@ -276,6 +419,6 @@ test("the browser's thresholds come from the server, not from a copy", () => {
   // and enable Start on a request that 400s.
   const train = Array.from({ length: 9 }, (_, i) => `t${i}`);
   const val = Array.from({ length: 6 }, (_, i) => `v${i}`);
-  const strict = splitIssues(split(train, val), { min_train: 12, min_val: 5 });
+  const strict = splitIssues(split(train, val), { ...LIMITS, soft_train: 12 });
   assert.ok(strict.some((i) => i.code === "train_too_small"));
 });

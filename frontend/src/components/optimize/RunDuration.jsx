@@ -18,13 +18,29 @@ import { useTick } from "../../useElapsed.js";
 // stated — one interrupted before its first step finished — must leave "by
 // alice" alone rather than a dangling separator in front of it. Composing it
 // here keeps that case beside the rule that produces it.
+//
+// `label.title` stays on the duration line. It is the only place two of the
+// four cases are explained at all: why an interrupted run's span stops at the
+// last finished step, and — for a run that was resumed — how much of its
+// wall-clock span was spent waiting rather than working. Neither sentence has
+// another home on the page.
 function Label({ run, steps, by }) {
   const label = durationLabel(run, steps);
-  if (!label) return <>by {by}</>;
+  // Two lines, always — including the empty one when a run has no duration to
+  // report yet. Both halves used to share a line, which meant the fixed grid
+  // cell had to fit "running for 1h 01m · by alice" and could not: it wrapped,
+  // and the facts row grew by a line every time the number got wider.
+  //
+  // Stopping the wrap alone would have truncated "by alice" instead — measured
+  // at 520, 620 and 760px, where the one-line version ends in an ellipsis. So
+  // the line break is deliberate rather than left to the browser, and the height
+  // is then the same whatever the number says.
   return (
     <>
-      <span title={label.title}>{label.text}</span>
-      {" · "}by {by}
+      <span className="opt-rundur" title={label ? label.title : undefined}>
+        {label ? label.text : ""}
+      </span>
+      <span className="opt-rundur">by {by}</span>
     </>
   );
 }

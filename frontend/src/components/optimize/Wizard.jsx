@@ -6,6 +6,7 @@ import DefaultsNotice from "../settings/DefaultsNotice.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Field, { FormSection } from "../ui/Field.jsx";
+import NumberInput from "../ui/NumberInput.jsx";
 import Skeleton from "../ui/Skeleton.jsx";
 import { IconCheck, IconPlay, IconRefresh } from "../icons.jsx";
 import { plural } from "../../plural.js";
@@ -13,6 +14,7 @@ import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
 import { counts, makeSplit } from "../../optimize_split.js";
+import * as undoStack from "../../optimize_split_history.js";
 import { routingReviewWarnings } from "../../optimize_routing_warnings.js";
 import { analystCallsPerStep, estimateRun, explainRun } from "../../optimize_cost.js";
 import {
@@ -65,6 +67,34 @@ export default function Wizard() {
   // chosen would look like the page arguing with them.
   const [skillTouched, setSkillTouched] = useState(false);
   const [split, setSplit] = useState(null);
+  // Undo for the split step. Two ways in, and keeping them apart is the whole
+  // point of the split:
+  //
+  //   `editSplit`    the developer changed something. Remember where they were.
+  //   `rebuildSplit` the split was replaced because the *questions* changed —
+  //                  a different skill, a different source, or none. The old
+  //                  history now describes a different set of questions, and
+  //                  `makeSplit` filters keys it does not recognise, so undoing
+  //                  across that boundary would not error: it would quietly
+  //                  restore a half-empty editor. So the history goes with it.
+  const [splitHistory, setSplitHistory] = useState(undoStack.empty);
+
+  function editSplit(next) {
+    setSplitHistory((h) => undoStack.push(h, split));
+    setSplit(next);
+  }
+
+  function rebuildSplit(next) {
+    setSplit(next);
+    setSplitHistory(undoStack.reset());
+  }
+
+  function undoSplit() {
+    const { history: rest, split: previous } = undoStack.undo(splitHistory);
+    if (!previous) return;
+    setSplit(previous);
+    setSplitHistory(rest);
+  }
   // `{ [skillName]: { skill, status, result, error } }` — every candidate skill
   // checked against the agent, filed under its own name. The old shape was a
   // single check that carried the skill it was for and relied on being cleared;
@@ -119,7 +149,7 @@ export default function Wizard() {
       setPreview(result);
       setSkills([]);
       setSkillTouched(false);
-      setSplit(null);
+      rebuildSplit(null);
     } catch (e) {
       if (seq !== previewSeq.current) return;
       setPreviewError(e.message);
@@ -145,7 +175,7 @@ export default function Wizard() {
       setPreviewError(null);
       setSkills([]);
       setSkillTouched(false);
-      setSplit(null);
+      rebuildSplit(null);
       return undefined;
     }
     const ids = sourceKey.split(",");
@@ -186,12 +216,19 @@ export default function Wizard() {
         Math.floor((index + 1) * (1 - share)) > Math.floor(index * (1 - share));
       (crossed ? valKeys : trainKeys).push(q.item_key);
     });
-    setSplit(makeSplit(questions, { train: trainKeys, val: valKeys }));
+    rebuildSplit(makeSplit(questions, { train: trainKeys, val: valKeys }));
   }
 
   // One card clicked: a radio in isolated mode, a checkbox in routing.
   function toggleSkill(skillName) {
     if (mode !== "routing") {
+      // Clicking the card that is already selected is not a change, and acting
+      // on it as if it were costs the developer their work: `chooseSkills`
+      // rebuilds the split from the preview, so every move, copy and exclusion
+      // made on step 4 goes back to the proposed 70/30 — and, since the rebuild
+      // also clears the undo history, there is nothing left to take it back
+      // with. The same click on a radio the browser owns does nothing at all.
+      if (skills.length === 1 && skills[0] === skillName) return;
       chooseSkills([skillName]);
       return;
     }
@@ -384,7 +421,13 @@ export default function Wizard() {
             missing prerequisite, and the failure was silent. */}
         {step.id === "split" && (
           split ? (
-            <SplitEditor split={split} limits={limits} onChange={setSplit} />
+            <SplitEditor
+              split={split}
+              limits={limits}
+              onChange={editSplit}
+              onUndo={undoSplit}
+              canUndo={undoStack.canUndo(splitHistory)}
+            />
           ) : (
             <MissingPrerequisite
               title="No split yet"
@@ -650,8 +693,7 @@ function ModeStep({ mode, onMode, config, onConfig, defaults, impls }) {
         label="Request timeout (seconds)"
         help="How long one question may take before the run counts it as failed."
       >
-        <input
-          type="number"
+        <NumberInput
           min={1}
           value={config.agent_timeout_s ?? ""}
           onChange={set("agent_timeout_s")}
@@ -771,8 +813,8 @@ function SettingsStep({ defaults, config, onConfig, secrets, onSecrets, mode }) 
             label="Weight on partial credit"
             help="Between 0 and 1. At 0 this is the exact score; at 1 it is partial credit alone."
           >
-            <input
-              type="number" min="0" max="1" step="0.1"
+            <NumberInput
+              min="0" max="1" step="0.1"
               value={config.mixed_weight ?? ""}
               onChange={set("mixed_weight")}
               placeholder={String(d.mixed_weight ?? 0.5)}
@@ -841,8 +883,7 @@ function StopRule({ children }) {
 function PercentInput({ field, raw, set, errors, placeholder }) {
   return (
     <span className="opt-stoprule-input">
-      <input
-        type="number"
+      <NumberInput
         min={HYPER_FIELDS[field].min}
         max={HYPER_FIELDS[field].max}
         value={raw(field)}
@@ -859,8 +900,7 @@ function PercentInput({ field, raw, set, errors, placeholder }) {
 function CountInput({ field, raw, set, errors }) {
   return (
     <span className="opt-stoprule-input">
-      <input
-        type="number"
+      <NumberInput
         min={HYPER_FIELDS[field].min}
         value={raw(field)}
         onChange={set(field)}
@@ -1001,8 +1041,7 @@ function ReviewStep({
           help="One pass over the whole training split."
           error={errors.num_epochs}
         >
-          <input
-            type="number"
+          <NumberInput
             min={HYPER_FIELDS.num_epochs.min}
             max={HYPER_FIELDS.num_epochs.max}
             value={raw("num_epochs")}
@@ -1023,8 +1062,7 @@ function ReviewStep({
           }
           error={errors.batch_size}
         >
-          <input
-            type="number"
+          <NumberInput
             min={HYPER_FIELDS.batch_size.min}
             value={raw("batch_size")}
             onChange={set("batch_size")}
@@ -1043,8 +1081,7 @@ function ReviewStep({
           }
           error={errors.learning_rate}
         >
-          <input
-            type="number"
+          <NumberInput
             min={HYPER_FIELDS.learning_rate.min}
             value={raw("learning_rate")}
             onChange={set("learning_rate")}
@@ -1065,8 +1102,7 @@ function ReviewStep({
           } at a time. Raise it only as far as the agent server can take.`}
           error={errors.concurrency}
         >
-          <input
-            type="number"
+          <NumberInput
             min={HYPER_FIELDS.concurrency.min}
             max={HYPER_FIELDS.concurrency.max}
             value={raw("concurrency")}
@@ -1112,8 +1148,7 @@ function ReviewStep({
           }
           error={mode === "routing" ? null : errors.minibatch_size}
         >
-          <input
-            type="number"
+          <NumberInput
             min={HYPER_FIELDS.minibatch_size.min}
             value={mode === "routing" ? (values.batch_size ?? "") : raw("minibatch_size")}
             onChange={set("minibatch_size")}
@@ -1130,8 +1165,7 @@ function ReviewStep({
             help={budgetHelp(values.reflect_budget_chars)}
             error={errors.reflect_budget_chars}
           >
-            <input
-              type="number"
+            <NumberInput
               min={HYPER_FIELDS.reflect_budget_chars.min}
               step={10000}
               value={raw("reflect_budget_chars")}

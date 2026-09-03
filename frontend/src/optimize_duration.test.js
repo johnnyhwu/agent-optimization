@@ -27,13 +27,31 @@ function step(no, { from, to } = {}) {
 // --- formatSpan -------------------------------------------------------------
 
 test("a run's duration reads in the units a run is measured in", () => {
-  // `formatDuration` in useElapsed.js stops at minutes because it times a single
-  // question. An optimization run is an hour or more, and "83m 12s" is a number
-  // the reader has to divide before it means anything.
-  assert.equal(formatSpan(48_000), "48s");
-  assert.equal(formatSpan(mins(12) + 30_000), "12m 30s");
+  // `formatDuration` in useElapsed.js reports seconds because it times a single
+  // question. An optimization run is an hour or more, and its seconds are noise
+  // at every scale it is read at — including "83m 12s", a number the reader has
+  // to divide before it means anything.
+  assert.equal(formatSpan(mins(12) + 30_000), "12m");
   assert.equal(formatSpan(mins(83) + 12_000), "1h 23m");
   assert.equal(formatSpan(mins(60)), "1h 00m");
+});
+
+test("the minute boundaries are where they say they are", () => {
+  // This string is live on the run page, so every boundary it crosses is a
+  // moment the header could move. Pinning them is what makes the width check in
+  // harness/checks/duration.mjs a check of something rather than of a coincidence.
+  assert.equal(formatSpan(59_000), "under a minute");
+  assert.equal(formatSpan(60_000), "1m");
+  assert.equal(formatSpan(mins(59) + 59_000), "59m");
+  assert.equal(formatSpan(mins(60)), "1h 00m");
+});
+
+test("under a minute is a phrase, not a zero", () => {
+  // "0m" on a run that has just started reads as a stopped clock. The seconds
+  // are gone deliberately; saying so is better than showing a number that looks
+  // like a bug.
+  assert.equal(formatSpan(0), "under a minute");
+  assert.equal(formatSpan(48_000), "under a minute");
 });
 
 test("an unknown duration formats to nothing rather than to zero", () => {
@@ -156,13 +174,13 @@ test("the label names which of the three numbers it is showing", () => {
     { status: "interrupted", started_at: iso(T0), completed_at: null },
     [step(0, { from: T0, to: T0 + mins(20) })],
   );
-  assert.equal(interrupted.text, "ran for 20m 00s up to the restart");
+  assert.equal(interrupted.text, "ran for 20m up to the restart");
 
   const running = durationLabel(
     { status: "running", started_at: new Date(Date.now() - 61_000).toISOString() },
     [],
   );
-  assert.match(running.text, /^running for 1m /);
+  assert.equal(running.text, "running for 1m");
 });
 
 test("a resumed run's tooltip accounts for the time it was not working", () => {
@@ -181,7 +199,7 @@ test("a resumed run's tooltip accounts for the time it was not working", () => {
     ],
   );
   assert.equal(label.text, "ran for 67h 00m");
-  assert.match(label.title, /20m 00s of that/);
+  assert.match(label.title, /20m of that/);
 });
 
 test("an ordinary run does not explain a gap it does not have", () => {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   MIN_QUESTIONS_PER_SKILL,
   SMALL_VAL_SPLIT,
+  TINY_VAL_SPLIT,
   SUGGESTED_QUESTIONS_PER_SKILL,
   routingReviewWarnings,
   routingSkillWarnings,
@@ -179,6 +180,65 @@ test("the same small split on the soft metric says nothing", () => {
     values: { learning_rate: 8, batch_size: 30, gate_metric: "soft" },
   });
   assert.ok(!ids(w).includes("hard-gate-small-val"));
+});
+
+// --- The tiny validation split the lowered size floor made reachable --------
+
+test("a validation split of two warns that the run may abort before step 1", () => {
+  // Routing is scored against each question's own skill tags, read back out of
+  // its trace. A validation question with no tags contributes nothing to the
+  // baseline, and if *every* one of them is like that the engine cannot measure
+  // a baseline and aborts the run — see `optimizer/engine.py`, "the baseline
+  // routing accuracy could not be measured".
+  //
+  // On a split of twenty that takes a broken eval set. On a split of two it
+  // takes one untagged question, which is the case the size floor used to make
+  // unreachable and no longer does.
+  const split = splitOf(
+    Array.from({ length: 12 }, (_, i) => q(`t${i}`, ["billing"])),
+    { val: ["v1", "v2"] },
+  );
+  const w = routingReviewWarnings({
+    mode: "routing",
+    skills: ["billing", "reporting"],
+    split,
+    values: { learning_rate: 8, batch_size: 12, gate_metric: "soft" },
+  });
+  const found = w.find((x) => x.id === "tiny-val-routing");
+  assert.ok(found, "expected the tiny-validation warning");
+  assert.equal(found.tone, "warning");
+  assert.match(found.body, /2/);
+});
+
+test("a validation split above the tiny threshold says nothing about it", () => {
+  const split = splitOf(
+    Array.from({ length: 30 }, (_, i) => q(`t${i}`, ["billing"])),
+    { val: Array.from({ length: TINY_VAL_SPLIT + 1 }, (_, i) => `v${i}`) },
+  );
+  const w = routingReviewWarnings({
+    mode: "routing",
+    skills: ["billing", "reporting"],
+    split,
+    values: { learning_rate: 8, batch_size: 30, gate_metric: "soft" },
+  });
+  assert.ok(!ids(w).includes("tiny-val-routing"));
+});
+
+test("an isolated run is never told about the routing baseline", () => {
+  // Isolated scores on the judge's verdict, not on tags read back from a trace,
+  // so the abort this warns about cannot happen there. Every rule in this
+  // module returns early on mode, and this is the newest one.
+  const split = splitOf(
+    Array.from({ length: 12 }, (_, i) => q(`t${i}`, ["billing"])),
+    { val: ["v1", "v2"] },
+  );
+  const w = routingReviewWarnings({
+    mode: "isolated",
+    skills: ["billing"],
+    split,
+    values: { learning_rate: 8, batch_size: 12, gate_metric: "soft" },
+  });
+  assert.deepEqual(w, []);
 });
 
 test("optimising a single description is noted as the weaker lever it is", () => {

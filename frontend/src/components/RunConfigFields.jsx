@@ -5,6 +5,7 @@ import Banner from "./ui/Banner.jsx";
 import Button from "./ui/Button.jsx";
 import { IconAlert, IconCheck, IconRefresh } from "./icons.jsx";
 import { plural } from "../plural.js";
+import NumberInput from "./ui/NumberInput.jsx";
 
 // The three connection sections shared by "Run eval" (RunConfigDialog) and the
 // playground's config panel. Extracted rather than copied: the parts worth
@@ -163,8 +164,8 @@ export default function RunConfigFields({
             <AgentProbe probe={probe} coverage={coverage} onRetry={onRetryProbe} />
           )}
           <Field label="Timeout" hint="seconds">
-            <input
-              type="number" min="1"
+            <NumberInput
+              min="1"
               value={form.agent_timeout_s ?? ""}
               disabled={fake("agent")}
               onChange={(e) => setNum("agent_timeout_s", e.target.value)}
@@ -177,8 +178,8 @@ export default function RunConfigFields({
           {/* Never disabled: this is how the run is orchestrated, not one of the
               services it talks to. */}
           <Field label="Concurrency" help="How many questions are sent to the agent at once.">
-            <input
-              type="number" min="1"
+            <NumberInput
+              min="1"
               value={form.concurrency ?? ""}
               onChange={(e) => setNum("concurrency", e.target.value)}
             />
@@ -217,8 +218,8 @@ export default function RunConfigFields({
           />
         </Field>
         <Field label="Timeout" hint="seconds">
-          <input
-            type="number" min="1"
+          <NumberInput
+            min="1"
             value={form.langfuse_timeout_s ?? ""}
             disabled={fake("trace")}
             onChange={(e) => setNum("langfuse_timeout_s", e.target.value)}

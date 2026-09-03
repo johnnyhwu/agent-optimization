@@ -18,6 +18,7 @@ import pytest
 from app.optimizer.dataset import (
     MIN_TRAIN,
     MIN_VAL,
+    WARN_VAL,
     Candidate,
     default_split,
     group_by_skill,
@@ -294,26 +295,10 @@ def test_a_tiny_set_still_puts_something_in_each_split():
 # --- What blocks a run, and what merely warns -------------------------------
 
 
-def test_a_split_below_the_minimum_sizes_is_an_error():
-    """Below this the numbers are noise and the run cannot mean anything.
-
-    On a validation split of three, one question is 33 percentage points: every
-    candidate either "improves" or "regresses" by a third, the gate accepts and
-    rejects on coin flips, and the developer pays for an hour of agent calls to
-    learn nothing. Refusing up front is the only honest answer.
-    """
-    issues = split_issues(
-        train_keys=[f"k{i}" for i in range(MIN_TRAIN - 1)],
-        val_keys=[f"v{i}" for i in range(MIN_VAL - 1)],
-    )
-    codes = {i["code"] for i in issues if i["level"] == "error"}
-    assert codes == {"train_too_small", "val_too_small"}
-
-
 def test_a_split_at_the_minimum_is_allowed():
     """The boundary is inclusive, so the message and the check agree.
 
-    A limit that says "at least 8" and refuses 8 is the kind of thing someone
+    A limit that says "at least 1" and refuses 1 is the kind of thing someone
     spends twenty minutes on before concluding the tool is broken.
     """
     issues = split_issues(
@@ -321,6 +306,39 @@ def test_a_split_at_the_minimum_is_allowed():
         val_keys=[f"v{i}" for i in range(MIN_VAL)],
     )
     assert not [i for i in issues if i["level"] == "error"]
+
+
+def test_a_tiny_split_warns_but_still_runs():
+    """The case the old floor of 8/5 refused, and the reason it was lowered.
+
+    Three questions is a bad experiment and a perfectly good check that the
+    pipeline works before an hour of agent calls is spent on sixty. The tool
+    says which one it thinks this is; the developer decides.
+    """
+    issues = split_issues(
+        train_keys=["a", "b", "c"],
+        val_keys=["d", "e"],
+    )
+    assert not [i for i in issues if i["level"] == "error"]
+    codes = {i["code"] for i in issues}
+    assert codes == {"train_too_small", "val_too_small"}
+
+
+def test_each_column_raises_exactly_one_size_issue():
+    """Three tiers, and a column belongs to one of them.
+
+    `elif` rather than three `if`s: a split of six training questions is small
+    *and* below the comfortable threshold, and saying so twice would put two
+    boxes on screen describing one number.
+    """
+    for n_train, expected in ((0, "train_empty"), (3, "train_too_small"),
+                              (12, "train_small"), (30, None)):
+        issues = split_issues(
+            train_keys=[f"k{i}" for i in range(n_train)],
+            val_keys=[f"v{i}" for i in range(WARN_VAL)],
+        )
+        train_codes = [i["code"] for i in issues if i["code"].startswith("train")]
+        assert train_codes == ([expected] if expected else [])
 
 
 def test_a_small_but_workable_split_warns_without_blocking():
@@ -361,8 +379,21 @@ def test_a_question_in_both_splits_is_warned_about_by_name():
 def test_an_empty_split_is_an_error_rather_than_a_crash():
     issues = split_issues(train_keys=[], val_keys=[])
     assert {i["code"] for i in issues if i["level"] == "error"} == {
-        "train_too_small", "val_too_small"
+        "train_empty", "val_empty"
     }
+
+
+def test_an_empty_validation_split_does_not_divide_by_zero():
+    """Why the floor is 1 and not 0.
+
+    The tier below `SOFT_VAL` reports how far one answer moves accuracy, which
+    is `100 / n_val`. Guarding it with `n_val >= MIN_VAL` only works while
+    `MIN_VAL` is at least 1 — at 0 the empty case would fall through to it and
+    the message would read "moves accuracy by inf points".
+    """
+    issues = split_issues(train_keys=["a"], val_keys=[])
+    assert [i["code"] for i in issues if i["code"].startswith("val")] == ["val_empty"]
+    assert all("inf" not in i["message"] for i in issues)
 
 
 def test_an_isolated_run_still_excludes_a_question_tagged_with_several_skills():

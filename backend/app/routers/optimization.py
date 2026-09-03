@@ -263,6 +263,8 @@ async def optimization_defaults(
         "limits": {
             "min_train": dataset.MIN_TRAIN,
             "min_val": dataset.MIN_VAL,
+            "soft_train": dataset.SOFT_TRAIN,
+            "soft_val": dataset.SOFT_VAL,
             "warn_train": dataset.WARN_TRAIN,
             "warn_val": dataset.WARN_VAL,
         },

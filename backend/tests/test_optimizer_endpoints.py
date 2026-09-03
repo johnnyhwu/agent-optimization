@@ -171,6 +171,11 @@ async def test_defaults_include_the_split_limits_the_wizard_enforces():
     payload = await opt.optimization_defaults(subject="alice")
     assert payload["limits"]["min_train"] == dataset.MIN_TRAIN
     assert payload["limits"]["min_val"] == dataset.MIN_VAL
+    # The tier that warns rather than blocks travels too. It is what the editor
+    # words "very small" against, so a browser holding its own 8 would describe
+    # a split by one number while the server judged it by another.
+    assert payload["limits"]["soft_train"] == dataset.SOFT_TRAIN
+    assert payload["limits"]["soft_val"] == dataset.SOFT_VAL
 
 
 async def test_defaults_include_the_conditions_that_stop_a_run_early():
@@ -687,9 +692,7 @@ async def test_creating_a_run_computes_the_step_counts_the_engine_reads(
     assert run.total_steps == 10
 
 
-async def test_a_split_below_the_minimum_is_refused_at_the_endpoint(
-    session, monkeypatch
-):
+async def test_an_empty_column_is_refused_at_the_endpoint(session, monkeypatch):
     """The browser's check is a convenience; this one is the rule.
 
     Anything else means the limit is enforced only for people using the UI as
@@ -700,10 +703,29 @@ async def test_a_split_below_the_minimum_is_refused_at_the_endpoint(
 
     with pytest.raises(HTTPException) as exc:
         await opt.create_optimization_run(
-            create_body(keys[:3], keys[3:5]), subject="alice", session=session
+            create_body([], keys[:5]), subject="alice", session=session
         )
     assert exc.value.status_code == 400
     assert "training" in str(exc.value.detail).lower()
+
+
+async def test_a_tiny_split_is_accepted_at_the_endpoint(session, monkeypatch):
+    """Small is the developer's call, and the endpoint has to agree with the UI.
+
+    This is the case the old floor of 8/5 refused: three training questions and
+    two validation ones, which is a bad experiment and a perfectly good check
+    that the pipeline runs at all before an hour of agent calls is spent on
+    sixty. The wizard now enables Start on it, so a 400 here would be the worst
+    of both — a button that submits a request the server rejects.
+    """
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    run = await opt.create_optimization_run(
+        create_body(keys[:3], keys[3:5]), subject="alice", session=session
+    )
+    assert run.n_train == 3
+    assert run.n_val == 2
 
 
 async def test_an_item_key_from_a_set_the_caller_cannot_read_is_refused(
