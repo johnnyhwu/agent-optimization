@@ -934,6 +934,33 @@
    at y=506 on Source, y=1573 on Skill, y=820 on Split — so Back and Continue
    moved between every step, and on the longest step they were below the fold
    along with the sentence explaining why Continue was disabled. */
+/* Each of the wizard's three rows spans the window and holds its content in the
+   middle with padding, rather than being a centred box with space beside it.
+
+   The difference only matters for one of them, and it matters a lot:
+   `.opt-wizard-body` is the sole scroll container on this route, so wherever it
+   does not reach, the wheel does nothing at all — `.main` is scrollable but has
+   nothing to scroll here, and the event has nowhere else to go. As a centred
+   box it left 44px of dead margin at either edge of a 1440px window, and on
+   anything wider than `--page-max` it left half the difference. The step bar
+   and the footer take the identical padding so all three stay in one column;
+   giving it only to the body would centre the content under a full-width bar.
+
+   `max()` rather than a media query because the two cases are the same
+   statement: hold the gutter when the window is narrow, and add the leftover to
+   it when the window is wider than the page. The `+ var(--gutter)` inside the
+   calc is what makes this land in exactly the same place as the centred box it
+   replaces — `--page-max` capped the padded box, not the content — and it is
+   checked: content runs 44..1396 at 1440px and 424..1776 at 2200px, before and
+   after. */
+.opt-steps,
+.opt-wizard-body,
+.opt-wizard-foot {
+  padding-inline: max(
+    var(--gutter),
+    calc((100% - var(--page-max)) / 2 + var(--gutter))
+  );
+}
 .opt-wizard-body {
   flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: var(--space-5);
