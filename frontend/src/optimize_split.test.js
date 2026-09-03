@@ -7,9 +7,12 @@ import {
   canStart,
   counts,
   duplicate,
+  duplicateAll,
   exclude,
+  excludeAll,
   makeSplit,
   move,
+  moveAll,
   restore,
   sortQuestions,
   splitIssues,
@@ -72,7 +75,7 @@ test("duplicating a question that is already in the other column changes nothing
   assert.deepEqual(after.val, ["a", "b"]);
 });
 
-test("excluding removes a question from both columns and remembers it", () => {
+test("excluding without naming a column takes the question out of the run", () => {
   // Exclude means "not in this run", not "delete from the eval set" — which is
   // why the button is an ✕ and not a bin, and why the question has to come back.
   const after = exclude(split(["a", "b"], ["a", "c"]), "a");
@@ -81,10 +84,86 @@ test("excluding removes a question from both columns and remembers it", () => {
   assert.deepEqual(after.excluded, ["a"]);
 });
 
-test("restoring puts a question back into the training column", () => {
+test("excluding from one column leaves the copy in the other alone", () => {
+  // The ✕ used to clear both columns whichever row it was pressed on, so a
+  // question that had just been copied to validation vanished from there too,
+  // with nothing on screen to say so. The button is on a row; it acts on that
+  // row.
+  const after = exclude(split(["a", "b"], ["a", "c"]), "a", "train");
+  assert.deepEqual(after.train, ["b"]);
+  assert.deepEqual(after.val, ["a", "c"], "the validation copy is still there");
+  assert.deepEqual(after.excluded, [], "and the run has not lost the question");
+});
+
+test("excluding the last copy is what puts a question in the drawer", () => {
+  const once = exclude(split(["a"], ["a"]), "a", "train");
+  assert.deepEqual(once.excluded, []);
+  const twice = exclude(once, "a", "val");
+  assert.deepEqual(twice.excluded, ["a"]);
+  assert.deepEqual(twice.train, []);
+  assert.deepEqual(twice.val, []);
+});
+
+test("excluding a question the drawer already holds does not list it twice", () => {
+  const after = exclude(split(["b"], ["c"], ["a"]), "a");
+  assert.deepEqual(after.excluded, ["a"]);
+});
+
+test("restoring puts a question back into the training column by default", () => {
   const after = restore(split(["b"], ["c"], ["a"]), "a");
   assert.ok(after.train.includes("a"));
   assert.deepEqual(after.excluded, []);
+});
+
+test("restoring can name the column instead", () => {
+  // The drawer's rows offer both, so that putting a question back into
+  // validation is one click rather than restore-then-move.
+  const after = restore(split(["b"], ["c"], ["a"]), "a", "val");
+  assert.deepEqual(after.val, ["c", "a"]);
+  assert.ok(!after.train.includes("a"));
+  assert.deepEqual(after.excluded, []);
+});
+
+// --- The same three things, to a whole column -------------------------------
+
+test("moving a whole column empties it into the other one", () => {
+  // The case that motivated this: sixty questions is sixty clicks.
+  const after = moveAll(split(["a", "b", "c"], ["d"]), "train", "val");
+  assert.deepEqual(after.train, []);
+  assert.deepEqual(after.val, ["d", "a", "b", "c"]);
+});
+
+test("copying a whole column leaves it where it is", () => {
+  const after = duplicateAll(split(["a", "b"], ["c"]), "train", "val");
+  assert.deepEqual(after.train, ["a", "b"]);
+  assert.deepEqual(after.val, ["c", "a", "b"]);
+  // Which is the overlap case, and the editor says so — deliberately, because
+  // it is what the developer asked for.
+  assert.equal(counts(after).overlap, 2);
+});
+
+test("a bulk copy does not duplicate what is already in the target", () => {
+  const after = duplicateAll(split(["a", "b"], ["a"]), "train", "val");
+  assert.deepEqual(after.val, ["a", "b"]);
+});
+
+test("excluding a whole column leaves questions that are also in the other one", () => {
+  // `excludeAll` is a fold over the per-row exclude, so it inherits the rule
+  // that a question with a copy elsewhere has not left the run. Anything else
+  // would make "clear this column" quietly destructive.
+  const after = excludeAll(split(["a", "b"], ["a"]), "train");
+  assert.deepEqual(after.train, []);
+  assert.deepEqual(after.val, ["a"]);
+  assert.deepEqual(after.excluded, ["b"]);
+});
+
+test("a bulk operation reads the column it is about to change", () => {
+  // `moveAll` empties the list it is iterating. Folding over the live split
+  // rather than a snapshot of the keys skips every other question.
+  const before = split(["a", "b", "c", "d", "e"], []);
+  const after = moveAll(before, "train", "val");
+  assert.equal(after.val.length, 5);
+  assert.deepEqual(before.train, ["a", "b", "c", "d", "e"], "and does not mutate");
 });
 
 test("every operation returns a new object rather than mutating", () => {

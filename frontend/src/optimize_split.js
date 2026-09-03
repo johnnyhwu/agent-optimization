@@ -66,21 +66,67 @@ export function duplicate(split, key, to) {
   });
 }
 
-export function exclude(split, key) {
+/**
+ * Take a question out of one column — and out of the run, if that was its last.
+ *
+ * `column` is which ✕ was pressed, and it matters for exactly one question: the
+ * one sitting in both columns. This used to clear both regardless, so pressing
+ * ✕ on a training row made the validation copy disappear too, with nothing on
+ * screen to say it had. The moment that bites is right after "also add to the
+ * other column", which is the only way to have two copies in the first place.
+ *
+ * Omitting `column` keeps the old meaning — remove it from the run entirely —
+ * because that is what the excluded drawer's own callers want.
+ */
+export function exclude(split, key, column = null) {
   if (!split.byKey.has(key)) return split;
+  const from = column ? [column] : ["train", "val"];
+  const lists = {};
+  for (const name of from) lists[name] = split[name].filter((k) => k !== key);
+  // Only a question that is now in neither column has left the run. One that
+  // still has a copy in the other column is not excluded — it is just no longer
+  // in this one, and putting it in the drawer as well would list a question that
+  // the run is still going to use.
+  const stillIn = ["train", "val"].some((name) => (lists[name] ?? split[name]).includes(key));
   return withLists(split, {
-    train: split.train.filter((k) => k !== key),
-    val: split.val.filter((k) => k !== key),
-    excluded: split.excluded.includes(key) ? split.excluded : [...split.excluded, key],
+    ...lists,
+    excluded: stillIn || split.excluded.includes(key)
+      ? split.excluded
+      : [...split.excluded, key],
   });
 }
 
-export function restore(split, key) {
+/** Put an excluded question back, into whichever column is asked for. */
+export function restore(split, key, to = "train") {
   if (!split.byKey.has(key)) return split;
   return withLists(split, {
     excluded: split.excluded.filter((k) => k !== key),
-    train: split.train.includes(key) ? split.train : [...split.train, key],
+    [to]: split[to].includes(key) ? split[to] : [...split[to], key],
   });
+}
+
+// --- The same three things, to a whole column at once ------------------------
+//
+// Sixty questions is sixty clicks, and "copy the training split into validation"
+// is a thing people actually want to do. Each of these is a fold over the
+// single-key function above rather than its own list surgery: the rules about
+// what a move removes and what a duplicate does not are stated once, and the
+// bulk path cannot drift from the one the rows use.
+//
+// The key list is snapshotted before the fold. `moveAll` empties the column it
+// is reading, and iterating a list while the operation mutates the split it
+// came from is how the second half of a column gets skipped.
+
+export function moveAll(split, from, to) {
+  return [...split[from]].reduce((acc, key) => move(acc, key, to), split);
+}
+
+export function duplicateAll(split, from, to) {
+  return [...split[from]].reduce((acc, key) => duplicate(acc, key, to), split);
+}
+
+export function excludeAll(split, column) {
+  return [...split[column]].reduce((acc, key) => exclude(acc, key, column), split);
 }
 
 // What the three icon buttons on a row may do, and why not when they may not.
@@ -108,7 +154,18 @@ export function actionsFor(split, key, column) {
           ? "Also add to validation (keep here)"
           : "Also add to training (keep here)",
     },
-    exclude: { enabled: true, reason: null, label: "Exclude from this run" },
+    // The label says which copy goes. A question in both columns has two, and
+    // "Exclude from this run" on the training row is a promise about the whole
+    // run that this button no longer keeps — it takes the copy you pressed it
+    // on and leaves the other one working.
+    exclude: {
+      enabled: true,
+      reason: null,
+      label: inBoth
+        ? `Remove from ${column === "train" ? "training" : "validation"} (the ` +
+          `${target === "val" ? "validation" : "training"} copy stays)`
+        : "Exclude from this run",
+    },
   };
 }
 

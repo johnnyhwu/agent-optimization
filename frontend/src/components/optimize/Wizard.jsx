@@ -14,6 +14,7 @@ import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
 import { counts, makeSplit } from "../../optimize_split.js";
+import * as undoStack from "../../optimize_split_history.js";
 import { routingReviewWarnings } from "../../optimize_routing_warnings.js";
 import { analystCallsPerStep, estimateRun, explainRun } from "../../optimize_cost.js";
 import {
@@ -66,6 +67,34 @@ export default function Wizard() {
   // chosen would look like the page arguing with them.
   const [skillTouched, setSkillTouched] = useState(false);
   const [split, setSplit] = useState(null);
+  // Undo for the split step. Two ways in, and keeping them apart is the whole
+  // point of the split:
+  //
+  //   `editSplit`    the developer changed something. Remember where they were.
+  //   `rebuildSplit` the split was replaced because the *questions* changed —
+  //                  a different skill, a different source, or none. The old
+  //                  history now describes a different set of questions, and
+  //                  `makeSplit` filters keys it does not recognise, so undoing
+  //                  across that boundary would not error: it would quietly
+  //                  restore a half-empty editor. So the history goes with it.
+  const [splitHistory, setSplitHistory] = useState(undoStack.empty);
+
+  function editSplit(next) {
+    setSplitHistory((h) => undoStack.push(h, split));
+    setSplit(next);
+  }
+
+  function rebuildSplit(next) {
+    setSplit(next);
+    setSplitHistory(undoStack.reset());
+  }
+
+  function undoSplit() {
+    const { history: rest, split: previous } = undoStack.undo(splitHistory);
+    if (!previous) return;
+    setSplit(previous);
+    setSplitHistory(rest);
+  }
   // `{ [skillName]: { skill, status, result, error } }` — every candidate skill
   // checked against the agent, filed under its own name. The old shape was a
   // single check that carried the skill it was for and relied on being cleared;
@@ -120,7 +149,7 @@ export default function Wizard() {
       setPreview(result);
       setSkills([]);
       setSkillTouched(false);
-      setSplit(null);
+      rebuildSplit(null);
     } catch (e) {
       if (seq !== previewSeq.current) return;
       setPreviewError(e.message);
@@ -146,7 +175,7 @@ export default function Wizard() {
       setPreviewError(null);
       setSkills([]);
       setSkillTouched(false);
-      setSplit(null);
+      rebuildSplit(null);
       return undefined;
     }
     const ids = sourceKey.split(",");
@@ -187,7 +216,7 @@ export default function Wizard() {
         Math.floor((index + 1) * (1 - share)) > Math.floor(index * (1 - share));
       (crossed ? valKeys : trainKeys).push(q.item_key);
     });
-    setSplit(makeSplit(questions, { train: trainKeys, val: valKeys }));
+    rebuildSplit(makeSplit(questions, { train: trainKeys, val: valKeys }));
   }
 
   // One card clicked: a radio in isolated mode, a checkbox in routing.
@@ -385,7 +414,13 @@ export default function Wizard() {
             missing prerequisite, and the failure was silent. */}
         {step.id === "split" && (
           split ? (
-            <SplitEditor split={split} limits={limits} onChange={setSplit} />
+            <SplitEditor
+              split={split}
+              limits={limits}
+              onChange={editSplit}
+              onUndo={undoSplit}
+              canUndo={undoStack.canUndo(splitHistory)}
+            />
           ) : (
             <MissingPrerequisite
               title="No split yet"
