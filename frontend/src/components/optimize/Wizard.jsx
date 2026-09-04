@@ -13,7 +13,10 @@ import { plural } from "../../plural.js";
 import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
+import AgentEndpointsFields from "../AgentEndpointsFields.jsx";
+import { useDebounced } from "../../useDebounced.js";
 import { counts, makeSplit } from "../../optimize_split.js";
+import { gateFor, probeMatches } from "../../agent_endpoints.js";
 import * as undoStack from "../../optimize_split_history.js";
 import { routingReviewWarnings } from "../../optimize_routing_warnings.js";
 import { analystCallsPerStep, estimateRun, explainRun } from "../../optimize_cost.js";
@@ -48,6 +51,10 @@ import {
 export default function Wizard() {
   const toast = useToast();
   const [stepIndex, setStepIndex] = useState(0);
+  const [skillsProbe, setSkillsProbe] = useState(null);
+  const [skillsBusy, setSkillsBusy] = useState(false);
+  const [chatProbe, setChatProbe] = useState(null);
+  const [chatBusy, setChatBusy] = useState(false);
   const [defaults, setDefaults] = useState(null);
   const [evalSets, setEvalSets] = useState(null);
   const [sourceIds, setSourceIds] = useState([]);
@@ -126,8 +133,83 @@ export default function Wizard() {
   // already run against whatever the backend's own environment said, so the
   // wizard could clear a skill on one agent and start the run on another.
   const agentConfig = {
-    agent_base_url: config.agent_base_url || "",
+    agent_chat_url: config.agent_chat_url || "",
+    agent_skills_url: config.agent_skills_url || "",
     agent_timeout_s: config.agent_timeout_s || "",
+  };
+
+  // The free half of the pre-flight, re-read whenever the URL stops moving —
+  // the same debounce the Run-eval dialog uses, for the same reason: a
+  // half-typed URL is always a failure, and a status line that flashes red on
+  // every keystroke teaches people to ignore it.
+  const skillsUrl = useDebounced(config.agent_skills_url || "", 400);
+  useEffect(() => {
+    if (skillsUrl !== (config.agent_skills_url || "")) return undefined;
+    let cancelled = false;
+    setSkillsBusy(true);
+    api
+      .agentSkills(skillsUrl)
+      .then((r) => {
+        if (cancelled) return;
+        setSkillsProbe({
+          check: r.check,
+          request_preview: r.request_preview,
+          response_preview: r.response_preview,
+        });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setSkillsProbe({ check: { ok: false, error: e.message } });
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [skillsUrl, config.agent_skills_url]);
+
+  // The expensive half. Never automatic: it spends a model call, and unlike the
+  // Run-eval dialog it asks the agent to prove the override *and* the trace,
+  // because an optimization run is meaningless without both.
+  async function testChat() {
+    if (chatBusy) return null;
+    setChatBusy(true);
+    try {
+      const r = await api.agentChatProbe({
+        config: agentConfig,
+        secrets,
+        with_override: true,
+        with_trace: true,
+      });
+      const probe = {
+        ...r,
+        forChatUrl: agentConfig.agent_chat_url,
+        forSkillsUrl: agentConfig.agent_skills_url,
+      };
+      setChatProbe(probe);
+      return probe;
+    } catch (e) {
+      const failed = {
+        chat: { ok: false, error: e.message },
+        forChatUrl: agentConfig.agent_chat_url,
+        forSkillsUrl: agentConfig.agent_skills_url,
+      };
+      setChatProbe(failed);
+      return failed;
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  // What the footer gates on. Absent keys are "not asked", so Continue stays
+  // pressable until something has actually been proved false — and pressing it
+  // is what asks.
+  const agentChecks = {
+    ...(skillsProbe?.check ? { skills: skillsProbe.check } : {}),
+    ...(chatProbe?.chat ? { chat: chatProbe.chat } : {}),
+    ...(chatProbe?.override ? { override: chatProbe.override } : {}),
+    ...(chatProbe?.trace ? { trace: chatProbe.trace } : {}),
   };
 
   // The preview is fetched when the sources change, not on every render of step
@@ -273,7 +355,8 @@ export default function Wizard() {
   // "does *this* server have it", so changing the server on step 1 and coming
   // back has to re-ask rather than keep showing what a different one said.
   const groupNames = (preview?.groups || []).map((g) => g.skill_name).join("\0");
-  const agentKey = `${agentConfig.agent_base_url}\0${agentConfig.agent_timeout_s}`;
+  const agentKey =
+    `${agentConfig.agent_skills_url}\0${agentConfig.agent_timeout_s}`;
   useEffect(() => {
     if (!groupNames) return;
     groupNames.split("\0").forEach((name) => runSkillCheck(name));
@@ -347,9 +430,36 @@ export default function Wizard() {
   // the Start button alike. They used to compute reachability separately from
   // blocking, which is how the bar could offer a step whose body rendered
   // nothing.
+  // Leaving the agent step is where the expensive check happens, and only if
+  // nothing has proved these URLs yet. Doing it on every Continue would spend a
+  // model call each time somebody stepped back to reread the modes; never doing
+  // it is how a run gets an hour in before discovering the override was ignored.
+  //
+  // A failure does not advance, and it does not need to say anything here: the
+  // checks land under the fields the developer is already looking at, and the
+  // footer's blocking line picks them up on the next render.
+  async function advance() {
+    const onAgentStep = STEPS[stepIndex]?.id === "mode";
+    if (onAgentStep && !probeMatches(chatProbe, {
+      chatUrl: agentConfig.agent_chat_url,
+      skillsUrl: agentConfig.agent_skills_url,
+    })) {
+      const probe = await testChat();
+      if (gateFor("optimization", {
+        ...agentChecks,
+        ...(probe?.chat ? { chat: probe.chat } : {}),
+        ...(probe?.override ? { override: probe.override } : {}),
+        ...(probe?.trace ? { trace: probe.trace } : {}),
+      }).blocked) {
+        return;
+      }
+    }
+    setStepIndex((i) => i + 1);
+  }
+
   const wizardState = {
     stepIndex, sourceIds, preview, previewError, skills, split, limits, checks, mode,
-    hyper, defaults: defaults?.defaults,
+    hyper, defaults: defaults?.defaults, agentChecks,
   };
   const blocked = blockingReason(wizardState);
   const reachable = furthestStep(wizardState);
@@ -381,6 +491,11 @@ export default function Wizard() {
             onConfig={setConfig}
             defaults={defaults.defaults}
             impls={defaults.impls}
+            chatProbe={chatProbe}
+            chatBusy={chatBusy}
+            onTestChat={testChat}
+            skillsProbe={skillsProbe}
+            skillsBusy={skillsBusy}
           />
         )}
 
@@ -485,9 +600,10 @@ export default function Wizard() {
           <Button
             variant="primary"
             disabled={Boolean(blocked)}
-            onClick={() => setStepIndex((i) => i + 1)}
+            loading={chatBusy}
+            onClick={advance}
           >
-            Continue
+            {chatBusy ? "Testing agent…" : "Continue"}
           </Button>
         ) : (
           <Button
@@ -626,7 +742,10 @@ function SourceStep({ evalSets, selected, onToggle, preview, previewing, error, 
 // yet. The Skill step is where that becomes a per-card verdict, which is the
 // whole reason this moved to the front — it used to be asked *after* the skill
 // and the split, and then refuse the answer.
-function ModeStep({ mode, onMode, config, onConfig, defaults, impls }) {
+function ModeStep({
+  mode, onMode, config, onConfig, defaults, impls,
+  chatProbe, chatBusy, onTestChat, skillsProbe, skillsBusy,
+}) {
   const set = (key) => (e) => onConfig({ ...config, [key]: e.target.value });
 
   return (
@@ -667,7 +786,7 @@ function ModeStep({ mode, onMode, config, onConfig, defaults, impls }) {
         check proves nothing. */}
     <FormSection
       title="Which agent server"
-      description="Every skill on the next steps is looked up on this server, and the run answers its questions there. Blank means the one this deployment is configured with."
+      description="Every skill on the next steps is looked up on this server, and the run answers its questions there. Optimization needs both endpoints: it sends a candidate skill with every rollout and reads back what the agent used."
     >
       {impls?.agent === "fake" && (
         <Banner tone="info" title="The agent seam is fake">
@@ -675,20 +794,18 @@ function ModeStep({ mode, onMode, config, onConfig, defaults, impls }) {
           rather than by a server, so this address is recorded but not called.
         </Banner>
       )}
-      <Field
-        label="Agent server URL"
-        help={
-          defaults.agent_base_url
-            ? `Blank uses ${defaults.agent_base_url}`
-            : "Not set in this deployment's environment — a run needs one here."
-        }
-      >
-        <input
-          value={config.agent_base_url || ""}
-          onChange={set("agent_base_url")}
-          placeholder={defaults.agent_base_url || "http://agent:8080"}
-        />
-      </Field>
+      <AgentEndpointsFields
+        chatUrl={config.agent_chat_url || ""}
+        skillsUrl={config.agent_skills_url || ""}
+        onChangeChat={(v) => onConfig({ ...config, agent_chat_url: v })}
+        onChangeSkills={(v) => onConfig({ ...config, agent_skills_url: v })}
+        chatProbe={chatProbe}
+        chatBusy={chatBusy}
+        onTestChat={onTestChat}
+        skillsProbe={skillsProbe}
+        skillsBusy={skillsBusy}
+        idPrefix="opt"
+      />
       <Field
         label="Request timeout (seconds)"
         help="How long one question may take before the run counts it as failed."

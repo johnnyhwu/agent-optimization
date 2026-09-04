@@ -1170,6 +1170,54 @@ select { cursor: pointer; }
 }
 .agent-bar-actions { display: flex; gap: var(--space-2); flex: none; }
 
+/* ---- agent endpoints ----
+   The two URLs that name an agent server, wherever they are asked for. Each
+   field is followed by a result block: one status line, the test button where
+   there is one, and the request/response panel folded away underneath.
+
+   Indented under the field it belongs to, and pulled up against it, because the
+   thing that makes this readable is that a status line is visibly *about* the
+   input above it rather than a row of its own. */
+.agent-ep-result {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: var(--space-2); margin: -6px 0 var(--space-3);
+}
+.agent-ep-status {
+  display: inline-flex; align-items: flex-start; gap: 6px;
+  font-size: var(--text-caption); line-height: 1.5;
+  /* The agent server's own words, which can be long and are worth reading in
+     full — wrapped rather than ellipsed, since the useful half of "connection
+     refused to http://…:8080" is at the end. */
+  word-break: break-word;
+}
+/* Square and sized to be hit rather than aimed at, like every other icon-only
+   control here. `ui-btn-icon` already sets the box; this only stops the link
+   reset from taking the underline and the text colour with it. */
+.agent-ep-help { color: var(--muted); text-decoration: none; }
+.agent-ep-help:hover { color: var(--text); }
+.agent-ep-exchange { width: 100%; }
+.agent-ep-exchange-label {
+  font-size: var(--text-micro); color: var(--muted);
+  margin-bottom: var(--space-1);
+}
+.agent-ep-exchange-label + .agent-ep-payload { margin-bottom: var(--space-3); }
+/* Wide by nature — a skills map is long lines of JSON — so it scrolls inside
+   its own box rather than widening the dialog. Both axes stated: the contract
+   test asks for it, and the reason is that a block that scrolls one way and
+   clips the other loses content with nothing to reach it by. */
+.agent-ep-payload {
+  margin: 0; max-height: 260px; overflow: auto;
+  padding: var(--space-2); border-radius: var(--radius-sm);
+  background: var(--code-bg); color: var(--text);
+  font-family: var(--font-mono); font-size: var(--text-micro);
+  line-height: 1.55; white-space: pre; width: 100%;
+}
+/* The chat endpoint's own state, beside the address it is about. */
+.agent-chat-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--text-caption);
+}
+
 .agent-bar-form { flex: 1; min-width: 0; }
 .agent-bar-head {
   display: flex; align-items: center; gap: var(--space-2);

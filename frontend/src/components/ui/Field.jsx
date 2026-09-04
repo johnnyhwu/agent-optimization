@@ -84,16 +84,30 @@ export function FormSection({ id, title, description, aside, children, className
 // `aside` — same word, same corner — so a badge means the same thing wherever it
 // turns up. It renders open or closed, because a mark that vanished on opening
 // would take the explanation of *why you opened this* with it.
+//
+// Uncontrolled by default, and controllable when a caller needs to open it for
+// a reason the panel cannot know — a check that failed on the way to starting,
+// say. Passing `open` hands over the state entirely; passing neither keeps the
+// old behaviour, which is what almost every caller wants.
 export function Disclosure({
   summary,
   detail,
   aside,
   defaultOpen = false,
+  open: controlledOpen,
+  onOpenChange,
   icon,
   children,
   className = "",
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const controlled = controlledOpen !== undefined;
+  const open = controlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = (next) => {
+    const value = typeof next === "function" ? next(open) : next;
+    if (!controlled) setUncontrolledOpen(value);
+    onOpenChange?.(value);
+  };
   return (
     <div className={`ui-disclosure${open ? " is-open" : ""} ${className}`.trim()}>
       <button

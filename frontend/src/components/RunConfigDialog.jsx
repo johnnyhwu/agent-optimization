@@ -13,6 +13,7 @@ import Skeleton from "./ui/Skeleton.jsx";
 import { IconAlert, IconGear, IconPlay } from "./icons.jsx";
 import { useDebounced } from "../useDebounced.js";
 import { coverageWarning, skillCoverage } from "../skill_coverage.js";
+import { gateFor, probeMatches } from "../agent_endpoints.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
@@ -49,6 +50,15 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // Bumped by "Try again", so a retry re-runs the effect on an unchanged URL.
   const [probeNonce, setProbeNonce] = useState(0);
   const [evalSetSkills, setEvalSetSkills] = useState(null);
+  // The chat probe: `null` until somebody asks for one, because it spends a
+  // model call. Carries the URLs it was about, so an answer never outlives the
+  // address it describes — see `probeMatches`.
+  const [chatProbe, setChatProbe] = useState(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  // Opened only when a check fails on the way to starting. Controlled rather
+  // than left to the Disclosure's own state so that a failure can open it,
+  // while everything else about it stays the developer's to close.
+  const [connOpen, setConnOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -75,7 +85,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // the same hook the share editor's directory lookup uses. The first value is
   // returned immediately, which is what makes the dialog check the URL it opened
   // with the moment it opens.
-  const agentUrl = useDebounced(form?.agent_base_url ?? "", 400);
+  const agentUrl = useDebounced(form?.agent_skills_url ?? "", 400);
 
   // Whether the probe can say anything at all. With either seam faked, the
   // workspace it would read is canned: the skills are make-believe, so a
@@ -92,20 +102,31 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   useEffect(() => {
     if (!form) return;
     setProbe(simulated ? { state: "simulated" } : { state: "checking" });
-  }, [Boolean(form), form?.agent_base_url, simulated, probeNonce]);
+  }, [Boolean(form), form?.agent_skills_url, simulated, probeNonce]);
 
   useEffect(() => {
     if (!form || simulated) return undefined;
     // Still settling — the debounced value is a URL the field no longer shows.
     // Skipping here is also what stops the probe firing once against the empty
     // string before the defaults have landed.
-    if (agentUrl !== (form.agent_base_url ?? "")) return undefined;
+    if (agentUrl !== (form.agent_skills_url ?? "")) return undefined;
     let cancelled = false;
     api
       .agentSkills(agentUrl)
       .then((r) => {
         if (cancelled) return;
-        setProbe({ state: "connected", skills: r.skills, version: r.version });
+        // 200 in all three cases now, with the outcome inside. `check.ok ===
+        // null` is "no skills endpoint configured", which is a supported way to
+        // run an agent — so it is a state to describe, never a failure.
+        setProbe({
+          state: r.check?.ok === false ? "failed" : "connected",
+          skills: r.skills,
+          version: r.version,
+          check: r.check,
+          error: r.check?.error || "",
+          request_preview: r.request_preview,
+          response_preview: r.response_preview,
+        });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -119,7 +140,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     // Deliberately *not* keyed on the eval set's tags. They decide what the
     // answer means, not what is asked — and the two requests race on open, so
     // having them here fired the probe a second time the moment the tags landed.
-  }, [Boolean(form), simulated, agentUrl, form?.agent_base_url, probeNonce]);
+  }, [Boolean(form), simulated, agentUrl, form?.agent_skills_url, probeNonce]);
 
   // The reading of that answer, kept apart from the asking. Either input can
   // arrive first; this recomputes when either does, without another round trip.
@@ -131,12 +152,24 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     );
   }, [probe, evalSetSkills]);
 
-  // Nothing may be started while the target is unknown or unreachable. Waiting
-  // out the check is the whole point — a run against an agent that is not there
-  // costs a run row, a full set of result rows and one agent call per question
-  // to discover a typo. The wait is bounded by the server's own probe timeout,
-  // which is deliberately short for exactly this reason.
-  const blocked = probe?.state === "checking" || probe?.state === "failed";
+  // The four checks, in the shape `gateFor` reads. Absent keys mean "not
+  // asked", which is what keeps the button pressable before anyone has spent a
+  // model call on the chat probe — the dialog asks on the way past instead.
+  const checks = useMemo(() => {
+    const out = {};
+    if (probe?.check) out.skills = probe.check;
+    if (chatProbe?.chat) out.chat = chatProbe.chat;
+    return out;
+  }, [probe, chatProbe]);
+
+  const gate = simulated
+    ? { blocked: false, reason: "", warnings: [] }
+    : gateFor("evaluation", checks);
+
+  // An eval run never sends a skills override and never reads a trace, so a
+  // broken skills endpoint costs it the coverage warning and nothing else. Only
+  // a chat endpoint that has actually failed stops a run.
+  const blocked = gate.blocked;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   // A cleared number input parses to 0/NaN, which the backend would reject
@@ -177,8 +210,70 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     });
   }
 
+  // One chat probe, and what it was about. Kept together so a stale answer can
+  // never be shown beside an address it does not describe.
+  async function testChat() {
+    if (!form || chatBusy) return;
+    setChatBusy(true);
+    try {
+      const r = await api.agentChatProbe({
+        config: { ...cleanedConfig(), agent_timeout_s: form.agent_timeout_s },
+        secrets,
+        // An eval run sends no override and reads no trace, so proving either
+        // would gate this dialog on something it does not use. Asking anyway
+        // would also make the check slower and more expensive for no answer
+        // anybody here acts on.
+        with_override: false,
+        with_trace: false,
+      });
+      setChatProbe({
+        ...r,
+        forChatUrl: form.agent_chat_url || "",
+        forSkillsUrl: form.agent_skills_url || "",
+      });
+      return r;
+    } catch (e) {
+      const failed = {
+        chat: { ok: false, error: e.message },
+        forChatUrl: form.agent_chat_url || "",
+        forSkillsUrl: form.agent_skills_url || "",
+      };
+      setChatProbe(failed);
+      return failed;
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function cleanedConfig() {
+    const { name, ...config } = form;
+    return config;
+  }
+
   async function submit() {
     setError(null);
+
+    // Test the chat endpoint on the way past, but only when nothing has proved
+    // it yet for *these* URLs. Doing it every time would spend a model call and
+    // half a minute on every run; skipping it entirely is how a typo used to
+    // cost a run row, a full set of result rows and one agent call per question.
+    //
+    // Success is silent. A dialog that stopped to report good news would make
+    // the check feel like an obstacle, and the next person would look for a way
+    // to turn it off.
+    if (!simulated && !probeMatches(chatProbe, {
+      chatUrl: form.agent_chat_url || "",
+      skillsUrl: form.agent_skills_url || "",
+    })) {
+      const result = await testChat();
+      if (result?.chat?.ok === false) {
+        // Only a failure opens the panel. Auto-opening on the way in would make
+        // the form jump under the cursor and re-open something just closed.
+        setConnOpen(true);
+        return;
+      }
+    }
+
     setBusy(true);
     const { name, ...config } = form;
     try {
@@ -211,23 +306,20 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
             variant="primary"
             icon={<IconPlay size={14} />}
             disabled={!form || blocked}
-            loading={busy}
+            loading={busy || chatBusy}
             onClick={submit}
             // The button explains its own disabled state. Without this, a
             // button that will not depress reads as a broken dialog rather than
-            // as a check in progress or a target that is not there.
-            title={
-              probe?.state === "checking"
-                ? "Checking the agent server…"
-                : probe?.state === "failed"
-                  ? "This agent server could not be reached — see Connection settings"
-                  : undefined
-            }
+            // as a target that is not there.
+            title={blocked ? `${gate.reason} See Connection settings.` : undefined}
           >
             {busy
               ? "Starting…"
-              : probe?.state === "checking"
-                ? "Checking agent…"
+              // The chat probe is the one wait a developer has not asked for —
+              // it happens on the way past — so the button says what it is
+              // doing rather than just spinning.
+              : chatBusy
+                ? "Testing agent…"
                 : "Run eval"}
           </Button>
         </>
@@ -272,16 +364,23 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
             summary="Connection settings"
             detail={servicesSummary(impls)}
             icon={<IconGear size={14} />}
-            // The mark that makes a closed panel worth opening. Deliberately a
-            // mark rather than opening the panel for them: the probe resolves
-            // after the dialog is already on screen, so auto-opening would make
-            // the form jump under the cursor — and would re-open a panel someone
-            // had just closed. Everything else
-            // in this dialog can be ignored by someone who only wants to press
-            // the button; an agent that is not there cannot be.
+            // Controlled, but only in one direction: a failed check on the way
+            // to starting opens it, and after that it is the developer's to
+            // close. A panel that re-opened whenever a check was unhappy would
+            // fight whoever had just decided to ignore it.
+            //
+            // Nothing opens it on the way *in*. The skills read resolves after
+            // the dialog is already on screen, so auto-opening would make the
+            // form jump under the cursor. That is what the mark below is for.
+            open={connOpen}
+            onOpenChange={setConnOpen}
             aside={
-              probe?.state === "failed" ? (
-                <span className="error-text" title="This agent server could not be reached">
+              blocked ? (
+                <span className="error-text" title={gate.reason}>
+                  <IconAlert size={14} />
+                </span>
+              ) : gate.warnings.length ? (
+                <span className="amber-text" title={gate.warnings[0]}>
                   <IconAlert size={14} />
                 </span>
               ) : probe?.state === "connected" && coverage ? (
@@ -303,6 +402,9 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               probe={probe}
               coverage={coverage}
               onRetryProbe={() => setProbeNonce((n) => n + 1)}
+              chatProbe={chatProbe}
+              chatBusy={chatBusy}
+              onTestChat={testChat}
             />
           </Disclosure>
 

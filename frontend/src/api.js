@@ -53,11 +53,13 @@ function qs(params) {
   return s ? `?${s}` : "";
 }
 
-// Which agent a playground call is about. Blank is not the same as absent here
-// only in spirit — `qs` drops both — but writing it this way keeps the two
-// workspace calls agreeing on the parameter names with one edit rather than two.
-function agentQuery({ agent_base_url, agent_timeout_s } = {}) {
-  return qs({ agent_base_url, agent_timeout_s });
+// Which agent a playground call is about. Only the skills endpoint: everything
+// behind these calls reads the agent's files, and none of it asks a question.
+// Blank is not the same as absent here only in spirit — `qs` drops both — but
+// writing it this way keeps the two workspace calls agreeing on the parameter
+// names with one edit rather than two.
+function agentQuery({ agent_skills_url, agent_timeout_s } = {}) {
+  return qs({ agent_skills_url, agent_timeout_s });
 }
 
 // Export params, with `run_ids` repeated rather than joined — the endpoint reads
@@ -130,16 +132,28 @@ export const api = {
   // ShareEditor).
   lookupUser: (username) => req("GET", `/users/lookup${qs({ username })}`),
 
-  // The "Run eval" dialog's pre-flight: can we reach this agent, and what skills
-  // does it have? Reaching it at all is the connection check — the same call the
-  // playground connects with — so there is no separate ping to keep in step.
+  // The free half of the pre-flight: what skills does this agent have? A GET,
+  // so callers fire it while the developer is still typing.
   //
-  // A failure is a 503 carrying the agent server's own words, which is what the
-  // dialog shows: "this agent has no skills" and "your URL is wrong" have to
-  // stay distinguishable. No timeout parameter: the probe has a short budget of
-  // its own on the server, because the Start button waits for it.
-  agentSkills: (agentBaseUrl) =>
-    req("GET", `/agent/skills${qs({ agent_base_url: agentBaseUrl })}`),
+  // Answers 200 in all three cases, with the outcome in `check.ok`: true for a
+  // listing, false with the agent server's own words, and **null for "no skills
+  // endpoint is configured"** — which is a supported way to run an agent, not a
+  // fault. "This agent has no skills", "your URL is wrong" and "you did not
+  // give one" have to stay three distinct things. No timeout parameter: the
+  // probe has a short budget of its own on the server.
+  agentSkills: (agentSkillsUrl) =>
+    req("GET", `/agent/skills${qs({ agent_skills_url: agentSkillsUrl })}`),
+
+  // The expensive half: one real question, answered by a real model. Never
+  // called on a keystroke — a button, or once on the way to starting something
+  // that would have spent far more.
+  //
+  // `with_override` also asks whether the skill files we sent took effect;
+  // `with_trace` whether that call's trace can be read back. Both come back as
+  // their own tri-state check, because the three screens gate on them
+  // differently (see `agent_endpoints.js`). A POST: it has a cost, and the
+  // trace check needs credentials.
+  agentChatProbe: (payload) => req("POST", "/agent/chat-probe", payload),
   // Returns a page: { items, total, has_more }.
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
@@ -315,7 +329,9 @@ export const api = {
       "GET",
       `/optimization/skill-check${qs({
         skill_name: skillName,
-        agent_base_url: agent.agent_base_url,
+        // Only the skills endpoint: this asks what the agent *has*, which its
+        // chat endpoint cannot answer.
+        agent_skills_url: agent.agent_skills_url,
         agent_timeout_s: agent.agent_timeout_s,
       })}`,
     ),
