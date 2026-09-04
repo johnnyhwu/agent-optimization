@@ -26,7 +26,7 @@ from app.integrations.base import AgentResponse, Span, Trace, Verdict, Workspace
 from app.integrations.real.prompts import build_diagnosis_messages
 from app.playground import PlaygroundAttempt
 from app.routers import playground as playground_router
-from app.schemas import PlaygroundCreate, RunConfig
+from app.schemas import PlaygroundCreate, RunConfig, WorkspaceReadIn
 from app.sse import hub
 
 
@@ -1111,7 +1111,7 @@ async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
 ):
     seen: list[tuple] = []
 
-    def spy(skills_url=None, timeout_s=None):
+    def spy(skills_url=None, timeout_s=None, **credentials):
         seen.append((skills_url, timeout_s))
 
         class Client:
@@ -1128,8 +1128,9 @@ async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
             "app.integrations.real.workspace.HttpWorkspaceClient", spy
         )
         ws = await playground_router.get_workspace(
-            agent_skills_url="http://agent-b:8080/skills",
-            agent_timeout_s=42.0,
+            WorkspaceReadIn(
+                agent_skills_url="http://agent-b:8080/skills", agent_timeout_s=42.0
+            ),
             subject="alice",
         )
 
@@ -1140,7 +1141,7 @@ async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
 async def test_the_version_check_asks_the_same_agent(configure, monkeypatch):
     seen: list[tuple] = []
 
-    def spy(skills_url=None, timeout_s=None):
+    def spy(skills_url=None, timeout_s=None, **credentials):
         seen.append((skills_url, timeout_s))
 
         class Client:
@@ -1154,7 +1155,8 @@ async def test_the_version_check_asks_the_same_agent(configure, monkeypatch):
             "app.integrations.real.workspace.HttpWorkspaceClient", spy
         )
         out = await playground_router.get_workspace_version(
-            agent_skills_url="http://agent-b:8080/skills", subject="alice"
+            WorkspaceReadIn(agent_skills_url="http://agent-b:8080/skills"),
+            subject="alice",
         )
 
     assert out.version == "v-from-b"
@@ -1164,7 +1166,7 @@ async def test_the_version_check_asks_the_same_agent(configure, monkeypatch):
 async def test_a_blank_agent_url_still_falls_back_to_the_environment(configure):
     """A single-agent deployment must behave exactly as it did before."""
     with configure(workspace_impl="fake"):
-        ws = await playground_router.get_workspace(agent_skills_url="", subject="alice")
+        ws = await playground_router.get_workspace(WorkspaceReadIn(), subject="alice")
 
     assert ws.skills["billing/SKILL.md"].startswith("# Billing")
 
@@ -1176,8 +1178,8 @@ async def test_the_edit_baseline_comes_from_the_attempts_own_agent(monkeypatch):
 
     seen: list[str | None] = []
 
-    def spy(agent_skills_url=None, agent_timeout_s=None):
-        seen.append(agent_skills_url)
+    def spy(agent):
+        seen.append(agent.agent_skills_url)
 
         class Client:
             async def get_workspace(self):

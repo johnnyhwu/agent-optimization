@@ -279,3 +279,86 @@ async def test_no_chat_url_is_one_sentence_not_a_stack_trace(configure):
         report = await run_conformance("", "")
     assert ids(report) == ["chat"]
     assert report.tier == 0
+
+
+# --- A server behind a gateway ------------------------------------------------
+
+@respx.mock
+async def test_the_checklist_can_authenticate(real):
+    """Without this the page is unusable by exactly the people most likely to
+    need it: someone who has just written a server and put it behind their
+    team's gateway."""
+    seen: list[str] = []
+
+    def guard(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization", ""))
+        if request.headers.get("authorization") != "Bearer sk-42":
+            return httpx.Response(401, text="unauthorized")
+        return FakeAgent()(request)
+
+    respx.post(CHAT_URL).mock(side_effect=guard)
+    respx.get(SKILLS_URL).mock(
+        return_value=httpx.Response(200, json={"version": "v1", "skills": {"a/SKILL.md": "x"}})
+    )
+    report = await run_conformance(CHAT_URL, SKILLS_URL, api_key="sk-42")
+
+    assert [c.id for c in report.cases if c.result.ok is False] == []
+    assert set(seen) == {"Bearer sk-42"}
+
+
+@respx.mock
+async def test_a_server_that_wants_no_credential_is_never_marked_down(real):
+    """There is no case here a server without authentication can fail. Asking
+    for no credential is not a defect, and this platform has no standing to
+    grade it."""
+    mount(FakeAgent())
+    report = await run_conformance(CHAT_URL, SKILLS_URL)
+
+    assert [c.id for c in report.cases if c.result.ok is False] == []
+    assert not any("auth" in c.id for c in report.cases)
+
+
+@respx.mock
+async def test_the_credential_does_not_follow_a_skills_url_somewhere_else(real):
+    """Same rule as everywhere else, and this page is where a developer is most
+    likely to paste two unrelated URLs while trying things out."""
+    respx.post(CHAT_URL).mock(side_effect=FakeAgent())
+    route = respx.get("https://elsewhere.test/skills").mock(
+        return_value=httpx.Response(200, json={"version": "v1", "skills": {}})
+    )
+    await run_conformance(CHAT_URL, "https://elsewhere.test/skills", api_key="sk-42")
+
+    assert "authorization" not in route.calls[0].request.headers
+
+
+@respx.mock
+async def test_a_401_says_what_to_do_about_it(real):
+    """This page is where a developer whose server sits behind a gateway is most
+    likely to arrive first, so a bare "HTTP 401" is the one place the advice is
+    worth the most."""
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(401, text="unauthorized"))
+    report = await run_conformance(CHAT_URL, SKILLS_URL)
+
+    assert "requires a credential and none was sent" in case(report, "chat").result.error
+
+
+@respx.mock
+async def test_a_401_from_a_key_we_did_send_says_something_different(real):
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(401, text="unauthorized"))
+    report = await run_conformance(CHAT_URL, SKILLS_URL, api_key="sk-wrong")
+
+    assert "was refused" in case(report, "chat").result.error
+
+
+@respx.mock
+async def test_a_401_from_a_skills_endpoint_the_key_never_reached(real):
+    """"None was sent" is the true sentence here, even though a key was typed:
+    the same-origin rule withheld it, and telling the developer their key was
+    refused would send them to rotate a working credential."""
+    respx.post(CHAT_URL).mock(side_effect=FakeAgent())
+    respx.get("https://elsewhere.test/skills").mock(
+        return_value=httpx.Response(401, text="unauthorized")
+    )
+    report = await run_conformance(CHAT_URL, "https://elsewhere.test/skills", api_key="sk-42")
+
+    assert "none was sent" in case(report, "skills").result.error

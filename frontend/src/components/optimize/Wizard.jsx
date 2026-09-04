@@ -139,6 +139,9 @@ export default function Wizard() {
     // dropped) and a JSON body typed `float | None` (where blank is a 422) —
     // and a 422 here reads as a chat endpoint that failed, which blocks
     // Continue on a wizard nobody has misconfigured.
+    // Blank for almost every agent, and inert when blank. Not a secret — it is
+    // the shape of the request, not the credential, which travels in `secrets`.
+    agent_auth_header: config.agent_auth_header || "",
     agent_timeout_s: Number(config.agent_timeout_s) > 0
       ? Number(config.agent_timeout_s)
       : null,
@@ -154,7 +157,16 @@ export default function Wizard() {
     let cancelled = false;
     setSkillsBusy(true);
     api
-      .agentSkills(skillsUrl)
+      .agentSkills({
+        config: {
+          agent_skills_url: skillsUrl,
+          // So the server can apply the same-origin rule before letting the
+          // credential travel to a second address.
+          agent_chat_url: config.agent_chat_url || "",
+          agent_auth_header: config.agent_auth_header || "",
+        },
+        secrets: { agent_api_key: secrets.agent_api_key || "" },
+      })
       .then((r) => {
         if (cancelled) return;
         setSkillsProbe({
@@ -173,7 +185,16 @@ export default function Wizard() {
     return () => {
       cancelled = true;
     };
-  }, [skillsUrl, config.agent_skills_url]);
+    // Keyed on the credential too: typing a key in answer to a 401 changes
+    // what the request is, and a status line still showing the refusal would
+    // read as a key that did not work.
+  }, [
+    skillsUrl,
+    config.agent_skills_url,
+    config.agent_chat_url,
+    config.agent_auth_header,
+    secrets.agent_api_key,
+  ]);
 
   // The expensive half. Never automatic: it spends a model call, and unlike the
   // Run-eval dialog it asks the agent to prove the override *and* the trace,
@@ -337,7 +358,7 @@ export default function Wizard() {
   async function runSkillCheck(skillName) {
     setChecks((current) => ({ ...current, [skillName]: { skill: skillName, status: "checking" } }));
     try {
-      const result = await api.skillCheck(skillName, agentConfig);
+      const result = await api.skillCheck(skillName, agentConfig, secrets);
       setChecks((current) => ({
         ...current,
         [skillName]: { skill: skillName, status: "ok", result },
@@ -361,8 +382,15 @@ export default function Wizard() {
   // "does *this* server have it", so changing the server on step 1 and coming
   // back has to re-ask rather than keep showing what a different one said.
   const groupNames = (preview?.groups || []).map((g) => g.skill_name).join("\0");
-  const agentKey =
-    `${agentConfig.agent_skills_url}\0${agentConfig.agent_timeout_s}`;
+  // The credential is part of the key too: a check that 401'd is an answer
+  // about a request that no longer exists once a key has been typed.
+  const agentKey = [
+    agentConfig.agent_skills_url,
+    agentConfig.agent_chat_url,
+    agentConfig.agent_auth_header,
+    secrets.agent_api_key || "",
+    agentConfig.agent_timeout_s,
+  ].join("\0");
   useEffect(() => {
     if (!groupNames) return;
     groupNames.split("\0").forEach((name) => runSkillCheck(name));
@@ -502,6 +530,8 @@ export default function Wizard() {
             onTestChat={testChat}
             skillsProbe={skillsProbe}
             skillsBusy={skillsBusy}
+            secrets={secrets}
+            onSecrets={setSecrets}
           />
         )}
 
@@ -751,6 +781,7 @@ function SourceStep({ evalSets, selected, onToggle, preview, previewing, error, 
 function ModeStep({
   mode, onMode, config, onConfig, defaults, impls,
   chatProbe, chatBusy, onTestChat, skillsProbe, skillsBusy,
+  secrets, onSecrets,
 }) {
   const set = (key) => (e) => onConfig({ ...config, [key]: e.target.value });
 
@@ -805,6 +836,10 @@ function ModeStep({
         skillsUrl={config.agent_skills_url || ""}
         onChangeChat={(v) => onConfig({ ...config, agent_chat_url: v })}
         onChangeSkills={(v) => onConfig({ ...config, agent_skills_url: v })}
+        apiKey={secrets.agent_api_key || ""}
+        authHeader={config.agent_auth_header || ""}
+        onChangeApiKey={(v) => onSecrets({ ...secrets, agent_api_key: v })}
+        onChangeAuthHeader={(v) => onConfig({ ...config, agent_auth_header: v })}
         chatProbe={chatProbe}
         chatBusy={chatBusy}
         onTestChat={onTestChat}

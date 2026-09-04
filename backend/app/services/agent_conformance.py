@@ -34,8 +34,9 @@ import httpx
 from app.config import settings
 from app.integrations.base import WorkspaceOverride
 from app.integrations.real.agent import build_payload
+from app.integrations.real.agent_auth import auth_headers, same_origin
 from app.integrations.real.workspace import HttpWorkspaceClient
-from app.services.agent_probe import CheckResult, make_probe_skill
+from app.services.agent_probe import CheckResult, make_probe_skill, with_auth_hint
 
 
 @dataclass
@@ -58,8 +59,12 @@ class ConformanceReport:
     summary: str = ""
 
 
-async def _post(client: httpx.AsyncClient, url: str, body: dict) -> httpx.Response:
-    return await client.post(url, json=body, headers={"Content-Type": "application/json"})
+async def _post(
+    client: httpx.AsyncClient, url: str, body: dict, headers: dict[str, str] | None = None
+) -> httpx.Response:
+    return await client.post(
+        url, json=body, headers={"Content-Type": "application/json", **(headers or {})}
+    )
 
 
 def _answer_of(resp: httpx.Response) -> str | None:
@@ -85,11 +90,25 @@ def _answer_of(resp: httpx.Response) -> str | None:
 
 
 async def run_conformance(
-    chat_url: str, skills_url: str = "", timeout_s: float | None = None
+    chat_url: str,
+    skills_url: str = "",
+    timeout_s: float | None = None,
+    *,
+    api_key: str = "",
+    auth_header: str = "",
 ) -> ConformanceReport:
+    """The whole checklist against one server.
+
+    The credential is optional and, unlike every other input here, **is not
+    itself checked**. There is no case that a server without authentication can
+    fail: asking for no credential is not a defect, and this platform has no
+    standing to grade it. The key exists so that a developer whose server is
+    behind a gateway can run the checklist at all.
+    """
     report = ConformanceReport()
     chat = (chat_url or "").strip()
     budget = timeout_s or settings.agent_timeout_s
+    headers = auth_headers(api_key, auth_header)
 
     def case(cid, title, why, result):
         report.cases.append(ConformanceCase(id=cid, title=title, why=why, result=result))
@@ -111,7 +130,7 @@ async def run_conformance(
             "skill-studio-conformance", ["conformance"], budget, None,
         )
         try:
-            resp = await _post(client, chat, plain)
+            resp = await _post(client, chat, plain, headers)
         except httpx.HTTPError as exc:
             case(
                 "chat", "Chat endpoint answers",
@@ -127,7 +146,14 @@ async def run_conformance(
                 "Everything else needs an endpoint to talk to.",
                 CheckResult(
                     ok=False,
-                    error=f"HTTP {resp.status_code}: {resp.text[:400]}",
+                    # The same hint the connection probes give. This page is the
+                    # one a developer whose server sits behind a gateway is most
+                    # likely to reach first, and a bare "HTTP 401" here is the
+                    # one place the advice is worth the most.
+                    error=with_auth_hint(
+                        f"HTTP {resp.status_code}: {resp.text[:400]}",
+                        has_key=bool((api_key or "").strip()),
+                    ),
                 ),
             )
             return _finish(report)
@@ -142,7 +168,7 @@ async def run_conformance(
             question, uuid.uuid4().hex, "skill-studio-conformance",
             ["conformance"], budget, WorkspaceOverride(skills=skills_map),
         )
-        resp = await _post(client, chat, with_override)
+        resp = await _post(client, chat, with_override, headers)
         answer = _answer_of(resp) or ""
         applied = magic in answer
         case(
@@ -168,7 +194,7 @@ async def run_conformance(
             question, uuid.uuid4().hex, "skill-studio-conformance",
             ["conformance"], budget, WorkspaceOverride(skills={}),
         )
-        resp = await _post(client, chat, empty)
+        resp = await _post(client, chat, empty, headers)
         answer = _answer_of(resp) or ""
         # What this can prove, and what it cannot, stated rather than implied.
         # An agent that reads `{}` as "use your own" answers from its deployed
@@ -208,7 +234,7 @@ async def run_conformance(
             question, uuid.uuid4().hex, "skill-studio-conformance",
             ["conformance"], budget, None,
         )
-        resp = await _post(client, chat, persisted_probe)
+        resp = await _post(client, chat, persisted_probe, headers)
         answer = _answer_of(resp) or ""
         case(
             "not_persisted", "The override is not persisted",
@@ -230,7 +256,7 @@ async def run_conformance(
             "x", uuid.uuid4().hex, "skill-studio-conformance", ["conformance"],
             budget, WorkspaceOverride(skills={"../../etc/passwd": "x"}),
         )
-        resp = await _post(client, chat, hostile)
+        resp = await _post(client, chat, hostile, headers)
         case(
             "path_safety", "A traversing skill path is refused",
             "These keys are attacker-influenced strings that most "
@@ -253,7 +279,7 @@ async def run_conformance(
             **forward_compatible["skill_studio"],
             "something_we_added_later": {"a": 1},
         }
-        resp = await _post(client, chat, forward_compatible)
+        resp = await _post(client, chat, forward_compatible, headers)
         answer = _answer_of(resp)
         case(
             "unknown_keys", "Unknown fields are ignored, not rejected",
@@ -291,14 +317,31 @@ async def run_conformance(
     # server whose URL was just typed, and answering about a canned workspace
     # instead is the one result it must never produce.
     client = HttpWorkspaceClient(
-        skills_url=skills_url, timeout_s=settings.agent_probe_timeout_s
+        skills_url=skills_url,
+        timeout_s=settings.agent_probe_timeout_s,
+        # Same rule as everywhere else: the chat endpoint's credential travels
+        # to the skills endpoint only when they are the same server.
+        **(
+            {"api_key": api_key, "auth_header": auth_header}
+            if api_key and same_origin(chat, skills_url)
+            else {}
+        ),
     )
     try:
         workspace = await client.get_workspace()
     except Exception as exc:  # noqa: BLE001 - the agent server's problem, quoted as-is
         case(
             "skills", "Skills endpoint lists the files", why_skills,
-            CheckResult(ok=False, error=str(exc) or type(exc).__name__),
+            CheckResult(
+                ok=False,
+                error=with_auth_hint(
+                    str(exc) or type(exc).__name__,
+                    # Only a key that actually reached this endpoint counts as
+                    # sent: one withheld by the same-origin rule means "none was
+                    # sent", which is the sentence that explains the 401.
+                    has_key=bool(api_key and same_origin(chat, skills_url)),
+                ),
+            ),
         )
         return _finish(report)
 

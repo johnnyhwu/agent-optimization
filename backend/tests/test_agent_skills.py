@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from app.config import settings
 from app.integrations.base import Workspace
 from app.routers import agent as agent_router
-from app.schemas import ChatProbeIn, RunConfig
+from app.schemas import ChatProbeIn, RunConfig, RunSecrets, SkillsProbeIn
 from app.services import agent_probe
 from app.services.agent_skills import top_level_skills
 
@@ -68,6 +68,15 @@ def test_the_optimizer_wizard_and_the_probe_agree_on_the_names():
 
 # --- The endpoint -----------------------------------------------------------
 
+def _skills_body(**config) -> SkillsProbeIn:
+    """The skills probe reads a body, not a query string.
+
+    It became a POST when it started carrying a credential: an API key in a
+    query string is an API key in an access log. It is still free and still has
+    no side effects, so the callers that fire it on every keystroke still do.
+    """
+    return SkillsProbeIn(config=RunConfig(**config))
+
 async def test_the_probe_reports_the_agents_skills():
     out = await agent_router.agent_skills(subject="alice")
     # The fake workspace's three canned skills.
@@ -84,7 +93,7 @@ async def test_the_probe_answers_for_the_agent_it_was_given():
     exactly like a check that passed.
     """
     out = await agent_router.agent_skills(
-        agent_skills_url="http://agent.example:9000/skills", subject="alice"
+        _skills_body(agent_skills_url="http://agent.example:9000/skills"), subject="alice"
     )
     assert out.agent_skills_url == "http://agent.example:9000/skills"
 
@@ -113,7 +122,7 @@ async def test_an_unreachable_agent_is_a_failed_check_not_an_empty_list(monkeypa
         lambda *a, **k: SimpleNamespace(workspace=Broken()),
     )
     out = await agent_router.agent_skills(
-        agent_skills_url="http://nowhere.invalid/skills", subject="alice"
+        _skills_body(agent_skills_url="http://nowhere.invalid/skills"), subject="alice"
     )
 
     assert out.check.ok is False
@@ -132,7 +141,9 @@ async def test_no_skills_endpoint_is_neither_success_nor_failure(configure, monk
         agent_probe, "build_seams",
         lambda *a, **k: SimpleNamespace(workspace=None),
     )
-    out = await agent_router.agent_skills(agent_skills_url="", subject="alice")
+    out = await agent_router.agent_skills(
+        _skills_body(agent_skills_url=""), subject="alice"
+    )
 
     assert out.check.ok is None
     assert out.check.error == ""
@@ -162,8 +173,8 @@ async def test_the_probe_spends_its_own_timeout_not_the_runs(monkeypatch, config
     monkeypatch.setattr(agent_probe, "build_seams", spy)
     with configure(agent_probe_timeout_s=5.0, agent_timeout_s=120.0):
         await agent_router.agent_skills(
-            agent_skills_url="http://agent.example:9000/skills", subject="alice"
-        )
+        _skills_body(agent_skills_url="http://agent.example:9000/skills"), subject="alice"
+    )
 
     assert seen["agent_timeout_s"] == 5.0
 
@@ -178,7 +189,7 @@ def _probe_body(**kwargs):
 
 
 async def test_the_chat_probe_reports_a_working_agent(monkeypatch):
-    async def fake_probe(chat_url, timeout_s, *, with_override, trace_client):
+    async def fake_probe(chat_url, timeout_s, *, with_override, trace_client, **kw):
         assert chat_url == "http://agent.example:9000/v1/chat/completions"
         return agent_probe.ChatProbeResult(
             chat=agent_probe.CheckResult(ok=True, detail="answered in 1.2s"),
@@ -204,7 +215,7 @@ async def test_an_answer_without_the_magic_value_fails_only_the_override(monkeyp
     wizard refuses. Collapsing them would take away both.
     """
 
-    async def fake_probe(chat_url, timeout_s, *, with_override, trace_client):
+    async def fake_probe(chat_url, timeout_s, *, with_override, trace_client, **kw):
         return agent_probe.ChatProbeResult(
             chat=agent_probe.CheckResult(ok=True, detail="answered in 1.2s"),
             override=agent_probe.CheckResult(ok=False, error="did not contain the value"),

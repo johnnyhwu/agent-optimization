@@ -156,3 +156,59 @@ export function probeMatches(probe, { chatUrl, skillsUrl }) {
     (probe.forSkillsUrl || "") === (skillsUrl || "")
   );
 }
+
+/**
+ * Does this failure look like a server asking to be authenticated?
+ *
+ * Used to open the credential panel on the screen the refusal appeared on.
+ * That is the whole of how an optional feature gets found: nobody opens a
+ * folded panel looking for a field they have no reason to believe exists, and
+ * "401" beside a URL is not an instruction.
+ *
+ * Matched on the backend's own hint rather than on the status code, so the two
+ * cannot disagree about what counts — `services/agent_probe.py` decides, and
+ * this reads the decision.
+ */
+export function looksUnauthorized(check) {
+  const error = check?.error || "";
+  return error.includes("requires a credential") || error.includes("was refused");
+}
+
+/**
+ * Will the agent's credential be sent to this skills endpoint too?
+ *
+ * The rule is the backend's (`integrations/real/agent_auth.py:same_origin`) and
+ * this is the copy that explains it on screen — a developer whose skills
+ * endpoint is on another host would otherwise see a 401 there and no reason for
+ * it, having just entered a key that works.
+ */
+export function credentialReachesSkills(chatUrl, skillsUrl) {
+  const origin = (url) => {
+    try {
+      const u = new URL((url || "").trim());
+      // Comparing `origin` rather than the parts: it already normalises the
+      // default port away, which is the case a string comparison gets wrong.
+      return u.origin;
+    } catch {
+      return "";
+    }
+  };
+  const a = origin(chatUrl);
+  return Boolean(a) && a === origin(skillsUrl);
+}
+
+/**
+ * A check's error split into what the server said and what to do about it.
+ *
+ * The backend joins the two with a blank line (`services/agent_probe.py`), and
+ * HTML collapses that into a single space — so a 401 and the sentence telling
+ * you to add an API key ran together into one long line, with the advice least
+ * likely to be read at the end of it. Returns `{ message, hint }`, `hint` being
+ * "" when there is nothing beyond the server's own words.
+ */
+export function splitHint(error) {
+  const text = error || "";
+  const at = text.indexOf("\n\n");
+  if (at === -1) return { message: text, hint: "" };
+  return { message: text.slice(0, at).trim(), hint: text.slice(at + 2).trim() };
+}

@@ -22,6 +22,28 @@
     "endpoint_key": null
   },
   {
+    "key": "agent_api_key",
+    "group": "agent",
+    "kind": "secret",
+    "label": "Agent API key",
+    "help": "Optional \u2014 most agent servers need none. Only ever sent to the chat endpoint above, and to the skills endpoint when that is the same server. Change the chat endpoint and this must be entered again.",
+    "minimum": null,
+    "maximum": null,
+    "optional": true,
+    "endpoint_key": "agent_chat_url"
+  },
+  {
+    "key": "agent_auth_header",
+    "group": "agent",
+    "kind": "text",
+    "label": "Auth header",
+    "help": "Optional. Blank sends the key as `Authorization: Bearer <key>`. Name a header instead \u2014 `X-Api-Key` \u2014 and the key is sent as that header's value, with no prefix.",
+    "minimum": null,
+    "maximum": null,
+    "optional": true,
+    "endpoint_key": null
+  },
+  {
     "key": "agent_timeout_s",
     "group": "agent",
     "kind": "float",

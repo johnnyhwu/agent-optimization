@@ -2,7 +2,12 @@ import React from "react";
 import { IconAlert, IconCheck, IconInfo } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
 import Field, { Disclosure } from "./ui/Field.jsx";
-import { deriveSkillsUrl } from "../agent_endpoints.js";
+import {
+  credentialReachesSkills,
+  deriveSkillsUrl,
+  looksUnauthorized,
+  splitHint,
+} from "../agent_endpoints.js";
 import { href } from "../useHashRoute.js";
 
 // The two URLs that name an agent server, wherever they are asked for.
@@ -23,6 +28,11 @@ import { href } from "../useHashRoute.js";
 //     asymmetry is cost, not taste: reading a skill listing is a free GET the
 //     caller can fire on a keystroke, while the chat probe spends a real model
 //     call. Nothing may spend that on somebody's behalf.
+//   * **Authentication is folded away and opens itself.** Most agent servers
+//     ask for no credential, so a key field beside the URL would be a question
+//     nearly everybody has to decide not to answer. It is a panel instead — and
+//     when a server answers 401 the panel opens, because nobody goes looking
+//     for a field they have no reason to believe exists.
 //   * **The request is shown before it is sent.** An implementer reading the
 //     actual bytes finds a field-name mismatch in seconds; the same mismatch
 //     hides in a prose spec for an afternoon. So the preview panel is populated
@@ -41,10 +51,17 @@ function StatusLine({ check, busy, busyLabel }) {
     );
   }
   if (check.ok === false) {
+    // The server's own words, then what to do about them on a line of their
+    // own. Rendering the joined string put a 401 and "add an API key" into one
+    // run-on sentence — HTML collapses the blank line between them.
+    const { message, hint } = splitHint(check.error);
     return (
-      <div className="agent-ep-status error-text">
-        <IconAlert size={13} /> {check.error}
-      </div>
+      <>
+        <div className="agent-ep-status error-text">
+          <IconAlert size={13} /> {message}
+        </div>
+        {hint && <div className="agent-ep-status hint">{hint}</div>}
+      </>
     );
   }
   return (
@@ -92,11 +109,87 @@ function Exchange({ request, response }) {
   );
 }
 
+// The credential, and the header it goes in. Rendered only for a screen that
+// passes `onChangeApiKey`; every screen that does keeps it folded until it is
+// needed.
+function Authentication({
+  apiKey,
+  authHeader,
+  onChangeApiKey,
+  onChangeAuthHeader,
+  keptPlaceholder,
+  chatUrl,
+  skillsUrl,
+  disabled,
+  idPrefix,
+  open,
+  onOpenChange,
+}) {
+  const reaches = credentialReachesSkills(chatUrl, skillsUrl);
+  return (
+    <Disclosure
+      summary="Authentication"
+      detail="Optional"
+      className="agent-ep-auth"
+      open={open}
+      onOpenChange={onOpenChange}
+    >
+      <Field
+        label="API key"
+        htmlFor={`${idPrefix}-api-key`}
+        hint={<HelpLink anchor="authentication" label="How the platform sends a credential" />}
+        help="Most agent servers need none. Leave this blank and nothing is sent."
+      >
+        <input
+          id={`${idPrefix}-api-key`}
+          type="password"
+          autoComplete="new-password"
+          value={apiKey}
+          placeholder={keptPlaceholder}
+          spellCheck={false}
+          disabled={disabled}
+          onChange={(e) => onChangeApiKey(e.target.value)}
+        />
+      </Field>
+      <Field
+        label="Auth header"
+        htmlFor={`${idPrefix}-auth-header`}
+        help="Blank sends Authorization: Bearer. Name a header to send the key as its value instead."
+      >
+        <input
+          id={`${idPrefix}-auth-header`}
+          value={authHeader}
+          placeholder="Authorization"
+          spellCheck={false}
+          disabled={disabled}
+          onChange={(e) => onChangeAuthHeader(e.target.value)}
+        />
+      </Field>
+      {/* Said here rather than discovered as a 401 on a server the developer
+          has just authenticated against successfully. */}
+      {skillsUrl.trim() && !reaches && (
+        <div className="agent-ep-status hint">
+          <IconInfo size={13} /> The skills endpoint is on a different host, so
+          this key is not sent there.
+        </div>
+      )}
+    </Disclosure>
+  );
+}
+
 export default function AgentEndpointsFields({
   chatUrl = "",
   skillsUrl = "",
   onChangeChat,
   onChangeSkills,
+  // Credentials are opt-in per screen: a screen that cannot store one does not
+  // show the panel. `keptApiKey` is the placeholder for a value already saved,
+  // which is never sent back to the browser.
+  apiKey = "",
+  authHeader = "",
+  onChangeApiKey,
+  onChangeAuthHeader,
+  keptApiKey = "",
   // { chat, override, trace } tri-states plus previews, or null before a probe.
   chatProbe = null,
   chatBusy = false,
@@ -108,6 +201,15 @@ export default function AgentEndpointsFields({
   disabled = false,
   idPrefix = "agent",
 }) {
+  // Folded by default and opened by a refusal — never closed again by one, so
+  // it does not shut under someone who opened it to type.
+  const [authOpen, setAuthOpen] = React.useState(false);
+  const refused =
+    looksUnauthorized(chatProbe?.chat) || looksUnauthorized(skillsProbe?.check);
+  React.useEffect(() => {
+    if (refused) setAuthOpen(true);
+  }, [refused]);
+
   // Prefilling only ever writes into an empty field. Overwriting a URL somebody
   // typed because they then edited the chat one is the kind of help that loses
   // work.
@@ -209,6 +311,22 @@ export default function AgentEndpointsFields({
           response={skillsProbe?.response_preview}
         />
       </div>
+
+      {onChangeApiKey && (
+        <Authentication
+          apiKey={apiKey}
+          authHeader={authHeader}
+          onChangeApiKey={onChangeApiKey}
+          onChangeAuthHeader={onChangeAuthHeader}
+          keptPlaceholder={keptApiKey}
+          chatUrl={chatUrl}
+          skillsUrl={skillsUrl}
+          disabled={disabled}
+          idPrefix={idPrefix}
+          open={authOpen}
+          onOpenChange={setAuthOpen}
+        />
+      )}
     </>
   );
 }

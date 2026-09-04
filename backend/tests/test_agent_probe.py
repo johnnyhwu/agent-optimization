@@ -355,3 +355,70 @@ async def test_the_probe_uses_the_url_it_was_given_not_the_environment(real):
 
     assert result.chat.ok is True
     assert str(respx.calls[0].request.url) == other
+
+
+# --- A refusal, and what to do about it ---------------------------------------
+#
+# This is the whole of how an optional feature gets found. Nobody browses a
+# settings page for a credential field they have no reason to believe exists;
+# they hit a 401 and read what the screen says. "agent server returned 401" is
+# accurate and tells them nothing.
+
+def test_a_refusal_says_that_no_credential_was_sent():
+    from app.services.agent_probe import with_auth_hint
+
+    hinted = with_auth_hint("agent server returned 401: unauthorized", has_key=False)
+    assert "requires a credential and none was sent" in hinted
+    # The agent's own words survive: they are the half that says which server.
+    assert "unauthorized" in hinted
+
+
+def test_a_refusal_of_a_key_we_did_send_says_something_different():
+    from app.services.agent_probe import with_auth_hint
+
+    hinted = with_auth_hint("agent server returned 403: forbidden", has_key=True)
+    assert "was refused" in hinted
+    assert "header other than Authorization" in hinted
+
+
+def test_every_other_failure_is_left_alone():
+    """A connection refused is not an authentication problem, and telling
+    someone to add an API key would send them to fix the wrong thing."""
+    from app.services.agent_probe import with_auth_hint
+
+    for error in ("could not reach the agent server: [Errno 111]",
+                  "agent server returned 500: boom",
+                  ""):
+        assert with_auth_hint(error, has_key=False) == error
+
+
+@respx.mock
+async def test_the_skills_probe_hints_at_a_401(real):
+    respx.get(SKILLS_URL).mock(return_value=httpx.Response(401, text="no"))
+    result = await probe_skills(SKILLS_URL, 5.0)
+
+    assert result.skills.ok is False
+    assert "none was sent" in result.skills.error
+
+
+@respx.mock
+async def test_the_skills_probe_carries_a_credential_to_the_same_host(real):
+    route = respx.get(SKILLS_URL).mock(
+        return_value=httpx.Response(200, json={"version": "v1", "skills": {}})
+    )
+    await probe_skills(SKILLS_URL, 5.0, chat_url=CHAT_URL, api_key="sk-42")
+
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-42"
+
+
+@respx.mock
+async def test_the_chat_probe_carries_a_credential(real):
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+    )
+    await probe_chat(CHAT_URL, 5.0, with_override=False, api_key="sk-42")
+
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-42"

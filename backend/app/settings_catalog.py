@@ -135,6 +135,29 @@ CATALOG: tuple[SettingSpec, ...] = (
             "and optimization need it."
         ),
     ),
+    # Both optional, and inert together: with no key nothing is sent and the
+    # request is byte for byte what it was before authentication existed. They
+    # are here because a team whose agent sits behind a gateway could not
+    # connect at all, and the deployment's own AGENT_API_KEY is the wrong place
+    # for a credential that belongs to one person.
+    SettingSpec(
+        key="agent_api_key", setting="agent_api_key", group="agent", kind="secret",
+        label="Agent API key", endpoint_key="agent_chat_url", optional=True,
+        help=(
+            "Optional — most agent servers need none. Only ever sent to the chat "
+            "endpoint above, and to the skills endpoint when that is the same "
+            "server. Change the chat endpoint and this must be entered again."
+        ),
+    ),
+    SettingSpec(
+        key="agent_auth_header", setting="agent_auth_header", group="agent", kind="text",
+        label="Auth header", optional=True,
+        help=(
+            "Optional. Blank sends the key as `Authorization: Bearer <key>`. Name "
+            "a header instead — `X-Api-Key` — and the key is sent as that "
+            "header's value, with no prefix."
+        ),
+    ),
     SettingSpec(
         key="agent_timeout_s", setting="agent_timeout_s", group="agent", kind="float",
         label="Agent timeout", help="Seconds one question may take before it counts as failed.",

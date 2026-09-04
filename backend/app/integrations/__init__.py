@@ -80,6 +80,26 @@ def _get(config: dict | None, key: str):
     return value
 
 
+def _workspace_auth(config: dict | None, secrets: dict | None, skills_url: str) -> dict:
+    """The credential arguments for the skills client: the chat endpoint's, or none.
+
+    Split out so the rule has one name and one test. Returning a dict of kwargs
+    rather than a key keeps the "send nothing" case free of an explicit
+    `api_key=None` at the call site, which is the case that must stay obviously
+    inert.
+    """
+    from app.integrations.real.agent_auth import same_origin
+
+    api_key = _get(secrets, "agent_api_key") or settings.agent_api_key
+    chat_url = _get(config, "agent_chat_url") or settings.agent_chat_url
+    if not api_key or not same_origin(chat_url, skills_url):
+        return {}
+    return {
+        "api_key": api_key,
+        "auth_header": _get(config, "agent_auth_header") or settings.agent_auth_header,
+    }
+
+
 def build_seams(
     config: dict | None = None,
     secrets: dict | None = None,
@@ -108,6 +128,11 @@ def build_seams(
         agent = HttpAgentClient(
             chat_url=_get(config, "agent_chat_url"),
             timeout_s=_get(config, "agent_timeout_s"),
+            # A credential, so it comes from `secrets` and never from `config`
+            # — the two are stored in different columns and only one of them is
+            # allowed near a response model. The header name is not a secret.
+            api_key=_get(secrets, "agent_api_key"),
+            auth_header=_get(config, "agent_auth_header"),
         )
     else:
         agent = FakeAgentClient()
@@ -184,6 +209,14 @@ def build_seams(
                 workspace = HttpWorkspaceClient(
                     skills_url=skills_url,
                     timeout_s=_get(config, "agent_timeout_s"),
+                    # The chat endpoint's credential reaches the skills endpoint
+                    # only when the two are the same server. There is one field
+                    # because there is one agent; there is this test because
+                    # "one agent" is an assumption the form cannot enforce, and
+                    # a credential typed against one host must not follow the
+                    # other field wherever it is pointed. See
+                    # `services/user_secrets.py` on endpoint binding.
+                    **_workspace_auth(config, secrets, skills_url),
                 )
         else:
             workspace = FakeWorkspaceClient()

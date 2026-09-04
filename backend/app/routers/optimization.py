@@ -22,7 +22,6 @@ import json
 import math
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import case, func, select
@@ -72,6 +71,7 @@ from app.schemas import (
     PreviewQuestion,
     PreviewSource,
     SkillCheck,
+    SkillCheckIn,
     SkillDiffFile,
     SkillGroup,
     TraceView,
@@ -391,15 +391,9 @@ async def _read_workspace(seams):
         ) from exc
 
 
-@router.get("/skill-check", response_model=SkillCheck)
+@router.post("/skill-check", response_model=SkillCheck)
 async def skill_check(
-    skill_name: str = Query(..., min_length=1),
-    # `Annotated` rather than `= Query(...)` for these two: the endpoints in this
-    # package are also called directly as plain functions by the tests, and a
-    # bare `Query(default)` leaves the parameter holding a FastAPI object rather
-    # than the default when nobody routes the call.
-    agent_skills_url: Annotated[str, Query(description="blank uses the server's own")] = "",
-    agent_timeout_s: Annotated[float | None, Query(gt=0)] = None,
+    body: SkillCheckIn,
     subject: str = Depends(current_subject),
 ):
     """Does the agent actually have this skill directory? (wizard step 3)
@@ -418,9 +412,21 @@ async def skill_check(
     another, which looks exactly like a check that passed.
 
     No session dependency: this reads the agent server, not the database.
+
+    A POST for a read, like `/agent/skills`: it may carry a credential, and a
+    credential in a query string is a credential in an access log. The chat URL
+    travels with it for one reason only — it is what decides whether the key may
+    reach the skills endpoint at all (same server, or nothing).
     """
-    config = {"agent_skills_url": agent_skills_url, "agent_timeout_s": agent_timeout_s}
-    seams = build_seams(config, include_workspace=True)
+    skill_name = body.skill_name
+    agent_skills_url = body.agent_skills_url
+    config = {
+        "agent_skills_url": agent_skills_url,
+        "agent_chat_url": body.agent_chat_url,
+        "agent_auth_header": body.agent_auth_header,
+        "agent_timeout_s": body.agent_timeout_s,
+    }
+    seams = build_seams(config, {"agent_api_key": body.agent_api_key}, include_workspace=True)
     # What the run would resolve to, by the same rule `run_config.resolve` uses —
     # so the card names the agent that answered rather than the box that was
     # left blank.

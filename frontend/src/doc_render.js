@@ -37,7 +37,17 @@ export function findAnchor(headings, anchor) {
   const exact = headings.find((h) => h.id === wanted);
   if (exact) return exact.id;
   const suffix = headings.find((h) => h.id.endsWith(`-${wanted}`));
-  return suffix ? suffix.id : "";
+  if (suffix) return suffix.id;
+  // A section whose title carries more than its name — "8. Authentication
+  // (optional)" — ends in neither its number nor its name, so neither rule
+  // above finds it and the "?" link lands silently at the top of the document.
+  // Matching after the leading number covers that without loosening this into
+  // a substring search, which would send `skills` to `skills-endpoint`.
+  const numbered = headings.find((h) => {
+    const body = h.id.replace(/^\d+-/, "");
+    return body === wanted || body.startsWith(`${wanted}-`);
+  });
+  return numbered ? numbered.id : "";
 }
 
 /**

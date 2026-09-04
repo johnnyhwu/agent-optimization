@@ -58,8 +58,21 @@ function qs(params) {
 // Blank is not the same as absent here only in spirit — `qs` drops both — but
 // writing it this way keeps the two workspace calls agreeing on the parameter
 // names with one edit rather than two.
-function agentQuery({ agent_skills_url, agent_timeout_s } = {}) {
-  return qs({ agent_skills_url, agent_timeout_s });
+// The body both workspace reads send. POSTs for reads: they may carry the
+// agent's credential, and a credential in a query string is a credential in an
+// access log. `agent_chat_url` is never called from there — it is what decides
+// whether the credential may reach the skills endpoint at all.
+function agentBody(
+  { agent_skills_url, agent_chat_url, agent_auth_header, agent_timeout_s } = {},
+  secrets = {},
+) {
+  return {
+    agent_skills_url,
+    agent_chat_url,
+    agent_auth_header,
+    agent_api_key: secrets.agent_api_key || "",
+    agent_timeout_s,
+  };
 }
 
 // Export params, with `run_ids` repeated rather than joined — the endpoint reads
@@ -132,8 +145,13 @@ export const api = {
   // ShareEditor).
   lookupUser: (username) => req("GET", `/users/lookup${qs({ username })}`),
 
-  // The free half of the pre-flight: what skills does this agent have? A GET,
+  // The free half of the pre-flight: what skills does this agent have? Free,
   // so callers fire it while the developer is still typing.
+  //
+  // A POST for a read, which is worth the note: it may carry a credential, and
+  // a credential in a query string is a credential in an access log. It has no
+  // side effects and costs nothing — the POST is about where the key goes, not
+  // about what this does.
   //
   // Answers 200 in all three cases, with the outcome in `check.ok`: true for a
   // listing, false with the agent server's own words, and **null for "no skills
@@ -141,8 +159,7 @@ export const api = {
   // fault. "This agent has no skills", "your URL is wrong" and "you did not
   // give one" have to stay three distinct things. No timeout parameter: the
   // probe has a short budget of its own on the server.
-  agentSkills: (agentSkillsUrl) =>
-    req("GET", `/agent/skills${qs({ agent_skills_url: agentSkillsUrl })}`),
+  agentSkills: (payload) => req("POST", "/agent/skills", payload),
 
   // The expensive half: one real question, answered by a real model. Never
   // called on a keystroke — a button, or once on the way to starting something
@@ -277,14 +294,14 @@ export const api = {
   // This one is also the playground's connect: it is the call that proves the
   // agent is reachable and speaks the contract, and it hands back the version
   // the staleness check needs. There is no separate ping to keep in step.
-  getWorkspace: (agent = {}) =>
-    req("GET", `/playground/workspace${agentQuery(agent)}`),
+  getWorkspace: (agent = {}, secrets = {}) =>
+    req("POST", "/playground/workspace", agentBody(agent, secrets)),
   // Cheap enough to call before every send, which is what turns "your snapshot
   // is stale" into a question asked before the experiment rather than a mystery
   // after it. Asked of the same agent the snapshot came from — a version from
   // anywhere else answers a different question.
-  getWorkspaceVersion: (agent = {}) =>
-    req("GET", `/playground/workspace/version${agentQuery(agent)}`),
+  getWorkspaceVersion: (agent = {}, secrets = {}) =>
+    req("POST", "/playground/workspace/version", agentBody(agent, secrets)),
   listAttempts: () => req("GET", "/playground/attempts"),
   createAttempt: (payload) => req("POST", "/playground/attempts", payload),
   getAttempt: (attemptId) => req("GET", `/playground/attempts/${attemptId}`),
@@ -334,17 +351,22 @@ export const api = {
   // first step and starts the run against it; a check that read the server's own
   // environment instead could clear a skill on one agent and hand the run to
   // another, and would look exactly like a check that passed.
-  skillCheck: (skillName, agent = {}) =>
-    req(
-      "GET",
-      `/optimization/skill-check${qs({
-        skill_name: skillName,
-        // Only the skills endpoint: this asks what the agent *has*, which its
-        // chat endpoint cannot answer.
-        agent_skills_url: agent.agent_skills_url,
-        agent_timeout_s: agent.agent_timeout_s,
-      })}`,
-    ),
+  // A POST for a read, like `agentSkills` and for the same reason: it may carry
+  // a credential, and a credential in a query string is a credential in an
+  // access log.
+  //
+  // The chat endpoint travels with it and is never called. It is what decides
+  // whether the key may reach the skills endpoint at all — same server, or
+  // nothing.
+  skillCheck: (skillName, agent = {}, secrets = {}) =>
+    req("POST", "/optimization/skill-check", {
+      skill_name: skillName,
+      agent_skills_url: agent.agent_skills_url,
+      agent_chat_url: agent.agent_chat_url,
+      agent_auth_header: agent.agent_auth_header,
+      agent_api_key: secrets.agent_api_key || "",
+      agent_timeout_s: agent.agent_timeout_s,
+    }),
   createOptimizationRun: (payload) => req("POST", "/optimization/runs", payload),
 
   listOptimizationRuns: (params = {}) =>

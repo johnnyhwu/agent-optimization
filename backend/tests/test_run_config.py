@@ -207,7 +207,13 @@ def test_no_run_response_model_declares_a_credential_field():
     outbound = set(RunOut.model_fields) | set(RunConfig.model_fields)
     assert not [f for f in outbound if "secret" in f or "api_key" in f]
     # ...while the inbound one does.
-    assert set(RunSecrets.model_fields) == {"langfuse_secret_key", "llm_api_key"}
+    assert set(RunSecrets.model_fields) == {
+        "langfuse_secret_key",
+        "llm_api_key",
+        # Optional in a stronger sense than the other two: most agent servers
+        # ask for no credential, and blank sends none.
+        "agent_api_key",
+    }
 
 
 def test_a_serialized_run_contains_no_credential_value():

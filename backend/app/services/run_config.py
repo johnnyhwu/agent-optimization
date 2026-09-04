@@ -25,6 +25,7 @@ def defaults() -> dict[str, Any]:
     return {
         "agent_chat_url": settings.agent_chat_url,
         "agent_skills_url": settings.agent_skills_url,
+        "agent_auth_header": settings.agent_auth_header,
         "agent_timeout_s": settings.agent_timeout_s,
         "langfuse_host": settings.langfuse_host,
         "langfuse_public_key": settings.langfuse_public_key,

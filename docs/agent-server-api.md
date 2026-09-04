@@ -34,11 +34,12 @@ evaluated today, and read the rest of this when you want more.
 5. [The skills override, in detail](#5-the-skills-override-in-detail)
 6. [Path safety](#6-path-safety)
 7. [The version string](#7-the-version-string)
-8. [Errors, and what each one causes](#8-errors-and-what-each-one-causes)
-9. [The probes you will see in your logs](#9-the-probes-you-will-see-in-your-logs)
-10. [Acceptance checklist](#10-acceptance-checklist)
-11. [A minimal reference implementation](#11-a-minimal-reference-implementation)
-12. [Migrating from the previous protocol](#12-migrating-from-the-previous-protocol)
+8. [Authentication](#8-authentication)
+9. [Errors, and what each one causes](#9-errors-and-what-each-one-causes)
+10. [The probes you will see in your logs](#10-the-probes-you-will-see-in-your-logs)
+11. [Acceptance checklist](#11-acceptance-checklist)
+12. [A minimal reference implementation](#12-a-minimal-reference-implementation)
+13. [Migrating from the previous protocol](#13-migrating-from-the-previous-protocol)
 
 ---
 
@@ -56,6 +57,10 @@ than refusing to start.
 The last row is not a third endpoint. It is two behaviours of the chat endpoint
 described in §5 and §3.4, and Skill Studio checks both before it lets an
 optimization run start.
+
+Authentication is not in this table because it unlocks nothing: a server that
+requires a credential and one that requires none are equally usable here. See
+§8 if yours sits behind a gateway.
 
 ---
 
@@ -379,7 +384,56 @@ at all: it disables both checks above while looking like it is doing something.
 
 ---
 
-## 8. Errors, and what each one causes
+## 8. Authentication
+
+**Nothing in this document requires your server to authenticate anything.** A
+server that accepts any request is a supported server, it passes every case in
+the acceptance checklist, and it is what most agents behind this platform are.
+Skip this section entirely if that is you.
+
+What the platform can do is *send* a credential, so that an agent sitting behind
+a gateway is reachable at all. Whether that credential is demanded, ignored, or
+never sent is your decision and the platform has no opinion about it.
+
+### What gets sent
+
+A developer may enter an API key beside the two URLs (or save one as a personal
+default). When they have, every request carries one header:
+
+```http
+Authorization: Bearer <key>
+```
+
+If your gateway wants a different header, they name it — `X-Api-Key` — and the
+key is sent as that header's value with **no** `Bearer` prefix.
+
+With no key entered, no such header is sent at all. Not an empty one: the
+request is byte for byte what it was before this existed.
+
+### Where it goes
+
+The key is entered against the **chat endpoint**, and it is sent to the skills
+endpoint only when that is the same server — same scheme, host and port. A
+skills endpoint on another host gets no credential, and the developer is told
+so on screen rather than discovering it as a 401.
+
+If your two endpoints are on different hosts and both need authentication, put
+them behind one address; there is deliberately no second key field.
+
+### What to return when a credential is missing or wrong
+
+**401** or **403**, with an OpenAI error envelope if you have one. The platform
+recognises both and turns them into a sentence naming what to do — "this agent
+server requires a credential and none was sent", or "the API key configured for
+this agent was refused" — rather than showing a bare status code beside a URL.
+
+That is the whole reason to prefer 401 over, say, a 200 carrying a refusal in
+the text: the second reads to this platform as an agent that answered, and the
+answer gets graded.
+
+---
+
+## 9. Errors, and what each one causes
 
 Skill Studio never guesses what went wrong — it shows the developer your status
 code and the beginning of your response body. If you answer with an OpenAI error
@@ -399,7 +453,8 @@ envelope, the sentence inside it is what gets shown:
 | 200 + empty/whitespace `content` | The question fails: "empty answer". |
 | 200 + no `choices` | The question fails, with your body quoted. |
 | 200 + a body starting with `<` | The question fails: "markup, not a chat completion". |
-| **4xx** | The question fails immediately, carrying your status and message. **Not retried** — a bad request fails identically every time. |
+| **401 / 403** | The question fails, and the check that reported it says a credential is missing or was refused (§8). **Not retried.** |
+| **4xx** (other) | The question fails immediately, carrying your status and message. **Not retried** — a bad request fails identically every time. |
 | **5xx** | The question fails, carrying your status and message. **Not retried.** |
 | Connection refused / reset | Fails the question. **Not** retried — see the note in §3.3. |
 | The platform's own timeout elapses | **Retried** with exponential backoff, then failed. |
@@ -411,13 +466,14 @@ envelope, the sentence inside it is what gets shown:
 | 200 + a valid body | Normal operation. |
 | 200 + `skills` that is not a `{string: string}` map | Hard error naming the offending entry. Not treated as empty. |
 | 200 + a non-JSON body | Hard error quoting the body. |
-| **any 4xx/5xx** | The check fails, carrying your status and body. Evaluation still runs; the playground will not connect and optimization will not start. |
+| **401 / 403** | The check fails and says a credential is missing or was refused (§8). Note that the key is only sent here when this endpoint is on the same host as the chat endpoint. |
+| **any other 4xx/5xx** | The check fails, carrying your status and body. Evaluation still runs; the playground will not connect and optimization will not start. |
 | Unreachable | Same, naming the URL tried. |
 | **Not configured at all** | Not an error. Evaluation runs; the rest is unavailable and says so. |
 
 ---
 
-## 9. The probes you will see in your logs
+## 10. The probes you will see in your logs
 
 Skill Studio sends a small number of synthetic calls. They are deliberate. If you
 see one and assume the platform is sending you corrupt data, you will go looking
@@ -483,7 +539,11 @@ Treat the marker as what it says it is: a comment, to be ignored.
 
 ---
 
-## 10. Acceptance checklist
+## 11. Acceptance checklist
+
+Nothing here checks authentication. If your server requires a credential, add
+`-H "Authorization: Bearer $KEY"` to every call below; if it does not, that is
+not a case you can fail (§8).
 
 ```bash
 CHAT=http://localhost:8080/v1/chat/completions
@@ -568,9 +628,9 @@ and means nothing.
 
 ---
 
-## 11. A minimal reference implementation
+## 12. A minimal reference implementation
 
-FastAPI, for illustration. It is complete enough to pass §10 and small enough to
+FastAPI, for illustration. It is complete enough to pass §11 and small enough to
 read in one sitting; the parts specific to your agent are marked.
 
 ```python
@@ -713,9 +773,33 @@ Note what this does **not** do, on purpose: it never writes an override back to
 `SKILLS_DIR`, it never lets one request's temporary directory outlive that
 request, and it never returns an empty skills map to signal a failure.
 
+It also has **no authentication**, which is not an omission — see §8. If yours
+does, the whole of it is one dependency on both routes:
+
+```python
+from fastapi import Depends, Header
+
+API_KEY = os.environ.get("API_KEY", "")
+
+
+def require_key(authorization: str = Header(default="")):
+    """401 when a credential is missing or wrong, so the platform can say which.
+
+    Answering 200 with a refusal in the text instead reads to Skill Studio as
+    an agent that answered, and the refusal gets graded as the answer.
+    """
+    if not API_KEY:
+        return                                  # open server; a supported choice
+    if authorization != f"Bearer {API_KEY}":
+        raise HTTPException(401, "missing or invalid credential")
+
+
+# then: @app.post("/v1/chat/completions", dependencies=[Depends(require_key)])
+```
+
 ---
 
-## 12. Migrating from the previous protocol
+## 13. Migrating from the previous protocol
 
 The previous contract was `POST {base}/execute` plus `GET {base}/skills`, both
 derived from one base URL. Nothing about what your agent *does* changes — only
@@ -733,6 +817,7 @@ where the fields are.
 | `{"content": "..."}` | `{"choices": [{"message": {"content": "..."}}]}` |
 | A bare JSON string reply | No longer accepted |
 | A `text/plain` reply | No longer accepted |
+| (nothing) | An optional `Authorization: Bearer` header, when the developer configures one — see §8. Servers that need no credential are unaffected. |
 
 In practice: rename `metadata` to `skill_studio`, read the question out of
 `messages` instead of `message`, and wrap your answer in a chat completion. The

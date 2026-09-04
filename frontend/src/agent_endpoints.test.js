@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  credentialReachesSkills,
   deriveSkillsUrl,
   gateFor,
+  looksUnauthorized,
   probeMatches,
+  splitHint,
   tierOf,
 } from "./agent_endpoints.js";
 
@@ -196,5 +199,118 @@ describe("probeMatches", () => {
 
   it("treats no probe as no match", () => {
     assert.equal(probeMatches(null, { chatUrl: "", skillsUrl: "" }), false);
+  });
+});
+
+describe("looksUnauthorized", () => {
+  // How the credential panel gets opened. Matched on the backend's own hint
+  // rather than on the status code, so the two cannot disagree about what
+  // counts as a refusal.
+  it("recognises a server that asked for a credential", () => {
+    assert.equal(
+      looksUnauthorized({
+        ok: false,
+        error:
+          "agent server returned 401: no\n\nThis agent server requires a " +
+          "credential and none was sent. Add an API key under Connection settings.",
+      }),
+      true
+    );
+  });
+
+  it("recognises a key that was refused", () => {
+    assert.equal(
+      looksUnauthorized({
+        ok: false,
+        error: "agent server returned 403\n\nThe API key configured for this agent was refused.",
+      }),
+      true
+    );
+  });
+
+  it("leaves every other failure alone", () => {
+    // Opening a credential panel over a connection refused sends someone to
+    // fix the wrong thing.
+    assert.equal(looksUnauthorized({ ok: false, error: "connection refused" }), false);
+    assert.equal(looksUnauthorized({ ok: true, detail: "answered in 1.2s" }), false);
+    assert.equal(looksUnauthorized(null), false);
+    assert.equal(looksUnauthorized(undefined), false);
+  });
+});
+
+describe("credentialReachesSkills", () => {
+  // The screen's copy of the backend's same-origin rule
+  // (integrations/real/agent_auth.py). A developer whose skills endpoint is on
+  // another host would otherwise see a 401 there and no reason for it, having
+  // just entered a key that works.
+  it("is true for two URLs on one server", () => {
+    assert.equal(
+      credentialReachesSkills(
+        "https://agent.test/v1/chat/completions",
+        "https://agent.test/skills"
+      ),
+      true
+    );
+  });
+
+  it("treats the default port as the port", () => {
+    assert.equal(
+      credentialReachesSkills("https://agent.test:443/chat", "https://agent.test/skills"),
+      true
+    );
+  });
+
+  it("is false across hosts, ports and schemes", () => {
+    assert.equal(
+      credentialReachesSkills("https://agent.test/chat", "https://other.test/skills"),
+      false
+    );
+    assert.equal(
+      credentialReachesSkills("http://agent.test:8080/chat", "http://agent.test:9090/skills"),
+      false
+    );
+    assert.equal(
+      credentialReachesSkills("https://agent.test/chat", "http://agent.test/skills"),
+      false
+    );
+  });
+
+  it("is false for a suffix that only looks like the same host", () => {
+    // The case a string comparison gets wrong, and the reason this parses.
+    assert.equal(
+      credentialReachesSkills(
+        "https://agent.test/chat",
+        "https://agent.test.evil.example/skills"
+      ),
+      false
+    );
+  });
+
+  it("is false when either URL is missing or unparseable", () => {
+    assert.equal(credentialReachesSkills("https://agent.test/chat", ""), false);
+    assert.equal(credentialReachesSkills("", ""), false);
+    assert.equal(credentialReachesSkills("agent.test/chat", "agent.test/skills"), false);
+  });
+});
+
+describe("splitHint", () => {
+  it("separates the server's words from the advice", () => {
+    // Joined by a blank line on the backend, which HTML collapses — so without
+    // this the 401 and the sentence telling you what to do about it render as
+    // one long line, with the advice at the end where it is least read.
+    const { message, hint } = splitHint(
+      "agent server returned 401: unauthorized\n\nThis agent server requires a credential."
+    );
+    assert.equal(message, "agent server returned 401: unauthorized");
+    assert.equal(hint, "This agent server requires a credential.");
+  });
+
+  it("leaves an ordinary error whole", () => {
+    assert.deepEqual(splitHint("connection refused"), {
+      message: "connection refused",
+      hint: "",
+    });
+    assert.deepEqual(splitHint(""), { message: "", hint: "" });
+    assert.deepEqual(splitHint(undefined), { message: "", hint: "" });
   });
 });

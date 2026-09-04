@@ -125,7 +125,12 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // live form state instead would turn it into "you have typed something".
   const [opened, setOpened] = useState(null);
   const [systemDefaults, setSystemDefaults] = useState(null);
-  const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
+  const [secrets, setSecrets] = useState({
+    llm_api_key: "",
+    langfuse_secret_key: "",
+    // Blank for almost every agent; see integrations/real/agent_auth.py.
+    agent_api_key: "",
+  });
 
   // Which agent this screen is about: "disconnected" | "connecting" |
   // "connected" | "error" | "fake". The URL itself is not duplicated here — it
@@ -230,15 +235,18 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     return {
       agent_chat_url: f?.agent_chat_url || "",
       agent_skills_url: f?.agent_skills_url || "",
+      // Not a secret — the shape of the request, not the credential, which
+      // travels in `secrets` and never in a URL.
+      agent_auth_header: f?.agent_auth_header || "",
       agent_timeout_s: f?.agent_timeout_s ?? null,
     };
   }
 
-  async function loadWorkspace(agent) {
+  async function loadWorkspace(agent, creds = secrets) {
     setWsLoading(true);
     setWsError(null);
     try {
-      const ws = await api.getWorkspace(agent);
+      const ws = await api.getWorkspace(agent, creds);
       setWorkspace(ws);
       // Reloading starts the edit over from what the agent has now. Replaying
       // the old edits onto new text would produce a third version that matches
@@ -262,12 +270,17 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // workspace contract, and it produces the snapshot and version everything below
   // depends on. A separate ping would prove less and be one more thing to keep
   // in step.
-  async function connect({ chat_url, skills_url, timeout_s }) {
+  async function connect({ chat_url, skills_url, timeout_s, api_key, auth_header }) {
     const agent = {
       agent_chat_url: chat_url,
       agent_skills_url: skills_url || "",
+      agent_auth_header: auth_header || "",
       agent_timeout_s: timeout_s ?? null,
     };
+    // Held beside the form, not in it: `form` is the attempt's config, and a
+    // credential does not belong in a config object that is echoed back.
+    const withKey = { ...secrets, agent_api_key: api_key || "" };
+    setSecrets(withKey);
     setForm((f) => ({ ...(f || {}), ...agent }));
     setConn("connecting");
     setConnError(null);
@@ -278,9 +291,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // costs a model call, and only gates the send button — so waiting for it
     // would make connecting feel several times slower to buy nothing that is
     // needed yet.
-    probeChat(agent);
+    probeChat(agent, withKey);
     try {
-      await loadWorkspace(agent);
+      await loadWorkspace(agent, withKey);
       setConn("connected");
       // Remembered only once it worked: the URL that could not be reached is
       // exactly the one not worth offering back next time.
@@ -300,7 +313,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // send are the ones it uses. The second is a warning rather than a block —
   // questions against the deployed skills are still worth asking, and the check
   // has real false positives.
-  async function probeChat(agent) {
+  async function probeChat(agent, creds = secrets) {
     if (!agent.agent_chat_url) {
       setChatProbe(null);
       return;
@@ -323,7 +336,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     try {
       const r = await api.agentChatProbe({
         config: agent,
-        secrets,
+        secrets: creds,
         with_override: true,
         // Not here. The playground reads traces one attempt at a time, on
         // demand, and a run's worth of trace plumbing is not what a send button
@@ -679,7 +692,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // and you would have no way of telling afterwards.
     if (workspace?.version) {
       try {
-        const { version } = await api.getWorkspaceVersion(agentOf());
+        const { version } = await api.getWorkspaceVersion(agentOf(), secrets);
         if (version && version !== workspace.version) {
           setStale({ version });
           return;
@@ -864,6 +877,8 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           onReload={reloadWorkspace}
           chatProbe={currentProbe}
           chatBusy={chatBusy}
+          apiKey={secrets.agent_api_key}
+          authHeader={form.agent_auth_header || ""}
         />
       )}
 

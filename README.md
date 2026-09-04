@@ -555,6 +555,11 @@ JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=
 # the agent's skill files — read-only, and optional: without it evaluation still
 # runs, and the playground, the coverage warning and optimization go without
 WORKSPACE_IMPL=real  AGENT_SKILLS_URL=https://your-agent-server/skills
+
+# only if your agent is behind a gateway. Blank sends no authorization header at
+# all, which is what most agent servers here want — authentication is not part
+# of the agent contract (docs/agent-server-api.md §8)
+AGENT_API_KEY=...    # AGENT_AUTH_HEADER=X-Api-Key if it is not Authorization
 ```
 Then check the wiring before spending a run on it:
 ```bash

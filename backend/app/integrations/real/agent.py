@@ -41,6 +41,7 @@ import httpx
 
 from app.config import settings
 from app.integrations.base import AgentResponse, WorkspaceOverride
+from app.integrations.real.agent_auth import auth_headers, redact
 
 # The vendor namespace every platform-specific field lives under. One name, in
 # one place, because it appears in the payload, in the docs and in the probe.
@@ -234,7 +235,13 @@ def build_payload(
 class HttpAgentClient:
     """POST a question to the agent's chat completions endpoint, return its answer."""
 
-    def __init__(self, chat_url: str | None = None, timeout_s: float | None = None) -> None:
+    def __init__(
+        self,
+        chat_url: str | None = None,
+        timeout_s: float | None = None,
+        api_key: str | None = None,
+        auth_header: str | None = None,
+    ) -> None:
         self.chat_url = (chat_url or settings.agent_chat_url).strip().rstrip("/")
         if not self.chat_url:
             raise RuntimeError(
@@ -243,9 +250,26 @@ class HttpAgentClient:
                 "(e.g. http://agent-host:8080/v1/chat/completions)."
             )
         self.timeout_s = timeout_s or settings.agent_timeout_s
+        # Both optional. With no key this client sends exactly the headers it
+        # sent before authentication existed — the agent contract does not
+        # require any, and most servers this talks to ask for none.
+        self.api_key = (api_key or settings.agent_api_key or "").strip()
+        self.auth_header = (auth_header or settings.agent_auth_header or "").strip()
 
     def _headers(self) -> dict[str, str]:
-        return {"Content-Type": "application/json"}
+        return {
+            "Content-Type": "application/json",
+            **auth_headers(self.api_key, self.auth_header),
+        }
+
+    def _safe(self, text: str) -> str:
+        """Whatever the agent said, with our credential taken back out.
+
+        Every error path below quotes the response body, and those quotes end up
+        in run records and on screen. A gateway that echoes request headers into
+        its error body is the case this covers.
+        """
+        return redact(text, self.api_key)
 
     def build_payload(
         self, question: str, correlation_id: str, user_id: str,
@@ -278,11 +302,11 @@ class HttpAgentClient:
         # Let 5xx/timeouts raise so the orchestrator's retry policy sees them;
         # a 4xx is a request problem and will fail identically on every retry.
         if resp.status_code >= 500:
-            raise AgentHttpError(_extract_error(resp))
+            raise AgentHttpError(self._safe(_extract_error(resp)))
         if resp.status_code >= 400:
             return AgentResponse(
                 response="", correlation_id=correlation_id, failed=True,
-                error=_extract_error(resp), latency_ms=latency_ms,
+                error=self._safe(_extract_error(resp)), latency_ms=latency_ms,
             )
 
         if _looks_like_markup(resp.text):
@@ -290,7 +314,7 @@ class HttpAgentClient:
                 response="", correlation_id=correlation_id, failed=True,
                 error=(
                     "the agent server answered 200 with markup, not a chat "
-                    f"completion: {resp.text[:500]}"
+                    f"completion: {self._safe(resp.text[:500])}"
                 ),
                 latency_ms=latency_ms,
             )
@@ -305,7 +329,7 @@ class HttpAgentClient:
                 response="", correlation_id=correlation_id, failed=True,
                 error=(
                     "the response was not a chat completion carrying a text "
-                    f"answer: {resp.text[:500]}"
+                    f"answer: {self._safe(resp.text[:500])}"
                 ),
                 latency_ms=latency_ms,
             )

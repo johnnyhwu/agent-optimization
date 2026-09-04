@@ -136,6 +136,11 @@ services:
       # OpenAI chat completions; the skills endpoint is optional.
       AGENT_CHAT_URL: ${AGENT_CHAT_URL:-}
       AGENT_SKILLS_URL: ${AGENT_SKILLS_URL:-}
+      # Optional, and inert when blank: with no key the agent sees exactly the
+      # headers it saw before these existed. Authentication is not part of the
+      # agent server contract — see docs/agent-server-api.md §8.
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      AGENT_AUTH_HEADER: ${AGENT_AUTH_HEADER:-}
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
       # The run dialog's pre-flight budget, not a question's. Short on purpose:
       # the Start button waits for this check before it can be pressed.

@@ -47,6 +47,7 @@ import httpx
 
 from app.config import settings
 from app.integrations.base import Workspace, derived_version
+from app.integrations.real.agent_auth import auth_headers, redact
 
 
 class WorkspaceFetchError(RuntimeError):
@@ -85,7 +86,13 @@ def _skills_from(body: dict, where: str) -> dict[str, str]:
 class HttpWorkspaceClient:
     """Read the agent server's skill files over HTTP."""
 
-    def __init__(self, skills_url: str | None = None, timeout_s: float | None = None) -> None:
+    def __init__(
+        self,
+        skills_url: str | None = None,
+        timeout_s: float | None = None,
+        api_key: str | None = None,
+        auth_header: str | None = None,
+    ) -> None:
         self.skills_url = (skills_url or settings.agent_skills_url).strip().rstrip("/")
         if not self.skills_url:
             raise RuntimeError(
@@ -94,13 +101,22 @@ class HttpWorkspaceClient:
                 "(e.g. http://agent-host:8080/skills)."
             )
         self.timeout_s = timeout_s or settings.agent_timeout_s
+        # Whatever the caller passed, which for a real run is the chat
+        # endpoint's credential — and only when the two endpoints are the same
+        # origin. That decision belongs to `integrations/__init__.py`, which is
+        # the one place that can see both URLs at once; this class just uses
+        # what it was handed, so a test can construct it either way.
+        self.api_key = (api_key or "").strip()
+        self.auth_header = (auth_header or "").strip()
 
     async def _get(self) -> Any:
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout_s, follow_redirects=True
             ) as client:
-                resp = await client.get(self.skills_url)
+                resp = await client.get(
+                    self.skills_url, headers=auth_headers(self.api_key, self.auth_header)
+                )
         except httpx.HTTPError as exc:
             raise WorkspaceFetchError(
                 f"could not reach the agent server at {self.skills_url}: {exc}"
@@ -109,7 +125,7 @@ class HttpWorkspaceClient:
         if resp.status_code >= 400:
             raise WorkspaceFetchError(
                 f"agent server returned {resp.status_code} for {self.skills_url}: "
-                f"{resp.text[:200]}"
+                f"{redact(resp.text[:200], self.api_key)}"
             )
         try:
             return resp.json()

@@ -289,12 +289,12 @@ Data Curation 通過這一題（eval set 是 skill 優化時的訓練資料，�
 
 | Seam | 介面 | 假實作 | 真實實作 |
 |---|---|---|---|
-| `AgentClient` | `call(question, correlation_id, user_id, tags, workspace=None) -> AgentResponse` | 睡 1–3s，回假 response | `POST AGENT_CHAT_URL`，body 見 §3.3 |
+| `AgentClient` | `call(question, correlation_id, user_id, tags, workspace=None) -> AgentResponse` | 睡 1–3s，回假 response | `POST AGENT_CHAT_URL`，body 見 §3.3。有設 `AGENT_API_KEY`（或使用者自己的憑證）時多送一個 authorization header，沒設就一個都不送 |
 | `JudgeClient` | `judge(question, response, ground_truth) -> Verdict` | 睡 0.5–1s，二元判定 | OpenAI 相容端點，LLM 同時吐 verdict + score + comment |
 | `TraceClient` | `fetch_trace(correlation_id) -> Trace \| NotReady` | 前 2 次 poll 回 NotReady，之後給假 trace | Langfuse，**兩條讀取策略依序嘗試**（見 §3.5） |
 | `DiagnosisClient` | `diagnose(trace, gt_reasoning, judge_verdict \| None) -> dict` | 睡 2–4s，回 §8.2 的 JSON | §8.2 四段式 prompt + 輸出驗證 + span_index 越界剔除 |
 | `SynthesisClient` | `synthesize(trace, question, agent_response) -> str` | 依假 trace 生出編號步驟 | §8.3 的 prompt，**與 judge/diagnosis 共用同一個 LLM client** |
-| `WorkspaceClient` | `get_workspace()`、`get_version()` | 罐頭的四個 skill 檔 | `GET AGENT_SKILLS_URL`（`get_version()` 走同一支，只取 `version`）。**沒設 URL 時 `build_seams` 回 `None`**，那是「只有 chat 端點」這個受支援的組態，不是錯誤 |
+| `WorkspaceClient` | `get_workspace()`、`get_version()` | 罐頭的四個 skill 檔 | `GET AGENT_SKILLS_URL`（`get_version()` 走同一支，只取 `version`）。**沒設 URL 時 `build_seams` 回 `None`**，那是「只有 chat 端點」這個受支援的組態，不是錯誤。chat 端點的憑證**只在同源時**才會一併送到這裡（`integrations/real/agent_auth.py:same_origin`）|
 | `OptimizerClient` | `chat(system, user, ...) -> (text, usage)` | 依 `failure_summary` 生出確定性的 patch，走得到 accept / reject / 多檔 diff 三條路徑 | OpenAI 相容端點；vendored 的 reflect / aggregate / clip 全部只透過這一支呼叫模型 |
 
 > **為什麼是 `WorkspaceClient` 而不是 `SkillClient`**：skill 在 agent server 上**是一個目錄**
@@ -534,7 +534,7 @@ Stage 1 **不做** step 拆解軟對齊；直接把整段 `ground_truth_reasonin
   > 否則填了半天卻跑出假資料，是最容易踩的坑。
 - **對話框在按下按鈕前就先探測 agent server**，而且**兩個端點的檢查機制刻意不對稱**——
   差別是成本。
-  - **skills 端點**：一個 GET，免費，所以維持**自動探測**（`GET /agent/skills`，
+  - **skills 端點**：一次讀取，免費，所以維持**自動探測**（`POST /agent/skills`，
     網址輸入 debounce，與分享對話框查員工目錄同一個 hook）。探測有自己的
     `AGENT_PROBE_TIMEOUT_S`（預設 5 秒）——借用 `AGENT_TIMEOUT_S`（120 秒，那是答一題的
     預算）會讓一台卡住的 agent 把對話框鎖住兩分鐘。
@@ -1323,7 +1323,7 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /users/lookup?username=` | — | 分享前對員工目錄查核（§11.3）。查無此人 → **404**；目錄連不上 → **200 但 `verified:false`**，前端警告卻放行 |
 | `GET /me` | — | 目前 subject 與其在各 eval set 的角色。**UI 不用它 gate 權限**（§11.4）——每個 eval set 的 payload 自己就帶 `my_role` |
 | `GET /run-config/defaults` | — | run config 對話框的預填值（env 來源）+ **`*_IMPL` 現況** |
-| `GET /agent/skills?agent_skills_url=` | — | 起飛前檢查中**免費的那一半**：一個 GET，所以打字時就能自動送。**三種結果都是 200**，答案放在 `check.ok` 的三態裡：`true` 有清單、`false` 帶 agent server 的原話、**`null` 代表沒設 skills 端點**——那是受支援的組態，不是錯誤。「這台沒有 skill」「你的 URL 打錯」「你沒給 URL」必須是三件事。用自己的 `AGENT_PROBE_TIMEOUT_S` |
+| `POST /agent/skills` | body | 起飛前檢查中**免費的那一半**，打字時就能自動送。**是 POST 但沒有副作用也不花錢**——它可能夾帶 agent 憑證，而 query string 裡的憑證就是 access log 裡的憑證。**三種結果都是 200**，答案放在 `check.ok` 的三態裡：`true` 有清單、`false` 帶 agent server 的原話、**`null` 代表沒設 skills 端點**——那是受支援的組態，不是錯誤。「這台沒有 skill」「你的 URL 打錯」「你沒給 URL」必須是三件事。用自己的 `AGENT_PROBE_TIMEOUT_S` |
 | `POST /agent/chat-probe` | body | 貴的那一半：一次真實提問。**絕不自動觸發**。`with_override` 順便驗 skill override 有沒有生效，`with_trace` 驗 trace 讀不讀得回來；三項各自是獨立的 check，因為三個畫面對它們的嚴格度不同 |
 | `POST /agent/conformance` | body | 整份驗收清單，給剛寫完 server 的人。包含正常使用永遠碰不到的三項：空 skills map、路徑穿越、override 落地 |
 | `POST /eval-sets` | — | 建立（payload 恆為 JSONL + `source_format`）；建立者 = owner；可帶 `shares`；`source_format='python'` 時可帶 `script`（provenance，**無 password 欄位**，多帶會被拒）|
@@ -1353,8 +1353,8 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 | `GET /eval-sets/{id}/export/preview` | R | 下載對話框的檔案預覽：各檔真實列數 + **實際欄位名**（由寫檔用的同一組欄位定義供給）|
 | `GET /eval-sets/{id}/export` | R | 下載本體；`?questions&runs&traces&fmt=csv\|jsonl&run_scope=all\|latest\|latest_n\|selected&run_ids=`。只選一個檔 → 直接回該檔；多檔 → zip + `manifest.json`；全不選 → 422 |
 | `POST /eval-sets/from-shortlist` | — | 用 shortlist 的題目 + 複製既有 set 的題目建立新 set（§7.6）；讀不到的來源 set → 404（**寫入前**檢查）；沒有任何題目 → 422 |
-| `GET /playground/workspace` | `agent_skills_url?` `agent_timeout_s?` | 指定那台 agent 的 config（已移除機密）+ 全部 skill 檔 + 版本；失敗 → **503 + 原因**。前端的 **Connect** 就是這一支 |
-| `GET /playground/workspace/version` | `agent_skills_url?` `agent_timeout_s?` | 只有版本字串，送出前的過期檢查用；**必須問快照來源的同一台** |
+| `POST /playground/workspace` | body | 指定那台 agent 的 config（已移除機密）+ 全部 skill 檔 + 版本；失敗 → **503 + 原因**。前端的 **Connect** 就是這一支。是 POST 而非 GET，因為它可能夾帶 agent 憑證 |
+| `POST /playground/workspace/version` | body | 只有版本字串，送出前的過期檢查用；**必須問快照來源的同一台**。同上，POST 是為了憑證 |
 | `POST /playground/attempts` | — | 建立 + 起背景 task，201（回 detail）|
 | `GET /playground/attempts` | — | 我的 attempt 清單（新到舊，**不分頁**——store 本來就有上限）|
 | `GET /playground/attempts/{id}` | C | 詳情，含與 run 相同形狀的 trace payload |
@@ -1432,7 +1432,7 @@ Evaluation（三層下鑽）              Playground                        Opti
 **Playground 先連線，才開始工作（connection bar）**
 
 編輯區之上有一條常駐的 **Target agent** bar：填 `Agent Base URL` 與 `Agent Timeout`、按
-**Connect**，Playground 才會動。**Connect 這個動作就是 `GET /playground/workspace`**——
+**Connect**，Playground 才會動。**Connect 這個動作就是 `POST /playground/workspace`**——
 一次呼叫同時證明「連得到」「講的是 skills 端點的契約」並取回 `version` / `skills`，
 所以不需要另一支 health 端點（多一支就是多一份會過期的東西）。
 
@@ -1814,6 +1814,7 @@ container。**金鑰只走環境變數或 repo 根目錄的 `.env`，不會進 i
 | **`AGENT_IMPL`** / **`JUDGE_IMPL`** / **`TRACE_IMPL`** / **`DIAGNOSIS_IMPL`** / **`SYNTHESIS_IMPL`** / **`WORKSPACE_IMPL`** | 皆 `fake` | 每個 seam 各自 fake 或 real，**可逐一切換** |
 | `AGENT_CHAT_URL` | 空 | agent 的 chat completions 端點（絕對 URL）|
 | `AGENT_SKILLS_URL` | 空 | agent 的 skills 端點（絕對 URL）。**選配**：沒有它 evaluation 照跑，playground、覆蓋率警告與 optimization 才需要 |
+| `AGENT_API_KEY` / `AGENT_AUTH_HEADER` | 皆空 | **選配，留白時完全不作用**：沒有 key 就不送任何 authorization header，request 與這兩個變數存在之前一模一樣。認證不屬於 agent server 契約的一部分（`docs/agent-server-api.md` §8），這裡只是讓平台*有能力*送。`AGENT_AUTH_HEADER` 留白 = `Authorization: Bearer <key>`；填 `X-Api-Key` 則送該 header 的原值。key 只在 skills 端點與 chat 端點**同源**時才會一併送過去 |
 | `AGENT_TIMEOUT_S` / `AGENT_MAX_RETRIES` | `120` / `2` | |
 | `LLM_BASE_URL` / `LLM_API_KEY` | （內部 litellm 端點）/ 空 | **OpenAI 相容**端點，可指向 self-hosted |
 | `LLM_TIMEOUT_S` / `LLM_MAX_RETRIES` | `120` / `2` | |

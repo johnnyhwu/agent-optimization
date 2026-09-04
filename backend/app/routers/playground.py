@@ -40,12 +40,14 @@ from app.schemas import (
     SynthesisOut,
     TraceView,
     WorkspaceOut,
+    WorkspaceReadIn,
     WorkspaceOverrideIn,
     WorkspaceVersionOut,
 )
 from app.db import get_session
 from app.services import judge_prompt as judge_prompt_service
 from app.services import run_config, user_secrets, user_settings
+from app.services.agent_probe import with_auth_hint
 from app.services.trace_view import count_llm_calls, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
@@ -59,9 +61,7 @@ BASELINE_TIMEOUT_S = 5.0
 
 # --- Workspace --------------------------------------------------------------
 
-def _workspace_client(
-    agent_skills_url: str | None = None, agent_timeout_s: float | None = None
-):
+def _workspace_client(agent: "WorkspaceReadIn"):
     """The workspace seam for one agent, or a 503 explaining why there isn't one.
 
     `include_workspace=True` is what makes `build_seams` construct it at all — a
@@ -85,7 +85,15 @@ def _workspace_client(
     """
     try:
         seams = build_seams(
-            {"agent_skills_url": agent_skills_url, "agent_timeout_s": agent_timeout_s},
+            {
+                "agent_skills_url": agent.agent_skills_url,
+                # Carried, never called: the seam needs both URLs to decide
+                # whether the credential may travel to the second one.
+                "agent_chat_url": agent.agent_chat_url,
+                "agent_auth_header": agent.agent_auth_header,
+                "agent_timeout_s": agent.agent_timeout_s,
+            },
+            {"agent_api_key": agent.agent_api_key},
             include_workspace=True,
         )
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a server bug
@@ -103,10 +111,9 @@ def _workspace_client(
     return seams.workspace
 
 
-@router.get("/workspace", response_model=WorkspaceOut)
+@router.post("/workspace", response_model=WorkspaceOut)
 async def get_workspace(
-    agent_skills_url: str = "",
-    agent_timeout_s: float | None = None,
+    agent: WorkspaceReadIn = WorkspaceReadIn(),
     subject: str = Depends(current_subject),
 ):
     """The agent's skill files, so an edit starts from the real thing.
@@ -123,20 +130,26 @@ async def get_workspace(
     the developer silently loses the starting point and retypes the skill from
     memory — then tests the wrong text.
     """
-    client = _workspace_client(agent_skills_url, agent_timeout_s)
+    client = _workspace_client(agent)
     try:
         ws = await client.get_workspace()
     except Exception as exc:  # noqa: BLE001
+        # The same hint the connection probes give. The playground's Connect is
+        # the only route to this endpoint, so a 401 here is a developer staring
+        # at a status code with the field that answers it folded away above.
         raise HTTPException(
-            status_code=503, detail=f"could not read the agent's workspace: {exc}"
+            status_code=503,
+            detail=with_auth_hint(
+                f"could not read the agent's workspace: {exc}",
+                has_key=bool((agent.agent_api_key or "").strip()),
+            ),
         ) from exc
     return WorkspaceOut(version=ws.version, skills=ws.skills)
 
 
-@router.get("/workspace/version", response_model=WorkspaceVersionOut)
+@router.post("/workspace/version", response_model=WorkspaceVersionOut)
 async def get_workspace_version(
-    agent_skills_url: str = "",
-    agent_timeout_s: float | None = None,
+    agent: WorkspaceReadIn = WorkspaceReadIn(),
     subject: str = Depends(current_subject),
 ):
     """Just the version, checked before a send to catch a stale snapshot.
@@ -149,12 +162,16 @@ async def get_workspace_version(
     `_workspace_client`: a version fetched from a different server than the
     snapshot came from can only ever produce a false answer, in either direction.
     """
-    client = _workspace_client(agent_skills_url, agent_timeout_s)
+    client = _workspace_client(agent)
     try:
         return WorkspaceVersionOut(version=await client.get_version())
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=503, detail=f"could not read the workspace version: {exc}"
+            status_code=503,
+            detail=with_auth_hint(
+                f"could not read the workspace version: {exc}",
+                has_key=bool((agent.agent_api_key or "").strip()),
+            ),
         ) from exc
 
 
@@ -266,6 +283,17 @@ async def create_attempt(
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
 ):
+    # Resolved before anything reads the agent, because the baseline lookup
+    # below is one of those reads: typed into this request, else this
+    # developer's saved default for the endpoint named in the config. The same
+    # `inject` the eval and optimize paths use, so a credential cannot be bound
+    # to its endpoint on two screens and not on the third.
+    resolved_secrets = user_secrets.inject(
+        await user_settings.stored_secrets(session, subject),
+        body.config.model_dump(),
+        body.secrets.model_dump(),
+    )
+
     override = None
     if body.workspace is not None and not body.workspace.is_empty:
         # An override that changes nothing is dropped rather than sent: the
@@ -290,7 +318,14 @@ async def create_attempt(
         # as edited that were never touched, and hides ones that were.
         try:
             ws = await asyncio.wait_for(
-                _workspace_client(body.config.agent_skills_url).get_workspace(),
+                _workspace_client(
+                    WorkspaceReadIn(
+                        agent_skills_url=body.config.agent_skills_url,
+                        agent_chat_url=body.config.agent_chat_url,
+                        agent_auth_header=body.config.agent_auth_header,
+                        agent_api_key=resolved_secrets.get("agent_api_key", ""),
+                    )
+                ).get_workspace(),
                 timeout=BASELINE_TIMEOUT_S,
             )
             baseline = ws.skills
@@ -325,15 +360,7 @@ async def create_attempt(
                 ),
             ),
         ),
-        # Typed into this request, else this developer's saved default for the
-        # very endpoint named above. The same `inject` the eval and optimize
-        # paths use, so a credential cannot be bound to its endpoint on two
-        # screens and not on the third.
-        secrets=user_secrets.inject(
-            await user_settings.stored_secrets(session, subject),
-            body.config.model_dump(),
-            body.secrets.model_dump(),
-        ),
+        secrets=resolved_secrets,
         correlation_id=uuid.uuid4().hex,
     )
     playground.start(attempt)

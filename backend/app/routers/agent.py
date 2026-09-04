@@ -3,10 +3,16 @@
 Two endpoints, and they are split by **cost**, which is the fact that shapes
 every screen using them:
 
-    GET  /agent/skills      one GET against the skills endpoint. Free and fast,
+    POST /agent/skills      one GET against the skills endpoint. Free and fast,
                             so callers fire it while the developer is typing.
     POST /agent/chat-probe  one real question answered by a real model. Never
                             automatic; something has to ask for it.
+
+Both are POSTs, and only one of them has a cost. The skills probe is a POST
+because it may carry a credential, and a credential in a query string is a
+credential in an access log — the platform's, the caller's proxy's, and
+whatever sits between. It stays free and side-effect-free, so the screens that
+fire it on every keystroke still do.
 
 The single check this replaces could be automatic because reading a skill
 listing costs nothing. Now that the platform also has to prove the chat endpoint
@@ -16,7 +22,7 @@ on every keystroke would be indefensible.
 
 **A missing skills endpoint is not a failure.** It is the entry-level
 configuration, and evaluation runs against such an agent normally.
-`GET /agent/skills` says so with `check.ok = null` rather than an error, and each
+`POST /agent/skills` says so with `check.ok = null` rather than an error, and each
 screen decides what that costs it — a lost coverage warning for an eval run, a
 blocked wizard for an optimization, a read-only file list in the playground.
 
@@ -41,9 +47,8 @@ Two things are deliberately not reused from the run's own settings:
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from app.auth import current_subject
 from app.config import settings
@@ -56,6 +61,7 @@ from app.schemas import (
     ConformanceCaseOut,
     ConformanceIn,
     ConformanceOut,
+    SkillsProbeIn,
 )
 from app.services.agent_conformance import run_conformance
 from app.services.agent_probe import probe_chat, probe_skills
@@ -64,11 +70,11 @@ from app.services.agent_skills import top_level_skills
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
-@router.get("/skills", response_model=AgentSkillsOut)
+@router.post("/skills", response_model=AgentSkillsOut)
 async def agent_skills(
-    # `Annotated` rather than a bare `Query(default)`, so the tests can call this
-    # as a plain function and get the default rather than a FastAPI object.
-    agent_skills_url: Annotated[str, Query(description="blank uses the server's own")] = "",
+    # A default instance, so a test can call this as a plain function — the same
+    # reason the query parameter it replaced was `Annotated`. Never mutated.
+    body: SkillsProbeIn = SkillsProbeIn(),
     subject: str = Depends(current_subject),
 ):
     """Which skills this agent has — and, by answering at all, that it is there.
@@ -87,10 +93,20 @@ async def agent_skills(
     a summary here would flatten "no such host" and "401 from the agent" into
     the same unhelpful sentence.
     """
+    config = body.config
     # What a run would resolve to, by the same rule `run_config.resolve` uses, so
     # the dialog names the endpoint that answered rather than the box left blank.
-    effective_url = (agent_skills_url or "").strip() or settings.agent_skills_url
-    result = await probe_skills(effective_url, settings.agent_probe_timeout_s)
+    effective_url = (config.agent_skills_url or "").strip() or settings.agent_skills_url
+    result = await probe_skills(
+        effective_url,
+        settings.agent_probe_timeout_s,
+        # Passed so the seam can apply the same-origin rule: a credential typed
+        # against the chat endpoint reaches the skills endpoint only when they
+        # are the same server.
+        chat_url=(config.agent_chat_url or "").strip() or settings.agent_chat_url,
+        api_key=body.secrets.agent_api_key,
+        auth_header=config.agent_auth_header,
+    )
     return AgentSkillsOut(
         agent_skills_url=effective_url,
         version=result.version,
@@ -138,6 +154,8 @@ async def chat_probe(
             config.get("agent_timeout_s") or settings.agent_timeout_s,
             with_override=body.with_override,
             trace_client=trace_client,
+            api_key=body.secrets.agent_api_key,
+            auth_header=config.get("agent_auth_header") or "",
         )
     except RuntimeError as exc:  # a seam that could not be built at all
         return ChatProbeOut(chat=CheckOut(ok=False, error=str(exc)))
@@ -173,6 +191,8 @@ async def conformance(
         body.agent_chat_url,
         body.agent_skills_url,
         body.agent_timeout_s or settings.agent_timeout_s,
+        api_key=body.agent_api_key,
+        auth_header=body.agent_auth_header,
     )
     return ConformanceOut(
         tier=report.tier,

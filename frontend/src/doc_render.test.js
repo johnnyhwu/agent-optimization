@@ -30,6 +30,29 @@ describe("findAnchor", () => {
     assert.equal(findAnchor(headings, "3-chat-endpoint"), "3-chat-endpoint");
   });
 
+  it("finds a section whose title says more than its name", () => {
+    // "8. Authentication (optional)" ends in neither its number nor its name,
+    // so a suffix match misses it and the "?" link lands silently at the top of
+    // the document — which reads as a link that works.
+    const titled = [
+      { id: "8-authentication-optional", text: "…", depth: 2 },
+      { id: "9-errors-and-what-each-one-causes", text: "…", depth: 2 },
+    ];
+    assert.equal(findAnchor(titled, "authentication"), "8-authentication-optional");
+    assert.equal(findAnchor(titled, "errors"), "9-errors-and-what-each-one-causes");
+  });
+
+  it("prefers a whole-name match over one that merely starts the same way", () => {
+    // The prefix rule is a last resort, which is what keeps it safe: a document
+    // with a section actually called "Skills" still answers `skills` with that
+    // one and not with "Skills endpoint".
+    const both = [
+      { id: "4-skills-endpoint", text: "…", depth: 2 },
+      { id: "5-skills", text: "…", depth: 2 },
+    ];
+    assert.equal(findAnchor(both, "skills"), "5-skills");
+  });
+
   it("returns nothing for a section that is not there", () => {
     assert.equal(findAnchor(headings, "authentication"), "");
     assert.equal(findAnchor(headings, ""), "");

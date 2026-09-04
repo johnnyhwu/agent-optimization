@@ -1199,6 +1199,9 @@ select { cursor: pointer; }
    reset from taking the underline and the text colour with it. */
 .agent-ep-help { color: var(--muted); text-decoration: none; }
 .agent-ep-help:hover { color: var(--text); }
+/* Full width like the exchange panel below it: both are folded blocks that sit
+   under a field, not beside one. */
+.agent-ep-auth { width: 100%; margin-top: var(--space-2); }
 .agent-ep-exchange { width: 100%; }
 .agent-ep-exchange-label {
   font-size: var(--text-micro); color: var(--muted);
@@ -1338,6 +1341,10 @@ select { cursor: pointer; }
 }
 .agent-bar-fields .field { flex: 1; min-width: 220px; margin-bottom: 0; }
 .agent-bar-fields .agent-bar-timeout { flex: 0 0 120px; min-width: 120px; }
+/* The credential panel, folded into the connect form. Its own top margin
+   because the disclosure sits between two rows of fields and would otherwise
+   read as part of the row above it. */
+.agent-bar-auth { margin-top: var(--space-2); }
 .agent-bar-recent {
   display: flex; align-items: center; gap: var(--space-2);
   flex-wrap: wrap; margin-top: var(--space-2);

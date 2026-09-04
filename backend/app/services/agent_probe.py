@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets as _secrets
 import time
 import uuid
@@ -71,6 +72,42 @@ PREVIEW_CHARS = 4000
 # healthy pipeline, short enough to sit in front of a button.
 TRACE_ATTEMPTS = 3
 TRACE_RETRY_DELAY_S = 2.0
+
+
+# A 401 or 403 in the agent's own words, so the hint below is only attached to
+# an answer that actually was one. Matched on the number rather than parsed out
+# of an httpx object because both clients have already turned their response
+# into the sentence a developer reads.
+_UNAUTHORIZED = re.compile(r"\b(401|403)\b")
+
+
+def with_auth_hint(error: str, *, has_key: bool) -> str:
+    """The agent's refusal, plus what to do about it.
+
+    This is the whole of how an optional feature gets found. Nobody browses a
+    settings page for a credential field they have no reason to believe exists;
+    they hit a 401 and read what the screen says. `agent server returned 401`
+    is accurate and tells them nothing, so the two cases are named: no key was
+    sent, or the key sent was refused.
+
+    Deliberately not naming where the field is. This sentence surfaces on the
+    Run-eval dialog, the playground's connect bar and the Test-your-server page,
+    and each calls that place something different — a pointer that is right on
+    one screen is wrong on the other two. Each of them opens its credential
+    panel when this appears, which is a better answer than a name anyway.
+    """
+    if not error or not _UNAUTHORIZED.search(error):
+        return error
+    if has_key:
+        return (
+            f"{error}\n\nThe API key configured for this agent was refused. Check "
+            "the key itself, and whether this server expects it in a header "
+            "other than Authorization."
+        )
+    return (
+        f"{error}\n\nThis agent server requires a credential and none was sent. "
+        "Add an API key for this agent."
+    )
 
 
 def _preview(value: Any) -> str:
@@ -130,13 +167,22 @@ def make_probe_skill() -> tuple[dict[str, str], str, str]:
 
 
 async def probe_skills(
-    skills_url: str, timeout_s: float | None = None
+    skills_url: str,
+    timeout_s: float | None = None,
+    *,
+    chat_url: str = "",
+    api_key: str = "",
+    auth_header: str = "",
 ) -> SkillsProbeResult:
     """Can the skills endpoint be read, and what does it hold?
 
     A blank URL is `ok=None`, not a failure: not configuring a skills endpoint
     is a supported choice, and calling it an error would put a red mark in front
     of someone running an evaluation that does not need one.
+
+    `chat_url` is here only so `build_seams` can decide whether the credential
+    is allowed to travel to the skills endpoint — same origin, or nothing. This
+    probe never calls it.
     """
     result = SkillsProbeResult()
     url = (skills_url or "").strip()
@@ -145,9 +191,12 @@ async def probe_skills(
     try:
         seams = build_seams(
             {
+                "agent_chat_url": chat_url,
                 "agent_skills_url": url,
+                "agent_auth_header": auth_header,
                 "agent_timeout_s": timeout_s or settings.agent_probe_timeout_s,
             },
+            {"agent_api_key": api_key},
             include_workspace=True,
         )
     except Exception as exc:  # noqa: BLE001 - misconfiguration, reported as the check
@@ -165,8 +214,15 @@ async def probe_skills(
         workspace = await seams.workspace.get_workspace()
     except Exception as exc:  # noqa: BLE001 - the agent server's problem, quoted as-is
         # The client's own message already names what was tried and what came
-        # back; wrapping it would say "could not reach the agent" twice.
-        result.skills = CheckResult(ok=False, error=str(exc) or type(exc).__name__)
+        # back; wrapping it would say "could not reach the agent" twice. The one
+        # thing added is what to do about a refusal.
+        result.skills = CheckResult(
+            ok=False,
+            error=with_auth_hint(
+                str(exc) or type(exc).__name__,
+                has_key=bool((api_key or settings.agent_api_key or "").strip()),
+            ),
+        )
         return result
 
     result.version = workspace.version
@@ -230,6 +286,8 @@ async def probe_chat(
     *,
     with_override: bool = True,
     trace_client=None,
+    api_key: str = "",
+    auth_header: str = "",
 ) -> ChatProbeResult:
     """One real call, read in three layers.
 
@@ -261,7 +319,18 @@ async def probe_chat(
         }
     )
 
-    seams = build_seams({"agent_chat_url": url, "agent_timeout_s": budget})
+    seams = build_seams(
+        {
+            "agent_chat_url": url,
+            "agent_auth_header": auth_header,
+            "agent_timeout_s": budget,
+        },
+        {"agent_api_key": api_key},
+    )
+    # Whether a credential was sent at all, which is what separates the two
+    # sentences a 401 deserves. Resolved the way the client resolves it, so a
+    # deployment-wide key counts.
+    has_key = bool((api_key or settings.agent_api_key or "").strip())
     started = time.monotonic()
     try:
         answer = await seams.agent.call(
@@ -269,14 +338,20 @@ async def probe_chat(
         )
     except (AgentHttpError, httpx.HTTPError) as exc:
         result.latency_ms = int((time.monotonic() - started) * 1000)
-        result.chat = CheckResult(ok=False, error=str(exc) or type(exc).__name__)
+        result.chat = CheckResult(
+            ok=False,
+            error=with_auth_hint(str(exc) or type(exc).__name__, has_key=has_key),
+        )
         return result
 
     result.latency_ms = answer.latency_ms
     result.response_preview = _preview(answer.response or answer.error or "")
 
     if answer.failed:
-        result.chat = CheckResult(ok=False, error=answer.error or "the call failed")
+        result.chat = CheckResult(
+            ok=False,
+            error=with_auth_hint(answer.error or "the call failed", has_key=has_key),
+        )
         return result
 
     result.chat = CheckResult(

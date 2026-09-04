@@ -153,6 +153,11 @@ export default function RunConfigFields({
             skillsUrl={form.agent_skills_url || ""}
             onChangeChat={(v) => set("agent_chat_url", v)}
             onChangeSkills={(v) => set("agent_skills_url", v)}
+            apiKey={secrets.agent_api_key}
+            authHeader={form.agent_auth_header || ""}
+            onChangeApiKey={(v) => setSecrets((s) => ({ ...s, agent_api_key: v }))}
+            onChangeAuthHeader={(v) => set("agent_auth_header", v)}
+            keptApiKey={kept("agent_api_key")}
             disabled={fake("agent")}
             chatProbe={chatProbe}
             chatBusy={chatBusy}

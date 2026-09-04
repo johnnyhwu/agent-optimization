@@ -178,6 +178,17 @@ class Settings(BaseSettings):
     agent_skills_url: str = ""
     agent_timeout_s: float = 120.0
     agent_max_retries: int = 2
+    # Optional, and inert when blank — see integrations/real/agent_auth.py.
+    # Authentication is not part of the agent server contract: a server that
+    # asks for nothing keeps working with these unset, byte for byte. They exist
+    # so a team whose agent sits behind a gateway can connect at all.
+    #
+    # `agent_api_key` is a credential and is treated as one everywhere (write
+    # only, encrypted when saved as a personal default, bound to the chat URL).
+    # `agent_auth_header` is not secret: blank sends `Authorization: Bearer`,
+    # and naming a header instead (`X-Api-Key`) sends the key verbatim.
+    agent_api_key: str = ""
+    agent_auth_header: str = ""
     # How long the "Run eval" dialog's pre-flight waits for the agent server
     # before calling it unreachable. Emphatically *not* `agent_timeout_s`: that
     # is the budget for answering a question, and the Start button stays

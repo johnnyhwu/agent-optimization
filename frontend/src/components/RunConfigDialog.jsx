@@ -28,6 +28,10 @@ import Banner, { BannerDetail } from "./ui/Banner.jsx";
 const SECRET_PAIRS = [
   ["llm_api_key", "llm_base_url"],
   ["langfuse_secret_key", "langfuse_host"],
+  // Bound to the chat endpoint, like the two above are bound to theirs. The
+  // backend enforces the same pairing (`settings_catalog.SECRET_ENDPOINTS`);
+  // this is what stops the dialog promising a key it will not carry over.
+  ["agent_api_key", "agent_chat_url"],
 ];
 
 export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) {
@@ -37,7 +41,12 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   const [systemDefaults, setSystemDefaults] = useState(null);
   const [impls, setImpls] = useState({});
   const [form, setForm] = useState(null);
-  const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
+  const [secrets, setSecrets] = useState({
+    llm_api_key: "",
+    langfuse_secret_key: "",
+    // Blank for almost every agent — see integrations/real/agent_auth.py.
+    agent_api_key: "",
+  });
   const [reuseFrom, setReuseFrom] = useState("");
   // The run behind `reuseFrom`, kept here because RunPicker only ever holds the
   // page it fetched and the endpoint-match rule below needs the run's config.
@@ -102,7 +111,14 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   useEffect(() => {
     if (!form) return;
     setProbe(simulated ? { state: "simulated" } : { state: "checking" });
-  }, [Boolean(form), form?.agent_skills_url, simulated, probeNonce]);
+  }, [
+    Boolean(form),
+    form?.agent_skills_url,
+    form?.agent_auth_header,
+    secrets.agent_api_key,
+    simulated,
+    probeNonce,
+  ]);
 
   useEffect(() => {
     if (!form || simulated) return undefined;
@@ -112,7 +128,16 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     if (agentUrl !== (form.agent_skills_url ?? "")) return undefined;
     let cancelled = false;
     api
-      .agentSkills(agentUrl)
+      .agentSkills({
+        config: {
+          agent_skills_url: agentUrl,
+          // Sent so the server can decide whether the credential may travel to
+          // the skills endpoint: same host, or nothing.
+          agent_chat_url: form.agent_chat_url || "",
+          agent_auth_header: form.agent_auth_header || "",
+        },
+        secrets: { agent_api_key: secrets.agent_api_key },
+      })
       .then((r) => {
         if (cancelled) return;
         // 200 in all three cases now, with the outcome inside. `check.ok ===
@@ -158,7 +183,19 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     // Deliberately *not* keyed on the eval set's tags. They decide what the
     // answer means, not what is asked — and the two requests race on open, so
     // having them here fired the probe a second time the moment the tags landed.
-  }, [Boolean(form), simulated, agentUrl, form?.agent_skills_url, probeNonce]);
+    //
+    // Keyed on the credential, though: someone who types a key in answer to a
+    // 401 has changed what the request is, and a status line still showing the
+    // refusal would look like a key that did not work.
+  }, [
+    Boolean(form),
+    simulated,
+    agentUrl,
+    form?.agent_skills_url,
+    form?.agent_auth_header,
+    secrets.agent_api_key,
+    probeNonce,
+  ]);
 
   // The reading of that answer, kept apart from the asking. Either input can
   // arrive first; this recomputes when either does, without another round trip.

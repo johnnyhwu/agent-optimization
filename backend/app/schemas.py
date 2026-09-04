@@ -302,6 +302,11 @@ class RunConfig(BaseModel):
     # Optional even when the rest is filled in: an agent that serves no skill
     # listing is evaluated normally, it just cannot be explored or optimised.
     agent_skills_url: str = ""
+    # Where the agent's credential goes, when there is one. Blank means
+    # `Authorization: Bearer <key>`; a name like `X-Api-Key` sends the key
+    # verbatim. Not a secret — it is the shape of the request, not the
+    # credential — so it lives here rather than in `RunSecrets`.
+    agent_auth_header: str = ""
     agent_timeout_s: float | None = None
     langfuse_host: str = ""
     langfuse_public_key: str = ""
@@ -337,6 +342,10 @@ class RunSecrets(BaseModel):
 
     langfuse_secret_key: str = ""
     llm_api_key: str = ""
+    # Optional, like everything else here, and optional in a stronger sense:
+    # most agent servers this platform talks to ask for no credential at all,
+    # and leaving this blank sends none. See integrations/real/agent_auth.py.
+    agent_api_key: str = ""
 
 
 class RunCreate(BaseModel):
@@ -988,6 +997,28 @@ class ConformanceIn(BaseModel):
     agent_chat_url: str = ""
     agent_skills_url: str = ""
     agent_timeout_s: float | None = None
+    # Optional here too. Without it this page would be unusable by exactly the
+    # people most likely to need it — someone who has just written a server and
+    # put it behind their team's gateway.
+    agent_api_key: str = ""
+    agent_auth_header: str = ""
+
+
+class SkillsProbeIn(BaseModel):
+    """Read one agent's skill listing.
+
+    A POST for a read, which is worth the explanation. It carries a credential,
+    and a credential in a query string is a credential in an access log — on
+    this platform's proxy, on the caller's, and on anything in between. The GET
+    this replaces took the URL as a query parameter and had nowhere safe to put
+    a key.
+
+    It stays cheap and side-effect-free, so the callers that fire it while
+    somebody is typing still do.
+    """
+
+    config: RunConfig = Field(default_factory=RunConfig)
+    secrets: RunSecrets = Field(default_factory=RunSecrets)
 
 
 class AgentSkillsOut(BaseModel):
@@ -1063,6 +1094,38 @@ class EvalSetSkills(BaseModel):
     untagged_question_count: int = 0
 
 
+class WorkspaceReadIn(BaseModel):
+    """Body of the playground's two workspace reads.
+
+    POSTs for reads, for the reason `SkillsProbeIn` gives: they may carry the
+    agent's credential, and a credential in a query string is a credential in an
+    access log. `agent_chat_url` is never called from here — it is what decides
+    whether the credential may reach the skills endpoint at all.
+    """
+
+    agent_skills_url: str = ""
+    agent_chat_url: str = ""
+    agent_auth_header: str = ""
+    agent_api_key: str = ""
+    agent_timeout_s: float | None = None
+
+
+class SkillCheckIn(BaseModel):
+    """Body of POST /optimization/skill-check.
+
+    A POST for a read, for the reason `SkillsProbeIn` gives: it may carry a
+    credential. `agent_chat_url` is not called — it is here so the seam can
+    decide whether the credential may travel to the skills endpoint.
+    """
+
+    skill_name: str = Field(min_length=1)
+    agent_skills_url: str = ""
+    agent_chat_url: str = ""
+    agent_auth_header: str = ""
+    agent_api_key: str = ""
+    agent_timeout_s: float | None = Field(default=None, gt=0)
+
+
 class SkillCheck(BaseModel):
     """Whether the agent has the skill the questions are tagged with."""
 
@@ -1102,6 +1165,9 @@ class OptimizationConfig(BaseModel):
     # Connections
     agent_chat_url: str = ""
     agent_skills_url: str = ""
+    # See `RunConfig.agent_auth_header`: the header the agent's credential goes
+    # in, not the credential.
+    agent_auth_header: str = ""
     agent_timeout_s: float | None = None
     langfuse_host: str = ""
     langfuse_public_key: str = ""
@@ -1161,6 +1227,7 @@ class OptimizationSecrets(BaseModel):
 
     llm_api_key: str = ""
     langfuse_secret_key: str = ""
+    agent_api_key: str = ""
 
 
 class DetectorConfig(BaseModel):
