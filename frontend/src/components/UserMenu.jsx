@@ -25,7 +25,14 @@ import { IconChevronDown, IconGear, IconUsers } from "./icons.jsx";
 // settings added since they last visited, and overrides whose deployment value
 // has moved underneath them — shown as a dot rather than a number, because the
 // number is not the point and the page will say it properly.
-const AVATAR_COLORS = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"];
+// The avatar carries white initials, so every one of these is a background with
+// text on it. The 500-weight ramp this started from measured 2.15:1 (amber) to
+// 4.47:1 (indigo) against white — all six below AA, the worst of them barely
+// legible. These are the 700/800 weights of the same six hues: same palette,
+// same distinguishability, 5.0:1 or better across the set. They live in JS
+// rather than CSS, so `css_contract.test.js` cannot see them; that is why the
+// ratios are written down here.
+const AVATAR_COLORS = ["#4f46e5", "#0369a1", "#047857", "#b45309", "#be185d", "#6d28d9"];
 
 export function avatarColor(name) {
   let h = 0;

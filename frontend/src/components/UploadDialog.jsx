@@ -21,6 +21,7 @@ import {
   rowsToJsonl,
   validateRows,
 } from "../upload_parse.js";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // A couple of rows so the dialog is usable/demoable without a file on hand.
 const SAMPLE_ROWS = [
@@ -291,7 +292,11 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
         </>
       }
     >
-      {error && <div className="error" style={{ whiteSpace: "pre-wrap" }}>{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not read that file">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       {!expanded && (
         <>
@@ -373,9 +378,9 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
           <FormatHelp onLoadSample={loadSample} />
         </div>
         {parseErrors.length > 0 && (
-          <div className="error" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
-            {"Parse warnings:\n" + parseErrors.join("\n")}
-          </div>
+          <Banner tone="warning" title="Some rows could not be read">
+            <BannerDetail>{parseErrors.join("\n")}</BannerDetail>
+          </Banner>
         )}
         {isScript && (
           <ScriptRunPanel

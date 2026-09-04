@@ -20,6 +20,7 @@ import Toolbar, { SearchInput, SegmentedControl } from "./ui/Toolbar.jsx";
 import {
   IconInbox, IconSearch, IconTrendDown, IconTrendUp, IconUpload, IconUsers,
 } from "./icons.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 const PAGE_SIZE = 24;
 
@@ -168,7 +169,11 @@ export default function EvalSetList({ onOpen, subject }) {
         )}
       </Toolbar>
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" className="is-block" title="Could not load your eval sets">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
       {sets === null && <SkeletonCards count={6} />}
 
       {sets && sets.length === 0 && (
@@ -206,6 +211,7 @@ export default function EvalSetList({ onOpen, subject }) {
               // Stagger only within a page: restarting the animation for every
               // card on each append would flash the whole grid.
               index={i % PAGE_SIZE}
+              pinnedLabel={metadataKey}
               onOpen={() => onOpen(s)}
               onDownload={() => setDownloadSet(s)}
               onEditQuestions={() => setEditSet(s)}
@@ -268,14 +274,29 @@ export default function EvalSetList({ onOpen, subject }) {
   );
 }
 
-function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigure, onDelete }) {
+function SetCard({ set: s, index, pinnedLabel, onOpen, onDownload, onEditQuestions, onConfigure, onDelete }) {
   const owner = s.my_role === "owner";
   const members = (s.roles || []).length;
   // "Nobody has looked at how this set is graded yet" — not "your judge prompt is
   // the default one", which is true of nearly every set and would be background
   // noise inside a week.
   const unreviewed = owner && !s.judge_prompt?.reviewed_at;
-  const labels = Object.entries(s.metadata || {});
+  // Capped so the foot band is always one row tall. Cards in a grid row stretch
+  // to the tallest of them, and a set with three metadata keys used to push its
+  // own stats band a line higher than its neighbours' — which defeats the point
+  // of the band, the one thing anyone reads *across* the cards. The rest are
+  // still reachable: the row carries the full list as its tooltip, and the set's
+  // own page shows them all.
+  //
+  // The key being filtered on sorts first, so the card can never hide the one
+  // label that explains why it is in the results — a set with five keys whose
+  // `env` came fourth would otherwise match "env: staging" and show nothing
+  // saying so.
+  const allLabels = Object.entries(s.metadata || {}).sort(
+    ([a], [b]) => (b === pinnedLabel) - (a === pinnedLabel),
+  );
+  const labels = allLabels.slice(0, 3);
+  const hiddenLabels = allLabels.length - labels.length;
 
   return (
     <Card
@@ -287,7 +308,7 @@ function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigu
     >
       <div className="set-card-top">
         <div className="set-card-heading">
-          <h3>{s.name}</h3>
+          <h3 title={s.name}>{s.name}</h3>
           <div className="set-card-meta">
             <span>{new Date(s.created_at).toLocaleDateString()}</span>
             <Badge tone={owner ? "success" : "neutral"} size="sm">{s.my_role}</Badge>
@@ -297,6 +318,31 @@ function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigu
               </Badge>
             )}
           </div>
+          {/* Metadata belongs with identity, not with status. It also has to
+              live in the band that absorbs the card's spare height: the foot is
+              what the stats band is measured against across the grid, so
+              anything that can wrap to a second line cannot go there. */}
+          {allLabels.length > 0 && (
+            <BadgeRow className="set-card-labels">
+              {/* Outlined, because a metadata key is not a status. Filled tints
+                  are how this product says "something happened" — regressed,
+                  improved, failed — and a neutral tint beside them was the same
+                  shape in a different colour, which is exactly the thing colour
+                  alone should not have to carry. */}
+              {labels.map(([k, v]) => (
+                <Badge key={k} tone="neutral" outline>{k}: {String(v)}</Badge>
+              ))}
+              {hiddenLabels > 0 && (
+                <Badge
+                  tone="neutral"
+                  outline
+                  title={allLabels.map(([k, v]) => `${k}: ${v}`).join("\n")}
+                >
+                  +{hiddenLabels}
+                </Badge>
+              )}
+            </BadgeRow>
+          )}
         </div>
 
         {/* Always visible. These used to appear only on hover, which meant the
@@ -339,7 +385,7 @@ function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigu
         <div className="set-card-spark"><Sparkline values={s.trend} /></div>
       </div>
 
-      {(s.regressed > 0 || s.improved > 0 || labels.length > 0) && (
+      {(s.regressed > 0 || s.improved > 0) && (
         <div className="set-card-foot">
           <BadgeRow>
             {s.regressed > 0 && (
@@ -352,9 +398,6 @@ function SetCard({ set: s, index, onOpen, onDownload, onEditQuestions, onConfigu
                 {s.improved} improved
               </Badge>
             )}
-            {labels.map(([k, v]) => (
-              <Badge key={k} tone="neutral">{k}: {String(v)}</Badge>
-            ))}
           </BadgeRow>
         </div>
       )}

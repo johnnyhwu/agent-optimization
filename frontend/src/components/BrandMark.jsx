@@ -25,7 +25,7 @@ export default function BrandMark({ size = 28, ...rest }) {
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" {...rest}>
       {/* --accent, as a literal. An SVG in a data URI cannot read a custom
           property, and the favicon and this have to be the same drawing. */}
-      <rect width="32" height="32" rx="8" fill="#6366f1" />
+      <rect width="32" height="32" rx="8" fill="#4f46e5" />
       {/* Body, vent hole and slit as one even-odd path, so the holes are
           actually holes — here they have to be, because what shows through
           them is the tile itself.

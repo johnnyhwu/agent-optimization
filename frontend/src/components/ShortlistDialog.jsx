@@ -7,6 +7,7 @@ import { IconAlert, IconPlus, IconSparkles, IconX } from "./icons.jsx";
 import { missingFields, toPayloadQuestion } from "../shortlist.js";
 import Button from "./ui/Button.jsx";
 import Badge from "./ui/Badge.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Review shortlisted playground questions, then turn them into an eval set
 // (§10.8).
@@ -173,7 +174,11 @@ export default function ShortlistDialog({
         </>
       }
     >
-      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not promote this shortlist">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       <div className="ui-segmented shortlist-tabs" role="tablist">
         {TABS.map(([id, label]) => (

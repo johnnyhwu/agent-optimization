@@ -18,3 +18,32 @@ export function shortStamp(value) {
     + ` ${pad(at.getHours())}:${pad(at.getMinutes())}`
   );
 }
+
+/**
+ * "40s ago" / "12m ago" / "5h ago", then the absolute stamp.
+ *
+ * This lived inside AttemptList and stopped at an hour, falling through to
+ * `toLocaleTimeString()` — which reintroduced, in one list, all three problems
+ * the comment at the top of this file describes. The playground's attempt list
+ * read "25s ago", "20m ago", "40m ago", "9:19:22 AM", "8:59:22 AM": two
+ * different notations in one column, the second of them locale-dependent, with
+ * seconds nobody needs and *no date at all*, so an attempt from last Tuesday
+ * was indistinguishable from one an hour ago.
+ *
+ * The ladder now runs to days before handing over to `shortStamp`, so the
+ * absolute form is the same one every other timestamp in the product uses.
+ *
+ * `now` is injectable so this is testable without freezing the clock.
+ */
+export function relativeStamp(value, now = Date.now()) {
+  if (!value) return "";
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return "";
+  const seconds = Math.max(0, (now - at.getTime()) / 1000);
+  if (seconds < 60) return `${Math.floor(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  // Up to a day stays relative: within a working day "5h ago" is the answer to
+  // the question being asked, and a clock time is not.
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return shortStamp(value);
+}

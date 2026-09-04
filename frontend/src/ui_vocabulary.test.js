@@ -172,3 +172,156 @@ test("the scanner reads the shapes this codebase actually writes", () => {
   assert.deepEqual(literalsFor(badges[3], "tone"), []);
   assert.deepEqual(literalsFor(openingTags(sample, "Button")[0], "variant"), ["secondary", "ghost"]);
 });
+
+// --- One way to report a failure --------------------------------------------
+
+test("an error state goes through Banner, not a bare div", () => {
+  // `Banner` exists because five hand-rolled message boxes had drifted apart,
+  // and its own comment says so. It won the argument for 58 call sites and lost
+  // it for 17, which kept a second, poorer error style alive in parallel:
+  // `<div className="error">{error}</div>` — a red box with no icon, no title,
+  // no recovery, and a different padding and margin from every Banner beside it.
+  //
+  // What that actually put on screen is worse than inconsistent. Because the
+  // div renders whatever string it is handed, an exception reached the user
+  // verbatim: "Cannot read properties of undefined (reading 'analysis')" as the
+  // entire content of the Playground, and "catalog is not iterable" as the
+  // whole of Settings. A Banner has a title slot for a sentence a person can
+  // act on and a `BannerDetail` slot for the machine's own words.
+  const problems = [];
+  for (const file of [join(HERE, "App.jsx"), ...jsxFiles(join(HERE, "components"))]) {
+    const source = readFileSync(file, "utf8");
+    for (const m of source.matchAll(/className="error"/g)) {
+      const line = source.slice(0, m.index).split("\n").length;
+      problems.push(`${relative(HERE, file)}:${line}`);
+    }
+  }
+  assert.deepEqual(
+    problems,
+    [],
+    `these render an error through the bare .error div instead of <Banner ` +
+      `tone="error">:\n  ${problems.join("\n  ")}\n\n` +
+      `Give the reader a sentence they can act on as the Banner's title, and ` +
+      `put the raw message in <BannerDetail>.`,
+  );
+});
+
+test("the bare .error block rule is gone from the stylesheet", () => {
+  // Left behind, it is an invitation: the class still works, so the next error
+  // state written in a hurry uses it and the vocabulary splits again.
+  // `.error-text` — an inline message under a field — is a different component
+  // and stays.
+  const rule = /(?:^|\})\s*\.error\s*\{/.test(css);
+  assert.equal(
+    rule,
+    false,
+    "`.error` still has a block rule in the stylesheet; delete it so the " +
+      "class cannot be reached by a new call site.",
+  );
+});
+
+// --- Every component a file renders, it can actually reach ------------------
+
+// Names a file can render: everything it imports, everything it declares, and
+// everything it binds by destructuring. Split out from the test so the
+// self-check below can drive it with sources whose answer is known.
+function outOfScope(source) {
+  const inScope = new Set(["React", "Fragment"]);
+
+  // `^\s*`, not `^`: anchoring hard to column 0 read every indented import as
+  // absent, which the self-check below caught the moment it was written.
+  for (const m of source.matchAll(/^\s*import\s+([\s\S]*?)\s+from\s+["'][^"']+["'];/gm)) {
+    const clause = m[1];
+    // `Default`, `{ A, B as C }`, `* as NS`, and the combinations of them.
+    const named = clause.match(/\{([\s\S]*?)\}/);
+    if (named) {
+      for (const part of named[1].split(",")) {
+        const name = part.trim().split(/\s+as\s+/).pop().trim();
+        if (name) inScope.add(name);
+      }
+    }
+    const head = clause.replace(/\{[\s\S]*?\}/, "").replace(/\*\s+as\s+/, "");
+    for (const part of head.split(",")) {
+      const name = part.trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) inScope.add(name);
+    }
+  }
+  // Declared in the file itself — usually a small helper beside the export.
+  for (const m of source.matchAll(/(?:^|\n)\s*(?:export\s+)?(?:default\s+)?function\s+([A-Z][\w$]*)/g)) {
+    inScope.add(m[1]);
+  }
+  for (const m of source.matchAll(/(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([A-Z][\w$]*)/g)) {
+    inScope.add(m[1]);
+  }
+  // Bound by destructuring, which is how a component arrives as data here:
+  // `{ icon: Icon }` off a SECTIONS row, `as: Tag = "div"` off Card's props.
+  for (const m of source.matchAll(/[{,]\s*[\w$]+\s*:\s*([A-Z][\w$]*)/g)) {
+    inScope.add(m[1]);
+  }
+  // And by shorthand — `const { Icon, tone } = MARKS[kind]`, which is how
+  // ScriptRunPanel and RolloutDetail pull a component out of a lookup table.
+  for (const m of source.matchAll(/[{,]\s*([A-Z][\w$]*)\s*[,}=]/g)) {
+    inScope.add(m[1]);
+  }
+
+  // Only capitalised tags are components; lowercase ones are host elements.
+  // `Foo.Bar` is checked on `Foo`, which is what has to be in scope.
+  const out = [];
+  for (const m of source.matchAll(/<([A-Z][\w$]*)/g)) {
+    if (inScope.has(m[1])) continue;
+    out.push({ name: m[1], line: source.slice(0, m.index).split("\n").length });
+  }
+  return out;
+}
+
+test("no JSX element is used without being imported or defined", () => {
+  // There is no test renderer and no jsdom here, so a component referenced but
+  // never imported throws only when a human happens to open that screen. It is
+  // the one mistake this codebase's tooling is completely blind to, and
+  // migrating seventeen error states onto `Banner` produced exactly it:
+  // `DefaultsPanel` already had `import Banner from …`, so an import pass that
+  // keyed on the word "Banner" skipped the file, and `<BannerDetail>` inside it
+  // was an undefined identifier. The Settings page threw on load.
+  const problems = [];
+  for (const file of [join(HERE, "App.jsx"), ...jsxFiles(join(HERE, "components"))]) {
+    for (const { name, line } of outOfScope(readFileSync(file, "utf8"))) {
+      problems.push(`${relative(HERE, file)}:${line}: <${name}> is not in scope`);
+    }
+  }
+  assert.deepEqual(
+    problems,
+    [],
+    `these throw at render time and nothing else here would catch it:\n  ` +
+      problems.join("\n  "),
+  );
+});
+
+test("the scope scanner still catches a missing import", () => {
+  // Guarding the guard, as this file already does for its tone scanner. The
+  // binding forms above were each added to silence a false positive, and every
+  // one of them widened what counts as "in scope" — so the thing that actually
+  // matters is that the real bug is still detected.
+  const missing = `
+    import Banner from "./ui/Banner.jsx";
+    export default function Panel() {
+      return <Banner tone="error"><BannerDetail>x</BannerDetail></Banner>;
+    }
+  `;
+  assert.deepEqual(outOfScope(missing).map((p) => p.name), ["BannerDetail"]);
+
+  // …and that the fix clears it.
+  const fixed = missing.replace(
+    'import Banner from "./ui/Banner.jsx";',
+    'import Banner, { BannerDetail } from "./ui/Banner.jsx";',
+  );
+  assert.deepEqual(outOfScope(fixed), []);
+
+  // Each real binding form, still recognised.
+  assert.deepEqual(outOfScope('const Tag = "div"; const x = <Tag />;'), []);
+  assert.deepEqual(outOfScope('const { Icon } = M; const x = <Icon />;'), []);
+  assert.deepEqual(outOfScope('m(({ icon: Icon }) => <Icon />);'), []);
+  assert.deepEqual(outOfScope('function Helper() {} const x = <Helper />;'), []);
+  assert.deepEqual(outOfScope('import * as NS from "x"; const a = <NS.Thing />;'), []);
+  // A lowercase host element is never a component.
+  assert.deepEqual(outOfScope("const x = <div><span /></div>;"), []);
+});

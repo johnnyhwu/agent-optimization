@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import Modal from "./Modal.jsx";
 import Button from "./ui/Button.jsx";
 import { IconAlert } from "./icons.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Confirmation for destructive actions. Deletes here cascade (an eval set takes
 // its whole run history with it), so the caller passes a `detail` line spelling
@@ -51,7 +52,11 @@ export default function ConfirmDialog({
           {detail && <p className="confirm-detail">{detail}</p>}
         </div>
       </div>
-      {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
+      {error && (
+        <Banner tone="error" title="That did not go through">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
     </Modal>
   );
 }

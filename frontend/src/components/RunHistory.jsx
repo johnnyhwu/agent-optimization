@@ -23,6 +23,7 @@ import NumberInput from "./ui/NumberInput.jsx";
 import {
   IconFileText, IconInbox, IconPlay, IconStop, IconTrash,
 } from "./icons.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Which questions the detail view treats as incorrect when several runs are
 // compared. Named for what they do rather than for the set operation they are:
@@ -239,7 +240,11 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
           />
         }
       />
-      {(error || loadError) && <div className="error">{error || loadError}</div>}
+      {(error || loadError) && (
+        <Banner tone="error" className="is-block" title="Could not load this set's runs">
+          <BannerDetail>{error || loadError}</BannerDetail>
+        </Banner>
+      )}
 
       {/* Driven by the run list rather than by "did I start it in this tab", so
           coming back to this page mid-run still shows where the run is. */}
@@ -308,6 +313,9 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
         <DataTable
           columns={columns}
           rows={runs}
+          // 644px of fixed tracks plus a readable Run column. Under this the
+          // table scrolls rather than ellipsising every run name to nothing.
+          minWidth={860}
           staggerWithin={PAGE_SIZE}
           onRowClick={(r) => onOpenRuns([r.id], "union", 2)}
           isSelected={(r) => selected.includes(r.id)}

@@ -8,6 +8,7 @@ import JudgePromptEditor from "./JudgePromptEditor.jsx";
 import { useToast } from "./Toast.jsx";
 import { IconPlus, IconX } from "./icons.jsx";
 import Button, { IconButton } from "./ui/Button.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Owner-only set config (§6.10/§6.16): name, description, metadata keys, the
 // share list, and how this set's answers are graded. Name/desc/metadata/judge
@@ -138,7 +139,11 @@ export default function ConfigDialog({ evalSet, subject, onClose, onSaved }) {
         </>
       }
     >
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not save these changes">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       <div className="ui-segmented" style={{ marginBottom: 14 }} role="tablist">
         {TABS.map(([id, label]) => (

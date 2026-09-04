@@ -15,6 +15,7 @@ import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
 import UserMenu from "./components/UserMenu.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
 import Skeleton from "./components/ui/Skeleton.jsx";
+import Banner, { BannerDetail } from "./components/ui/Banner.jsx";
 
 // The whole view state lives in the URL (see useHashRoute): which section, which
 // eval set, which runs, which incorrect mode. The three tiers of §6.13 are the
@@ -122,7 +123,9 @@ export default function App() {
         <div className="main">
           <header className="topbar">
             <div className="topbar-inner">
-              <div className="topbar-title">{sectionTitle(route.section)}</div>
+              {/* Where you are, once. See Breadcrumb for why this replaced the
+                  section title that used to sit here. */}
+              <Breadcrumb route={route} evalSet={resolved} />
               <UserMenu
                 subject={subject}
                 users={users}
@@ -146,11 +149,17 @@ export default function App() {
             >
             {route.section === "evaluation" && (
               <>
-                <Breadcrumb route={route} evalSet={resolved} />
                 {setError && (
-                  <div className="error">
-                    {setError} <a href={href.evaluation()}>Back to eval sets</a>
-                  </div>
+                  <Banner
+                    tone="error"
+                    className="is-block"
+                    title="Could not open that eval set"
+                    actions={
+                      <a href={href.evaluation()}>Back to eval sets</a>
+                    }
+                  >
+                    <BannerDetail>{setError}</BannerDetail>
+                  </Banner>
                 )}
                 {route.tier === "sets" && (
                   <EvalSetList

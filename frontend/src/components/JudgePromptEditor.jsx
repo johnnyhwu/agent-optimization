@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Button from "./ui/Button.jsx";
+import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // The eval set's grading criteria — the "Judging" tab of the config dialog.
 //
@@ -137,14 +138,16 @@ export default function JudgePromptEditor({
           spellCheck={false}
         />
         {missing.length > 0 ? (
-          <div className="error" style={{ marginTop: 6 }}>
-            Missing {missing.map((m) => PLACEHOLDER_LABELS[m]).join(", ")}. The
-            judge never sees{" "}
+          <Banner
+            tone="error"
+            title={`Missing ${missing.map((m) => PLACEHOLDER_LABELS[m]).join(", ")}`}
+          >
+            The judge never sees{" "}
             {missing.includes("ground_truth")
               ? "the expected answer, so it will grade against nothing and still return verdicts that look normal"
               : "that input"}
             .
-          </div>
+          </Banner>
         ) : (
           <div className="hint">
             Placeholders: <code>{"{question}"}</code>,{" "}
@@ -216,7 +219,11 @@ export default function JudgePromptEditor({
         </span>
       )}
 
-      {error && <div className="error" style={{ marginTop: 10 }}>{error}</div>}
+      {error && (
+        <Banner tone="error" title="Could not check this prompt">
+          <BannerDetail>{error}</BannerDetail>
+        </Banner>
+      )}
 
       {result && (
         <div style={{ marginTop: 12 }}>
