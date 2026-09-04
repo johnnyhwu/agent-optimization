@@ -1217,6 +1217,37 @@ select { cursor: pointer; }
   line-height: 1.55; white-space: pre; width: 100%;
 }
 /* The chat endpoint's own state, beside the address it is about. */
+/* ---- server check ----
+   A form, then a list of cases. Each case is a mark, a title, what happened and
+   why the case exists — the last of those is the part a checklist normally
+   leaves out, and the part that turns a red line into something actionable. */
+.check-form {
+  max-width: 640px; display: flex; flex-direction: column;
+  gap: var(--space-2); margin-bottom: var(--space-5);
+  align-items: stretch;
+}
+/* The one action, sized to itself. A column of stretched children makes a
+   primary button as wide as the form, which reads as a banner. */
+.check-form > .ui-btn { align-self: flex-start; margin-top: var(--space-2); }
+.check-report {
+  max-width: 780px; display: flex; flex-direction: column; gap: var(--space-3);
+}
+.check-case {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--space-3); padding: var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+/* Aligned to the title, not to the middle of the card: a mark floating beside
+   a three-line explanation reads as belonging to the explanation. */
+.check-case-mark {
+  display: flex; align-items: flex-start; justify-content: center; padding-top: 2px;
+}
+.check-case-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.check-case-title { font-weight: var(--fw-semibold); font-size: var(--text-body); }
+/* The agent's own words, which can be long and are worth reading in full. */
+.check-case-detail { font-size: var(--text-caption); word-break: break-word; }
+.check-case-why { font-size: var(--text-caption); line-height: 1.5; }
+
 /* ---- documentation ----
    A repository markdown file, rendered. Measured rather than full-width: the
    contract is prose and tables, and a 1600px line of prose is unreadable no

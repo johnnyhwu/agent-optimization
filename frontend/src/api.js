@@ -155,6 +155,11 @@ export const api = {
   // trace check needs credentials.
   agentChatProbe: (payload) => req("POST", "/agent/chat-probe", payload),
 
+  // The whole acceptance checklist against one server, including the cases
+  // ordinary use never reaches. Several model calls, so it is only ever behind
+  // a button somebody pressed.
+  agentConformance: (payload) => req("POST", "/agent/conformance", payload),
+
   // Reference documentation, as the markdown it is stored as. There is one copy
   // of the agent-server contract and it is the file in `docs/` — this hands it
   // over so the UI cannot drift from what a reviewer reads.

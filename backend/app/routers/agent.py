@@ -48,7 +48,16 @@ from fastapi import APIRouter, Depends, Query
 from app.auth import current_subject
 from app.config import settings
 from app.integrations import build_seams
-from app.schemas import AgentSkillsOut, ChatProbeIn, ChatProbeOut, CheckOut
+from app.schemas import (
+    AgentSkillsOut,
+    ChatProbeIn,
+    ChatProbeOut,
+    CheckOut,
+    ConformanceCaseOut,
+    ConformanceIn,
+    ConformanceOut,
+)
+from app.services.agent_conformance import run_conformance
 from app.services.agent_probe import probe_chat, probe_skills
 from app.services.agent_skills import top_level_skills
 
@@ -141,4 +150,38 @@ async def chat_probe(
         latency_ms=result.latency_ms,
         request_preview=result.request_preview,
         response_preview=result.response_preview,
+    )
+
+
+@router.post("/conformance", response_model=ConformanceOut)
+async def conformance(
+    body: ConformanceIn,
+    subject: str = Depends(current_subject),
+):
+    """Run the whole acceptance checklist against one agent server.
+
+    For someone who has just written a server and has nothing to point it at
+    yet. It costs several model calls, which is why it is a page of its own with
+    a button on it rather than anything that happens on the way past.
+
+    Three of the cases it runs are unreachable from ordinary use — an empty
+    skills map, a traversing path, an override that outlives its request — and
+    those are the ones implementations get wrong, because each produces a
+    correct-looking answer right up until it matters.
+    """
+    report = await run_conformance(
+        body.agent_chat_url,
+        body.agent_skills_url,
+        body.agent_timeout_s or settings.agent_timeout_s,
+    )
+    return ConformanceOut(
+        tier=report.tier,
+        summary=report.summary,
+        cases=[
+            ConformanceCaseOut(
+                id=c.id, title=c.title, why=c.why,
+                result=CheckOut(**asdict(c.result)),
+            )
+            for c in report.cases
+        ],
     )

@@ -4,6 +4,7 @@ import Banner, { BannerDetail } from "./ui/Banner.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
 import { findAnchor, renderDoc } from "../doc_render.js";
+import { href } from "../useHashRoute.js";
 
 // The reference documentation, rendered from the repository's own markdown.
 //
@@ -61,7 +62,21 @@ export default function Documentation({ doc, anchor }) {
 
   return (
     <div className="doc-page">
-      <PageHeader title={state.doc.title} subtitle={state.doc.summary} />
+      <PageHeader
+        title={state.doc.title}
+        subtitle={state.doc.summary}
+        // The one action this page has, and the reason it is here rather than
+        // at the end of the checklist section: somebody who has finished
+        // implementing wants to run it, and should not have to scroll a long
+        // reference document to find out that they can.
+        primary={
+          doc === "agent-server" ? (
+            <a className="ui-btn ui-btn-secondary" href={href.docs("test-server")}>
+              <span className="ui-btn-label">Test your server</span>
+            </a>
+          ) : null
+        }
+      />
       <div className="doc-layout">
         {/* Derived from the document rather than maintained beside it, so the
             two cannot disagree. Second in the source order and placed to the

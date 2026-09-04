@@ -8,6 +8,7 @@ import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
 import Documentation from "./components/Documentation.jsx";
 import Playground from "./components/Playground.jsx";
+import ServerCheck from "./components/ServerCheck.jsx";
 import OptimizeSection from "./components/optimize/OptimizeSection.jsx";
 import SettingsSection from "./components/settings/SettingsSection.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
@@ -228,17 +229,24 @@ export default function App() {
               <SettingsSection key={subject} route={route} unseen={settingsAttention} />
             )}
 
-            {route.section === "documentation" && (
-              // Keyed on the anchor as well as the document: arriving at the
-              // same page from a different "?" has to scroll again, and without
-              // the key the effect that scrolls would be looking at an
-              // unchanged document.
-              <Documentation
-                key={`${route.doc}#${route.anchor}`}
-                doc={route.doc}
-                anchor={route.anchor}
-              />
-            )}
+            {route.section === "documentation" &&
+              // The checker shares the section because it is the same errand —
+              // "what does my server have to do, and does it?" — and a fourth
+              // rail item for a page visited twice in a project's life would
+              // cost more attention than it returns.
+              (route.doc === "test-server" ? (
+                <ServerCheck />
+              ) : (
+                // Keyed on the anchor as well as the document: arriving at the
+                // same page from a different "?" has to scroll again, and
+                // without the key the effect that scrolls would be looking at
+                // an unchanged document.
+                <Documentation
+                  key={`${route.doc}#${route.anchor}`}
+                  doc={route.doc}
+                  anchor={route.anchor}
+                />
+              ))}
             </ErrorBoundary>
           </div>
         </div>

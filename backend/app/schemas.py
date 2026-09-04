@@ -969,6 +969,27 @@ class CheckOut(BaseModel):
     error: str = ""
 
 
+class ConformanceCaseOut(BaseModel):
+    id: str
+    title: str
+    why: str = ""
+    result: CheckOut = Field(default_factory=CheckOut)
+
+
+class ConformanceOut(BaseModel):
+    """The whole acceptance checklist, run against one agent server."""
+
+    cases: list[ConformanceCaseOut] = Field(default_factory=list)
+    tier: int = 0
+    summary: str = ""
+
+
+class ConformanceIn(BaseModel):
+    agent_chat_url: str = ""
+    agent_skills_url: str = ""
+    agent_timeout_s: float | None = None
+
+
 class AgentSkillsOut(BaseModel):
     """What the "Run eval" dialog's pre-flight learned about one agent server.
 
