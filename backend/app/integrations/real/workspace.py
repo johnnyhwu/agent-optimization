@@ -2,7 +2,13 @@
 
 One endpoint, read-only and additive on the agent server's side:
 
-    GET {base}/skills  -> {"skills": {path: text}, "version": str (optional)}
+    GET {agent_skills_url}  -> {"skills": {path: text}, "version": str (optional)}
+
+The URL is given whole rather than derived from a base, and it is **optional**:
+an agent that serves no skill listing is a supported configuration. It can still
+be evaluated — it simply cannot be explored in the playground or optimised,
+because both of those need to know what files it is running with. `build_seams`
+expresses that by handing back no workspace client at all.
 
 Writing a workspace back is deliberately absent — that needs versioning and
 rollback (§4.9) and belongs to Stage 3.
@@ -29,9 +35,9 @@ has no skills" and "your URL is wrong" must not look the same in the UI. A
 developer who cannot tell them apart retypes the skill from memory and then
 tests the wrong text.
 
-Shares `AGENT_BASE_URL` / `AGENT_TIMEOUT_S` with the agent seam: the skills live
-on the same server that answers questions, so a second base URL would only be an
-extra thing to get wrong.
+Shares `AGENT_TIMEOUT_S` with the agent seam, but has its own URL: the skills
+usually live on the same host as the chat endpoint, yet nothing requires it, and
+the paths are the agent author's to choose.
 """
 from __future__ import annotations
 
@@ -45,9 +51,6 @@ from app.integrations.base import Workspace, derived_version
 
 class WorkspaceFetchError(RuntimeError):
     """The agent server could not be reached, or answered unusably."""
-
-
-SKILLS_PATH = "/skills"
 
 
 def _as_str(value: Any) -> str | None:
@@ -82,41 +85,42 @@ def _skills_from(body: dict, where: str) -> dict[str, str]:
 class HttpWorkspaceClient:
     """Read the agent server's skill files over HTTP."""
 
-    def __init__(self, base_url: str | None = None, timeout_s: float | None = None) -> None:
-        self.base_url = (base_url or settings.agent_base_url).rstrip("/")
-        if not self.base_url:
+    def __init__(self, skills_url: str | None = None, timeout_s: float | None = None) -> None:
+        self.skills_url = (skills_url or settings.agent_skills_url).strip().rstrip("/")
+        if not self.skills_url:
             raise RuntimeError(
-                "WORKSPACE_IMPL=real but no agent base URL was given — set it in "
-                "the playground config, or via AGENT_BASE_URL "
-                "(e.g. http://agent-host:8080)."
+                "WORKSPACE_IMPL=real but no agent skills endpoint was given — set "
+                "it in the playground config, or via AGENT_SKILLS_URL "
+                "(e.g. http://agent-host:8080/skills)."
             )
         self.timeout_s = timeout_s or settings.agent_timeout_s
 
-    async def _get(self, path: str) -> Any:
+    async def _get(self) -> Any:
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout_s, follow_redirects=True
             ) as client:
-                resp = await client.get(f"{self.base_url}{path}")
+                resp = await client.get(self.skills_url)
         except httpx.HTTPError as exc:
             raise WorkspaceFetchError(
-                f"could not reach the agent server at {self.base_url}{path}: {exc}"
+                f"could not reach the agent server at {self.skills_url}: {exc}"
             ) from exc
 
         if resp.status_code >= 400:
             raise WorkspaceFetchError(
-                f"agent server returned {resp.status_code} for {path}: {resp.text[:200]}"
+                f"agent server returned {resp.status_code} for {self.skills_url}: "
+                f"{resp.text[:200]}"
             )
         try:
             return resp.json()
         except ValueError as exc:
             raise WorkspaceFetchError(
-                f"GET {self.base_url}{path} did not return JSON: {resp.text[:200]}"
+                f"GET {self.skills_url} did not return JSON: {resp.text[:200]}"
             ) from exc
 
     async def get_workspace(self) -> Workspace:
-        where = f"GET {self.base_url}{SKILLS_PATH}"
-        body = await self._get(SKILLS_PATH)
+        where = f"GET {self.skills_url}"
+        body = await self._get()
         if not isinstance(body, dict):
             raise WorkspaceFetchError(f"{where} did not return an object: {str(body)[:200]}")
 

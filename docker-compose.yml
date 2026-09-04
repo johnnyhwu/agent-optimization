@@ -108,8 +108,9 @@ services:
       # Drafts an expected reasoning process from a trace, on the shortlist's
       # button. Shares the LLM endpoint with the judge and the diagnosis.
       SYNTHESIS_IMPL: ${SYNTHESIS_IMPL:-fake}
-      # The agent's skill files; reads {AGENT_BASE_URL}/skills. Gates the
-      # Run-eval Start button and the playground's Connect.
+      # The agent's skill files; reads AGENT_SKILLS_URL. Optional on the agent's
+      # side: with no URL an eval still runs, and the playground, the coverage
+      # warning and optimization are the ones that go without.
       WORKSPACE_IMPL: ${WORKSPACE_IMPL:-fake}
       # The model that turns scored rollouts into skill edits. Its own seam, and
       # it was the one seam missing from this list: `OPTIMIZER_IMPL=real` set on
@@ -122,7 +123,11 @@ services:
       # These are the *defaults* the "Run eval" dialog prefills from; each run
       # stores the settings it was actually triggered with. Values mirror
       # app/config.py so an unset variable here doesn't blank out its default.
-      AGENT_BASE_URL: ${AGENT_BASE_URL:-}
+      # Two absolute URLs, not a base: the agent server is somebody else's
+      # service and its paths are theirs to choose. The chat endpoint speaks
+      # OpenAI chat completions; the skills endpoint is optional.
+      AGENT_CHAT_URL: ${AGENT_CHAT_URL:-}
+      AGENT_SKILLS_URL: ${AGENT_SKILLS_URL:-}
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
       # The run dialog's pre-flight budget, not a question's. Short on purpose:
       # the Start button waits for this check before it can be pressed.

@@ -73,9 +73,9 @@ def test_a_stored_empty_string_is_an_override_not_an_absence(configure):
     """Clearing the settings page's field removes the key. A key that is present
     and empty is therefore a deliberate "I want this blank", and must not be
     quietly turned back into the environment's value."""
-    with configure(agent_base_url="http://from-env:8080"):
-        effective = user_settings.run_defaults({"agent_base_url": ""})
-    assert effective["agent_base_url"] == ""
+    with configure(agent_chat_url="http://from-env:8080"):
+        effective = user_settings.run_defaults({"agent_chat_url": ""})
+    assert effective["agent_chat_url"] == ""
 
 
 # --- The overlay covers exactly the keys it should --------------------------

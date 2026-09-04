@@ -1,13 +1,24 @@
 [
   {
-    "key": "agent_base_url",
+    "key": "agent_chat_url",
     "group": "agent",
     "kind": "text",
-    "label": "Agent server URL",
-    "help": "Where questions are sent. The playground connects to this on open.",
+    "label": "Chat endpoint",
+    "help": "The full URL of your agent's OpenAI chat completions endpoint \u2014 questions are sent here. Everything else on this page is optional; this is not.",
     "minimum": null,
     "maximum": null,
     "optional": false,
+    "endpoint_key": null
+  },
+  {
+    "key": "agent_skills_url",
+    "group": "agent",
+    "kind": "text",
+    "label": "Skills endpoint",
+    "help": "Optional. The full URL that lists your agent's skill files. Without it evaluation still runs; the playground, the skill-coverage warning and optimization need it.",
+    "minimum": null,
+    "maximum": null,
+    "optional": true,
     "endpoint_key": null
   },
   {

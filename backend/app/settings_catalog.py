@@ -2,7 +2,7 @@
 what they may not.
 
 Every form in this product opens on values the deployment chose: the agent
-server in `AGENT_BASE_URL`, the grading model in `JUDGE_MODEL`, the batch size in
+server in `AGENT_CHAT_URL`, the grading model in `JUDGE_MODEL`, the batch size in
 `OPTIMIZER_BATCH_SIZE`. That is right for a deployment and wrong for a person.
 Someone who points every run at their own agent server retypes the same address
 a dozen times a day, and the "Run eval" dialog has no memory of yesterday. This
@@ -113,9 +113,27 @@ GROUPS = (
 CATALOG: tuple[SettingSpec, ...] = (
     # --- Agent --------------------------------------------------------------
     SettingSpec(
-        key="agent_base_url", setting="agent_base_url", group="agent", kind="text",
-        label="Agent server URL",
-        help="Where questions are sent. The playground connects to this on open.",
+        key="agent_chat_url", setting="agent_chat_url", group="agent", kind="text",
+        label="Chat endpoint",
+        help=(
+            "The full URL of your agent's OpenAI chat completions endpoint — "
+            "questions are sent here. Everything else on this page is optional; "
+            "this is not."
+        ),
+    ),
+    # Optional, and the help text has to earn the extra field: someone who
+    # leaves it blank gets a working evaluation and no explanation of what they
+    # gave up. Naming what it unlocks is the only thing on this page that turns
+    # a blank box into a decision.
+    SettingSpec(
+        key="agent_skills_url", setting="agent_skills_url", group="agent", kind="text",
+        label="Skills endpoint",
+        optional=True,
+        help=(
+            "Optional. The full URL that lists your agent's skill files. Without "
+            "it evaluation still runs; the playground, the skill-coverage warning "
+            "and optimization need it."
+        ),
     ),
     SettingSpec(
         key="agent_timeout_s", setting="agent_timeout_s", group="agent", kind="float",

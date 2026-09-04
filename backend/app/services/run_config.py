@@ -23,7 +23,8 @@ from app.schemas import RunConfig
 def defaults() -> dict[str, Any]:
     """Environment-derived defaults for every non-secret run setting."""
     return {
-        "agent_base_url": settings.agent_base_url,
+        "agent_chat_url": settings.agent_chat_url,
+        "agent_skills_url": settings.agent_skills_url,
         "agent_timeout_s": settings.agent_timeout_s,
         "langfuse_host": settings.langfuse_host,
         "langfuse_public_key": settings.langfuse_public_key,

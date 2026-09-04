@@ -165,8 +165,17 @@ class Settings(BaseSettings):
     workspace_impl: Impl = "fake"
 
     # --- Agent HTTP server (§6.2) -------------------------------------------
-    # Base URL of the FastAPI agent server; the client POSTs to {base}/execute.
-    agent_base_url: str = ""
+    # Two absolute URLs, not a base URL with paths appended. The agent server is
+    # somebody else's service — its chat endpoint may live under a prefix, or
+    # behind a gateway that rewrites paths — and a base URL made every one of
+    # those a reason not to adopt the platform. Naming both outright costs one
+    # extra field and accepts every layout.
+    #
+    # `agent_chat_url` speaks OpenAI chat completions (docs/agent-server-api.md).
+    # `agent_skills_url` is optional: an agent that does not serve its skill
+    # files can still be evaluated, it just cannot be explored or optimised.
+    agent_chat_url: str = ""
+    agent_skills_url: str = ""
     agent_timeout_s: float = 120.0
     agent_max_retries: int = 2
     # How long the "Run eval" dialog's pre-flight waits for the agent server

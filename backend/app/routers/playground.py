@@ -60,14 +60,19 @@ BASELINE_TIMEOUT_S = 5.0
 # --- Workspace --------------------------------------------------------------
 
 def _workspace_client(
-    agent_base_url: str | None = None, agent_timeout_s: float | None = None
+    agent_skills_url: str | None = None, agent_timeout_s: float | None = None
 ):
     """The workspace seam for one agent, or a 503 explaining why there isn't one.
 
     `include_workspace=True` is what makes `build_seams` construct it at all — a
     misconfigured workspace seam must not be able to break the eval path, so
-    nothing else asks for it. `WORKSPACE_IMPL=real` with no agent base URL raises
-    here, and the developer needs to read that sentence rather than get a 500.
+    nothing else asks for it.
+
+    **No skills endpoint is a 503 here, and only here.** An agent that serves no
+    skill listing is a supported configuration everywhere else — it just cannot
+    be explored. This router *is* the exploring, so it has nothing to offer such
+    an agent and says so in a sentence naming the missing endpoint, rather than
+    returning an empty workspace that reads as "this agent has no skills".
 
     **Which agent is a per-request question, not a per-process one.** The caller
     chooses the agent it is asking a question of, so the workspace it edits has
@@ -80,29 +85,35 @@ def _workspace_client(
     """
     try:
         seams = build_seams(
-            {"agent_base_url": agent_base_url, "agent_timeout_s": agent_timeout_s},
+            {"agent_skills_url": agent_skills_url, "agent_timeout_s": agent_timeout_s},
             include_workspace=True,
         )
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a server bug
         raise HTTPException(
             status_code=503, detail=f"{type(exc).__name__}: {exc}"
         ) from exc
-    if seams.workspace is None:  # pragma: no cover - include_workspace ensures one
-        raise HTTPException(status_code=503, detail="no workspace client configured")
+    if seams.workspace is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "this agent has no skills endpoint configured, so its skill "
+                "files cannot be read or edited. Add one to use the playground."
+            ),
+        )
     return seams.workspace
 
 
 @router.get("/workspace", response_model=WorkspaceOut)
 async def get_workspace(
-    agent_base_url: str = "",
+    agent_skills_url: str = "",
     agent_timeout_s: float | None = None,
     subject: str = Depends(current_subject),
 ):
     """The agent's skill files, so an edit starts from the real thing.
 
     This doubles as the playground's **connect** call: reaching it proves the
-    agent is there, speaks the `GET /skills` contract (docs/agent-server-api.md)
-    and hands over a version to check
+    agent is there, speaks the skills-endpoint contract
+    (docs/agent-server-api.md) and hands over a version to check
     staleness against, all of which the UI needs before its first question. A
     separate health endpoint would prove less and be one more thing to keep in
     step.
@@ -112,7 +123,7 @@ async def get_workspace(
     the developer silently loses the starting point and retypes the skill from
     memory — then tests the wrong text.
     """
-    client = _workspace_client(agent_base_url, agent_timeout_s)
+    client = _workspace_client(agent_skills_url, agent_timeout_s)
     try:
         ws = await client.get_workspace()
     except Exception as exc:  # noqa: BLE001
@@ -124,7 +135,7 @@ async def get_workspace(
 
 @router.get("/workspace/version", response_model=WorkspaceVersionOut)
 async def get_workspace_version(
-    agent_base_url: str = "",
+    agent_skills_url: str = "",
     agent_timeout_s: float | None = None,
     subject: str = Depends(current_subject),
 ):
@@ -138,7 +149,7 @@ async def get_workspace_version(
     `_workspace_client`: a version fetched from a different server than the
     snapshot came from can only ever produce a false answer, in either direction.
     """
-    client = _workspace_client(agent_base_url, agent_timeout_s)
+    client = _workspace_client(agent_skills_url, agent_timeout_s)
     try:
         return WorkspaceVersionOut(version=await client.get_version())
     except Exception as exc:  # noqa: BLE001
@@ -279,7 +290,7 @@ async def create_attempt(
         # as edited that were never touched, and hides ones that were.
         try:
             ws = await asyncio.wait_for(
-                _workspace_client(body.config.agent_base_url).get_workspace(),
+                _workspace_client(body.config.agent_skills_url).get_workspace(),
                 timeout=BASELINE_TIMEOUT_S,
             )
             baseline = ws.skills

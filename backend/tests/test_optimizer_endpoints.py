@@ -235,22 +235,22 @@ async def test_skill_check_answers_for_the_agent_it_was_given():
     passed.
     """
     check = await opt.skill_check(
-        skill_name="billing", agent_base_url="http://agent.example:9000", subject="alice"
+        skill_name="billing", agent_skills_url="http://agent.example:9000/skills", subject="alice"
     )
-    assert check.agent_base_url == "http://agent.example:9000"
+    assert check.agent_skills_url == "http://agent.example:9000/skills"
 
     # Blank keeps meaning "the server's own", as everywhere else in this config.
     fallback = await opt.skill_check(skill_name="billing", subject="alice")
-    assert fallback.agent_base_url == settings.agent_base_url
+    assert fallback.agent_skills_url == settings.agent_skills_url
 
 
 async def test_skill_check_names_the_agent_even_when_the_skill_is_missing():
     """A skill that was not found most needs to say *where* it was looked for."""
     check = await opt.skill_check(
-        skill_name="billling", agent_base_url="http://agent.example:9000", subject="alice"
+        skill_name="billling", agent_skills_url="http://agent.example:9000/skills", subject="alice"
     )
     assert check.exists is False
-    assert check.agent_base_url == "http://agent.example:9000"
+    assert check.agent_skills_url == "http://agent.example:9000/skills"
 
 
 async def test_skill_check_names_the_skills_that_do_exist_when_one_is_missing():

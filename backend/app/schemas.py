@@ -298,7 +298,10 @@ class RunConfig(BaseModel):
     the form and the fallback always agree.
     """
 
-    agent_base_url: str = ""
+    agent_chat_url: str = ""
+    # Optional even when the rest is filled in: an agent that serves no skill
+    # listing is evaluated normally, it just cannot be explored or optimised.
+    agent_skills_url: str = ""
     agent_timeout_s: float | None = None
     langfuse_host: str = ""
     langfuse_public_key: str = ""
@@ -939,6 +942,19 @@ class ImportPreview(BaseModel):
     sources: list[PreviewSource] = Field(default_factory=list)
 
 
+class CheckOut(BaseModel):
+    """One connection check's answer.
+
+    `ok` is a tri-state: `None` means the check was not attempted, which the UI
+    must not draw as a failure. "We did not test the override" and "the override
+    did not apply" gate an optimization run differently.
+    """
+
+    ok: bool | None = None
+    detail: str = ""
+    error: str = ""
+
+
 class AgentSkillsOut(BaseModel):
     """What the "Run eval" dialog's pre-flight learned about one agent server.
 
@@ -949,11 +965,49 @@ class AgentSkillsOut(BaseModel):
     skill list as "this agent has no skills".
     """
 
-    # The agent this actually asked, resolved the way a run resolves it, so the
-    # dialog can name the server that answered rather than the box left blank.
-    agent_base_url: str
+    # The endpoint this actually read, resolved the way a run resolves it, so
+    # the dialog can name the server that answered rather than the box left
+    # blank. Empty when no skills endpoint was configured at all — which is a
+    # state to describe, not an error to report.
+    agent_skills_url: str
     version: str = ""
     skills: list[str] = Field(default_factory=list)
+    # `ok=None` here is the entry-level tier: no skills endpoint was configured,
+    # which is a supported way to run an agent and must not be drawn in red.
+    check: CheckOut = Field(default_factory=CheckOut)
+    request_preview: str = ""
+    response_preview: str = ""
+
+
+class ChatProbeOut(BaseModel):
+    """The result of one real call to the agent's chat endpoint."""
+
+    chat: CheckOut = Field(default_factory=CheckOut)
+    override: CheckOut = Field(default_factory=CheckOut)
+    trace: CheckOut = Field(default_factory=CheckOut)
+    trace_id: str = ""
+    latency_ms: int | None = None
+    # What was sent and what came back, for the collapsed debug panel beside the
+    # field. Shown rather than described: an implementer reading the real bytes
+    # finds a mismatch in seconds that a prose spec hides for an afternoon.
+    request_preview: str = ""
+    response_preview: str = ""
+
+
+class ChatProbeIn(BaseModel):
+    """Ask the platform to call an agent once, on purpose.
+
+    A POST, not a GET, because it has a cost: one real question answered by a
+    real model. It also carries secrets — the trace check needs the trace
+    store's credentials — which have no business in a query string.
+    """
+
+    config: RunConfig = Field(default_factory=RunConfig)
+    secrets: RunSecrets = Field(default_factory=RunSecrets)
+    # Off for the cheapest "is anything listening" check; on wherever the answer
+    # gates something that depends on the override.
+    with_override: bool = True
+    with_trace: bool = False
 
 
 class EvalSetSkill(BaseModel):
@@ -988,9 +1042,9 @@ class SkillCheck(BaseModel):
     n_chars: int = 0
     has_frontmatter: bool = False
     # Which agent server answered. The check used to read only the server's own
-    # environment while the wizard collected a base URL of its own, so a
-    # developer could clear a skill against one agent and run against another.
-    agent_base_url: str = ""
+    # environment while the wizard collected a URL of its own, so a developer
+    # could clear a skill against one agent and run against another.
+    agent_skills_url: str = ""
     # Set when routing mode cannot be offered, with the reason to show instead.
     routing_blocked_reason: str | None = None
     available_skills: list[str] = Field(default_factory=list)
@@ -1011,7 +1065,8 @@ class OptimizationConfig(BaseModel):
     """
 
     # Connections
-    agent_base_url: str = ""
+    agent_chat_url: str = ""
+    agent_skills_url: str = ""
     agent_timeout_s: float | None = None
     langfuse_host: str = ""
     langfuse_public_key: str = ""

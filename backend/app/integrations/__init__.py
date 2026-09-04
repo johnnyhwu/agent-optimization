@@ -89,17 +89,24 @@ def build_seams(
     """Build the clients for one run. Blank config falls back to the environment.
 
     `include_workspace` is opt-in because a misconfigured workspace seam must not
-    be able to break the eval path: `WORKSPACE_IMPL=real` with no agent base URL
-    raises, and nothing in a run reads the agent's config or skills. Only the
-    playground asks for it, and only the playground's workspace endpoints answer
-    for it.
+    be able to break the eval path: nothing in a run reads the agent's config or
+    skills. Only the playground, the wizard and the pre-flights ask for it.
+
+    **A missing skills URL is not a misconfiguration.** With
+    `WORKSPACE_IMPL=real` and no `agent_skills_url`, `workspace` comes back
+    `None` rather than raising. That is the whole of the entry-level tier: an
+    agent with only a chat endpoint can be evaluated, and the features that need
+    the file listing — the playground's editor, the wizard's skill check,
+    optimization — are the ones that have to say so. Callers must handle `None`;
+    the ones that cannot work without it turn it into a sentence naming the
+    missing endpoint.
     """
     agent: AgentClient
     if settings.agent_impl == "real":
         from app.integrations.real.agent import HttpAgentClient
 
         agent = HttpAgentClient(
-            base_url=_get(config, "agent_base_url"),
+            chat_url=_get(config, "agent_chat_url"),
             timeout_s=_get(config, "agent_timeout_s"),
         )
     else:
@@ -168,10 +175,16 @@ def build_seams(
         if settings.workspace_impl == "real":
             from app.integrations.real.workspace import HttpWorkspaceClient
 
-            workspace = HttpWorkspaceClient(
-                base_url=_get(config, "agent_base_url"),
-                timeout_s=_get(config, "agent_timeout_s"),
-            )
+            skills_url = _get(config, "agent_skills_url") or settings.agent_skills_url
+            # No URL, no client — and no exception. See the docstring: this is
+            # the supported "chat endpoint only" configuration, not a mistake to
+            # report here. Reporting it here would put the sentence in front of
+            # someone running an eval, which does not need it.
+            if skills_url:
+                workspace = HttpWorkspaceClient(
+                    skills_url=skills_url,
+                    timeout_s=_get(config, "agent_timeout_s"),
+                )
         else:
             workspace = FakeWorkspaceClient()
 
