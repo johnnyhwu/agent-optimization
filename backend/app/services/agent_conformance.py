@@ -34,7 +34,8 @@ import httpx
 from app.config import settings
 from app.integrations.base import WorkspaceOverride
 from app.integrations.real.agent import build_payload
-from app.services.agent_probe import CheckResult, make_probe_skill, probe_skills
+from app.integrations.real.workspace import HttpWorkspaceClient
+from app.services.agent_probe import CheckResult, make_probe_skill
 
 
 @dataclass
@@ -169,30 +170,51 @@ async def run_conformance(
         )
         resp = await _post(client, chat, empty)
         answer = _answer_of(resp) or ""
+        # What this can prove, and what it cannot, stated rather than implied.
+        # An agent that reads `{}` as "use your own" answers from its deployed
+        # files — which do not contain the value we invented either, so the
+        # reply looks identical to a correct one. Distinguishing the two needs a
+        # question only the deployed files can answer, and the platform has no
+        # way to write one. So this reports the half it can see, and the `why`
+        # says the other half is yours to check.
         case(
-            "empty_skills", "An empty skills map means no skills",
-            "`{}` is falsy in every language this gets written in, so `if "
-            "skills:` silently turns \"run with no skills\" into \"use your "
-            "own\" — and the answer still looks right.",
+            "empty_skills", "An empty skills map is accepted and clears the override",
+            "`{}` means \"run with no skills\", and `{}` is falsy in every "
+            "language this gets written in — so `if skills:` silently turns it "
+            "into \"use your own\". This case catches an empty map that leaks "
+            "the previous call's files; it cannot see a fallback to your "
+            "deployed ones, because that answer looks correct. Test that half "
+            "with a question only your own skills can answer.",
             CheckResult(ok=True, detail="answered without the sent skill")
-            if magic not in answer
+            if resp.status_code < 400 and magic not in answer
             else CheckResult(
                 ok=False,
                 error=(
-                    "the answer still contained the previous call's skill value, "
-                    "so an empty map did not clear the skills for this call."
+                    f"HTTP {resp.status_code}: {resp.text[:300]}"
+                    if resp.status_code >= 400
+                    else "the answer still contained the previous call's skill "
+                    "value, so an empty map did not clear the skills for this call."
                 ),
             ),
         )
 
         # ⑥ The override is not persisted.
-        resp = await _post(client, chat, dict(plain))
+        #
+        # The *magic* question with no skills key at all — "use your own files".
+        # Re-sending the plain question instead proved nothing: no agent answers
+        # "reply with the single word: ok" by quoting a skill, so the check
+        # passed whether or not the override had been written to disk.
+        persisted_probe = build_payload(
+            question, uuid.uuid4().hex, "skill-studio-conformance",
+            ["conformance"], budget, None,
+        )
+        resp = await _post(client, chat, persisted_probe)
         answer = _answer_of(resp) or ""
         case(
             "not_persisted", "The override is not persisted",
             "An override written into the real skills directory works for one "
             "call and quietly changes the deployed agent for everyone else.",
-            CheckResult(ok=True, detail="a later plain call was unaffected")
+            CheckResult(ok=True, detail="a later call with no override was unaffected")
             if magic not in answer
             else CheckResult(
                 ok=False,
@@ -263,25 +285,46 @@ async def run_conformance(
         )
         return _finish(report)
 
-    skills_result = await probe_skills(skills_url, settings.agent_probe_timeout_s)
-    case("skills", "Skills endpoint lists the files", why_skills, skills_result.skills)
-    if skills_result.skills.ok:
-        derived = skills_result.version.startswith("sha256.")
+    # Straight to the HTTP client, not through `build_seams`. Everywhere else in
+    # the platform the seam is right: a deployment on fake seams should probe
+    # the fake ones. Here it would be a lie — this page exists to report on the
+    # server whose URL was just typed, and answering about a canned workspace
+    # instead is the one result it must never produce.
+    client = HttpWorkspaceClient(
+        skills_url=skills_url, timeout_s=settings.agent_probe_timeout_s
+    )
+    try:
+        workspace = await client.get_workspace()
+    except Exception as exc:  # noqa: BLE001 - the agent server's problem, quoted as-is
         case(
-            "version", "A version of the agent's own is reported",
-            "It has to move when a model or prompt changes, not only when a "
-            "skill file does — the staleness check and run comparability both "
-            "rest on it.",
-            CheckResult(ok=True, detail=f"version {skills_result.version}")
-            if not derived
-            else CheckResult(
-                ok=None,
-                detail=(
-                    "no version reported, so one was derived from the skill "
-                    "files. That fallback cannot see a model or prompt change."
-                ),
-            ),
+            "skills", "Skills endpoint lists the files", why_skills,
+            CheckResult(ok=False, error=str(exc) or type(exc).__name__),
         )
+        return _finish(report)
+
+    n = len(workspace.skills)
+    case(
+        "skills", "Skills endpoint lists the files", why_skills,
+        CheckResult(ok=True, detail=f"{n} skill file{'' if n == 1 else 's'}"),
+    )
+    # `derived_version` prefixes what it computes, so this distinguishes "the
+    # agent told us" from "we hashed the files ourselves" — which is the whole
+    # difference between a staleness check and half of one.
+    derived = workspace.version.startswith("sha256.")
+    case(
+        "version", "A version of the agent's own is reported",
+        "It has to move when a model or prompt changes, not only when a skill "
+        "file does — the staleness check and run comparability both rest on it.",
+        CheckResult(ok=True, detail=f"version {workspace.version}")
+        if not derived
+        else CheckResult(
+            ok=None,
+            detail=(
+                "no version reported, so one was derived from the skill files. "
+                "That fallback cannot see a model or prompt change."
+            ),
+        ),
+    )
 
     return _finish(report)
 

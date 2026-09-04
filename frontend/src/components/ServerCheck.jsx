@@ -74,6 +74,11 @@ export default function ServerCheck() {
     }
   }
 
+  // Tier 0 means two different things — "the chat endpoint is dead" and "there
+  // is no skills endpoint" — so the tier alone cannot title the result. The
+  // chat case is what separates them.
+  const usable = report?.cases?.some((c) => c.id === "chat" && c.result.ok === true);
+
   return (
     <div className="doc-page">
       <PageHeader
@@ -138,9 +143,13 @@ export default function ServerCheck() {
 
       {report && (
         <div className="check-report">
+          {/* The headline is what this agent *can* do — except when it cannot
+              do anything, which tier 0 also covers. A server that never
+              answered was being announced as "Evaluation only", which is a
+              claim about a working agent. */}
           <Banner
-            tone={report.tier === 2 ? "success" : report.tier === 0 ? "warning" : "info"}
-            title={TIER_LABELS[report.tier]}
+            tone={usable ? (report.tier === 2 ? "success" : "info") : "error"}
+            title={usable ? TIER_LABELS[report.tier] : "This agent is not usable yet"}
           >
             {report.summary}
           </Banner>

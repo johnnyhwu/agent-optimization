@@ -118,8 +118,18 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
         // 200 in all three cases now, with the outcome inside. `check.ok ===
         // null` is "no skills endpoint configured", which is a supported way to
         // run an agent — so it is a state to describe, never a failure.
+        // Three states, not two. `check.ok === null` is "no skills endpoint
+        // configured", and folding it into `connected` produced a green
+        // "0 skills on this agent" plus a coverage warning about questions
+        // needing skills — an accusation about an agent nobody configured to
+        // have any.
         setProbe({
-          state: r.check?.ok === false ? "failed" : "connected",
+          state:
+            r.check?.ok === false
+              ? "failed"
+              : r.check?.ok === null
+                ? "none"
+                : "connected",
           skills: r.skills,
           version: r.version,
           check: r.check,
@@ -132,7 +142,15 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
         if (cancelled) return;
         // The agent server's own words. A summary here would flatten "no such
         // host" and "401 from the agent" into the same unhelpful sentence.
-        setProbe({ state: "failed", error: e.message });
+        //
+        // Carried as a `check` too, because that is what the field's status
+        // line reads. Without it a transport failure showed a Try again button
+        // with nothing above it saying what to try again *for*.
+        setProbe({
+          state: "failed",
+          error: e.message,
+          check: { ok: false, error: e.message },
+        });
       });
     return () => {
       cancelled = true;

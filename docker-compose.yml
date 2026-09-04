@@ -39,6 +39,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      # The reference documentation the UI serves (GET /docs/{name}) is the
+      # repository's own markdown — there is deliberately no second copy. The
+      # build context above is ./backend, one level below where those files
+      # live, so they cannot be COPYed into the image; mounted read-only
+      # instead. Without this the Documentation page and every "?" help link
+      # answer 500.
+      - ./docs:/app/docs:ro
     environment:
       # Same URLs as before, with the Postgres host swapped from localhost to the
       # compose service name. Still overridable from the host environment.

@@ -22,17 +22,38 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import current_subject
+from app.config import settings
 from app.schemas import DocOut
 
 router = APIRouter(prefix="/docs", tags=["docs"])
 
-# `app/routers/docs.py` -> repository root.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _docs_dir() -> Path:
+    """Where the markdown lives, in a checkout and in the image.
+
+    Two answers, because the backend's Docker build context is `./backend` and
+    the documents are a level above it — they cannot be copied into the image,
+    so compose mounts them at `/app/docs` instead. Searching rather than
+    assuming is what keeps `python -m pytest` and a deployed container both
+    working without a second copy of the file.
+    """
+    if settings.docs_dir:
+        return Path(settings.docs_dir)
+    for candidate in (
+        # A checkout: app/routers/docs.py -> backend -> repository root.
+        Path(__file__).resolve().parents[3] / "docs",
+        # The container, where WORKDIR is /app and ./docs is mounted read-only.
+        Path("/app/docs"),
+    ):
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).resolve().parents[3] / "docs"
+
 
 # The documents the UI may ask for, by the name it uses in its own routes.
 PUBLISHED = {
     "agent-server": (
-        "docs/agent-server-api.md",
+        "agent-server-api.md",
         "Agent Server API",
         "What your agent server must expose to be evaluated, explored and "
         "optimised by Skill Studio.",
@@ -46,7 +67,7 @@ def get_doc(name: str, subject: str = Depends(current_subject)):
     if entry is None:
         raise HTTPException(status_code=404, detail=f"no document named {name!r}")
     relative, title, summary = entry
-    path = _REPO_ROOT / relative
+    path = _docs_dir() / relative
     try:
         text = path.read_text("utf-8")
     except OSError as exc:

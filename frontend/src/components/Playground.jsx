@@ -19,7 +19,7 @@ import {
 import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
-import { gateFor } from "../agent_endpoints.js";
+import { gateFor, probeMatches } from "../agent_endpoints.js";
 import { setServerTime } from "../useElapsed.js";
 import { adoptFetched, mergeAttempt, pruneById } from "../attempt_state.js";
 import Button, { IconButton } from "./ui/Button.jsx";
@@ -306,6 +306,20 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       return;
     }
     setChatBusy(true);
+    // Which agent this answer is about. The call is deliberately not awaited,
+    // so a slow probe for the agent someone has just switched away from can
+    // land after the new one's — and an answer about the previous address
+    // disables the send button for the current one, with a reason naming a
+    // server nobody is connected to.
+    const about = {
+      chatUrl: agent.agent_chat_url,
+      skillsUrl: agent.agent_skills_url || "",
+    };
+    const tagged = (probe) => ({
+      ...probe,
+      forChatUrl: about.chatUrl,
+      forSkillsUrl: about.skillsUrl,
+    });
     try {
       const r = await api.agentChatProbe({
         config: agent,
@@ -316,9 +330,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
         // should wait on.
         with_trace: false,
       });
-      setChatProbe(r);
+      setChatProbe(tagged(r));
     } catch (e) {
-      setChatProbe({ chat: { ok: false, error: e.message } });
+      setChatProbe(tagged({ chat: { ok: false, error: e.message } }));
     } finally {
       setChatBusy(false);
     }
@@ -328,9 +342,19 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // that failed stops the send button; everything else is worth saying and not
   // worth stopping for. Absent checks are "not asked", so nothing is blocked
   // while the probe is still in flight.
+  // Only an answer about the agent currently connected counts. A stale one is
+  // discarded rather than shown: it is indistinguishable from a current result,
+  // and the thing it would do is refuse to send a question to a working agent.
+  const currentProbe = probeMatches(chatProbe, {
+    chatUrl: form?.agent_chat_url || "",
+    skillsUrl: form?.agent_skills_url || "",
+  })
+    ? chatProbe
+    : null;
+
   const agentGate = gateFor("playground", {
-    ...(chatProbe?.chat ? { chat: chatProbe.chat } : {}),
-    ...(chatProbe?.override ? { override: chatProbe.override } : {}),
+    ...(currentProbe?.chat ? { chat: currentProbe.chat } : {}),
+    ...(currentProbe?.override ? { override: currentProbe.override } : {}),
   });
 
   // How much of the workspace edit would be lost. Asked before anything that
@@ -838,7 +862,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           onConnect={connect}
           onChangeAgent={changeAgent}
           onReload={reloadWorkspace}
-          chatProbe={chatProbe}
+          chatProbe={currentProbe}
           chatBusy={chatBusy}
         />
       )}

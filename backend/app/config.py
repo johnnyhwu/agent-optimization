@@ -187,6 +187,11 @@ class Settings(BaseSettings):
     # be started against unnoticed.
     agent_probe_timeout_s: float = 5.0
 
+    # Where the reference documentation is read from, for `GET /docs/{name}`.
+    # Blank searches the checkout and then the container's mount point; set it
+    # for a deployment that puts the markdown somewhere else.
+    docs_dir: str = ""
+
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
     llm_base_url: str = "http://litellm-ai4bi.cpoap-dev.dev.tsmc.com"
     llm_api_key: str = ""

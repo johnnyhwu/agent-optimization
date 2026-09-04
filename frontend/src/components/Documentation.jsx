@@ -34,9 +34,11 @@ export default function Documentation({ doc, anchor }) {
     };
   }, [doc]);
 
+  // `doc` is passed so the document's own fragment links can be rewritten into
+  // full routes — see the `link` renderer in doc_render.js.
   const rendered = useMemo(
-    () => (state.doc ? renderDoc(state.doc.markdown) : null),
-    [state.doc]
+    () => (state.doc ? renderDoc(state.doc.markdown, doc) : null),
+    [state.doc, doc]
   );
 
   // After the HTML is in the DOM, not before: the element being scrolled to is

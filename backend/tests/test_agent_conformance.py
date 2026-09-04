@@ -77,9 +77,16 @@ class FakeAgent:
             if self.persists:
                 self.leaked = skills
 
+        question = next(
+            (m["content"] for m in reversed(body["messages"]) if m["role"] == "user"),
+            "",
+        )
+
         text = "ok"
-        if effective and self.applies_override:
-            # Answer with whatever magic value the supplied skill carries.
+        # Only when *asked*. A fake that recited the magic value whatever it was
+        # asked would let a persistence check pass while sending the wrong
+        # question — which is exactly the bug this file is written to catch.
+        if effective and self.applies_override and "magic value" in question:
             for content in effective.values():
                 for word in content.split():
                     if word.startswith("XYZZY-"):
@@ -158,7 +165,13 @@ async def test_an_empty_map_treated_as_use_your_own_is_caught(real):
 @respx.mock
 async def test_a_persisted_override_is_caught(real):
     """Visible only across two calls: the second one still knows the first's
-    files, which means the deployed agent has been changed for everyone."""
+    files, which means the deployed agent has been changed for everyone.
+
+    The second call has to ask the question the leak would answer. Re-sending
+    the harmless baseline question instead proved nothing — no agent replies to
+    "reply with the single word: ok" by quoting a skill — so the case passed
+    whether or not anything had been written to disk.
+    """
     mount(FakeAgent(persists=True))
     report = await run_conformance(CHAT_URL, SKILLS_URL)
 
@@ -173,6 +186,42 @@ async def test_an_accepted_traversing_path_is_caught(real):
 
     assert case(report, "path_safety").result.ok is False
     assert "400" in case(report, "path_safety").result.error
+
+
+@respx.mock
+async def test_an_empty_map_the_server_refuses_is_caught(real):
+    """`{}` is a legitimate request. A server that 4xxs it has not implemented
+    the third state at all, which is a different fault from mishandling it."""
+    def refuse_empty(request):
+        vendor = json.loads(request.content).get("skill_studio") or {}
+        if vendor.get("skills") == {}:
+            return httpx.Response(400, text="skills must not be empty")
+        return FakeAgent()(request)
+
+    respx.post(CHAT_URL).mock(side_effect=refuse_empty)
+    respx.get(SKILLS_URL).mock(
+        return_value=httpx.Response(200, json={"version": "v1", "skills": {}})
+    )
+    report = await run_conformance(CHAT_URL, SKILLS_URL)
+
+    assert case(report, "empty_skills").result.ok is False
+    assert "400" in case(report, "empty_skills").result.error
+
+
+@respx.mock
+async def test_the_skills_case_talks_to_the_url_it_was_given(real, configure):
+    """Never through the seam, unlike every other read in this platform.
+
+    A deployment on fake seams probing the fake ones is right everywhere else.
+    Here it would report a canned workspace, a version and a tier about a server
+    that was never contacted — the one result this page must not produce.
+    """
+    with configure(workspace_impl="fake"):
+        mount(FakeAgent())
+        report = await run_conformance(CHAT_URL, SKILLS_URL)
+
+    assert case(report, "skills").result.detail == "1 skill file"
+    assert any(str(c.request.url) == SKILLS_URL for c in respx.calls)
 
 
 @respx.mock

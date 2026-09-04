@@ -64,6 +64,8 @@ export function AgentProbe({ probe, coverage, onRetry }) {
     ) : null;
   }
 
+  // `none` — no skills endpoint — says its piece on the field's status line.
+  // A count here would be describing a listing nobody asked for.
   if (probe.state !== "connected") return null;
 
   return (
@@ -155,7 +157,7 @@ export default function RunConfigFields({
             chatProbe={chatProbe}
             chatBusy={chatBusy}
             onTestChat={onTestChat}
-            skillsProbe={probe?.state === "connected" || probe?.state === "failed"
+            skillsProbe={probe?.check
               ? { check: probe.check, request_preview: probe.request_preview,
                   response_preview: probe.response_preview }
               : null}

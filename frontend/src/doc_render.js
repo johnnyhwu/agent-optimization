@@ -46,8 +46,11 @@ export function findAnchor(headings, anchor) {
  * `headings` is every `##`/`###` in order, which is what the page's contents
  * column is built from — derived rather than maintained, so it cannot disagree
  * with the document.
+ *
+ * `docName` is needed only to rewrite the document's own fragment links into
+ * full routes; the `link` renderer says why a bare `#id` cannot survive here.
  */
-export function renderDoc(markdown) {
+export function renderDoc(markdown, docName = "agent-server") {
   const headings = [];
   const seen = new Map();
   // The page prints the document's title itself, from the API. Rendering the
@@ -78,6 +81,25 @@ export function renderDoc(markdown) {
         }
         if (depth === 2 || depth === 3) headings.push({ id, text: plain, depth });
         return `<h${depth} id="${id}">${text}</h${depth}>\n`;
+      },
+      // A link to a heading in this same document.
+      //
+      // The document's own contents list is written as plain markdown
+      // fragments (`[…](#3-chat-endpoint)`), which is right in a file and wrong
+      // in a hash-routed app: clicking one replaces the whole route with
+      // `#3-chat-endpoint`, which parses as no known section, falls through to
+      // evaluation, and is then rewritten to `#/evaluation`. The reader is
+      // thrown off the page by a link that points into it.
+      //
+      // So an in-page fragment becomes the full route. Everything else —
+      // external links especially — is left exactly as written.
+      link({ href: target, title, tokens }) {
+        const text = this.parser.parseInline(tokens);
+        const resolved = target.startsWith("#")
+          ? `#/documentation/${docName}${target}`
+          : target;
+        const attrs = title ? ` title="${escapeHtml(title)}"` : "";
+        return `<a href="${escapeHtml(resolved)}"${attrs}>${text}</a>`;
       },
       // Never pass markup through. See the note at the top of the file.
       html({ text }) {

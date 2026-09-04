@@ -302,6 +302,11 @@ EXCLUDED_SETTINGS: dict[str, str] = {
     "db_pool_recycle_s": "process-wide resource budget",
     "db_pool_pre_ping": "process-wide resource budget",
     "root_path": "set by the reverse proxy in front of this process",
+    "docs_dir": (
+        "where this deployment keeps the reference markdown on disk. A "
+        "packaging detail, and pointing it somewhere else changes nothing a "
+        "developer would recognise as a preference"
+    ),
     "frontend_origin": "CORS. A user-settable origin is a user-settable security boundary",
     "log_level": "operational, and shared by every request in the process",
     # Identity. Who the caller is, and how that is decided, is emphatically not

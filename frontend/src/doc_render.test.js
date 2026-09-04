@@ -37,6 +37,22 @@ describe("findAnchor", () => {
 });
 
 describe("renderDoc", () => {
+  it("rewrites the document's own fragment links into full routes", () => {
+    // A bare `#3-chat-endpoint` replaces the whole hash route, parses as no
+    // known section, falls through to evaluation and is rewritten to
+    // `#/evaluation` — so the document's own contents list would throw the
+    // reader off the page it points into.
+    const { html } = renderDoc("[Chat endpoint](#3-chat-endpoint)\n", "agent-server");
+    assert.match(html, /href="#\/documentation\/agent-server#3-chat-endpoint"/);
+  });
+
+  it("leaves links that go somewhere else alone", () => {
+    const { html } = renderDoc("[the spec](https://example.com/x)\n");
+    assert.match(html, /href="https:\/\/example.com\/x"/);
+    const relative = renderDoc("[a file](./other.md)\n");
+    assert.match(relative.html, /href="\.\/other.md"/);
+  });
+
   it("gives every heading an id a link can point at", () => {
     const { html, headings } = renderDoc("## 3. Chat endpoint\n\ntext\n");
     assert.match(html, /<h2 id="3-chat-endpoint">/);

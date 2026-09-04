@@ -55,6 +55,28 @@ def test_traversal_shapes_are_simply_not_in_the_map(name):
     assert caught.value.status_code == 404
 
 
+def test_the_docs_directory_is_found_rather_than_assumed(configure, tmp_path):
+    """The path that only breaks in a container.
+
+    `parents[3]` is the repository root in a checkout and `/` inside the image —
+    the backend's Docker build context is `./backend`, so the documents are a
+    level above anything that can be COPYed in, and compose mounts them at
+    `/app/docs` instead. Assuming either one alone leaves the Documentation page
+    and every "?" help link answering 500 in exactly one of the two.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "agent-server-api.md").write_text("# Moved\n", "utf-8")
+
+    with configure(docs_dir=str(elsewhere)):
+        assert docs_router.get_doc("agent-server", subject="alice").markdown == "# Moved\n"
+
+    # Unset, it finds the checkout's own copy without being told.
+    assert "chat endpoint" in (
+        docs_router.get_doc("agent-server", subject="alice").markdown.lower()
+    )
+
+
 def test_every_published_document_actually_exists():
     """A whitelist that names a missing file is a 500 nobody finds until a user
     clicks a link. Cheaper to notice here."""

@@ -135,7 +135,13 @@ export default function Wizard() {
   const agentConfig = {
     agent_chat_url: config.agent_chat_url || "",
     agent_skills_url: config.agent_skills_url || "",
-    agent_timeout_s: config.agent_timeout_s || "",
+    // `null`, never `""`. This object is both a query string (where blank is
+    // dropped) and a JSON body typed `float | None` (where blank is a 422) —
+    // and a 422 here reads as a chat endpoint that failed, which blocks
+    // Continue on a wizard nobody has misconfigured.
+    agent_timeout_s: Number(config.agent_timeout_s) > 0
+      ? Number(config.agent_timeout_s)
+      : null,
   };
 
   // The free half of the pre-flight, re-read whenever the URL stops moving —
