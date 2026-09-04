@@ -41,7 +41,7 @@ import httpx
 
 from app.config import settings
 from app.integrations.base import AgentResponse, WorkspaceOverride
-from app.integrations.real.agent_auth import auth_headers, redact
+from app.integrations.real.agent_auth import auth_headers, credentialed_client, redact
 
 # The vendor namespace every platform-specific field lives under. One name, in
 # one place, because it appears in the payload, in the docs and in the probe.
@@ -290,8 +290,13 @@ class HttpAgentClient:
         )
         started = time.monotonic()
 
-        async with httpx.AsyncClient(
-            timeout=self.timeout_s, follow_redirects=True
+        # Not a plain client: the credential is bound to the URL it was typed
+        # against, so a redirect cannot carry it to another server.
+        async with credentialed_client(
+            self.chat_url,
+            timeout_s=self.timeout_s,
+            api_key=self.api_key,
+            auth_header=self.auth_header,
         ) as client:
             resp = await client.post(
                 self.chat_url, json=payload, headers=self._headers()

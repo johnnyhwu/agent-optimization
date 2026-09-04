@@ -47,7 +47,7 @@ from app.schemas import (
 from app.db import get_session
 from app.services import judge_prompt as judge_prompt_service
 from app.services import run_config, user_secrets, user_settings
-from app.services.agent_probe import with_auth_hint
+from app.services.agent_probe import credential_state, with_auth_hint
 from app.services.trace_view import count_llm_calls, span_to_out
 from app.sse import hub, resync_if_dropped, resync_or_ping
 
@@ -141,7 +141,11 @@ async def get_workspace(
             status_code=503,
             detail=with_auth_hint(
                 f"could not read the agent's workspace: {exc}",
-                has_key=bool((agent.agent_api_key or "").strip()),
+                credential=credential_state(
+                    agent.agent_api_key,
+                    chat_url=agent.agent_chat_url,
+                    target_url=agent.agent_skills_url,
+                ),
             ),
         ) from exc
     return WorkspaceOut(version=ws.version, skills=ws.skills)
@@ -170,7 +174,11 @@ async def get_workspace_version(
             status_code=503,
             detail=with_auth_hint(
                 f"could not read the workspace version: {exc}",
-                has_key=bool((agent.agent_api_key or "").strip()),
+                credential=credential_state(
+                    agent.agent_api_key,
+                    chat_url=agent.agent_chat_url,
+                    target_url=agent.agent_skills_url,
+                ),
             ),
         ) from exc
 

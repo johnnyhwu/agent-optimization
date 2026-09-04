@@ -51,6 +51,7 @@ from app.config import settings
 from app.integrations import build_seams
 from app.integrations.base import NotReady, WorkspaceOverride
 from app.integrations.real.agent import AgentHttpError, build_payload
+from app.integrations.real.agent_auth import same_origin
 
 # The probe skill's path. Namespaced so it cannot collide with a real skill, and
 # recognisable in an agent's logs as something the platform sent.
@@ -81,14 +82,42 @@ TRACE_RETRY_DELAY_S = 2.0
 _UNAUTHORIZED = re.compile(r"\b(401|403)\b")
 
 
-def with_auth_hint(error: str, *, has_key: bool) -> str:
+# What happened to the credential on the request that just failed. Three
+# outcomes, not two: a key can be configured and still not have been sent,
+# because the endpoint it was typed against is not the endpoint being read.
+# Telling that case "your key was refused" sends someone to re-check a key that
+# was never used, and never mentions the reason.
+CREDENTIAL_SENT = "sent"
+CREDENTIAL_ABSENT = "absent"
+CREDENTIAL_WITHHELD = "withheld"
+
+
+def credential_state(
+    api_key: str | None, *, chat_url: str = "", target_url: str = ""
+) -> str:
+    """Which of the three happened, by the same rule `build_seams` applies.
+
+    One function because the rule was written out by hand at three call sites
+    and two of them got it wrong — they asked whether a key exists, which is not
+    the same question as whether it was sent.
+
+    With no `target_url` this is just "is there a key": the caller is asking
+    about the chat endpoint, which is the address the credential belongs to.
+    """
+    if not (api_key or "").strip():
+        return CREDENTIAL_ABSENT
+    if target_url and chat_url and not same_origin(chat_url, target_url):
+        return CREDENTIAL_WITHHELD
+    return CREDENTIAL_SENT
+
+
+def with_auth_hint(error: str, *, credential: str) -> str:
     """The agent's refusal, plus what to do about it.
 
     This is the whole of how an optional feature gets found. Nobody browses a
     settings page for a credential field they have no reason to believe exists;
     they hit a 401 and read what the screen says. `agent server returned 401`
-    is accurate and tells them nothing, so the two cases are named: no key was
-    sent, or the key sent was refused.
+    is accurate and tells them nothing, so each case is named.
 
     Deliberately not naming where the field is. This sentence surfaces on the
     Run-eval dialog, the playground's connect bar and the Test-your-server page,
@@ -98,11 +127,19 @@ def with_auth_hint(error: str, *, has_key: bool) -> str:
     """
     if not error or not _UNAUTHORIZED.search(error):
         return error
-    if has_key:
+    if credential == CREDENTIAL_SENT:
         return (
             f"{error}\n\nThe API key configured for this agent was refused. Check "
             "the key itself, and whether this server expects it in a header "
             "other than Authorization."
+        )
+    if credential == CREDENTIAL_WITHHELD:
+        return (
+            f"{error}\n\nThis endpoint requires a credential, and the API key "
+            "configured for this agent was not sent to it: it is on a different "
+            "server from the chat endpoint, and a credential only goes to the "
+            "address it was entered for. Point both endpoints at the same "
+            "server, or give this one a key of its own."
         )
     return (
         f"{error}\n\nThis agent server requires a credential and none was sent. "
@@ -220,7 +257,14 @@ async def probe_skills(
             ok=False,
             error=with_auth_hint(
                 str(exc) or type(exc).__name__,
-                has_key=bool((api_key or settings.agent_api_key or "").strip()),
+                # `target_url` is what makes this different from the chat probe:
+                # the key belongs to the chat endpoint, and reaches this one only
+                # when they are the same server.
+                credential=credential_state(
+                    api_key or settings.agent_api_key,
+                    chat_url=chat_url or settings.agent_chat_url,
+                    target_url=url,
+                ),
             ),
         )
         return result
@@ -330,7 +374,9 @@ async def probe_chat(
     # Whether a credential was sent at all, which is what separates the two
     # sentences a 401 deserves. Resolved the way the client resolves it, so a
     # deployment-wide key counts.
-    has_key = bool((api_key or settings.agent_api_key or "").strip())
+    # The chat endpoint is the address the credential was entered for, so there
+    # is no withholding rule to apply here — only "sent" or "absent".
+    credential = credential_state(api_key or settings.agent_api_key)
     started = time.monotonic()
     try:
         answer = await seams.agent.call(
@@ -340,7 +386,7 @@ async def probe_chat(
         result.latency_ms = int((time.monotonic() - started) * 1000)
         result.chat = CheckResult(
             ok=False,
-            error=with_auth_hint(str(exc) or type(exc).__name__, has_key=has_key),
+            error=with_auth_hint(str(exc) or type(exc).__name__, credential=credential),
         )
         return result
 
@@ -350,7 +396,7 @@ async def probe_chat(
     if answer.failed:
         result.chat = CheckResult(
             ok=False,
-            error=with_auth_hint(answer.error or "the call failed", has_key=has_key),
+            error=with_auth_hint(answer.error or "the call failed", credential=credential),
         )
         return result
 

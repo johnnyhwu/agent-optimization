@@ -29,14 +29,25 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
+import time
+
 import httpx
 
 from app.config import settings
 from app.integrations.base import WorkspaceOverride
 from app.integrations.real.agent import build_payload
-from app.integrations.real.agent_auth import auth_headers, same_origin
+from app.integrations.real.agent_auth import (
+    auth_headers,
+    credentialed_client,
+    same_origin,
+)
 from app.integrations.real.workspace import HttpWorkspaceClient
-from app.services.agent_probe import CheckResult, make_probe_skill, with_auth_hint
+from app.services.agent_probe import (
+    CheckResult,
+    credential_state,
+    make_probe_skill,
+    with_auth_hint,
+)
 
 
 @dataclass
@@ -59,9 +70,44 @@ class ConformanceReport:
     summary: str = ""
 
 
+# How long the whole checklist may take, however slow the agent is. Six model
+# calls at the per-call timeout is 12 minutes at the default, and nginx gives up
+# on a request at 660s (`frontend/nginx.conf.template`) — so without a cap the
+# checklist's worst case is a 504 with no report in it, which is the one outcome
+# worse than a slow one. Under that limit on purpose, so what the developer sees
+# is this file's own sentence rather than the proxy's.
+CHECKLIST_BUDGET_S = 540.0
+
+
+class _OutOfTime(Exception):
+    """The total budget is spent, so the checklist stops where it is.
+
+    Raised rather than returned so it unwinds to one place. What has been
+    established so far is still worth showing: the cases already recorded are
+    kept, and the report says why it stops there.
+    """
+
+
 async def _post(
-    client: httpx.AsyncClient, url: str, body: dict, headers: dict[str, str] | None = None
+    client: httpx.AsyncClient,
+    url: str,
+    body: dict,
+    headers: dict[str, str] | None = None,
+    *,
+    deadline: float | None = None,
 ) -> httpx.Response:
+    if deadline is not None:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            # The sentence is written where the budget is known — here there
+            # is only a deadline, not the number it came from.
+            raise _OutOfTime()
+        return await client.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json", **(headers or {})},
+            timeout=left,
+        )
     return await client.post(
         url, json=body, headers={"Content-Type": "application/json", **(headers or {})}
     )
@@ -96,6 +142,7 @@ async def run_conformance(
     *,
     api_key: str = "",
     auth_header: str = "",
+    budget_s: float | None = None,
 ) -> ConformanceReport:
     """The whole checklist against one server.
 
@@ -104,8 +151,66 @@ async def run_conformance(
     fail: asking for no credential is not a defect, and this platform has no
     standing to grade it. The key exists so that a developer whose server is
     behind a gateway can run the checklist at all.
+
+    **Always returns a report.** Six live model calls is six chances for the
+    server to stop answering, and losing the whole page to the seventh minute of
+    a slow one taught nobody anything. A run that cannot continue keeps what it
+    established and says where it stopped.
     """
     report = ConformanceReport()
+    total = budget_s or CHECKLIST_BUDGET_S
+    deadline = time.monotonic() + total
+    try:
+        return await _run_checklist(
+            report, chat_url, skills_url, timeout_s,
+            api_key=api_key, auth_header=auth_header, deadline=deadline,
+        )
+    except _OutOfTime:
+        _abort(
+            report,
+            f"the checklist ran out of time after {total:.0f}s. The cases above "
+            "are what it got through; a server this slow to answer will also be "
+            "slow to evaluate.",
+        )
+        return _finish(report)
+    except httpx.HTTPError as exc:
+        # Case ① has its own handler for an unreachable server, so anything
+        # reaching here failed *after* the endpoint had answered once — a
+        # timeout, a dropped connection, a gateway that gave up. That is the
+        # agent's behaviour under load, and it is worth reporting as such rather
+        # than as a 500 with no report at all.
+        _abort(
+            report,
+            f"the agent server stopped answering partway through the checklist: "
+            f"{type(exc).__name__}: {exc}",
+        )
+        return _finish(report)
+
+
+def _abort(report: ConformanceReport, reason: str) -> None:
+    report.cases.append(
+        ConformanceCase(
+            id="checklist",
+            title="The checklist finished",
+            why=(
+                "Every case below this line was skipped, so this report is "
+                "partial — a case that did not run is not a case that passed."
+            ),
+            result=CheckResult(ok=False, error=reason),
+        )
+    )
+
+
+async def _run_checklist(
+    report: ConformanceReport,
+    chat_url: str,
+    skills_url: str = "",
+    timeout_s: float | None = None,
+    *,
+    api_key: str = "",
+    auth_header: str = "",
+    deadline: float | None = None,
+) -> ConformanceReport:
     chat = (chat_url or "").strip()
     budget = timeout_s or settings.agent_timeout_s
     headers = auth_headers(api_key, auth_header)
@@ -123,14 +228,16 @@ async def run_conformance(
 
     skills_map, question, magic = make_probe_skill()
 
-    async with httpx.AsyncClient(timeout=budget, follow_redirects=True) as client:
+    async with credentialed_client(
+        chat, timeout_s=budget, api_key=api_key, auth_header=auth_header
+    ) as client:
         # ① A plain call: the baseline everything else varies from.
         plain = build_payload(
             "Reply with the single word: ok", uuid.uuid4().hex,
             "skill-studio-conformance", ["conformance"], budget, None,
         )
         try:
-            resp = await _post(client, chat, plain, headers)
+            resp = await _post(client, chat, plain, headers, deadline=deadline)
         except httpx.HTTPError as exc:
             case(
                 "chat", "Chat endpoint answers",
@@ -152,7 +259,7 @@ async def run_conformance(
                     # one place the advice is worth the most.
                     error=with_auth_hint(
                         f"HTTP {resp.status_code}: {resp.text[:400]}",
-                        has_key=bool((api_key or "").strip()),
+                        credential=credential_state(api_key),
                     ),
                 ),
             )
@@ -168,7 +275,7 @@ async def run_conformance(
             question, uuid.uuid4().hex, "skill-studio-conformance",
             ["conformance"], budget, WorkspaceOverride(skills=skills_map),
         )
-        resp = await _post(client, chat, with_override, headers)
+        resp = await _post(client, chat, with_override, headers, deadline=deadline)
         answer = _answer_of(resp) or ""
         applied = magic in answer
         case(
@@ -194,7 +301,7 @@ async def run_conformance(
             question, uuid.uuid4().hex, "skill-studio-conformance",
             ["conformance"], budget, WorkspaceOverride(skills={}),
         )
-        resp = await _post(client, chat, empty, headers)
+        resp = await _post(client, chat, empty, headers, deadline=deadline)
         answer = _answer_of(resp) or ""
         # What this can prove, and what it cannot, stated rather than implied.
         # An agent that reads `{}` as "use your own" answers from its deployed
@@ -234,7 +341,7 @@ async def run_conformance(
             question, uuid.uuid4().hex, "skill-studio-conformance",
             ["conformance"], budget, None,
         )
-        resp = await _post(client, chat, persisted_probe, headers)
+        resp = await _post(client, chat, persisted_probe, headers, deadline=deadline)
         answer = _answer_of(resp) or ""
         case(
             "not_persisted", "The override is not persisted",
@@ -256,7 +363,7 @@ async def run_conformance(
             "x", uuid.uuid4().hex, "skill-studio-conformance", ["conformance"],
             budget, WorkspaceOverride(skills={"../../etc/passwd": "x"}),
         )
-        resp = await _post(client, chat, hostile, headers)
+        resp = await _post(client, chat, hostile, headers, deadline=deadline)
         case(
             "path_safety", "A traversing skill path is refused",
             "These keys are attacker-influenced strings that most "
@@ -279,7 +386,7 @@ async def run_conformance(
             **forward_compatible["skill_studio"],
             "something_we_added_later": {"a": 1},
         }
-        resp = await _post(client, chat, forward_compatible, headers)
+        resp = await _post(client, chat, forward_compatible, headers, deadline=deadline)
         answer = _answer_of(resp)
         case(
             "unknown_keys", "Unknown fields are ignored, not rejected",
@@ -337,9 +444,11 @@ async def run_conformance(
                 error=with_auth_hint(
                     str(exc) or type(exc).__name__,
                     # Only a key that actually reached this endpoint counts as
-                    # sent: one withheld by the same-origin rule means "none was
-                    # sent", which is the sentence that explains the 401.
-                    has_key=bool(api_key and same_origin(chat, skills_url)),
+                    # sent: one withheld by the same-origin rule gets a sentence
+                    # of its own, naming the withholding as the reason.
+                    credential=credential_state(
+                        api_key, chat_url=chat, target_url=skills_url
+                    ),
                 ),
             ),
         )

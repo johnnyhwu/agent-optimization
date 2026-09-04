@@ -151,9 +151,25 @@ export default function Wizard() {
   // the same debounce the Run-eval dialog uses, for the same reason: a
   // half-typed URL is always a failure, and a status line that flashes red on
   // every keystroke teaches people to ignore it.
+  //
+  // All four inputs, not just the URL: the chat URL and the credential are part
+  // of what is asked (they decide whether the key may travel to this endpoint),
+  // so leaving them undebounced meant one request to the agent server per
+  // keystroke while somebody typed an API key — a burst of failed
+  // authentication against a gateway that may be counting them.
   const skillsUrl = useDebounced(config.agent_skills_url || "", 400);
+  const chatUrl = useDebounced(config.agent_chat_url || "", 400);
+  const authHeader = useDebounced(config.agent_auth_header || "", 400);
+  const apiKey = useDebounced(secrets.agent_api_key || "", 400);
   useEffect(() => {
-    if (skillsUrl !== (config.agent_skills_url || "")) return undefined;
+    if (
+      skillsUrl !== (config.agent_skills_url || "") ||
+      chatUrl !== (config.agent_chat_url || "") ||
+      authHeader !== (config.agent_auth_header || "") ||
+      apiKey !== (secrets.agent_api_key || "")
+    ) {
+      return undefined;
+    }
     let cancelled = false;
     setSkillsBusy(true);
     api
@@ -162,10 +178,10 @@ export default function Wizard() {
           agent_skills_url: skillsUrl,
           // So the server can apply the same-origin rule before letting the
           // credential travel to a second address.
-          agent_chat_url: config.agent_chat_url || "",
-          agent_auth_header: config.agent_auth_header || "",
+          agent_chat_url: chatUrl,
+          agent_auth_header: authHeader,
         },
-        secrets: { agent_api_key: secrets.agent_api_key || "" },
+        secrets: { agent_api_key: apiKey },
       })
       .then((r) => {
         if (cancelled) return;
@@ -190,6 +206,9 @@ export default function Wizard() {
     // read as a key that did not work.
   }, [
     skillsUrl,
+    chatUrl,
+    authHeader,
+    apiKey,
     config.agent_skills_url,
     config.agent_chat_url,
     config.agent_auth_header,

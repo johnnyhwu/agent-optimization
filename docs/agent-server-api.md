@@ -420,6 +420,13 @@ so on screen rather than discovering it as a 401.
 If your two endpoints are on different hosts and both need authentication, put
 them behind one address; there is deliberately no second key field.
 
+The same rule survives a redirect. If your endpoint answers `302` to another
+host, the platform follows it — the request is retried there, but **without the
+credential**. A credential goes to the address it was entered for and nowhere
+else, and a `Location` header is not a place to decide that from. A redirect
+within your own origin keeps it, as does the plain `http://` → `https://`
+upgrade of the same host.
+
 ### What to return when a credential is missing or wrong
 
 **401** or **403**, with an OpenAI error envelope if you have one. The platform

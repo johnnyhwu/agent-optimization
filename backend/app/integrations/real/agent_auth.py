@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+import httpx
+
 # The header a credential goes in when nobody says otherwise, and the one name
 # whose value is prefixed. Every other header carries the key verbatim: an
 # `X-Api-Key: Bearer abc` would be rejected by the gateway that asked for it.
@@ -102,3 +104,89 @@ def redact(text: str, api_key: str | None) -> str:
     # The full header value first, so `Bearer abc` becomes one marker rather
     # than the word "Bearer" followed by one.
     return text.replace(BEARER_PREFIX + key, "<redacted>").replace(key, "<redacted>")
+
+
+def _is_https_upgrade(origin: str, url: str) -> bool:
+    """Is this the one redirect that may keep the credential? `http://h` → `https://h`.
+
+    Mirrors the exception httpx makes for `Authorization` (`_is_https_redirect`),
+    so binding the credential to an origin does not break the server that is
+    reached over http and immediately upgrades. Anything else — another host,
+    another port, a downgrade — is a different address.
+    """
+    a, b = urlsplit(origin), urlsplit(url)
+    if not a.hostname or a.hostname.lower() != (b.hostname or "").lower():
+        return False
+    try:
+        return (
+            a.scheme.lower() == "http"
+            and (a.port or 80) == 80
+            and b.scheme.lower() == "https"
+            and (b.port or 443) == 443
+        )
+    except ValueError:
+        return False
+
+
+class OriginBoundTransport(httpx.AsyncBaseTransport):
+    """A transport that drops the credential header once the request leaves its origin.
+
+    `follow_redirects=True` means the client may send the request somewhere
+    other than the URL that was typed. httpx already strips `Authorization` on a
+    cross-origin redirect — and only that name, because it is the only one it
+    knows to be a credential. A server configured with `X-Api-Key` would have
+    its key carried to wherever a `302` pointed, which is the endpoint binding
+    in `services/user_secrets.py` broken by a response.
+
+    Every hop in a redirect chain reaches the transport with its real URL, so
+    this is the layer that can tell. Applied to both header names rather than
+    only the custom one: two rules that mostly agree are harder to reason about
+    than one, and this one is the rule the platform actually promises.
+    """
+
+    def __init__(
+        self, inner: httpx.AsyncBaseTransport, *, header_name: str, origin: str
+    ) -> None:
+        self._inner = inner
+        self._header = header_name
+        self._origin = origin
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if not same_origin(self._origin, target) and not _is_https_upgrade(
+            self._origin, target
+        ):
+            # Conditional because httpx may have removed it already: it does
+            # its own stripping for `Authorization`, and deleting a header that
+            # is not there raises.
+            if self._header in request.headers:
+                del request.headers[self._header]
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def credentialed_client(
+    url: str,
+    *,
+    timeout_s: float,
+    api_key: str = "",
+    auth_header: str = "",
+) -> httpx.AsyncClient:
+    """The client for talking to one agent endpoint, credential bound to its origin.
+
+    With no key this is the plain client it has always been — same timeout, same
+    redirect following, no transport in the way.
+    """
+    headers = auth_headers(api_key, auth_header)
+    if not headers:
+        return httpx.AsyncClient(timeout=timeout_s, follow_redirects=True)
+    name = next(iter(headers))
+    return httpx.AsyncClient(
+        timeout=timeout_s,
+        follow_redirects=True,
+        transport=OriginBoundTransport(
+            httpx.AsyncHTTPTransport(), header_name=name, origin=url
+        ),
+    )

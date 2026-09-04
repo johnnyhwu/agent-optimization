@@ -7,6 +7,7 @@ which is exactly why they need a checker rather than a code review.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -361,4 +362,66 @@ async def test_a_401_from_a_skills_endpoint_the_key_never_reached(real):
     )
     report = await run_conformance(CHAT_URL, "https://elsewhere.test/skills", api_key="sk-42")
 
-    assert "none was sent" in case(report, "skills").result.error
+    error = case(report, "skills").result.error
+    assert "was not sent to it" in error
+    assert "different server from the chat endpoint" in error
+    # The one thing it must not say: that the key they typed is wrong.
+    assert "was refused" not in error
+
+
+# --- The checklist always comes back ------------------------------------------
+#
+# Six live model calls is six chances for the server to stop answering. Losing
+# the whole page to the seventh minute of a slow one taught nobody anything, and
+# `frontend/nginx.conf.template` gives up on a request at 660s regardless — so
+# the run is bounded, and what it established before it stopped is still shown.
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_server_that_stops_answering_still_produces_a_report():
+    """Before this, anything after the first case raised straight out of the
+    service and the endpoint answered 500 with no report in it."""
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, json=completion("ok"))
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    respx.post(CHAT_URL).mock(side_effect=handler)
+    report = await run_conformance(CHAT_URL, "")
+
+    assert case(report, "chat").result.ok is True
+    stopped = case(report, "checklist")
+    assert stopped.result.ok is False
+    assert "stopped answering partway through" in stopped.result.error
+    # A case that did not run is not a case that passed.
+    assert report.tier == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_whole_checklist_is_bounded():
+    """The per-case timeout bounds one call; six of them at the default is
+    twelve minutes, which is longer than the proxy in front of this will wait."""
+    async def slow(request):
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json=completion("ok"))
+
+    respx.post(CHAT_URL).mock(side_effect=slow)
+    report = await run_conformance(CHAT_URL, "", budget_s=0.02)
+
+    stopped = case(report, "checklist")
+    assert "ran out of time" in stopped.result.error
+    # Not a silent truncation: the report says the cases below it were skipped.
+    assert "did not run is not a case that passed" in stopped.why
+
+
+def test_the_budget_leaves_room_for_the_proxy_in_front_of_it():
+    """`frontend/nginx.conf.template` answers 504 at 660s, which reaches the
+    user as a failure with no message. Whatever this is set to, it has to lose
+    that race on purpose."""
+    from app.services.agent_conformance import CHECKLIST_BUDGET_S
+
+    assert CHECKLIST_BUDGET_S < 660

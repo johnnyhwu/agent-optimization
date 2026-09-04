@@ -187,3 +187,93 @@ def test_the_header_name_travels_with_the_key(real):
     )
     assert seams.agent._headers()["X-Api-Key"] == "sk-42"
     assert seams.workspace.auth_header == "X-Api-Key"
+
+
+# --- The credential does not survive leaving its origin -----------------------
+#
+# `follow_redirects=True` means the client may send the request somewhere other
+# than the URL that was typed. httpx strips `Authorization` on a cross-origin
+# redirect, and only that name — a server configured with `X-Api-Key` had its
+# key carried to wherever a 302 pointed, which is this platform's endpoint
+# binding broken by a response rather than by a setting.
+
+ELSEWHERE = "https://elsewhere.test/sink"
+
+
+def _redirect_chain(to: str = ELSEWHERE):
+    respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(307, headers={"Location": to})
+    )
+    return respx.post(to).mock(return_value=httpx.Response(200, json=completion("ok")))
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("header", [None, "X-Api-Key", "authorization"])
+async def test_a_redirect_to_another_host_arrives_without_the_credential(header):
+    sink = _redirect_chain()
+    await HttpAgentClient(
+        chat_url=CHAT_URL, api_key="sk-secret-42", auth_header=header
+    ).call("q", "cid", "user")
+
+    sent = sink.calls[0].request.headers
+    assert not [k for k, v in sent.items() if "sk-secret-42" in v], (
+        f"the credential reached {ELSEWHERE} in a {header or 'Authorization'} header"
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_redirect_within_the_same_origin_keeps_it():
+    """Stripping on every redirect would break the server that answers on a
+    path it redirects to, which is an ordinary thing for a gateway to do."""
+    same = "https://agent.test/v1/chat/completions/"
+    sink = _redirect_chain(same)
+    await HttpAgentClient(
+        chat_url=CHAT_URL, api_key="sk-secret-42", auth_header="X-Api-Key"
+    ).call("q", "cid", "user")
+    assert sink.calls[0].request.headers["X-Api-Key"] == "sk-secret-42"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_http_to_https_upgrade_on_the_same_host_keeps_it():
+    """The one exception httpx itself makes, kept: a server reached over http
+    that immediately upgrades is the same server, and losing the credential
+    there would break a working deployment to close nothing."""
+    plain = "http://agent.test/v1/chat/completions"
+    respx.post(plain).mock(
+        return_value=httpx.Response(307, headers={"Location": CHAT_URL})
+    )
+    sink = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=completion("ok"))
+    )
+    await HttpAgentClient(
+        chat_url=plain, api_key="sk-secret-42", auth_header="X-Api-Key"
+    ).call("q", "cid", "user")
+    assert sink.calls[0].request.headers["X-Api-Key"] == "sk-secret-42"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_skills_endpoint_is_bound_the_same_way():
+    respx.get(SKILLS_URL).mock(
+        return_value=httpx.Response(307, headers={"Location": "https://elsewhere.test/s"})
+    )
+    sink = respx.get("https://elsewhere.test/s").mock(
+        return_value=httpx.Response(200, json={"version": "v1", "skills": {}})
+    )
+    await HttpWorkspaceClient(
+        skills_url=SKILLS_URL, api_key="sk-secret-42", auth_header="X-Api-Key"
+    ).get_workspace()
+    assert "x-api-key" not in sink.calls[0].request.headers
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_unauthenticated_client_still_follows_redirects():
+    """The transport is only in the way when there is something to protect."""
+    sink = _redirect_chain()
+    resp = await HttpAgentClient(chat_url=CHAT_URL).call("q", "cid", "user")
+    assert resp.response == "ok"
+    assert "authorization" not in sink.calls[0].request.headers

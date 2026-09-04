@@ -95,6 +95,16 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // returned immediately, which is what makes the dialog check the URL it opened
   // with the moment it opens.
   const agentUrl = useDebounced(form?.agent_skills_url ?? "", 400);
+  // The credential is debounced for the same reason the URL is, and it is the
+  // stronger case: every keystroke used to be its own request to the agent
+  // server carrying a half-typed key, which is a burst of failed authentication
+  // attempts against a gateway that may well be counting them.
+  // The chat URL is here because it decides whether the credential may travel
+  // to the skills endpoint at all — a status line computed against the URL that
+  // was in the field two edits ago can be green for the wrong reason.
+  const agentChat = useDebounced(form?.agent_chat_url ?? "", 400);
+  const agentHeader = useDebounced(form?.agent_auth_header ?? "", 400);
+  const agentKey = useDebounced(secrets.agent_api_key ?? "", 400);
 
   // Whether the probe can say anything at all. With either seam faked, the
   // workspace it would read is canned: the skills are make-believe, so a
@@ -114,6 +124,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   }, [
     Boolean(form),
     form?.agent_skills_url,
+    form?.agent_chat_url,
     form?.agent_auth_header,
     secrets.agent_api_key,
     simulated,
@@ -125,7 +136,14 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     // Still settling — the debounced value is a URL the field no longer shows.
     // Skipping here is also what stops the probe firing once against the empty
     // string before the defaults have landed.
-    if (agentUrl !== (form.agent_skills_url ?? "")) return undefined;
+    if (
+      agentUrl !== (form.agent_skills_url ?? "") ||
+      agentChat !== (form.agent_chat_url ?? "") ||
+      agentHeader !== (form.agent_auth_header ?? "") ||
+      agentKey !== (secrets.agent_api_key ?? "")
+    ) {
+      return undefined;
+    }
     let cancelled = false;
     api
       .agentSkills({
@@ -133,10 +151,10 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
           agent_skills_url: agentUrl,
           // Sent so the server can decide whether the credential may travel to
           // the skills endpoint: same host, or nothing.
-          agent_chat_url: form.agent_chat_url || "",
-          agent_auth_header: form.agent_auth_header || "",
+          agent_chat_url: agentChat,
+          agent_auth_header: agentHeader,
         },
-        secrets: { agent_api_key: secrets.agent_api_key },
+        secrets: { agent_api_key: agentKey },
       })
       .then((r) => {
         if (cancelled) return;
@@ -191,7 +209,11 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     Boolean(form),
     simulated,
     agentUrl,
+    agentChat,
+    agentHeader,
+    agentKey,
     form?.agent_skills_url,
+    form?.agent_chat_url,
     form?.agent_auth_header,
     secrets.agent_api_key,
     probeNonce,

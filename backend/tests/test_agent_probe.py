@@ -16,10 +16,15 @@ import respx
 from app.integrations.base import NOT_READY, Trace, Workspace
 from app.services import agent_probe
 from app.services.agent_probe import (
+    CREDENTIAL_ABSENT,
+    CREDENTIAL_SENT,
+    CREDENTIAL_WITHHELD,
     PROBE_SKILL_PATH,
+    credential_state,
     make_probe_skill,
     probe_chat,
     probe_skills,
+    with_auth_hint,
 )
 
 CHAT_URL = "https://agent.test/v1/chat/completions"
@@ -365,18 +370,18 @@ async def test_the_probe_uses_the_url_it_was_given_not_the_environment(real):
 # accurate and tells them nothing.
 
 def test_a_refusal_says_that_no_credential_was_sent():
-    from app.services.agent_probe import with_auth_hint
-
-    hinted = with_auth_hint("agent server returned 401: unauthorized", has_key=False)
+    hinted = with_auth_hint(
+        "agent server returned 401: unauthorized", credential=CREDENTIAL_ABSENT
+    )
     assert "requires a credential and none was sent" in hinted
     # The agent's own words survive: they are the half that says which server.
     assert "unauthorized" in hinted
 
 
 def test_a_refusal_of_a_key_we_did_send_says_something_different():
-    from app.services.agent_probe import with_auth_hint
-
-    hinted = with_auth_hint("agent server returned 403: forbidden", has_key=True)
+    hinted = with_auth_hint(
+        "agent server returned 403: forbidden", credential=CREDENTIAL_SENT
+    )
     assert "was refused" in hinted
     assert "header other than Authorization" in hinted
 
@@ -384,12 +389,10 @@ def test_a_refusal_of_a_key_we_did_send_says_something_different():
 def test_every_other_failure_is_left_alone():
     """A connection refused is not an authentication problem, and telling
     someone to add an API key would send them to fix the wrong thing."""
-    from app.services.agent_probe import with_auth_hint
-
     for error in ("could not reach the agent server: [Errno 111]",
                   "agent server returned 500: boom",
                   ""):
-        assert with_auth_hint(error, has_key=False) == error
+        assert with_auth_hint(error, credential=CREDENTIAL_ABSENT) == error
 
 
 @respx.mock
@@ -422,3 +425,53 @@ async def test_the_chat_probe_carries_a_credential(real):
     await probe_chat(CHAT_URL, 5.0, with_override=False, api_key="sk-42")
 
     assert route.calls[0].request.headers["authorization"] == "Bearer sk-42"
+
+
+def test_a_key_that_was_withheld_is_not_a_key_that_was_refused():
+    """The case that had two of its three call sites wrong. A key configured
+    for the chat endpoint is not sent to a skills endpoint on another server,
+    so "check the key itself" sends someone to re-check a key that was never
+    used — and never mentions the reason it was not."""
+    hinted = with_auth_hint(
+        "agent server returned 401: unauthorized", credential=CREDENTIAL_WITHHELD
+    )
+    assert "was not sent to it" in hinted
+    assert "different server from the chat endpoint" in hinted
+    assert "was refused" not in hinted
+
+
+def test_which_of_the_three_happened():
+    same = "https://agent.test/skills"
+    other = "https://elsewhere.test/skills"
+    chat = "https://agent.test/v1/chat/completions"
+
+    assert credential_state("") == CREDENTIAL_ABSENT
+    assert credential_state("   ") == CREDENTIAL_ABSENT
+    # No target named: the caller is asking about the chat endpoint itself,
+    # which is the address the credential belongs to.
+    assert credential_state("sk-42") == CREDENTIAL_SENT
+    assert credential_state("sk-42", chat_url=chat, target_url=same) == CREDENTIAL_SENT
+    assert (
+        credential_state("sk-42", chat_url=chat, target_url=other)
+        == CREDENTIAL_WITHHELD
+    )
+    # Withholding needs a key to withhold.
+    assert credential_state("", chat_url=chat, target_url=other) == CREDENTIAL_ABSENT
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_the_skills_probe_says_the_credential_was_withheld(real):
+    """End to end, because this is the sentence a real screen shows: the whole
+    point of the fix is that the probe computes the state rather than asking
+    whether a key exists."""
+    respx.get("https://elsewhere.test/skills").mock(
+        return_value=httpx.Response(401, text="unauthorized")
+    )
+    result = await probe_skills(
+        "https://elsewhere.test/skills",
+        chat_url=CHAT_URL,
+        api_key="sk-42",
+    )
+    assert result.skills.ok is False
+    assert "was not sent to it" in result.skills.error

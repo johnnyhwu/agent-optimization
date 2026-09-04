@@ -47,7 +47,7 @@ import httpx
 
 from app.config import settings
 from app.integrations.base import Workspace, derived_version
-from app.integrations.real.agent_auth import auth_headers, redact
+from app.integrations.real.agent_auth import auth_headers, credentialed_client, redact
 
 
 class WorkspaceFetchError(RuntimeError):
@@ -111,8 +111,13 @@ class HttpWorkspaceClient:
 
     async def _get(self) -> Any:
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_s, follow_redirects=True
+            # See `credentialed_client`: a redirect off this origin loses the
+            # credential rather than carrying it to whatever answered.
+            async with credentialed_client(
+                self.skills_url,
+                timeout_s=self.timeout_s,
+                api_key=self.api_key,
+                auth_header=self.auth_header,
             ) as client:
                 resp = await client.get(
                     self.skills_url, headers=auth_headers(self.api_key, self.auth_header)
