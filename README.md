@@ -191,7 +191,7 @@ button.
   which is often all you wanted.
 - **Skill override.** The composer loads every file under the agent's `skills/`
   directory. Edit a `SKILL.md`, add a reference file, delete one — and the whole
-  set travels with *this one call* as `metadata.skills`, replacing the agent's
+  set travels with *this one call* as `skill_studio.skills`, replacing the agent's
   directory for it. Nothing is written back to the agent server.
 - **Stale-snapshot check.** Before each send the platform re-reads the agent's
   version. If it moved since the editor read it, you are asked
@@ -230,22 +230,29 @@ button.
 > The UI says as much rather than implying a check that does not exist.
 > (An **optimization run** does check, before it spends an hour: see below.)
 
-Two endpoints are needed on the **agent server** — the full contract, written so
-an agent developer can implement from it alone with no other context, is
-**[`docs/agent-server-api.md`](docs/agent-server-api.md)**:
+Two endpoints on the **agent server**, given as two absolute URLs — nothing is
+appended to a base. Only the first is required. The full contract, written so an
+agent developer can implement from it alone with no other context, is
+**[`docs/agent-server-api.md`](docs/agent-server-api.md)**, and it is readable
+inside the app under Documentation.
 
 ```
-GET  /skills    -> {"skills": {relative path: text}, "version": "..."}
-                   every skill file, in full. `{}` is a valid answer — an agent
-                   with no skills works. `version` is optional but recommended;
-                   without it the platform derives one by hashing the files,
-                   which cannot see a model or prompt change.
-POST /execute   -> {"content": "the answer"}
-                   reads metadata.trace_data.trace_id and uses it as the Langfuse
-                   trace id; metadata.timeout_s as this call's budget, replacing
-                   its own hard-coded limit; and an optional metadata.skills,
-                   the complete file set for this call only — replacing its
-                   directory, never persisted.
+POST {chat endpoint}    an ordinary OpenAI chat completions call. Everything
+                        specific to this platform rides in one extra top-level
+                        key, `skill_studio`: `trace_data.trace_id` to be used as
+                        the Langfuse trace id, `timeout_s` as this call's budget
+                        replacing the server's own hard-coded limit, and an
+                        optional `skills` — the complete file set for this call
+                        only, replacing the server's directory, never persisted.
+
+GET  {skills endpoint}  -> {"skills": {relative path: text}, "version": "..."}
+                        every skill file, in full. Optional: without it,
+                        evaluation still runs and the playground, the
+                        skill-coverage warning and optimization go without.
+                        `{}` is a valid answer — an agent with no skills works.
+                        `version` is optional but recommended; without it the
+                        platform derives one by hashing the files, which cannot
+                        see a model or prompt change.
 ```
 
 One rule on the agent's side carries the design: `skills` **replaces** its
@@ -510,12 +517,12 @@ so on.
 
 | env var | seam | what `real` means |
 |---|---|---|
-| `AGENT_IMPL` | `AgentClient` | POST `{"message", "metadata"}` to the agent server's `/execute` (`AGENT_BASE_URL`), with the correlation id, run trigger, and eval set tag in `metadata.trace_data`, and this call's time budget in `metadata.timeout_s` (spec §3.3) |
+| `AGENT_IMPL` | `AgentClient` | POST an OpenAI chat completion to `AGENT_CHAT_URL`, with the correlation id, run trigger and eval set tag in `skill_studio.trace_data`, and this call's time budget in `skill_studio.timeout_s` (spec §3.3) |
 | `JUDGE_IMPL` | `JudgeClient` | LLM-as-judge over an OpenAI-compatible endpoint (`LLM_BASE_URL`, `JUDGE_MODEL`) |
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
 | `SYNTHESIS_IMPL` | `SynthesisClient` | draft an expected reasoning process from a trace, for a question being promoted out of the playground. Shares the LLM endpoint with the judge and the diagnosis; `SYNTHESIS_MODEL` picks the model |
-| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's skill files: `GET {AGENT_BASE_URL}/skills` ([contract](docs/agent-server-api.md)). Read-only, so it is the cheapest one to switch on first — and it gates the Run-eval Start button and the playground's Connect, so it is also the first one worth having |
+| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's skill files: `GET AGENT_SKILLS_URL` ([contract](docs/agent-server-api.md)). Read-only, so it is the cheapest one to switch on first. With no URL there is simply no workspace client: evaluation runs regardless, and the playground, the coverage warning and optimization are what say so |
 | `OPTIMIZER_IMPL` | `OptimizerClient` | the model that edits the skill in Optimize — reflect, merge and rank all call it and nothing else (`LLM_BASE_URL`, `OPTIMIZER_MODEL`). The fake one returns deterministic patches, which is enough to exercise accept, reject and multi-file diffs end to end |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
@@ -542,11 +549,12 @@ while the endpoint they authenticate against is unchanged.
 
 ```bash
 # minimum for "upload a real eval set, run it, see real results"
-AGENT_IMPL=real  AGENT_BASE_URL=https://your-agent-server
+AGENT_IMPL=real  AGENT_CHAT_URL=https://your-agent-server/v1/chat/completions
 JUDGE_IMPL=real  LLM_BASE_URL=https://your-llm/v1  LLM_API_KEY=...  JUDGE_MODEL=...
 
-# the agent's skill files — read-only, and it gates Start and Connect
-WORKSPACE_IMPL=real  AGENT_BASE_URL=https://your-agent-server
+# the agent's skill files — read-only, and optional: without it evaluation still
+# runs, and the playground, the coverage warning and optimization go without
+WORKSPACE_IMPL=real  AGENT_SKILLS_URL=https://your-agent-server/skills
 ```
 Then check the wiring before spending a run on it:
 ```bash
@@ -554,9 +562,11 @@ make preflight   # OK / FAIL per seam, with the reason
 ```
 
 **Prerequisite for the trace seam (spec §3.3):** the agent server must read
-`metadata.trace_data.trace_id` out of the `/execute` request body and use it
-as its Langfuse trace id. Without that the platform has no way to find the
-trace it just caused. The full metadata shape sent on every call is:
+`skill_studio.trace_data.trace_id` out of the request body and use it as its
+Langfuse trace id. Without that the platform has no way to find the trace it
+just caused — and optimization will not start at all, because the check that
+proves a candidate skill reached the model is a read of that trace. The full
+shape sent on every call is:
 ```json
 {"trace_data": {"trace_id": "...", "session_id": "...", "user_id": "...", "tags": ["eval_<eval_set_name>"]},
  "timeout_s": 115}
@@ -564,7 +574,7 @@ trace it just caused. The full metadata shape sent on every call is:
 `trace_id` and `session_id` are the same value (each question is its own
 correlation unit); `user_id` is the subject who triggered the run. A playground
 attempt sends the same shape with `tags: ["playground"]`, plus
-`metadata.skills` when the agent's skill files were edited
+`skill_studio.skills` when the agent's skill files were edited
 ([the playground](#the-playground)) — an eval run never sends that key at all.
 
 `timeout_s` is the budget the agent server should give **itself** for this one
@@ -785,7 +795,8 @@ list, with the authorization rule for each endpoint, is spec §9. In brief:
 | Group | Endpoints |
 |---|---|
 | Session | `GET /health`, `/users`, `/users/lookup?username=`, `/me`, `/run-config/defaults` |
-| Agent | `GET /agent/skills?agent_base_url=` — the "Run eval" dialog's pre-flight: reaching it proves the agent server is there and hands back its skill list |
+| Agent | `GET /agent/skills?agent_skills_url=` (free, automatic), `POST /agent/chat-probe` (one real question; never automatic), `POST /agent/conformance` (the whole acceptance checklist) |
+| Docs | `GET /docs/{name}` — the reference documentation, served as the repository's own markdown so there is only ever one copy |
 | Eval sets | `POST /eval-sets`, `GET /eval-sets` (paged + filtered), `GET·PATCH·DELETE /eval-sets/{id}`, `PUT /eval-sets/{id}/roles`, `GET /eval-sets/metadata/keys`, `POST .../judge-prompt/verify`, `POST .../judge-prompt/reviewed` |
 | Questions | `GET /eval-sets/{id}/questions`, `GET /eval-sets/{id}/skills`, `PATCH .../questions/{qpk}` (optimistic lock → 409) |
 | Runs | `POST·GET /eval-sets/{id}/runs` (paged), `GET·DELETE .../runs/{run_id}`, `POST .../runs/{run_id}/cancel`, `GET .../runs/{run_id}/progress` (SSE) |

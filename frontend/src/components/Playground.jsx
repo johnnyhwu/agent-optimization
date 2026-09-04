@@ -69,7 +69,7 @@ function useAttemptsCollapsed() {
 // each send compares against.
 //
 // **Everything here hangs off one connected agent, and that is now explicit.**
-// The workspace used to be read on mount from whatever `AGENT_BASE_URL` the
+// The workspace used to be read on mount from whatever agent URL the
 // backend was started with, while the question went to whichever URL was typed
 // into the endpoints panel. Nothing enforced that these were the same server, so
 // the failure was silent and total: the editor showed agent A's skill files, the
@@ -163,7 +163,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const active = attempts.find((a) => a.id === activeId) || null;
 
   // The defaults decide where this screen starts: with a fake workspace seam
-  // there is no agent to connect to, and with an AGENT_BASE_URL in the
+  // there is no agent to connect to, and with an AGENT_CHAT_URL in the
   // environment there is one obvious answer — connecting to it keeps every
   // existing single-agent deployment working exactly as it did, rather than
   // making everyone press a button to get back to where they already were.

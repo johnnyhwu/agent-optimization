@@ -377,7 +377,7 @@ test("a field the developer cleared is absent, not an empty string", () => {
   // thinking better of it left "" in the box, which is a 422 rather than the
   // "use the environment" that every blank field on this form means.
   const sent = cleanConfig({
-    agent_base_url: "http://agent:8080",
+    agent_chat_url: "http://agent:8080/v1/chat/completions",
     agent_timeout_s: "",
     langfuse_host: "   ",
     judge_model: null,
@@ -386,7 +386,7 @@ test("a field the developer cleared is absent, not an empty string", () => {
     failure_only: false,
   });
   assert.deepEqual(sent, {
-    agent_base_url: "http://agent:8080",
+    agent_chat_url: "http://agent:8080/v1/chat/completions",
     // A real false is a value, not a blank — dropping it would silently turn
     // "off" into "whatever the server defaults to".
     concurrency: 4,

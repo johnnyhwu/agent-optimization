@@ -220,7 +220,7 @@ def _intended_verdict(question: str) -> str:
 
 
 class FakeAgentClient:
-    # REPLACE WITH REAL IMPL: POST the agent HTTP server's /execute endpoint,
+    # REPLACE WITH REAL IMPL: POST the agent server's chat completions endpoint,
     # passing correlation_id as metadata.trace_data.trace_id (§6.2) so the
     # agent applies it to its Langfuse trace.
     async def call(
@@ -400,7 +400,7 @@ class FakeSynthesisClient:
 
 
 class FakeWorkspaceClient:
-    # REPLACE WITH REAL IMPL: GET {agent}/skills from the agent server.
+    # REPLACE WITH REAL IMPL: GET the agent server's skills endpoint.
     async def get_workspace(self) -> Workspace:
         await asyncio.sleep(fc.SKILL_FETCH_LATENCY_S)
         return Workspace(
