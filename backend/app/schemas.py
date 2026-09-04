@@ -942,6 +942,20 @@ class ImportPreview(BaseModel):
     sources: list[PreviewSource] = Field(default_factory=list)
 
 
+class DocOut(BaseModel):
+    """One reference document, as the markdown it is stored as.
+
+    Rendered on the client rather than here: the source of truth is a file in
+    the repository, and turning it into HTML on the way out would put a second
+    formatting decision between the file and the reader.
+    """
+
+    name: str
+    title: str
+    summary: str = ""
+    markdown: str
+
+
 class CheckOut(BaseModel):
     """One connection check's answer.
 

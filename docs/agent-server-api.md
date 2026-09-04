@@ -1,41 +1,65 @@
 # Agent Server API
 
-**What an agent server must implement to be evaluated, explored and optimised by
+**What your agent server must expose to be evaluated, explored and optimised by
 Skill Studio.**
 
 This document is self-contained. You do not need to know anything about Skill
-Studio to implement against it, and you should not need to read any other file
-in this repository. If something here is ambiguous, that is a bug in this
-document — please say so rather than guessing.
+Studio to implement against it, and you should not need to read any other file in
+this repository. If something here is ambiguous, that is a bug in this document —
+please say so rather than guessing.
 
-**Two endpoints. That is the whole contract.**
+**Two endpoints, and only the first is required.**
 
 ```
-POST /execute   answer one question
-GET  /skills    list the skill files you are running with
+POST {chat endpoint}     answer one question   (OpenAI chat completions)
+GET  {skills endpoint}   list your skill files (optional)
 ```
 
-Both live on the same host. Skill Studio is configured with one base URL
-(`AGENT_BASE_URL`, e.g. `http://agent-host:8080`) and appends these paths to it.
+They are two **absolute URLs**, entered separately in Skill Studio. Nothing is
+appended to a base URL and no path is imposed: your chat endpoint may sit under
+any prefix, behind any gateway, on a different host from your skills endpoint.
+
+**Start with the chat endpoint you already have.** If your agent is fronted by an
+OpenAI-compatible chat completions endpoint — which most are — you can be
+evaluated today, and read the rest of this when you want more.
 
 ---
 
 ## Table of contents
 
-1. [Vocabulary](#1-vocabulary)
-2. [`POST /execute`](#2-post-execute)
-3. [`GET /skills`](#3-get-skills)
-4. [The skills override, in detail](#4-the-skills-override-in-detail)
-5. [Path safety](#5-path-safety)
-6. [The version string](#6-the-version-string)
-7. [Errors, and what each one causes](#7-errors-and-what-each-one-causes)
-8. [The probe marker you will see in your logs](#8-the-probe-marker-you-will-see-in-your-logs)
-9. [Acceptance checklist](#9-acceptance-checklist)
-10. [A minimal reference implementation](#10-a-minimal-reference-implementation)
+1. [What each endpoint unlocks](#1-what-each-endpoint-unlocks)
+2. [Vocabulary](#2-vocabulary)
+3. [Chat endpoint](#3-chat-endpoint)
+4. [Skills endpoint](#4-skills-endpoint)
+5. [The skills override, in detail](#5-the-skills-override-in-detail)
+6. [Path safety](#6-path-safety)
+7. [The version string](#7-the-version-string)
+8. [Errors, and what each one causes](#8-errors-and-what-each-one-causes)
+9. [The probes you will see in your logs](#9-the-probes-you-will-see-in-your-logs)
+10. [Acceptance checklist](#10-acceptance-checklist)
+11. [A minimal reference implementation](#11-a-minimal-reference-implementation)
+12. [Migrating from the previous protocol](#12-migrating-from-the-previous-protocol)
 
 ---
 
-## 1. Vocabulary
+## 1. What each endpoint unlocks
+
+Skill Studio works with what you give it, and says what you are missing rather
+than refusing to start.
+
+| You implement | You get |
+|---|---|
+| Chat endpoint | **Evaluation** — run an eval set against your agent and see the score, the answers and the grader's verdicts. |
+| ＋ Skills endpoint | **Playground** (view and edit your skill files, ask one question at a time), skill-coverage warnings, and staleness detection. |
+| ＋ Skills override applied<br>＋ Trace id reused | **Optimization** — hundreds of rollouts against candidate versions of a skill, scored and compared. |
+
+The last row is not a third endpoint. It is two behaviours of the chat endpoint
+described in §5 and §3.4, and Skill Studio checks both before it lets an
+optimization run start.
+
+---
+
+## 2. Vocabulary
 
 | Term | Meaning |
 |---|---|
@@ -43,29 +67,37 @@ Both live on the same host. Skill Studio is configured with one base URL
 | **skill** | A **directory** of instructions your agent can load — typically `SKILL.md` plus reference files beside it. Not a single string. |
 | **skill file** | One file inside a skill directory, addressed by a path relative to the root of your skills directory, e.g. `billing/references/refunds.md`. |
 | **workspace** | All your skill files together, as one flat `{path: text}` map. |
-| **override** | A set of skill files supplied with a single `/execute` call, to be used **for that call only**. |
+| **override** | A set of skill files supplied with a single chat call, to be used **for that call only**. |
 | **trace** | The record of what your agent did, written to Langfuse. Skill Studio reads it back to show the developer each step. |
 
 ---
 
-## 2. `POST /execute`
+## 3. Chat endpoint
 
 Answer one question. This is a **single-shot** endpoint — there is no
 conversation, no session to keep, and no state carried between calls.
+
+It is an ordinary OpenAI chat completions endpoint. Everything Skill Studio needs
+beyond the standard rides in one extra top-level key, `skill_studio`.
 
 ### Request
 
 ```jsonc
 {
-  "message": "What was ACME's outstanding balance at the end of Q2?",
-  "metadata": {
+  "model": "default",
+  "messages": [
+    {"role": "user",
+     "content": "What was ACME's outstanding balance at the end of Q2?"}
+  ],
+  "stream": false,
+  "skill_studio": {
+    "timeout_s": 115.0,
     "trace_data": {
       "trace_id": "9f3e11c8a2b04d7e8c1f5a6b7d8e9f01",
       "session_id": "9f3e11c8a2b04d7e8c1f5a6b7d8e9f01",
       "user_id": "alice",
       "tags": ["eval_billing"]
     },
-    "timeout_s": 115.0,
     "skills": {
       "billing/SKILL.md": "---\nname: billing\n---\n# Billing\n1. ...",
       "billing/references/refunds.md": "# Refund rules\n..."
@@ -74,63 +106,77 @@ conversation, no session to keep, and no state carried between calls.
 }
 ```
 
-| Field | Type | Required | Meaning |
+| Field | Type | Always sent | Meaning |
 |---|---|---|---|
-| `message` | string | **yes** | The question. Answer it. |
-| `metadata.trace_data.trace_id` | string | **yes** | **Use this as your Langfuse trace id.** See below. |
-| `metadata.trace_data.session_id` | string | yes | Same value as `trace_id`. Each question is its own session. |
-| `metadata.trace_data.user_id` | string | yes | Who or what triggered the call. Pass through to Langfuse. |
-| `metadata.trace_data.tags` | string[] | yes | Labels for the trace. May be empty. Pass through to Langfuse. |
-| `metadata.timeout_s` | float | yes | Your budget for this call, in seconds. See §2.2. |
-| `metadata.skills` | object | **no** | Skill files to use for this call only. See §4. |
+| `model` | string | yes | A constant, `"default"`. **You may ignore it.** It is sent because the OpenAI request schema requires it, and a gateway in front of you will reject a request without one. |
+| `messages` | array | yes | Exactly one `user` message. No system message: your prompt is yours. |
+| `stream` | bool | yes | Always `false`. |
+| `skill_studio.timeout_s` | float | yes | Your budget for this call, in seconds. See §3.3. |
+| `skill_studio.trace_data.trace_id` | string | yes | **Use this as your Langfuse trace id.** See §3.4. |
+| `skill_studio.trace_data.session_id` | string | yes | Currently the same value as `trace_id`. Pass through to Langfuse. |
+| `skill_studio.trace_data.user_id` | string | yes | Who or what triggered the call. Pass through to Langfuse. |
+| `skill_studio.trace_data.tags` | string[] | yes | Labels for the trace. May be empty. Pass through to Langfuse. |
+| `skill_studio.skills` | object | **no** | Skill files to use for this call only. See §5. |
 
 **Ignore any key you do not recognise.** Skill Studio may add fields; a server
 that rejects unknown keys will break on the next release.
 
-### Response
+### 3.1 Why `skill_studio` and not `metadata`
+
+OpenAI's own `metadata` field is specified as at most 16 string→string pairs of
+512 characters. A skill file does not fit, and a strict gateway rejects it
+outright. A namespaced top-level key beside `messages` is the conventional
+alternative — it is exactly what the OpenAI SDKs' `extra_body` parameter flattens
+into — and keeping everything under one key means a gateway that filters unknown
+fields has one thing to allow rather than three.
+
+If you use the OpenAI SDK as a client elsewhere, note that `extra_body` is a
+parameter name, not a wire field: the JSON on the wire has `skill_studio` at the
+top level, as above.
+
+### 3.2 Response
+
+An ordinary chat completion:
 
 ```json
-{ "content": "ACME's outstanding balance at the end of Q2 was $42,180.00." }
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "choices": [
+    {"index": 0,
+     "message": {"role": "assistant",
+                 "content": "ACME's outstanding balance at the end of Q2 was $42,180.00."},
+     "finish_reason": "stop"}
+  ],
+  "usage": {"prompt_tokens": 1200, "completion_tokens": 80, "total_tokens": 1280}
+}
 ```
 
-| Field | Type | Meaning |
-|---|---|---|
-| `content` | string | The agent's answer, as prose. |
+The answer is read from `choices[0].message.content`. It may be a string or the
+content-parts array (`[{"type": "text", "text": "..."}]`), in which case the text
+parts are concatenated.
 
-That is the entire response body. Anything else you return is ignored.
+* `finish_reason: "length"` — the answer is **accepted and graded**, and marked
+  as truncated. It is not a failure.
+* `usage` — recorded if you send it. Optional.
+* `id` — currently ignored.
 
-Three tolerated variants, in case they are cheaper for you than the wrapper:
+**Never return an empty or whitespace-only answer, and never `content: null`
+with only tool calls.** An empty answer is treated as a failure, not as a wrong
+answer — grading `""` would produce a meaningless verdict and hide the real
+problem. If you have nothing to say, return a 5xx with a reason.
 
-* A bare JSON string — `"the answer"` — is accepted.
-* A `text/plain` body is accepted as the answer verbatim.
-* A body that is **not JSON at all** and **opens with `<`** is **rejected**.
-  That rule exists because a proxy or framework error page returning HTTP 200 is
-  not your agent answering, and if it were accepted the platform's LLM judge
-  would grade the markup and record a confident wrong verdict against you.
-  (A JSON body is never subject to this — if you deliberately answer with markup,
-  put it in `content` and it is passed through untouched.)
+**A body that is not JSON and opens with `<` is rejected**, because a proxy or
+framework error page returning HTTP 200 is not your agent answering, and if it
+were accepted the platform's LLM judge would grade the markup and record a
+confident wrong verdict against you. (A JSON body is never subject to this — if
+you deliberately answer with markup, put it in `content` and it passes through
+untouched.)
 
-**Never return an empty or whitespace-only `content`.** It is treated as a
-failure, not as a wrong answer — grading `""` would produce a meaningless
-verdict and hide the real problem. If you have nothing to say, return a 5xx with
-a reason.
+### 3.3 `timeout_s` is your budget for this call
 
-### 2.1 The trace id is load-bearing
-
-Skill Studio mints `trace_id` before calling you and then uses it to find your
-trace in Langfuse afterwards. **If you generate your own trace id instead, every
-feature that reads a trace stops working** — the step-by-step view, the failure
-diagnosis, and the optimizer's reflection stage all go dark, while `/execute`
-itself keeps looking perfectly healthy.
-
-Apply it as the trace id on the trace you write for this call. Nothing else is
-required of your Langfuse usage: whatever you already log — generations, tool
-calls, their inputs and outputs — is what the developer will see.
-
-### 2.2 `timeout_s` is your budget for this call
-
-`timeout_s` replaces whatever fixed limit you would otherwise apply to one
-`/execute`.
+`skill_studio.timeout_s` replaces whatever fixed limit you would otherwise apply
+to one call.
 
 * **Honour it.** A server that ignores it and keeps its own hard-coded limit
   makes the platform's timeout setting one-directional: lowering it works,
@@ -140,7 +186,7 @@ calls, their inputs and outputs — is what the developer will see.
   Callers legitimately send 600 or 1800; a hung request with no ceiling occupies
   a worker forever.
 * **On expiry, return 504 (or another 5xx) with a reason.** Do not silently
-  return a truncated answer — see the rule about empty answers above.
+  return a truncated answer.
 * If the field is absent, fall back to your own default.
 
 The value you receive is already **5 seconds less** than the platform's own wait,
@@ -148,18 +194,35 @@ so under normal conditions **you expire first**. That margin exists precisely so
 your 5xx has time to reach the wire; if the platform gives up first it sees a
 dropped connection, which is far less informative than your error.
 
-> **Note:** a 5xx from `/execute` fails that question and is **not retried** —
-> retrying an already-timed-out call twice more just spends three times as long
-> reaching the same answer. Be aware that **a refused or reset connection is not
-> retried either** today: only the platform's own timeout is. Do not size a
-> restart or redeploy window on the assumption that brief unavailability is
-> absorbed — every question in flight will fail on the first refusal.
+> **Note:** a 5xx fails that question and is **not retried** — retrying an
+> already-timed-out call twice more just spends three times as long reaching the
+> same answer. Be aware that **a refused or reset connection is not retried
+> either** today: only the platform's own timeout is. Do not size a restart or
+> redeploy window on the assumption that brief unavailability is absorbed —
+> every question in flight will fail on the first refusal.
+
+### 3.4 The trace id is load-bearing
+
+Skill Studio mints `trace_id` before calling you and then uses it to find your
+trace in Langfuse afterwards. **If you generate your own trace id instead, every
+feature that reads a trace stops working** — the step-by-step view, the failure
+diagnosis, and the optimizer's reflection stage all go dark, while the chat
+endpoint itself keeps looking perfectly healthy. **Optimization will not start
+at all**, because the check that proves a candidate skill reached your model is
+a read of that trace.
+
+Apply it as the trace id on the trace you write for this call. Nothing else is
+required of your Langfuse usage: whatever you already log — generations, tool
+calls, their inputs and outputs — is what the developer will see.
 
 ---
 
-## 3. `GET /skills`
+## 4. Skills endpoint
 
 Report the skill files you are currently running with. No parameters.
+
+**Optional.** Without it, evaluation runs normally; the playground, the
+skill-coverage warning and optimization are what go without.
 
 ### Response
 
@@ -177,7 +240,7 @@ Report the skill files you are currently running with. No parameters.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `skills` | object | **yes** | Flat `{relative path: full file text}`. May be `{}`. |
-| `version` | string | no | Changes whenever your behaviour changes. See §6. |
+| `version` | string | no | Changes whenever your behaviour changes. See §7. |
 
 Rules for `skills`:
 
@@ -190,8 +253,7 @@ Rules for `skills`:
 * **Skip binaries** that will not decode as UTF-8 — but skip them individually
   rather than failing the whole request.
 * **`{}` is a valid answer.** An agent with no skill files is a supported
-  configuration: evaluation runs against it normally (the UI shows a note when
-  the questions are tagged with skills you do not have), and the playground opens
+  configuration: evaluation runs against it normally, and the playground opens
   with an empty file list you can still add to.
 
 If you cannot read your own skills directory, return **5xx with the reason**.
@@ -199,30 +261,20 @@ Never return `{"skills": {}}` to mean "something went wrong" — "this agent has
 skills" and "this agent is broken" must stay distinguishable, or a developer will
 conclude their text vanished and retype it from memory.
 
-### 3.1 This endpoint is also the health check
-
-Reaching `/skills` successfully is how Skill Studio decides an agent is there and
-speaks this contract. It gates the **Start** button on the Run-eval dialog and
-the **Connect** action in the playground. There is no separate ping endpoint, on
-purpose: one that existed would prove less and be one more thing to keep in step.
-
-The practical consequence: **implement `/skills` even if you have no skills.**
-Returning `{"skills": {}}` is three lines and makes your agent fully usable.
-
 ---
 
-## 4. The skills override, in detail
+## 5. The skills override, in detail
 
-When `metadata.skills` is present on an `/execute` call, use exactly those files
-for that call instead of your own.
+When `skill_studio.skills` is present on a chat call, use exactly those files for
+that call instead of your own.
 
 **This is the mechanism the whole optimization feature rests on.** An
-optimization run answers hundreds of questions with candidate versions of a
-skill and compares the results. If you ignore this field, every rollout answers
-from your deployed files, the accuracy curve sits flat, and the run produces
-nothing — so this is worth getting right.
+optimization run answers hundreds of questions with candidate versions of a skill
+and compares the results. If you ignore this field, every rollout answers from
+your deployed files, the accuracy curve sits flat, and the run produces nothing —
+so this is worth getting right.
 
-### 4.1 Three distinct states
+### 5.1 Three distinct states
 
 | What arrives | What it means |
 |---|---|
@@ -236,47 +288,52 @@ presence, not for truthiness:
 
 ```python
 # ❌ wrong: {} is falsy, so "run with no skills" silently becomes "use your own"
-if payload["metadata"].get("skills"):
+if payload["skill_studio"].get("skills"):
     ...
 
 # ✅ right
-skills = payload["metadata"].get("skills")
+skills = payload["skill_studio"].get("skills")
 if skills is not None:
     ...
 ```
 
-### 4.2 Replacement, never a patch
+### 5.2 Replacement, never a patch
 
 The map is the **complete** file set for the call:
 
 * A path in the map — use the supplied text, even if you have a file there.
-* A path **not** in the map — that file **does not exist** for this call, even if
+* A path **not** in the map — that file **does not exist for this call**, even if
   it is on your disk.
 
-Replacement rather than merging is what makes "does it still answer without this
-reference file?" expressible at all. A merge could never remove anything.
+To be explicit, because the wording invites a much worse reading: **this is not a
+deletion.** Nothing on your disk changes. The call simply sees a different set of
+files. Writing the supplied files to a per-request temporary directory and
+pointing that one call at it is the usual approach; so is keeping them in memory
+if your agent can load skills from a map.
 
-### 4.3 Never persist it
+Replacement rather than merging is what makes "does it still answer without this
+reference file?" expressible at all — a merge could never remove anything. It is
+also what lets an optimization run send *one* skill and measure that skill alone,
+rather than that skill mixed with everything else you have deployed.
+
+### 5.3 Never persist it
 
 The override applies to one call, in isolation:
 
-* Do not write it to disk.
+* Do not write it into your real skills directory.
 * Do not let it affect any other in-flight or subsequent request.
 * Concurrent calls with different overrides must not see each other's files.
 
 Skill Studio sends overrides constantly while a developer iterates, and it
 assumes your deployed agent is never disturbed by any of it.
 
-Writing the files to a per-request temporary directory and pointing that one call
-at it is the usual approach; so is keeping them in memory if your agent can load
-skills from a map.
-
 ---
 
-## 5. Path safety
+## 6. Path safety
 
 The keys of `skills` are attacker-influenced strings that many implementations
-will turn into filesystem paths. Reject the whole request with **400** if any key:
+will turn into filesystem paths. Reject the whole request with **400** if any
+key:
 
 * contains `..`
 * starts with `/`
@@ -289,9 +346,9 @@ Then resolve `temp_dir / relative_path` to an absolute path and confirm it is
 
 ---
 
-## 6. The version string
+## 7. The version string
 
-`version` in the `/skills` response is optional but **strongly recommended**.
+`version` in the skills response is optional but **strongly recommended**.
 
 **What it means:** the string changes whenever anything that would change your
 answers changes. Not only skill file edits — a model swap, a system-prompt
@@ -304,8 +361,8 @@ so is a hash over your whole effective configuration.
 * **Playground staleness.** Before each question, Skill Studio re-reads the
   version. If it moved since the editor loaded your files, the developer is asked
   whether to reload or send anyway — because a question answered against a skill
-  that changed underneath them is not a result they can trust, and there would
-  be no way to tell afterwards.
+  that changed underneath them is not a result they can trust, and there would be
+  no way to tell afterwards.
 * **Run comparability.** An evaluation run records the version at its start and
   end; an optimization run records it at every step. A redeploy halfway through
   makes the questions either side of it measurements of two different systems,
@@ -322,46 +379,74 @@ at all: it disables both checks above while looking like it is doing something.
 
 ---
 
-## 7. Errors, and what each one causes
+## 8. Errors, and what each one causes
 
 Skill Studio never guesses what went wrong — it shows the developer your status
-code and the beginning of your response body (the first 500 characters for
-`/execute`, the first 200 for `/skills`). Say something useful, and say it
-early.
+code and the beginning of your response body. If you answer with an OpenAI error
+envelope, the sentence inside it is what gets shown:
 
-### `POST /execute`
+```json
+{"error": {"message": "This model's maximum context length is 8192 tokens.",
+           "type": "invalid_request_error"}}
+```
+
+### Chat endpoint
 
 | You return | What happens |
 |---|---|
-| 200 + `{"content": "..."}` | The answer is graded. |
-| 200 + non-string / missing `content` | The question fails: "not a usable string". |
-| 200 + empty `content` | The question fails: "empty response". |
-| 200 + a body starting with `<` | The question fails: "not a usable string". |
-| **4xx** | The question fails immediately, carrying your status and body. **Not retried** — a bad request fails identically every time. |
-| **5xx** | The question fails, carrying your status and body. **Not retried.** |
-| Connection refused / reset | Fails the question. **Not** retried — see the note in §2.2. |
+| 200 + a chat completion with text | The answer is graded. |
+| 200 + `content: null`, or only tool calls | The question fails: "not a chat completion carrying a text answer". |
+| 200 + empty/whitespace `content` | The question fails: "empty answer". |
+| 200 + no `choices` | The question fails, with your body quoted. |
+| 200 + a body starting with `<` | The question fails: "markup, not a chat completion". |
+| **4xx** | The question fails immediately, carrying your status and message. **Not retried** — a bad request fails identically every time. |
+| **5xx** | The question fails, carrying your status and message. **Not retried.** |
+| Connection refused / reset | Fails the question. **Not** retried — see the note in §3.3. |
 | The platform's own timeout elapses | **Retried** with exponential backoff, then failed. |
 
-### `GET /skills`
+### Skills endpoint
 
 | You return | What happens |
 |---|---|
 | 200 + a valid body | Normal operation. |
 | 200 + `skills` that is not a `{string: string}` map | Hard error naming the offending entry. Not treated as empty. |
 | 200 + a non-JSON body | Hard error quoting the body. |
-| **any 4xx/5xx** | Hard error carrying your status and body. The Run-eval Start button stays disabled and the playground will not connect. |
-| Unreachable | Same, naming the host and path tried. |
+| **any 4xx/5xx** | The check fails, carrying your status and body. Evaluation still runs; the playground will not connect and optimization will not start. |
+| Unreachable | Same, naming the URL tried. |
+| **Not configured at all** | Not an error. Evaluation runs; the rest is unavailable and says so. |
 
 ---
 
-## 8. The probe marker you will see in your logs
+## 9. The probes you will see in your logs
 
-Before an optimization run starts, Skill Studio sends **one** `/execute` call
-that looks slightly odd, and it is deliberate. You do not have to do anything for
-it — but if you see it and assume the platform is sending you corrupt data, you
-will go looking for a bug that does not exist. So:
+Skill Studio sends a small number of synthetic calls. They are deliberate. If you
+see one and assume the platform is sending you corrupt data, you will go looking
+for a bug that does not exist.
 
-**What you will see on that one call:**
+### 9.1 The connection probe
+
+Sent when a developer presses **Test endpoint**, on the way to starting a run, or
+when the playground connects. One call, carrying a skills override with a single
+file:
+
+```
+skill_studio_probe/SKILL.md
+```
+
+and a question asking for the "magic value" that file contains. The value is a
+random token, different every time — a constant would eventually be hard-coded to
+make the check pass, and a check that can be satisfied without reading the file
+we just sent is not a check.
+
+**What it proves:** that your chat endpoint answers, and that the override
+reached your model. If you answer but the token is not in your reply, Skill
+Studio says so without accusing you of anything specific — a refusal, an unloaded
+tool and a prompt pipeline that strips the file's contents all produce the same
+symptom.
+
+### 9.2 The optimization pre-flight
+
+Before an optimization run starts, **one** call is sent that looks slightly odd:
 
 1. The question has a sentence appended:
    `(you must first read the billing skill)`
@@ -370,18 +455,18 @@ will go looking for a bug that does not exist. So:
    `<!-- probe-8f3a91c2d4e6: platform override check, ignore this line -->`
 
 **Why.** Skill Studio needs to know whether you actually applied
-`metadata.skills` — and it cannot tell from the answer, because a candidate skill
-is usually a light edit of the file you already have, so both produce nearly
-identical traces. The marker exists only in the copy that was sent. If it turns
-up in the trace, the override reached the model; if the trace shows the skill
-being read and the marker is *not* there, you are answering from your own copy
-and the run is stopped rather than spending an hour producing a flat line.
+`skill_studio.skills` — and it cannot tell from the answer, because a candidate
+skill is usually a light edit of the file you already have, so both produce nearly
+identical traces. The marker exists only in the copy that was sent. If it turns up
+in the trace, the override reached the model; if the trace shows the skill being
+read and the marker is *not* there, you are answering from your own copy and the
+run is stopped rather than spending an hour producing a flat line.
 
 The appended sentence is there so the file's contents land in the trace whether
 you inject skills into a prompt or read them with a tool — a tool result comes
 back into the conversation either way.
 
-**This happens on one call per optimization run** — twice at most, since a run
+This happens on one call per optimization run — twice at most, since a run
 interrupted before its first scored step re-probes when it resumes. Every scored
 rollout carries the candidate text and the unmodified question, because anything
 else would be a second variable in the measurement.
@@ -398,74 +483,82 @@ Treat the marker as what it says it is: a comment, to be ignored.
 
 ---
 
-## 9. Acceptance checklist
+## 10. Acceptance checklist
 
 ```bash
-AGENT=http://localhost:8080
+CHAT=http://localhost:8080/v1/chat/completions
+SKILLS=http://localhost:8080/skills
 
 # ① Plain call. No override, no frills — the baseline everything else varies from.
-curl -s $AGENT/execute -H 'Content-Type: application/json' -d '{
-  "message": "hello",
-  "metadata": {"trace_data": {"trace_id": "t1", "session_id": "t1",
-                              "user_id": "alice", "tags": []},
-               "timeout_s": 30}
-}' | jq -e '.content | type == "string" and length > 0'
+curl -s $CHAT -H 'Content-Type: application/json' -d '{
+  "model": "default",
+  "messages": [{"role": "user", "content": "hello"}],
+  "stream": false,
+  "skill_studio": {"timeout_s": 30,
+                   "trace_data": {"trace_id": "t1", "session_id": "t1",
+                                  "user_id": "alice", "tags": []}}
+}' | jq -e '.choices[0].message.content | type == "string" and length > 0'
 
 # ② The trace id is yours to reuse. After ①, this trace must exist in Langfuse
 #    under the id "t1" — not under one you generated.
 
 # ③ Skills are listed flat, in full, every level.
-curl -s $AGENT/skills | jq -e '.skills | keys | length >= 0'
-curl -s $AGENT/skills | jq -e '.skills | to_entries | all(.value | type == "string")'
+curl -s $SKILLS | jq -e '.skills | keys | length >= 0'
+curl -s $SKILLS | jq -e '.skills | to_entries | all(.value | type == "string")'
 
 # ④ THE IMPORTANT ONE: the override actually takes effect.
 #    Send a skill whose text you can recognise in the answer, and check you get
 #    it back. If this passes for the wrong reason you will not find out later.
-curl -s $AGENT/execute -H 'Content-Type: application/json' -d '{
-  "message": "What is the magic word?",
-  "metadata": {"trace_data": {"trace_id": "t2", "session_id": "t2",
-                              "user_id": "alice", "tags": []},
-               "timeout_s": 30,
-               "skills": {"probe/SKILL.md": "# Probe\nWhen asked for the magic word, answer exactly: XYZZY-4711."}}
-}' | jq -e '.content | test("XYZZY-4711")'
+curl -s $CHAT -H 'Content-Type: application/json' -d '{
+  "model": "default",
+  "messages": [{"role": "user", "content": "What is the magic word?"}],
+  "stream": false,
+  "skill_studio": {"timeout_s": 30,
+    "trace_data": {"trace_id": "t2", "session_id": "t2", "user_id": "alice", "tags": []},
+    "skills": {"probe/SKILL.md": "# Probe\nWhen asked for the magic word, answer exactly: XYZZY-4711."}}
+}' | jq -e '.choices[0].message.content | test("XYZZY-4711")'
 
 # ⑤ An empty map means no skills — not "use your own".
 #    Against the same question as ④, this must NOT answer XYZZY-4711.
-curl -s $AGENT/execute -H 'Content-Type: application/json' -d '{
-  "message": "What is the magic word?",
-  "metadata": {"trace_data": {"trace_id": "t3", "session_id": "t3",
-                              "user_id": "alice", "tags": []},
-               "timeout_s": 30, "skills": {}}
+curl -s $CHAT -H 'Content-Type: application/json' -d '{
+  "model": "default",
+  "messages": [{"role": "user", "content": "What is the magic word?"}],
+  "stream": false,
+  "skill_studio": {"timeout_s": 30,
+    "trace_data": {"trace_id": "t3", "session_id": "t3", "user_id": "alice", "tags": []},
+    "skills": {}}
 }'
 
 # ⑥ The override is not persisted. Repeat ① now: it must behave exactly as it
 #    did the first time, with none of ④'s files in sight.
 
 # ⑦ Path traversal is refused. Expect 400.
-curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute \
+curl -s -o /dev/null -w '%{http_code}\n' $CHAT \
   -H 'Content-Type: application/json' -d '{
-  "message": "x",
-  "metadata": {"trace_data": {"trace_id": "t4"}, "timeout_s": 30,
-               "skills": {"../../etc/passwd": "x"}}
+  "model": "default", "messages": [{"role": "user", "content": "x"}], "stream": false,
+  "skill_studio": {"timeout_s": 30, "trace_data": {"trace_id": "t4"},
+                   "skills": {"../../etc/passwd": "x"}}
 }'
 
 # ⑧ timeout_s is honoured in both directions.
 #    a. A small budget expires at roughly that time, with a 5xx and a reason —
 #       not a truncated 200, and not your built-in limit.
-time curl -s -o /dev/null -w '%{http_code}\n' $AGENT/execute \
+time curl -s -o /dev/null -w '%{http_code}\n' $CHAT \
   -H 'Content-Type: application/json' -d '{
-  "message": "<a question that takes a long time>",
-  "metadata": {"trace_data": {"trace_id": "t5"}, "timeout_s": 5}
+  "model": "default",
+  "messages": [{"role": "user", "content": "<a question that takes a long time>"}],
+  "stream": false,
+  "skill_studio": {"timeout_s": 5, "trace_data": {"trace_id": "t5"}}
 }'
 #    b. A budget larger than your old built-in limit really does let a question
 #       run that long. This is the half people forget, and it is the whole point.
 
-# ⑨ Unknown metadata keys are ignored, not rejected.
-curl -s $AGENT/execute -H 'Content-Type: application/json' -d '{
-  "message": "hello",
-  "metadata": {"trace_data": {"trace_id": "t6"}, "timeout_s": 30,
-               "something_we_added_later": {"a": 1}}
-}' | jq -e '.content | type == "string"'
+# ⑨ Unknown keys are ignored, not rejected.
+curl -s $CHAT -H 'Content-Type: application/json' -d '{
+  "model": "default", "messages": [{"role": "user", "content": "hello"}], "stream": false,
+  "skill_studio": {"timeout_s": 30, "trace_data": {"trace_id": "t6"},
+                   "something_we_added_later": {"a": 1}}
+}' | jq -e '.choices[0].message.content | type == "string"'
 ```
 
 **④ and ⑤ together are the most important checks here.** They are the only ones
@@ -475,15 +568,17 @@ and means nothing.
 
 ---
 
-## 10. A minimal reference implementation
+## 11. A minimal reference implementation
 
-FastAPI, for illustration. It is complete enough to pass §9 and small enough to
+FastAPI, for illustration. It is complete enough to pass §10 and small enough to
 read in one sitting; the parts specific to your agent are marked.
 
 ```python
 import os
 import shutil
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -547,32 +642,39 @@ def get_skills():
     return {"version": current_version(), "skills": skills}
 
 
-class ExecuteRequest(BaseModel):
-    message: str
-    metadata: dict = {}
+class ChatRequest(BaseModel):
+    messages: list[dict]
+    model: str | None = None
+    stream: bool = False
+    skill_studio: dict = {}
     model_config = {"extra": "allow"}  # tolerate keys added later
 
 
-@app.post("/execute")
-async def execute(req: ExecuteRequest):
-    trace_data = req.metadata.get("trace_data") or {}
-    budget = min(
-        float(req.metadata.get("timeout_s") or DEFAULT_TIMEOUT_S), MAX_TIMEOUT_S
+@app.post("/v1/chat/completions")
+async def chat_completions(req: ChatRequest):
+    ss = req.skill_studio or {}
+    trace_data = ss.get("trace_data") or {}
+    budget = min(float(ss.get("timeout_s") or DEFAULT_TIMEOUT_S), MAX_TIMEOUT_S)
+
+    # Single-shot: the platform sends exactly one user message.
+    question = next(
+        (m.get("content") for m in reversed(req.messages) if m.get("role") == "user"),
+        "",
     )
 
     # `is not None`, not truthiness: {} means "no skills for this call".
-    override = req.metadata.get("skills")
+    override = ss.get("skills")
     root, temporary = SKILLS_DIR, False
     if override is not None:
         root, temporary = materialise(override), True
 
     try:
         answer = await run_agent(                       # <- your agent
-            req.message,
+            question,
             skills=read_skills(root),
             timeout_s=budget,
             # Use the caller's id. Generating your own breaks every feature
-            # that reads the trace afterwards.
+            # that reads the trace afterwards, and blocks optimization outright.
             trace_id=trace_data.get("trace_id"),
             session_id=trace_data.get("session_id"),
             user_id=trace_data.get("user_id"),
@@ -587,7 +689,18 @@ async def execute(req: ExecuteRequest):
     answer = (answer or "").strip()
     if not answer:
         raise HTTPException(500, "the agent produced no answer")
-    return {"content": answer}
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": req.model or "default",
+        "choices": [
+            {"index": 0,
+             "message": {"role": "assistant", "content": answer},
+             "finish_reason": "stop"}
+        ],
+    }
 
 
 def current_version() -> str:                            # <- your versioning
@@ -599,3 +712,33 @@ def current_version() -> str:                            # <- your versioning
 Note what this does **not** do, on purpose: it never writes an override back to
 `SKILLS_DIR`, it never lets one request's temporary directory outlive that
 request, and it never returns an empty skills map to signal a failure.
+
+---
+
+## 12. Migrating from the previous protocol
+
+The previous contract was `POST {base}/execute` plus `GET {base}/skills`, both
+derived from one base URL. Nothing about what your agent *does* changes — only
+where the fields are.
+
+| Before | Now |
+|---|---|
+| `POST {base}/execute` | `POST {chat endpoint}`, an absolute URL you choose |
+| `GET {base}/skills` | `GET {skills endpoint}`, an absolute URL you choose, now optional |
+| `message` | `messages[0].content` (role `user`) |
+| `metadata` | `skill_studio` |
+| `metadata.skills` | `skill_studio.skills` — **identical contents and semantics** |
+| `metadata.timeout_s` | `skill_studio.timeout_s` — identical |
+| `metadata.trace_data` | `skill_studio.trace_data` — identical |
+| `{"content": "..."}` | `{"choices": [{"message": {"content": "..."}}]}` |
+| A bare JSON string reply | No longer accepted |
+| A `text/plain` reply | No longer accepted |
+
+In practice: rename `metadata` to `skill_studio`, read the question out of
+`messages` instead of `message`, and wrap your answer in a chat completion. The
+whole of §5, §6 and §7 is unchanged.
+
+Two things Skill Studio no longer accepts are the two lax reply shapes. They
+existed because the old protocol had no standard to point at; this one does, and
+every extra accepted shape is a way for a gateway's stray response to be graded
+as though your agent had answered it.

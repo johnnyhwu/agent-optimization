@@ -339,6 +339,10 @@ select { cursor: pointer; }
   letter-spacing: -0.02em; white-space: nowrap;
 }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+/* The footer list sits at the foot of the rail rather than after the last
+   section, so reference material reads as reference material and not as a
+   fourth thing the product does. */
+.rail-list-foot { margin-top: auto; }
 
 /* Deliberately not the segmented pill (which means "filter this page") and not
    the inset accent bar (which means "this row of the list is selected"). A
@@ -1213,6 +1217,78 @@ select { cursor: pointer; }
   line-height: 1.55; white-space: pre; width: 100%;
 }
 /* The chat endpoint's own state, beside the address it is about. */
+/* ---- documentation ----
+   A repository markdown file, rendered. Measured rather than full-width: the
+   contract is prose and tables, and a 1600px line of prose is unreadable no
+   matter how much room there is.
+
+   Contents column second in the source and placed right by the grid, so a
+   narrow window puts it after the thing it indexes rather than in front. */
+.doc-layout {
+  /* The text column is measured, not fluid: the contract is prose and tables,
+     and a 1600px line of prose is unreadable however much room there is. The
+     contents column sits against it rather than at the far edge, so the eye
+     does not cross empty space to reach it. */
+  display: grid; grid-template-columns: minmax(0, 78ch) 220px;
+  gap: var(--space-6); align-items: start; justify-content: start;
+}
+@media (max-width: 1000px) {
+  .doc-layout { grid-template-columns: minmax(0, 1fr); }
+  .doc-toc { display: none; }
+}
+.doc-body h2 {
+  margin: var(--space-6) 0 var(--space-3); font-size: var(--text-title);
+  padding-top: var(--space-3); border-top: 1px solid var(--border);
+}
+.doc-body h3 { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-ui); }
+.doc-body p, .doc-body li { line-height: 1.65; }
+.doc-body ul, .doc-body ol { padding-left: var(--space-5); }
+.doc-body blockquote {
+  margin: var(--space-3) 0; padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--border); color: var(--muted);
+}
+.doc-body code {
+  font-family: var(--font-mono); font-size: var(--text-caption);
+  background: var(--code-bg); padding: 1px 5px; border-radius: var(--radius-sm);
+}
+/* Wide by nature — the reference implementation and the curl checklist are both
+   long lines — so it scrolls inside its own box. Both axes stated: a block that
+   scrolls one way and clips the other loses content with nothing to reach it
+   by. */
+.doc-body pre {
+  overflow-x: auto; overflow-y: hidden; padding: var(--space-3);
+  background: var(--code-bg); border-radius: var(--radius-sm);
+  line-height: 1.55;
+}
+.doc-body pre code { background: none; padding: 0; font-size: var(--text-micro); }
+/* The contract is mostly tables, and several are wide enough to need their own
+   scroll rather than squeezing the page. */
+.doc-body table {
+  display: block; overflow-x: auto; overflow-y: hidden;
+  border-collapse: collapse; margin: var(--space-3) 0;
+  font-size: var(--text-caption);
+}
+.doc-body th, .doc-body td {
+  border: 1px solid var(--border); padding: var(--space-2) var(--space-3);
+  text-align: left; vertical-align: top;
+}
+.doc-body th { background: var(--panel); font-weight: var(--fw-semibold); }
+.doc-toc {
+  position: sticky; top: var(--space-4);
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: var(--text-caption);
+}
+.doc-toc-head {
+  font-size: var(--text-micro); color: var(--muted);
+  font-weight: var(--fw-semibold); margin-bottom: var(--space-2);
+}
+.doc-toc-link {
+  color: var(--muted); text-decoration: none; padding: 3px 0;
+  min-height: 24px; display: flex; align-items: center;
+}
+.doc-toc-link:hover { color: var(--text); }
+.doc-toc-h3 { padding-left: var(--space-3); }
+
 .agent-chat-state {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--text-caption);

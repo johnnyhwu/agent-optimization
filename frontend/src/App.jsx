@@ -6,6 +6,7 @@ import { href, navigate, useHashRoute } from "./useHashRoute.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
+import Documentation from "./components/Documentation.jsx";
 import Playground from "./components/Playground.jsx";
 import OptimizeSection from "./components/optimize/OptimizeSection.jsx";
 import SettingsSection from "./components/settings/SettingsSection.jsx";
@@ -226,6 +227,18 @@ export default function App() {
             {route.section === "settings" && (
               <SettingsSection key={subject} route={route} unseen={settingsAttention} />
             )}
+
+            {route.section === "documentation" && (
+              // Keyed on the anchor as well as the document: arriving at the
+              // same page from a different "?" has to scroll again, and without
+              // the key the effect that scrolls would be looking at an
+              // unchanged document.
+              <Documentation
+                key={`${route.doc}#${route.anchor}`}
+                doc={route.doc}
+                anchor={route.anchor}
+              />
+            )}
             </ErrorBoundary>
           </div>
         </div>
@@ -235,6 +248,7 @@ export default function App() {
 }
 
 function sectionTitle(section) {
+  if (section === "documentation") return "Documentation";
   if (section === "playground") return "Playground";
   if (section === "optimize") return "Optimize";
   if (section === "settings") return "Settings";

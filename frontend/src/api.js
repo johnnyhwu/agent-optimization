@@ -154,6 +154,11 @@ export const api = {
   // differently (see `agent_endpoints.js`). A POST: it has a cost, and the
   // trace check needs credentials.
   agentChatProbe: (payload) => req("POST", "/agent/chat-probe", payload),
+
+  // Reference documentation, as the markdown it is stored as. There is one copy
+  // of the agent-server contract and it is the file in `docs/` — this hands it
+  // over so the UI cannot drift from what a reviewer reads.
+  doc: (name) => req("GET", `/docs/${name}`),
   // Returns a page: { items, total, has_more }.
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),
