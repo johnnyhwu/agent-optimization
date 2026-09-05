@@ -21,8 +21,7 @@ import respx
 
 from app.integrations.real.workspace import HttpWorkspaceClient, WorkspaceFetchError
 
-URL = "https://agent.test"
-SKILLS_URL = f"{URL}/skills"
+SKILLS_URL = "https://agent.test/skills"
 
 FULL_BODY = {
     "version": "a1b2c3d",
@@ -35,7 +34,7 @@ FULL_BODY = {
 
 @pytest.fixture
 def client(configure):
-    with configure(agent_base_url=URL, agent_timeout_s=5.0):
+    with configure(agent_skills_url=SKILLS_URL, agent_timeout_s=5.0):
         yield HttpWorkspaceClient()
 
 
@@ -165,12 +164,12 @@ async def test_http_error_carries_status_and_body(client):
 
 @respx.mock
 async def test_the_error_names_the_endpoint_it_tried(client):
-    """"/skills 404s" and "the host is down" send a developer to different
-    places, so the message has to say which one happened."""
+    """"the skills endpoint 404s" and "the host is down" send a developer to
+    different places, so the message has to say which one happened."""
     respx.get(SKILLS_URL).mock(return_value=httpx.Response(404, text="nope"))
     with pytest.raises(WorkspaceFetchError) as exc:
         await client.get_workspace()
-    assert "/skills" in str(exc.value)
+    assert SKILLS_URL in str(exc.value)
 
 
 @respx.mock
@@ -186,7 +185,7 @@ async def test_transport_error_names_the_host(client):
     respx.get(SKILLS_URL).mock(side_effect=httpx.ConnectError("nope"))
     with pytest.raises(WorkspaceFetchError) as exc:
         await client.get_workspace()
-    assert URL in str(exc.value)
+    assert SKILLS_URL in str(exc.value)
 
 
 @respx.mock
@@ -214,8 +213,14 @@ async def test_get_version_propagates_a_failure(client):
         await client.get_version()
 
 
-def test_no_base_url_is_a_readable_error(configure):
-    with configure(agent_base_url=""):
+def test_no_skills_url_is_a_readable_error(configure):
+    """Constructing one without a URL is a mistake; *not* constructing one is not.
+
+    `build_seams` hands back no workspace client at all when no skills endpoint
+    is configured, because that is a supported way to run an agent. This message
+    is for the caller that asked for a client anyway.
+    """
+    with configure(agent_skills_url=""):
         with pytest.raises(RuntimeError) as exc:
             HttpWorkspaceClient()
-    assert "AGENT_BASE_URL" in str(exc.value)
+    assert "AGENT_SKILLS_URL" in str(exc.value)

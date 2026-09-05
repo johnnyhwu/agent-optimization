@@ -46,29 +46,29 @@ def test_blank_config_reproduces_the_environment_only_behaviour(configure):
 def test_impl_switches_stay_the_master_switch(configure):
     # Config naming a real endpoint does not by itself turn a fake seam real.
     with configure(agent_impl="fake"):
-        seams = build_seams({"agent_base_url": "https://agent.test"})
+        seams = build_seams({"agent_chat_url": "https://agent.test/v1/chat/completions"})
     assert isinstance(seams.agent, FakeAgentClient)
 
 
 def test_run_config_overrides_the_environment_for_a_real_seam(configure):
-    with configure(agent_impl="real", agent_base_url="https://env.test",
+    with configure(agent_impl="real", agent_chat_url="https://env.test/v1/chat/completions",
                    agent_timeout_s=120.0):
         seams = build_seams(
-            {"agent_base_url": "https://per-run.test", "agent_timeout_s": 7.0}
+            {"agent_chat_url": "https://per-run.test/v1/chat/completions", "agent_timeout_s": 7.0}
         )
 
     assert isinstance(seams.agent, HttpAgentClient)
-    assert seams.agent.base_url == "https://per-run.test"
+    assert seams.agent.chat_url == "https://per-run.test/v1/chat/completions"
     assert seams.agent.timeout_s == 7.0
 
 
 def test_blank_fields_fall_back_to_the_environment(configure):
     # A field the developer left empty must not blank out the env value.
-    with configure(agent_impl="real", agent_base_url="https://env.test",
+    with configure(agent_impl="real", agent_chat_url="https://env.test/v1/chat/completions",
                    agent_timeout_s=99.0):
-        seams = build_seams({"agent_base_url": "   ", "agent_timeout_s": None})
+        seams = build_seams({"agent_chat_url": "   ", "agent_timeout_s": None})
 
-    assert seams.agent.base_url == "https://env.test"
+    assert seams.agent.chat_url == "https://env.test/v1/chat/completions"
     assert seams.agent.timeout_s == 99.0
 
 
@@ -207,7 +207,13 @@ def test_no_run_response_model_declares_a_credential_field():
     outbound = set(RunOut.model_fields) | set(RunConfig.model_fields)
     assert not [f for f in outbound if "secret" in f or "api_key" in f]
     # ...while the inbound one does.
-    assert set(RunSecrets.model_fields) == {"langfuse_secret_key", "llm_api_key"}
+    assert set(RunSecrets.model_fields) == {
+        "langfuse_secret_key",
+        "llm_api_key",
+        # Optional in a stronger sense than the other two: most agent servers
+        # ask for no credential, and blank sends none.
+        "agent_api_key",
+    }
 
 
 def test_a_serialized_run_contains_no_credential_value():

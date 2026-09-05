@@ -25,26 +25,40 @@ def _line(status: str, seam: str, detail: str) -> None:
 
 
 async def check_agent() -> bool:
+    """One real question, not a GET at a POST-only path.
+
+    This used to GET the execute endpoint and count any HTTP status as proof of
+    life, because a valid call was expensive. It is still expensive — and now
+    worth it: "something is listening on that host" was compatible with a chat
+    endpoint that rejects every request this platform makes, which is the
+    failure a pre-flight exists to catch.
+
+    The override is not checked here. That question belongs to the screens that
+    gate on it; a startup check that spends a model call is already at the limit
+    of what belongs in one.
+    """
     if settings.agent_impl != "real":
         _line(SKIP, "agent", "AGENT_IMPL=fake")
         return True
-    if not settings.agent_base_url:
-        _line(FAIL, "agent", "AGENT_BASE_URL is empty")
+    if not settings.agent_chat_url:
+        _line(FAIL, "agent", "AGENT_CHAT_URL is empty")
         return False
-    url = f"{settings.agent_base_url.rstrip('/')}/execute"
+    from app.services.agent_probe import probe_chat
+
     try:
-        # A GET on a POST-only endpoint won't be a valid call, but it proves
-        # the host resolves, TLS works and something is listening there. Any
-        # HTTP status counts as reachable; only transport errors are failures.
-        async with httpx.AsyncClient(
-            timeout=settings.agent_timeout_s, follow_redirects=True
-        ) as client:
-            resp = await client.get(url)
-        _line(OK, "agent", f"{url} reachable (HTTP {resp.status_code})")
-        return True
+        result = await probe_chat(
+            settings.agent_chat_url,
+            settings.agent_timeout_s,
+            with_override=False,
+        )
     except Exception as exc:  # noqa: BLE001
-        _line(FAIL, "agent", f"{url}: {exc}")
+        _line(FAIL, "agent", f"{settings.agent_chat_url}: {exc}")
         return False
+    if not result.chat.ok:
+        _line(FAIL, "agent", f"{settings.agent_chat_url}: {result.chat.error}")
+        return False
+    _line(OK, "agent", f"{settings.agent_chat_url} {result.chat.detail}")
+    return True
 
 
 async def _check_llm(seam: str, model: str) -> bool:
@@ -116,20 +130,24 @@ async def check_workspace() -> bool:
     if settings.workspace_impl != "real":
         _line(SKIP, "workspace", "WORKSPACE_IMPL=fake")
         return True
-    if not settings.agent_base_url:
+    if not settings.agent_skills_url:
+        # SKIP, not FAIL. An agent without a skills endpoint is a supported
+        # configuration — evaluation runs against it normally — so a red line
+        # here would report a working deployment as broken. What it costs is
+        # named instead, because nothing else on this screen will say it.
         _line(
-            FAIL, "workspace",
-            "AGENT_BASE_URL is empty (the workspace lives on the agent server)",
+            SKIP, "workspace",
+            "AGENT_SKILLS_URL is empty — evaluation works; the playground, the "
+            "skill-coverage warning and optimization need it",
         )
-        return False
+        return True
     from app.integrations.real.workspace import HttpWorkspaceClient
 
     try:
-        # Unlike the agent check this is a real call: /skills is a GET, so
-        # there is no reason to settle for "something is listening".
+        # Unlike the agent check this is free: the skills endpoint is a GET.
         ws = await HttpWorkspaceClient().get_workspace()
     except Exception as exc:  # noqa: BLE001
-        _line(FAIL, "workspace", f"{settings.agent_base_url}: {exc}")
+        _line(FAIL, "workspace", f"{settings.agent_skills_url}: {exc}")
         return False
     # Says whether the version came from the agent or was derived here, because
     # the two carry different guarantees: the agent's own moves on a model or

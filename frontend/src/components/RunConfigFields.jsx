@@ -2,8 +2,9 @@ import React from "react";
 import Field, { FormSection } from "./ui/Field.jsx";
 import Badge from "./ui/Badge.jsx";
 import Banner from "./ui/Banner.jsx";
+import AgentEndpointsFields from "./AgentEndpointsFields.jsx";
 import Button from "./ui/Button.jsx";
-import { IconAlert, IconCheck, IconRefresh } from "./icons.jsx";
+import { IconCheck, IconRefresh } from "./icons.jsx";
 import { plural } from "../plural.js";
 import NumberInput from "./ui/NumberInput.jsx";
 
@@ -32,55 +33,45 @@ import NumberInput from "./ui/NumberInput.jsx";
 // variable the reader cannot see, cannot set from here, and did not ask about.
 // The state is real and worth showing; the variable name is not.
 
-// What the pre-flight found, under the URL that caused it.
+// What the skills read means for *this eval set* — and only that.
 //
-// Three states and they are not interchangeable:
+// The read itself now reports itself, beside the field that caused it
+// (`AgentEndpointsFields`), which is where a connection error belongs. What is
+// left here is the part that has nothing to do with the connection: how many
+// skills came back, and whether this set's questions need ones the agent does
+// not have. Those are claims about the run being started, and they read as a
+// consequence of a successful read rather than as its status line.
 //
-//   checking    the Start button is disabled and this says why. Without a line
-//               here, a button that will not depress reads as a broken dialog.
-//   connected   the agent answered. The skill count is the evidence — a tick on
-//               its own is a claim; "6 skills" is the thing that was read.
-//   failed      the agent server's own words, verbatim. "This agent has no
-//               skills" and "your URL is wrong" have to stay distinguishable,
-//               and only the reason it gave can tell them apart. It stays on
-//               screen rather than passing as a toast, because it is a state to
-//               fix, not news — the same rule the playground's connection bar
-//               follows.
-//
-// The coverage warning is a separate claim and reads as one: the connection
-// succeeded, and *then* there is something about this eval set worth knowing.
+// Keeping both in one block was what made a failed read say two different
+// things in two places, one of them stale.
 export function AgentProbe({ probe, coverage, onRetry }) {
   // Nothing to report about a seam that is not being asked: the section's
-  // `simulated` badge has already said so, and a tick here would be claiming a
-  // connection that was never made.
+  // `simulated` badge has already said so, and a count here would be describing
+  // a connection that was never made.
   if (probe.state === "simulated") return null;
 
-  if (probe.state === "checking") {
-    return (
-      <div className="cfg-probe hint">Checking the agent…</div>
-    );
+  if (probe.state === "failed") {
+    // The reason is already on screen under the field. What is not is a way
+    // back from it: a read can fail because a server was restarting, and
+    // retyping the URL to re-trigger the check is not a fix anyone should have
+    // to discover.
+    return onRetry ? (
+      <div className="cfg-probe">
+        <Button size="sm" icon={<IconRefresh size={13} />} onClick={onRetry}>
+          Try again
+        </Button>
+      </div>
+    ) : null;
   }
 
-  if (probe.state === "failed") {
-    return (
-      <div className="cfg-probe">
-        <div className="error-text">
-          <IconAlert size={13} /> Could not reach this agent.
-        </div>
-        <div className="hint cfg-probe-detail">{probe.error}</div>
-        {onRetry && (
-          <Button size="sm" icon={<IconRefresh size={13} />} onClick={onRetry}>
-            Try again
-          </Button>
-        )}
-      </div>
-    );
-  }
+  // `none` — no skills endpoint — says its piece on the field's status line.
+  // A count here would be describing a listing nobody asked for.
+  if (probe.state !== "connected") return null;
 
   return (
     <div className="cfg-probe">
       <div className="ok-text">
-        <IconCheck size={13} /> Connected · {plural(probe.skills.length, "skill")}
+        <IconCheck size={13} /> {plural(probe.skills.length, "skill")} on this agent
         {probe.version ? <code className="agent-version">{probe.version}</code> : null}
       </div>
       {/* Heading and body both come from `coverageWarning`, so the heading
@@ -140,6 +131,11 @@ export default function RunConfigFields({
   probe = null,
   coverage = null,
   onRetryProbe = null,
+  // The expensive half, owned by the host too — it spends a model call, so only
+  // a screen that knows when that is worth it may trigger one.
+  chatProbe = null,
+  chatBusy = false,
+  onTestChat = null,
 }) {
   const fake = (seam) => impls[seam] === "fake";
   const simulatedNote = "Simulated in this environment, so what you enter here has no effect.";
@@ -152,14 +148,27 @@ export default function RunConfigFields({
           description={fake("agent") ? simulatedNote : "The service that answers each question."}
           aside={fake("agent") && <SimulatedBadge />}
         >
-          <Field label="Base URL">
-            <input
-              value={form.agent_base_url}
-              placeholder="http://agent-host:8080"
-              disabled={fake("agent")}
-              onChange={(e) => set("agent_base_url", e.target.value)}
-            />
-          </Field>
+          <AgentEndpointsFields
+            chatUrl={form.agent_chat_url || ""}
+            skillsUrl={form.agent_skills_url || ""}
+            onChangeChat={(v) => set("agent_chat_url", v)}
+            onChangeSkills={(v) => set("agent_skills_url", v)}
+            apiKey={secrets.agent_api_key}
+            authHeader={form.agent_auth_header || ""}
+            onChangeApiKey={(v) => setSecrets((s) => ({ ...s, agent_api_key: v }))}
+            onChangeAuthHeader={(v) => set("agent_auth_header", v)}
+            keptApiKey={kept("agent_api_key")}
+            disabled={fake("agent")}
+            chatProbe={chatProbe}
+            chatBusy={chatBusy}
+            onTestChat={onTestChat}
+            skillsProbe={probe?.check
+              ? { check: probe.check, request_preview: probe.request_preview,
+                  response_preview: probe.response_preview }
+              : null}
+            skillsBusy={probe?.state === "checking"}
+            idPrefix="run"
+          />
           {probe && (
             <AgentProbe probe={probe} coverage={coverage} onRetry={onRetryProbe} />
           )}

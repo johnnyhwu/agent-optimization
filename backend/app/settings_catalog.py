@@ -2,7 +2,7 @@
 what they may not.
 
 Every form in this product opens on values the deployment chose: the agent
-server in `AGENT_BASE_URL`, the grading model in `JUDGE_MODEL`, the batch size in
+server in `AGENT_CHAT_URL`, the grading model in `JUDGE_MODEL`, the batch size in
 `OPTIMIZER_BATCH_SIZE`. That is right for a deployment and wrong for a person.
 Someone who points every run at their own agent server retypes the same address
 a dozen times a day, and the "Run eval" dialog has no memory of yesterday. This
@@ -113,9 +113,50 @@ GROUPS = (
 CATALOG: tuple[SettingSpec, ...] = (
     # --- Agent --------------------------------------------------------------
     SettingSpec(
-        key="agent_base_url", setting="agent_base_url", group="agent", kind="text",
-        label="Agent server URL",
-        help="Where questions are sent. The playground connects to this on open.",
+        key="agent_chat_url", setting="agent_chat_url", group="agent", kind="text",
+        label="Chat endpoint",
+        help=(
+            "The full URL of your agent's OpenAI chat completions endpoint — "
+            "questions are sent here. Everything else on this page is optional; "
+            "this is not."
+        ),
+    ),
+    # Optional, and the help text has to earn the extra field: someone who
+    # leaves it blank gets a working evaluation and no explanation of what they
+    # gave up. Naming what it unlocks is the only thing on this page that turns
+    # a blank box into a decision.
+    SettingSpec(
+        key="agent_skills_url", setting="agent_skills_url", group="agent", kind="text",
+        label="Skills endpoint",
+        optional=True,
+        help=(
+            "Optional. The full URL that lists your agent's skill files. Without "
+            "it evaluation still runs; the playground, the skill-coverage warning "
+            "and optimization need it."
+        ),
+    ),
+    # Both optional, and inert together: with no key nothing is sent and the
+    # request is byte for byte what it was before authentication existed. They
+    # are here because a team whose agent sits behind a gateway could not
+    # connect at all, and the deployment's own AGENT_API_KEY is the wrong place
+    # for a credential that belongs to one person.
+    SettingSpec(
+        key="agent_api_key", setting="agent_api_key", group="agent", kind="secret",
+        label="Agent API key", endpoint_key="agent_chat_url", optional=True,
+        help=(
+            "Optional — most agent servers need none. Only ever sent to the chat "
+            "endpoint above, and to the skills endpoint when that is the same "
+            "server. Change the chat endpoint and this must be entered again."
+        ),
+    ),
+    SettingSpec(
+        key="agent_auth_header", setting="agent_auth_header", group="agent", kind="text",
+        label="Auth header", optional=True,
+        help=(
+            "Optional. Blank sends the key as `Authorization: Bearer <key>`. Name "
+            "a header instead — `X-Api-Key` — and the key is sent as that "
+            "header's value, with no prefix."
+        ),
     ),
     SettingSpec(
         key="agent_timeout_s", setting="agent_timeout_s", group="agent", kind="float",
@@ -284,6 +325,11 @@ EXCLUDED_SETTINGS: dict[str, str] = {
     "db_pool_recycle_s": "process-wide resource budget",
     "db_pool_pre_ping": "process-wide resource budget",
     "root_path": "set by the reverse proxy in front of this process",
+    "docs_dir": (
+        "where this deployment keeps the reference markdown on disk. A "
+        "packaging detail, and pointing it somewhere else changes nothing a "
+        "developer would recognise as a preference"
+    ),
     "frontend_origin": "CORS. A user-settable origin is a user-settable security boundary",
     "log_level": "operational, and shared by every request in the process",
     # Identity. Who the caller is, and how that is decided, is emphatically not

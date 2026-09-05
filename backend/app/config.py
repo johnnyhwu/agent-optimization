@@ -165,10 +165,30 @@ class Settings(BaseSettings):
     workspace_impl: Impl = "fake"
 
     # --- Agent HTTP server (§6.2) -------------------------------------------
-    # Base URL of the FastAPI agent server; the client POSTs to {base}/execute.
-    agent_base_url: str = ""
+    # Two absolute URLs, not a base URL with paths appended. The agent server is
+    # somebody else's service — its chat endpoint may live under a prefix, or
+    # behind a gateway that rewrites paths — and a base URL made every one of
+    # those a reason not to adopt the platform. Naming both outright costs one
+    # extra field and accepts every layout.
+    #
+    # `agent_chat_url` speaks OpenAI chat completions (docs/agent-server-api.md).
+    # `agent_skills_url` is optional: an agent that does not serve its skill
+    # files can still be evaluated, it just cannot be explored or optimised.
+    agent_chat_url: str = ""
+    agent_skills_url: str = ""
     agent_timeout_s: float = 120.0
     agent_max_retries: int = 2
+    # Optional, and inert when blank — see integrations/real/agent_auth.py.
+    # Authentication is not part of the agent server contract: a server that
+    # asks for nothing keeps working with these unset, byte for byte. They exist
+    # so a team whose agent sits behind a gateway can connect at all.
+    #
+    # `agent_api_key` is a credential and is treated as one everywhere (write
+    # only, encrypted when saved as a personal default, bound to the chat URL).
+    # `agent_auth_header` is not secret: blank sends `Authorization: Bearer`,
+    # and naming a header instead (`X-Api-Key`) sends the key verbatim.
+    agent_api_key: str = ""
+    agent_auth_header: str = ""
     # How long the "Run eval" dialog's pre-flight waits for the agent server
     # before calling it unreachable. Emphatically *not* `agent_timeout_s`: that
     # is the budget for answering a question, and the Start button stays
@@ -177,6 +197,11 @@ class Settings(BaseSettings):
     # cannot say what skills it has within a few seconds is not one a run should
     # be started against unnoticed.
     agent_probe_timeout_s: float = 5.0
+
+    # Where the reference documentation is read from, for `GET /docs/{name}`.
+    # Blank searches the checkout and then the container's mount point; set it
+    # for a deployment that puts the markdown somewhere else.
+    docs_dir: str = ""
 
     # --- LLM (OpenAI-compatible endpoint; judge + diagnosis) ---------------
     llm_base_url: str = "http://litellm-ai4bi.cpoap-dev.dev.tsmc.com"

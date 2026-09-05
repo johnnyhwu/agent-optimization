@@ -46,7 +46,7 @@ from app.models import (
 )
 from app.optimizer import dataset, hyperparams
 from app.routers import optimization as opt
-from app.schemas import ImportPreviewRequest, OptimizationRunCreate
+from app.schemas import ImportPreviewRequest, OptimizationRunCreate, SkillCheckIn
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -208,7 +208,7 @@ async def test_skill_check_lists_the_files_of_a_skill_that_exists():
     before the run starts rather than discovering it at step 0 — after a run
     row, an item snapshot and a batch of agent calls have already been spent.
     """
-    check = await opt.skill_check(skill_name="billing", subject="alice")
+    check = await opt.skill_check(SkillCheckIn(skill_name="billing"), subject="alice")
     assert check.exists is True
     assert any(path.endswith("SKILL.md") for path in check.files)
     assert len(check.files) > 1, "the fake skill has a reference file; the tree needs it"
@@ -221,7 +221,7 @@ async def test_skill_check_measures_each_file_and_not_only_their_sum():
     whether a skill is one long SKILL.md or a short one beside a large
     reference — the difference that decides what an optimization run can move.
     """
-    check = await opt.skill_check(skill_name="billing", subject="alice")
+    check = await opt.skill_check(SkillCheckIn(skill_name="billing"), subject="alice")
     assert set(check.file_chars) == set(check.files)
     assert all(n > 0 for n in check.file_chars.values())
     assert sum(check.file_chars.values()) == check.n_chars
@@ -235,22 +235,24 @@ async def test_skill_check_answers_for_the_agent_it_was_given():
     passed.
     """
     check = await opt.skill_check(
-        skill_name="billing", agent_base_url="http://agent.example:9000", subject="alice"
+        SkillCheckIn(skill_name="billing", agent_skills_url="http://agent.example:9000/skills"),
+        subject="alice",
     )
-    assert check.agent_base_url == "http://agent.example:9000"
+    assert check.agent_skills_url == "http://agent.example:9000/skills"
 
     # Blank keeps meaning "the server's own", as everywhere else in this config.
-    fallback = await opt.skill_check(skill_name="billing", subject="alice")
-    assert fallback.agent_base_url == settings.agent_base_url
+    fallback = await opt.skill_check(SkillCheckIn(skill_name="billing"), subject="alice")
+    assert fallback.agent_skills_url == settings.agent_skills_url
 
 
 async def test_skill_check_names_the_agent_even_when_the_skill_is_missing():
     """A skill that was not found most needs to say *where* it was looked for."""
     check = await opt.skill_check(
-        skill_name="billling", agent_base_url="http://agent.example:9000", subject="alice"
+        SkillCheckIn(skill_name="billling", agent_skills_url="http://agent.example:9000/skills"),
+        subject="alice",
     )
     assert check.exists is False
-    assert check.agent_base_url == "http://agent.example:9000"
+    assert check.agent_skills_url == "http://agent.example:9000/skills"
 
 
 async def test_skill_check_names_the_skills_that_do_exist_when_one_is_missing():
@@ -259,7 +261,7 @@ async def test_skill_check_names_the_skills_that_do_exist_when_one_is_missing():
     The developer picked the name from a question tag, so a mismatch is usually
     one character — and the answer is on the agent server they just connected to.
     """
-    check = await opt.skill_check(skill_name="billling", subject="alice")
+    check = await opt.skill_check(SkillCheckIn(skill_name="billling"), subject="alice")
     assert check.exists is False
     assert "billing" in check.available_skills
 
@@ -271,7 +273,7 @@ async def test_skill_check_reports_whether_routing_mode_is_possible():
     which is the difference between an informed choice and a run that rejects
     every candidate for an hour.
     """
-    check = await opt.skill_check(skill_name="billing", subject="alice")
+    check = await opt.skill_check(SkillCheckIn(skill_name="billing"), subject="alice")
     assert check.has_frontmatter is False  # the fake workspace's skills carry none
     assert check.routing_blocked_reason
 
@@ -290,7 +292,7 @@ async def test_skill_check_reports_an_unreachable_agent_as_a_503(monkeypatch):
 
     monkeypatch.setattr(opt, "build_seams", lambda *a, **k: Seams())
     with pytest.raises(HTTPException) as exc:
-        await opt.skill_check(skill_name="billing", subject="alice")
+        await opt.skill_check(SkillCheckIn(skill_name="billing"), subject="alice")
 
     assert exc.value.status_code == 503
     assert "/skills" in exc.value.detail

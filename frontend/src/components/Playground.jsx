@@ -19,6 +19,7 @@ import {
 import * as shortlist from "../shortlist.js";
 import { recentAgents, rememberAgent } from "../agent_recall.js";
 import { href, navigate } from "../useHashRoute.js";
+import { gateFor, probeMatches } from "../agent_endpoints.js";
 import { setServerTime } from "../useElapsed.js";
 import { adoptFetched, mergeAttempt, pruneById } from "../attempt_state.js";
 import Button, { IconButton } from "./ui/Button.jsx";
@@ -68,7 +69,7 @@ function useAttemptsCollapsed() {
 // each send compares against.
 //
 // **Everything here hangs off one connected agent, and that is now explicit.**
-// The workspace used to be read on mount from whatever `AGENT_BASE_URL` the
+// The workspace used to be read on mount from whatever agent URL the
 // backend was started with, while the question went to whichever URL was typed
 // into the endpoints panel. Nothing enforced that these were the same server, so
 // the failure was silent and total: the editor showed agent A's skill files, the
@@ -124,11 +125,16 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // live form state instead would turn it into "you have typed something".
   const [opened, setOpened] = useState(null);
   const [systemDefaults, setSystemDefaults] = useState(null);
-  const [secrets, setSecrets] = useState({ llm_api_key: "", langfuse_secret_key: "" });
+  const [secrets, setSecrets] = useState({
+    llm_api_key: "",
+    langfuse_secret_key: "",
+    // Blank for almost every agent; see integrations/real/agent_auth.py.
+    agent_api_key: "",
+  });
 
   // Which agent this screen is about: "disconnected" | "connecting" |
   // "connected" | "error" | "fake". The URL itself is not duplicated here — it
-  // lives in `form.agent_base_url`, which is what an attempt is sent with.
+  // lives in `form.agent_chat_url`, which is what an attempt is sent with.
   const [conn, setConn] = useState("disconnected");
   const [connError, setConnError] = useState(null);
   const [recent, setRecent] = useState([]);
@@ -145,6 +151,11 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // Set when something carried in — a cloned attempt, a question handed over
   // from a run — names an agent other than the connected one.
   const [agentMismatch, setAgentMismatch] = useState(null);
+  // The chat probe's answer, and whether one is in flight. Separate from `conn`
+  // because it lands after the screen is already usable: it gates the send
+  // button, not the page.
+  const [chatProbe, setChatProbe] = useState(null);
+  const [chatBusy, setChatBusy] = useState(false);
 
   // Questions on their way out of the playground and into an eval set.
   // Copies, not references: an attempt is evicted at the per-user cap and lost
@@ -157,7 +168,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   const active = attempts.find((a) => a.id === activeId) || null;
 
   // The defaults decide where this screen starts: with a fake workspace seam
-  // there is no agent to connect to, and with an AGENT_BASE_URL in the
+  // there is no agent to connect to, and with an AGENT_CHAT_URL in the
   // environment there is one obvious answer — connecting to it keeps every
   // existing single-agent deployment working exactly as it did, rather than
   // making everyone press a button to get back to where they already were.
@@ -176,9 +187,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           // be an unhandled one — and `loadWorkspace` has already put the reason
           // where the editor shows it.
           loadWorkspace({}).catch(() => {});
-        } else if (r.defaults?.agent_base_url) {
+        } else if (r.defaults?.agent_chat_url) {
           connect({
-            base_url: r.defaults.agent_base_url,
+            chat_url: r.defaults.agent_chat_url,
+            skills_url: r.defaults.agent_skills_url || "",
             timeout_s: r.defaults.agent_timeout_s ?? null,
           });
         }
@@ -221,16 +233,20 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // drift.
   function agentOf(f = form) {
     return {
-      agent_base_url: f?.agent_base_url || "",
+      agent_chat_url: f?.agent_chat_url || "",
+      agent_skills_url: f?.agent_skills_url || "",
+      // Not a secret — the shape of the request, not the credential, which
+      // travels in `secrets` and never in a URL.
+      agent_auth_header: f?.agent_auth_header || "",
       agent_timeout_s: f?.agent_timeout_s ?? null,
     };
   }
 
-  async function loadWorkspace(agent) {
+  async function loadWorkspace(agent, creds = secrets) {
     setWsLoading(true);
     setWsError(null);
     try {
-      const ws = await api.getWorkspace(agent);
+      const ws = await api.getWorkspace(agent, creds);
       setWorkspace(ws);
       // Reloading starts the edit over from what the agent has now. Replaying
       // the old edits onto new text would produce a third version that matches
@@ -254,18 +270,36 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // workspace contract, and it produces the snapshot and version everything below
   // depends on. A separate ping would prove less and be one more thing to keep
   // in step.
-  async function connect({ base_url, timeout_s }) {
-    const agent = { agent_base_url: base_url, agent_timeout_s: timeout_s ?? null };
+  async function connect({ chat_url, skills_url, timeout_s, api_key, auth_header }) {
+    const agent = {
+      agent_chat_url: chat_url,
+      agent_skills_url: skills_url || "",
+      agent_auth_header: auth_header || "",
+      agent_timeout_s: timeout_s ?? null,
+    };
+    // Held beside the form, not in it: `form` is the attempt's config, and a
+    // credential does not belong in a config object that is echoed back.
+    const withKey = { ...secrets, agent_api_key: api_key || "" };
+    setSecrets(withKey);
     setForm((f) => ({ ...(f || {}), ...agent }));
     setConn("connecting");
     setConnError(null);
     setStale(null);
+    setChatProbe(null);
+    // Fired here and deliberately not awaited. Reading the skill files is what
+    // the screen cannot open without; asking the agent a question is slower,
+    // costs a model call, and only gates the send button — so waiting for it
+    // would make connecting feel several times slower to buy nothing that is
+    // needed yet.
+    probeChat(agent, withKey);
     try {
-      await loadWorkspace(agent);
+      await loadWorkspace(agent, withKey);
       setConn("connected");
       // Remembered only once it worked: the URL that could not be reached is
       // exactly the one not worth offering back next time.
-      setRecent(rememberAgent(subject, { base_url, timeout_s: timeout_s ?? null }));
+      setRecent(rememberAgent(subject, {
+        chat_url, skills_url: skills_url || "", timeout_s: timeout_s ?? null,
+      }));
     } catch (e) {
       setConn("error");
       setConnError(e.message);
@@ -273,6 +307,68 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       setWsEdit(null);
     }
   }
+
+  // One test question, on connect. Its answer says two things the workspace read
+  // cannot: that the agent will answer at all, and whether the skill files we
+  // send are the ones it uses. The second is a warning rather than a block —
+  // questions against the deployed skills are still worth asking, and the check
+  // has real false positives.
+  async function probeChat(agent, creds = secrets) {
+    if (!agent.agent_chat_url) {
+      setChatProbe(null);
+      return;
+    }
+    setChatBusy(true);
+    // Which agent this answer is about. The call is deliberately not awaited,
+    // so a slow probe for the agent someone has just switched away from can
+    // land after the new one's — and an answer about the previous address
+    // disables the send button for the current one, with a reason naming a
+    // server nobody is connected to.
+    const about = {
+      chatUrl: agent.agent_chat_url,
+      skillsUrl: agent.agent_skills_url || "",
+    };
+    const tagged = (probe) => ({
+      ...probe,
+      forChatUrl: about.chatUrl,
+      forSkillsUrl: about.skillsUrl,
+    });
+    try {
+      const r = await api.agentChatProbe({
+        config: agent,
+        secrets: creds,
+        with_override: true,
+        // Not here. The playground reads traces one attempt at a time, on
+        // demand, and a run's worth of trace plumbing is not what a send button
+        // should wait on.
+        with_trace: false,
+      });
+      setChatProbe(tagged(r));
+    } catch (e) {
+      setChatProbe(tagged({ chat: { ok: false, error: e.message } }));
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  // What the playground may do, given what the probes found. A chat endpoint
+  // that failed stops the send button; everything else is worth saying and not
+  // worth stopping for. Absent checks are "not asked", so nothing is blocked
+  // while the probe is still in flight.
+  // Only an answer about the agent currently connected counts. A stale one is
+  // discarded rather than shown: it is indistinguishable from a current result,
+  // and the thing it would do is refuse to send a question to a working agent.
+  const currentProbe = probeMatches(chatProbe, {
+    chatUrl: form?.agent_chat_url || "",
+    skillsUrl: form?.agent_skills_url || "",
+  })
+    ? chatProbe
+    : null;
+
+  const agentGate = gateFor("playground", {
+    ...(currentProbe?.chat ? { chat: currentProbe.chat } : {}),
+    ...(currentProbe?.override ? { override: currentProbe.override } : {}),
+  });
 
   // How much of the workspace edit would be lost. Asked before anything that
   // replaces the snapshot, because an edit is the expensive thing on this screen
@@ -294,7 +390,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
 
   // Switch straight to another agent, keeping the same confirm as changing by
   // hand — the edits being discarded are worth the same either way.
-  function changeAgentTo({ url, timeout_s }) {
+  function changeAgentTo({ chat_url, skills_url, timeout_s }) {
     if (
       dirtyCount() &&
       !window.confirm(
@@ -303,7 +399,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     ) {
       return;
     }
-    connect({ base_url: url, timeout_s });
+    connect({ chat_url, skills_url, timeout_s });
   }
 
   // Back to the connect form. The snapshot goes with it: it describes a server
@@ -362,14 +458,20 @@ export default function Playground({ subject, seed, onSeedApplied }) {
   // exact failure this screen was restructured to make impossible. The mismatch
   // is said out loud instead, with the switch on a button.
   function otherAgent(config) {
-    const { agent_base_url, agent_timeout_s, ...rest } = config;
+    const { agent_chat_url, agent_skills_url, agent_timeout_s, ...rest } = config;
     return rest;
   }
 
   function noteAgentMismatch(config, what) {
-    const url = config?.agent_base_url;
-    if (!url || !form || url === form.agent_base_url) return;
-    setAgentMismatch({ url, timeout_s: config.agent_timeout_s ?? null, what });
+    const url = config?.agent_chat_url;
+    if (!url || !form || url === form.agent_chat_url) return;
+    setAgentMismatch({
+      url,
+      chat_url: url,
+      skills_url: config.agent_skills_url || "",
+      timeout_s: config.agent_timeout_s ?? null,
+      what,
+    });
   }
 
   // Take a freshly fetched list as the new truth, without letting it undo
@@ -590,7 +692,7 @@ export default function Playground({ subject, seed, onSeedApplied }) {
     // and you would have no way of telling afterwards.
     if (workspace?.version) {
       try {
-        const { version } = await api.getWorkspaceVersion(agentOf());
+        const { version } = await api.getWorkspaceVersion(agentOf(), secrets);
         if (version && version !== workspace.version) {
           setStale({ version });
           return;
@@ -762,7 +864,8 @@ export default function Playground({ subject, seed, onSeedApplied }) {
       {form && (
         <AgentConnectionBar
           status={conn}
-          baseUrl={form.agent_base_url}
+          chatUrl={form.agent_chat_url}
+          skillsUrl={form.agent_skills_url}
           timeoutS={form.agent_timeout_s}
           version={workspace?.version}
           skillCount={workspace ? Object.keys(workspace.skills || {}).length : null}
@@ -772,6 +875,10 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           onConnect={connect}
           onChangeAgent={changeAgent}
           onReload={reloadWorkspace}
+          chatProbe={currentProbe}
+          chatBusy={chatBusy}
+          apiKey={secrets.agent_api_key}
+          authHeader={form.agent_auth_header || ""}
         />
       )}
 
@@ -819,6 +926,9 @@ export default function Playground({ subject, seed, onSeedApplied }) {
           onSend={send}
           busy={busy}
           connected={conn === "connected" || conn === "fake"}
+          agentAnswering={!agentGate.blocked}
+          agentBlockedReason={agentGate.reason}
+          agentWarnings={agentGate.warnings}
           workspace={workspace}
           workspaceEdit={wsEdit}
           onWorkspaceEdit={setWsEdit}

@@ -26,7 +26,7 @@ from app.integrations.base import AgentResponse, Span, Trace, Verdict, Workspace
 from app.integrations.real.prompts import build_diagnosis_messages
 from app.playground import PlaygroundAttempt
 from app.routers import playground as playground_router
-from app.schemas import PlaygroundCreate, RunConfig
+from app.schemas import PlaygroundCreate, RunConfig, WorkspaceReadIn
 from app.sse import hub
 
 
@@ -880,7 +880,8 @@ async def test_create_materializes_the_config_like_a_run_does(monkeypatch, confi
     started: list[PlaygroundAttempt] = []
     monkeypatch.setattr(playground, "start", started.append)
 
-    with configure(agent_base_url="https://env-agent.test", judge_model="env-judge"):
+    with configure(agent_chat_url="https://env-agent.test/v1/chat/completions",
+                   judge_model="env-judge"):
         detail = await playground_router.create_attempt(
             PlaygroundCreate(question="q", config=RunConfig(judge_model="typed-judge")),
             subject="alice",
@@ -888,7 +889,7 @@ async def test_create_materializes_the_config_like_a_run_does(monkeypatch, confi
 
     attempt = started[0]
     assert attempt.config["judge_model"] == "typed-judge"
-    assert attempt.config["agent_base_url"] == "https://env-agent.test"
+    assert attempt.config["agent_chat_url"] == "https://env-agent.test/v1/chat/completions"
     assert detail.config.judge_model == "typed-judge"
 
 
@@ -1035,14 +1036,19 @@ async def test_re_diagnose_reports_the_models_own_error(monkeypatch):
     assert "context length exceeded" in attempt.diagnosis_error
 
 
-async def test_workspace_endpoints_report_misconfiguration_as_503(configure):
-    """WORKSPACE_IMPL=real with no agent base URL used to be a 500 — the reason
-    has to reach the developer, and it is a configuration problem, not a bug."""
-    with configure(workspace_impl="real", agent_base_url=""):
+async def test_no_skills_endpoint_is_a_503_naming_what_is_missing(configure):
+    """An agent with no skills endpoint is supported everywhere but here.
+
+    This router *is* the exploring, so it has nothing to offer such an agent —
+    but it has to say which endpoint is missing. Returning an empty workspace
+    instead would read as "this agent has no skills", and a developer would go
+    looking for files that were never the problem.
+    """
+    with configure(workspace_impl="real", agent_skills_url=""):
         with pytest.raises(HTTPException) as exc:
             await playground_router.get_workspace(subject="alice")
     assert exc.value.status_code == 503
-    assert "AGENT_BASE_URL" in exc.value.detail
+    assert "skills endpoint" in exc.value.detail
 
 
 async def test_a_broken_workspace_is_a_503_not_an_empty_one(configure, monkeypatch):
@@ -1105,8 +1111,8 @@ async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
 ):
     seen: list[tuple] = []
 
-    def spy(base_url=None, timeout_s=None):
-        seen.append((base_url, timeout_s))
+    def spy(skills_url=None, timeout_s=None, **credentials):
+        seen.append((skills_url, timeout_s))
 
         class Client:
             async def get_workspace(self):
@@ -1122,20 +1128,21 @@ async def test_the_workspace_is_read_from_the_agent_the_caller_chose(
             "app.integrations.real.workspace.HttpWorkspaceClient", spy
         )
         ws = await playground_router.get_workspace(
-            agent_base_url="http://agent-b:8080",
-            agent_timeout_s=42.0,
+            WorkspaceReadIn(
+                agent_skills_url="http://agent-b:8080/skills", agent_timeout_s=42.0
+            ),
             subject="alice",
         )
 
-    assert seen == [("http://agent-b:8080", 42.0)]
+    assert seen == [("http://agent-b:8080/skills", 42.0)]
     assert ws.skills == {"b/SKILL.md": "agent B's skill"}
 
 
 async def test_the_version_check_asks_the_same_agent(configure, monkeypatch):
     seen: list[tuple] = []
 
-    def spy(base_url=None, timeout_s=None):
-        seen.append((base_url, timeout_s))
+    def spy(skills_url=None, timeout_s=None, **credentials):
+        seen.append((skills_url, timeout_s))
 
         class Client:
             async def get_version(self):
@@ -1148,17 +1155,18 @@ async def test_the_version_check_asks_the_same_agent(configure, monkeypatch):
             "app.integrations.real.workspace.HttpWorkspaceClient", spy
         )
         out = await playground_router.get_workspace_version(
-            agent_base_url="http://agent-b:8080", subject="alice"
+            WorkspaceReadIn(agent_skills_url="http://agent-b:8080/skills"),
+            subject="alice",
         )
 
     assert out.version == "v-from-b"
-    assert seen == [("http://agent-b:8080", None)]
+    assert seen == [("http://agent-b:8080/skills", None)]
 
 
 async def test_a_blank_agent_url_still_falls_back_to_the_environment(configure):
     """A single-agent deployment must behave exactly as it did before."""
     with configure(workspace_impl="fake"):
-        ws = await playground_router.get_workspace(agent_base_url="", subject="alice")
+        ws = await playground_router.get_workspace(WorkspaceReadIn(), subject="alice")
 
     assert ws.skills["billing/SKILL.md"].startswith("# Billing")
 
@@ -1170,8 +1178,8 @@ async def test_the_edit_baseline_comes_from_the_attempts_own_agent(monkeypatch):
 
     seen: list[str | None] = []
 
-    def spy(agent_base_url=None, agent_timeout_s=None):
-        seen.append(agent_base_url)
+    def spy(agent):
+        seen.append(agent.agent_skills_url)
 
         class Client:
             async def get_workspace(self):
@@ -1187,12 +1195,12 @@ async def test_the_edit_baseline_comes_from_the_attempts_own_agent(monkeypatch):
         PlaygroundCreate(
             question="q",
             workspace={"skills": {"a/SKILL.md": "edited"}},
-            config=RunConfig(agent_base_url="http://agent-b:8080"),
+            config=RunConfig(agent_skills_url="http://agent-b:8080/skills"),
         ),
         subject="alice",
     )
 
-    assert seen == ["http://agent-b:8080"]
+    assert seen == ["http://agent-b:8080/skills"]
     assert started[0].workspace_baseline == {"a/SKILL.md": "from the right agent"}
 
 
