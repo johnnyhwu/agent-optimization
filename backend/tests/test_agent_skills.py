@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from app.config import settings
 from app.integrations.base import Workspace
 from app.routers import agent as agent_router
-from app.schemas import ChatProbeIn, RunConfig, RunSecrets, SkillsProbeIn
+from app.schemas import ChatProbeIn, RunConfig, SkillsProbeIn
 from app.services import agent_probe
 from app.services.agent_skills import top_level_skills
 

@@ -128,8 +128,8 @@ def _is_https_upgrade(origin: str, url: str) -> bool:
         return False
 
 
-class OriginBoundTransport(httpx.AsyncBaseTransport):
-    """A transport that drops the credential header once the request leaves its origin.
+def _origin_guard(header_name: str, origin: str):
+    """A request hook that drops the credential header once it leaves its origin.
 
     `follow_redirects=True` means the client may send the request somewhere
     other than the URL that was typed. httpx already strips `Authorization` on a
@@ -138,33 +138,27 @@ class OriginBoundTransport(httpx.AsyncBaseTransport):
     its key carried to wherever a `302` pointed, which is the endpoint binding
     in `services/user_secrets.py` broken by a response.
 
-    Every hop in a redirect chain reaches the transport with its real URL, so
-    this is the layer that can tell. Applied to both header names rather than
-    only the custom one: two rules that mostly agree are harder to reason about
-    than one, and this one is the rule the platform actually promises.
+    A request hook rather than a custom transport: httpx runs these once per
+    redirect hop with the hop's real URL (`_send_handling_redirects`), so this
+    sees every address the credential would reach, while leaving the client's
+    own transport — and with it the proxy configuration httpx reads from the
+    environment — exactly as it would otherwise be. Applied to both header names
+    rather than only the custom one: two rules that mostly agree are harder to
+    reason about than one, and this one is the rule the platform actually
+    promises.
     """
 
-    def __init__(
-        self, inner: httpx.AsyncBaseTransport, *, header_name: str, origin: str
-    ) -> None:
-        self._inner = inner
-        self._header = header_name
-        self._origin = origin
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def guard(request: httpx.Request) -> None:
         target = str(request.url)
-        if not same_origin(self._origin, target) and not _is_https_upgrade(
-            self._origin, target
-        ):
-            # Conditional because httpx may have removed it already: it does
-            # its own stripping for `Authorization`, and deleting a header that
-            # is not there raises.
-            if self._header in request.headers:
-                del request.headers[self._header]
-        return await self._inner.handle_async_request(request)
+        if same_origin(origin, target) or _is_https_upgrade(origin, target):
+            return
+        # Conditional because httpx may have removed it already: it does its own
+        # stripping for `Authorization`, and deleting a header that is not there
+        # raises.
+        if header_name in request.headers:
+            del request.headers[header_name]
 
-    async def aclose(self) -> None:
-        await self._inner.aclose()
+    return guard
 
 
 def credentialed_client(
@@ -177,7 +171,7 @@ def credentialed_client(
     """The client for talking to one agent endpoint, credential bound to its origin.
 
     With no key this is the plain client it has always been — same timeout, same
-    redirect following, no transport in the way.
+    redirect following, nothing in the way.
     """
     headers = auth_headers(api_key, auth_header)
     if not headers:
@@ -186,7 +180,5 @@ def credentialed_client(
     return httpx.AsyncClient(
         timeout=timeout_s,
         follow_redirects=True,
-        transport=OriginBoundTransport(
-            httpx.AsyncHTTPTransport(), header_name=name, origin=url
-        ),
+        event_hooks={"request": [_origin_guard(name, url)]},
     )

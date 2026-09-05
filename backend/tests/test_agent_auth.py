@@ -13,7 +13,12 @@ import respx
 
 from app.integrations import build_seams
 from app.integrations.real.agent import HttpAgentClient
-from app.integrations.real.agent_auth import auth_headers, redact, same_origin
+from app.integrations.real.agent_auth import (
+    auth_headers,
+    credentialed_client,
+    redact,
+    same_origin,
+)
 from app.integrations.real.workspace import HttpWorkspaceClient
 
 CHAT_URL = "https://agent.test/v1/chat/completions"
@@ -272,8 +277,24 @@ async def test_the_skills_endpoint_is_bound_the_same_way():
 @pytest.mark.asyncio
 @respx.mock
 async def test_an_unauthenticated_client_still_follows_redirects():
-    """The transport is only in the way when there is something to protect."""
+    """Nothing is in the way when there is nothing to protect."""
     sink = _redirect_chain()
     resp = await HttpAgentClient(chat_url=CHAT_URL).call("q", "cid", "user")
     assert resp.response == "ok"
     assert "authorization" not in sink.calls[0].request.headers
+
+
+def test_a_credentialed_client_still_goes_through_the_proxy(monkeypatch):
+    """Binding the credential to an origin must not unplug the proxy settings.
+
+    httpx reads `HTTPS_PROXY` from the environment only when the client builds
+    its own transport (`allow_env_proxies = trust_env and transport is None`),
+    so guarding the credential with a custom transport would quietly send the
+    authenticated requests direct while the unauthenticated ones went through
+    the proxy. The guard is a request hook for this reason.
+    """
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.test:8080")
+    plain = credentialed_client(CHAT_URL, timeout_s=5)
+    keyed = credentialed_client(CHAT_URL, timeout_s=5, api_key="sk-secret-42")
+    assert list(keyed._mounts) == list(plain._mounts)
+    assert keyed._mounts
