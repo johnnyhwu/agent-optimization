@@ -4,6 +4,19 @@ React 18 + Vite, no router, no state library, no CSS framework, no chart
 library. `pnpm test` is `node --test src/*.test.js` — plain Node, no DOM, no
 test renderer.
 
+## Adding a dependency
+
+`pnpm add`, and commit `pnpm-lock.yaml` with `package.json`. Nothing here
+installs with npm: `frontend/Dockerfile` and `docker-compose.override.yml` both
+run `pnpm install --frozen-lockfile`, which refuses to install at all when the
+lockfile does not match `package.json`.
+
+An `npm install` writes a `package-lock.json` that no build reads, leaves every
+test green and the dev server working, and the mismatch surfaces as
+`ERR_PNPM_OUTDATED_LOCKFILE` in somebody else's image build. That has happened
+once, to `marked`. `package-lock.json` is now in `.gitignore` and
+`src/lockfile_contract.test.js` compares the two files.
+
 ## Where logic goes
 
 Components render. Anything with a rule in it goes in a pure `src/*.js` module

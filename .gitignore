@@ -16,6 +16,14 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/.pnpm-store/
+# The frontend is pnpm-only: every image and compose service installs with
+# `pnpm install --frozen-lockfile`, and pnpm-lock.yaml is the lockfile they
+# read. A package-lock.json left behind by an `npm install` is installed from
+# by nothing, but it makes `npm install` look like the supported way to add a
+# dependency — and then package.json changes, the npm lockfile changes, and the
+# lockfile the build actually uses does not. Ignored so it cannot be committed
+# again; `src/lockfile_contract.test.js` catches the divergence itself.
+frontend/package-lock.json
 
 # OS / editor
 .DS_Store
