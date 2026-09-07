@@ -7,7 +7,7 @@ import {
   deriveSkillsUrl,
   splitHint,
 } from "../agent_endpoints.js";
-import { href } from "../useHashRoute.js";
+import DocsHelp from "./DocsHelp.jsx";
 
 // The two URLs that name an agent server, wherever they are asked for.
 //
@@ -75,22 +75,6 @@ function StatusLine({ check, busy, busyLabel }) {
   );
 }
 
-// The "?" beside a field label. A deep link, not a link to the front of the
-// docs: someone clicking this has a specific question, and landing them on a
-// table of contents makes them find the answer twice.
-function HelpLink({ anchor, label }) {
-  return (
-    <a
-      className="agent-ep-help ui-btn ui-btn-ghost ui-btn-icon"
-      href={href.docs("agent-server", anchor)}
-      title={label}
-      aria-label={label}
-    >
-      <IconInfo size={14} />
-    </a>
-  );
-}
-
 // One named group of fields inside the agent block. Not a `FormSection`: these
 // sit *inside* one, and reusing that heading would give a group the same weight
 // as the section containing it.
@@ -155,7 +139,7 @@ function Authentication({
       <Field
         label="API key"
         htmlFor={`${idPrefix}-api-key`}
-        hint={<HelpLink anchor="authentication" label="How the platform sends a credential" />}
+        hint={<DocsHelp anchor="authentication" label="How the platform sends a credential" />}
         help="Most agent servers need none. Leave this blank and nothing is sent."
       >
         <input
@@ -172,6 +156,7 @@ function Authentication({
       <Field
         label="Auth header"
         htmlFor={`${idPrefix}-auth-header`}
+        hint={<DocsHelp anchor="authentication" label="Where the credential is sent" />}
         help="Blank sends Authorization: Bearer. Name a header to send the key as its value instead."
       >
         <input
@@ -251,7 +236,7 @@ export default function AgentEndpointsFields({
         <Field
           label="URL"
           htmlFor={`${idPrefix}-chat-url`}
-          hint={<HelpLink anchor="chat-endpoint" label="What this endpoint must do" />}
+          hint={<DocsHelp anchor="chat-endpoint" label="What this endpoint must do" />}
           help="Where questions are sent. OpenAI chat completions."
         >
           <div className="agent-ep-row">
@@ -317,7 +302,7 @@ export default function AgentEndpointsFields({
         <Field
           label="URL"
           htmlFor={`${idPrefix}-skills-url`}
-          hint={<HelpLink anchor="skills-endpoint" label="What this endpoint must do" />}
+          hint={<DocsHelp anchor="skills-endpoint" label="What this endpoint must do" />}
           help={
             "Optional. Without it an evaluation still runs — the playground, the " +
             "skill-coverage warning and optimization are what need it."

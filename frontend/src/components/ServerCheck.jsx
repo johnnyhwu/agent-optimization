@@ -1,15 +1,12 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
-import {
-  deriveSkillsUrl,
-  looksUnauthorized,
-  splitHint,
-  TIER_LABELS,
-} from "../agent_endpoints.js";
+import { deriveSkillsUrl, splitHint, TIER_LABELS } from "../agent_endpoints.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 import Button from "./ui/Button.jsx";
-import Field, { Disclosure } from "./ui/Field.jsx";
+import Field from "./ui/Field.jsx";
+import { EndpointGroup } from "./AgentEndpointsFields.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
+import DocsHelp from "./DocsHelp.jsx";
 import { IconAlert, IconCheck, IconInfo, IconPlay } from "./icons.jsx";
 import { href } from "../useHashRoute.js";
 
@@ -72,7 +69,6 @@ export default function ServerCheck() {
   const [authHeader, setAuthHeader] = useState("");
   // Opened by a refusal and never closed by one, so it does not shut under
   // somebody who opened it to type. Same rule as the other two screens.
-  const [authOpen, setAuthOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
@@ -88,7 +84,6 @@ export default function ServerCheck() {
         agent_auth_header: authHeader.trim(),
       });
       setReport(result);
-      if ((result.cases || []).some((c) => looksUnauthorized(c.result))) setAuthOpen(true);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -109,47 +104,18 @@ export default function ServerCheck() {
       />
 
       <div className="check-form">
-        <Field
-          label="Chat endpoint"
-          htmlFor="check-chat"
-          help="OpenAI chat completions. Required."
-        >
-          <input
-            id="check-chat"
-            value={chatUrl}
-            placeholder="http://agent-host:8080/v1/chat/completions"
-            spellCheck={false}
-            autoFocus
-            onChange={(e) => setChatUrl(e.target.value)}
-            onBlur={(e) => {
-              if (skillsUrl.trim()) return;
-              const guess = deriveSkillsUrl(e.target.value);
-              if (guess) setSkillsUrl(guess);
-            }}
-          />
-        </Field>
-        <Field
-          label="Skills endpoint"
-          htmlFor="check-skills"
-          help="Optional. Leave blank if your server does not have one — nothing else is assumed in its place."
-        >
-          <input
-            id="check-skills"
-            value={skillsUrl}
-            placeholder="http://agent-host:8080/skills"
-            spellCheck={false}
-            onChange={(e) => setSkillsUrl(e.target.value)}
-          />
-        </Field>
-        <Disclosure
-          summary="Authentication"
-          detail="Optional"
-          open={authOpen}
-          onOpenChange={setAuthOpen}
-        >
+        {/* The same three groups, in the same order, as every other screen
+            that asks for an agent server: the credential first because it
+            applies to both addresses under it, then the endpoint the checklist
+            cannot run without, then the optional one. This block had them the
+            other way round with the credential folded away, so the one page
+            whose whole job is "did I implement the contract" disagreed with the
+            forms people implement against. */}
+        <EndpointGroup title="Endpoint authentication">
           <Field
             label="API key"
             htmlFor="check-api-key"
+            hint={<DocsHelp anchor="authentication" label="How the platform sends a credential" />}
             help={
               "Most agent servers need none, and nothing here checks whether " +
               "yours does — asking for no credential is not a defect."
@@ -167,6 +133,7 @@ export default function ServerCheck() {
           <Field
             label="Auth header"
             htmlFor="check-auth-header"
+            hint={<DocsHelp anchor="authentication" label="Where the credential is sent" />}
             help="Blank sends Authorization: Bearer. Name a header to send the key as its value instead."
           >
             <input
@@ -177,7 +144,45 @@ export default function ServerCheck() {
               onChange={(e) => setAuthHeader(e.target.value)}
             />
           </Field>
-        </Disclosure>
+        </EndpointGroup>
+        <EndpointGroup title="Chat endpoint">
+          <Field
+            label="URL"
+            htmlFor="check-chat"
+            hint={<DocsHelp anchor="chat-endpoint" label="What this endpoint must do" />}
+            help="OpenAI chat completions. Required."
+          >
+            <input
+              id="check-chat"
+              value={chatUrl}
+              placeholder="http://agent-host:8080/v1/chat/completions"
+              spellCheck={false}
+              autoFocus
+              onChange={(e) => setChatUrl(e.target.value)}
+              onBlur={(e) => {
+                if (skillsUrl.trim()) return;
+                const guess = deriveSkillsUrl(e.target.value);
+                if (guess) setSkillsUrl(guess);
+              }}
+            />
+          </Field>
+        </EndpointGroup>
+        <EndpointGroup title="Skills endpoint">
+          <Field
+            label="URL"
+            htmlFor="check-skills"
+            hint={<DocsHelp anchor="skills-endpoint" label="What this endpoint must do" />}
+            help="Optional. Leave blank if your server does not have one — nothing else is assumed in its place."
+          >
+            <input
+              id="check-skills"
+              value={skillsUrl}
+              placeholder="http://agent-host:8080/skills"
+              spellCheck={false}
+              onChange={(e) => setSkillsUrl(e.target.value)}
+            />
+          </Field>
+        </EndpointGroup>
         <Button
           variant="primary"
           icon={<IconPlay size={14} />}

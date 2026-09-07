@@ -34,6 +34,21 @@ export function slugify(text) {
 export function findAnchor(headings, anchor) {
   if (!anchor) return "";
   const wanted = slugify(anchor);
+  // Sections first, then everything. A "?" beside a field names a *section* of
+  // the contract, and the same words turn up again as sub-headings inside other
+  // sections: the agent-server document has "## 3. Chat endpoint" and, under
+  // "## 9. Errors", a "### Chat endpoint" listing what each status code does.
+  // The sub-heading's id is the exact `chat-endpoint`, so a single pass over
+  // every heading matched it first — and both endpoint links in the product
+  // landed the reader in the error table of section 9 rather than on the
+  // endpoint's own section. Nothing said so: it is a real heading in the right
+  // document, one screen from where they meant to be.
+  return match(headings.filter((h) => h.depth === 2), wanted)
+    || match(headings, wanted);
+}
+
+// The three rules, loosest last, over one set of candidates.
+function match(headings, wanted) {
   const exact = headings.find((h) => h.id === wanted);
   if (exact) return exact.id;
   const suffix = headings.find((h) => h.id.endsWith(`-${wanted}`));

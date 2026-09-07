@@ -53,6 +53,35 @@ describe("findAnchor", () => {
     assert.equal(findAnchor(both, "skills"), "5-skills");
   });
 
+  it("prefers a section over a sub-heading that happens to share the name", () => {
+    // The real document has both: "## 3. Chat endpoint", and a "### Chat
+    // endpoint" under "## 9. Errors" listing what each status code does. The
+    // sub-heading's id is the exact `chat-endpoint`, so it used to win — and
+    // both endpoint "?" links in the product landed in the error table one
+    // section further down, which is a real heading in the right document and
+    // therefore reads as the link working.
+    const withSubheadings = [
+      { id: "3-chat-endpoint", text: "…", depth: 2 },
+      { id: "4-skills-endpoint", text: "…", depth: 2 },
+      { id: "9-errors-and-what-each-one-causes", text: "…", depth: 2 },
+      { id: "chat-endpoint", text: "…", depth: 3 },
+      { id: "skills-endpoint", text: "…", depth: 3 },
+    ];
+    assert.equal(findAnchor(withSubheadings, "chat-endpoint"), "3-chat-endpoint");
+    assert.equal(findAnchor(withSubheadings, "skills-endpoint"), "4-skills-endpoint");
+  });
+
+  it("still finds a sub-heading when no section answers", () => {
+    // The preference is for sections, not a refusal to look anywhere else: a
+    // "?" may legitimately point at a sub-section, and the anchor is written by
+    // hand at the call site.
+    const subOnly = [
+      { id: "8-authentication", text: "…", depth: 2 },
+      { id: "what-gets-sent", text: "…", depth: 3 },
+    ];
+    assert.equal(findAnchor(subOnly, "what-gets-sent"), "what-gets-sent");
+  });
+
   it("returns nothing for a section that is not there", () => {
     assert.equal(findAnchor(headings, "authentication"), "");
     assert.equal(findAnchor(headings, ""), "");

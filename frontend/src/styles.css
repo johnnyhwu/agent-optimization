@@ -341,8 +341,17 @@ select { cursor: pointer; }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 /* The footer list sits at the foot of the rail rather than after the last
    section, so reference material reads as reference material and not as a
-   fourth thing the product does. */
-.rail-list-foot { margin-top: auto; }
+   fourth thing the product does.
+   It owns the *only* `margin-top: auto` in the rail. `.rail-collapse` carried
+   one too, and two auto margins in a flex column split the free space between
+   them — which left Documentation floating in the middle of the empty rail with
+   a hand's width of nothing under it, attached to neither the sections above
+   nor the control below. The rule above it is what says the two rows at the
+   bottom are one group. */
+.rail-list-foot {
+  margin-top: auto;
+  padding-top: var(--space-2); border-top: 1px solid var(--border);
+}
 
 /* Deliberately not the segmented pill (which means "filter this page") and not
    the inset accent bar (which means "this row of the list is selected"). A
@@ -371,7 +380,7 @@ select { cursor: pointer; }
   letter-spacing: 0.04em; color: var(--muted); opacity: 0.8;
 }
 .rail-collapse {
-  margin-top: auto; justify-content: flex-start; gap: var(--space-3);
+  justify-content: flex-start; gap: var(--space-3);
   padding: var(--space-2) var(--space-3); font-size: var(--text-caption);
   color: var(--muted); background: none; border: none; border-radius: var(--radius-sm);
   transition: background var(--dur), color var(--dur);
@@ -582,6 +591,13 @@ select { cursor: pointer; }
 .set-card-heading h3 {
   margin: 0 0 6px; font-size: var(--text-title); font-weight: var(--fw-semibold);
   overflow-wrap: anywhere;
+  /* Two lines whether the name needs them or not. Cards size to their own
+     content now, so without this a one-line title started its card's numbers
+     twenty pixels above its neighbour's — and the stats band is the one thing
+     read *across* the grid rather than down a card. Reserved rather than
+     stretched: the space is the same on every card, which is what makes it read
+     as the layout's rhythm instead of as one card having a gap in it. */
+  line-height: 1.3; min-height: 2.6em;
   /* Two lines, then ellipsis, with the full name in the title attribute. A set
      can be named anything and a three-line one used to set the height of every
      card in its grid row — so one badly named set made the whole row taller and
@@ -1236,9 +1252,11 @@ select { cursor: pointer; }
 }
 /* Square and sized to be hit rather than aimed at, like every other icon-only
    control here. `ui-btn-icon` already sets the box; this only stops the link
-   reset from taking the underline and the text colour with it. */
-.agent-ep-help { color: var(--muted); text-decoration: none; }
-.agent-ep-help:hover { color: var(--text); }
+   reset from taking the underline and the text colour with it. Named for what
+   it is rather than for the one component it started in: four screens ask for
+   an agent server and all four carry it now. */
+.docs-help { color: var(--muted); text-decoration: none; }
+.docs-help:hover { color: var(--text); text-decoration: none; }
 /* The three groups — credential, chat endpoint, skills endpoint — laid out in
    the order they are decided in. A rule and a heading rather than three nested
    disclosures: the fields are all needed, and a chevron on each of them was
@@ -1338,6 +1356,12 @@ select { cursor: pointer; }
   padding-top: var(--space-3); border-top: 1px solid var(--border);
 }
 .doc-body h3 { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-ui); }
+/* Every heading is a jump target — the "?" beside a field links straight to
+   one — and the top bar is sticky, so a heading scrolled to its own top lands
+   underneath it. Measured at -0.34px from the viewport top, which is to say
+   completely behind 48px of chrome. Same rule, same reason, as
+   `.settings-group`. */
+.doc-body h2, .doc-body h3 { scroll-margin-top: calc(var(--topbar-h) + var(--space-4)); }
 .doc-body p, .doc-body li { line-height: 1.65; }
 .doc-body ul, .doc-body ol { padding-left: var(--space-5); }
 .doc-body blockquote {
@@ -1402,8 +1426,8 @@ select { cursor: pointer; }
 .agent-bar-fields {
   display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap;
 }
-.agent-bar-fields .field { flex: 1; min-width: 220px; margin-bottom: 0; }
-.agent-bar-fields .agent-bar-timeout { flex: 0 0 120px; min-width: 120px; }
+.agent-bar-fields .ui-field { flex: 1; min-width: 220px; margin-bottom: 0; }
+.agent-bar-fields .agent-bar-timeout { flex: 0 0 140px; min-width: 140px; }
 /* The credential panel, folded into the connect form. Its own top margin
    because the disclosure sits between two rows of fields and would otherwise
    read as part of the row above it. */
