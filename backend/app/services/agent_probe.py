@@ -52,6 +52,7 @@ from app.integrations import build_seams
 from app.integrations.base import NotReady, WorkspaceOverride
 from app.integrations.real.agent import AgentHttpError, build_payload
 from app.integrations.real.agent_auth import same_origin
+from app.services.agent_skills import top_level_skills
 
 # The probe skill's path. Namespaced so it cannot collide with a real skill, and
 # recognisable in an agent's logs as something the platform sent.
@@ -203,6 +204,24 @@ def make_probe_skill() -> tuple[dict[str, str], str, str]:
     return skills, PROBE_QUESTION, magic
 
 
+def skills_detail(paths: list[str]) -> str:
+    """The status line under a skills endpoint: "3 skills in 11 files".
+
+    Both numbers, because they answer different questions and this line was only
+    ever giving the second one. "11 skill files" is true and reads as eleven
+    skills; one skill is routinely half a dozen files, so the file count alone
+    overstates what the agent has by whatever its reference material happens to
+    weigh. The skill count is the number a developer holds against their own
+    skills directory, and the one every screen's missing-skill warning is
+    computed from — see `services/agent_skills.py` for what counts as one.
+    """
+    names = top_level_skills(paths)
+    return (
+        f"{len(names)} skill{'' if len(names) == 1 else 's'}"
+        f" in {len(paths)} file{'' if len(paths) == 1 else 's'}"
+    )
+
+
 async def probe_skills(
     skills_url: str,
     timeout_s: float | None = None,
@@ -271,13 +290,7 @@ async def probe_skills(
 
     result.version = workspace.version
     result.paths = sorted(workspace.skills)
-    result.skills = CheckResult(
-        ok=True,
-        detail=(
-            f"{len(workspace.skills)} skill file"
-            f"{'' if len(workspace.skills) == 1 else 's'}"
-        ),
-    )
+    result.skills = CheckResult(ok=True, detail=skills_detail(result.paths))
     result.response_preview = _preview(
         {
             "version": workspace.version,
