@@ -19,6 +19,7 @@ from app.optimizer.runner import reap_interrupted_optimization_runs
 from app.routers import (
     agent,
     diagnosis,
+    docs,
     eval_set_scripts,
     eval_sets,
     export,
@@ -150,6 +151,7 @@ app.add_middleware(
 )
 
 app.include_router(agent.router)
+app.include_router(docs.router)
 app.include_router(users.router)
 app.include_router(eval_sets.router)
 app.include_router(eval_set_scripts.router)

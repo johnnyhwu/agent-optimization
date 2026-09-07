@@ -174,4 +174,7 @@ def test_the_endpoint_mapping_comes_from_the_catalogue():
     assert _SECRET_ENDPOINTS == {
         "llm_api_key": "llm_base_url",
         "langfuse_secret_key": "langfuse_host",
+        # Bound to the chat endpoint, and reaching the skills endpoint only when
+        # that is the same server — see integrations/real/agent_auth.py.
+        "agent_api_key": "agent_chat_url",
     }

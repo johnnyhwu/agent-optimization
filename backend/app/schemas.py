@@ -298,7 +298,15 @@ class RunConfig(BaseModel):
     the form and the fallback always agree.
     """
 
-    agent_base_url: str = ""
+    agent_chat_url: str = ""
+    # Optional even when the rest is filled in: an agent that serves no skill
+    # listing is evaluated normally, it just cannot be explored or optimised.
+    agent_skills_url: str = ""
+    # Where the agent's credential goes, when there is one. Blank means
+    # `Authorization: Bearer <key>`; a name like `X-Api-Key` sends the key
+    # verbatim. Not a secret — it is the shape of the request, not the
+    # credential — so it lives here rather than in `RunSecrets`.
+    agent_auth_header: str = ""
     agent_timeout_s: float | None = None
     langfuse_host: str = ""
     langfuse_public_key: str = ""
@@ -334,6 +342,10 @@ class RunSecrets(BaseModel):
 
     langfuse_secret_key: str = ""
     llm_api_key: str = ""
+    # Optional, like everything else here, and optional in a stronger sense:
+    # most agent servers this platform talks to ask for no credential at all,
+    # and leaving this blank sends none. See integrations/real/agent_auth.py.
+    agent_api_key: str = ""
 
 
 class RunCreate(BaseModel):
@@ -939,6 +951,76 @@ class ImportPreview(BaseModel):
     sources: list[PreviewSource] = Field(default_factory=list)
 
 
+class DocOut(BaseModel):
+    """One reference document, as the markdown it is stored as.
+
+    Rendered on the client rather than here: the source of truth is a file in
+    the repository, and turning it into HTML on the way out would put a second
+    formatting decision between the file and the reader.
+    """
+
+    name: str
+    title: str
+    summary: str = ""
+    markdown: str
+
+
+class CheckOut(BaseModel):
+    """One connection check's answer.
+
+    `ok` is a tri-state: `None` means the check was not attempted, which the UI
+    must not draw as a failure. "We did not test the override" and "the override
+    did not apply" gate an optimization run differently.
+    """
+
+    ok: bool | None = None
+    detail: str = ""
+    error: str = ""
+
+
+class ConformanceCaseOut(BaseModel):
+    id: str
+    title: str
+    why: str = ""
+    result: CheckOut = Field(default_factory=CheckOut)
+
+
+class ConformanceOut(BaseModel):
+    """The whole acceptance checklist, run against one agent server."""
+
+    cases: list[ConformanceCaseOut] = Field(default_factory=list)
+    tier: int = 0
+    summary: str = ""
+
+
+class ConformanceIn(BaseModel):
+    agent_chat_url: str = ""
+    agent_skills_url: str = ""
+    agent_timeout_s: float | None = None
+    # Optional here too. Without it this page would be unusable by exactly the
+    # people most likely to need it — someone who has just written a server and
+    # put it behind their team's gateway.
+    agent_api_key: str = ""
+    agent_auth_header: str = ""
+
+
+class SkillsProbeIn(BaseModel):
+    """Read one agent's skill listing.
+
+    A POST for a read, which is worth the explanation. It carries a credential,
+    and a credential in a query string is a credential in an access log — on
+    this platform's proxy, on the caller's, and on anything in between. The GET
+    this replaces took the URL as a query parameter and had nowhere safe to put
+    a key.
+
+    It stays cheap and side-effect-free, so the callers that fire it while
+    somebody is typing still do.
+    """
+
+    config: RunConfig = Field(default_factory=RunConfig)
+    secrets: RunSecrets = Field(default_factory=RunSecrets)
+
+
 class AgentSkillsOut(BaseModel):
     """What the "Run eval" dialog's pre-flight learned about one agent server.
 
@@ -949,11 +1031,49 @@ class AgentSkillsOut(BaseModel):
     skill list as "this agent has no skills".
     """
 
-    # The agent this actually asked, resolved the way a run resolves it, so the
-    # dialog can name the server that answered rather than the box left blank.
-    agent_base_url: str
+    # The endpoint this actually read, resolved the way a run resolves it, so
+    # the dialog can name the server that answered rather than the box left
+    # blank. Empty when no skills endpoint was configured at all — which is a
+    # state to describe, not an error to report.
+    agent_skills_url: str
     version: str = ""
     skills: list[str] = Field(default_factory=list)
+    # `ok=None` here is the entry-level tier: no skills endpoint was configured,
+    # which is a supported way to run an agent and must not be drawn in red.
+    check: CheckOut = Field(default_factory=CheckOut)
+    request_preview: str = ""
+    response_preview: str = ""
+
+
+class ChatProbeOut(BaseModel):
+    """The result of one real call to the agent's chat endpoint."""
+
+    chat: CheckOut = Field(default_factory=CheckOut)
+    override: CheckOut = Field(default_factory=CheckOut)
+    trace: CheckOut = Field(default_factory=CheckOut)
+    trace_id: str = ""
+    latency_ms: int | None = None
+    # What was sent and what came back, for the collapsed debug panel beside the
+    # field. Shown rather than described: an implementer reading the real bytes
+    # finds a mismatch in seconds that a prose spec hides for an afternoon.
+    request_preview: str = ""
+    response_preview: str = ""
+
+
+class ChatProbeIn(BaseModel):
+    """Ask the platform to call an agent once, on purpose.
+
+    A POST, not a GET, because it has a cost: one real question answered by a
+    real model. It also carries secrets — the trace check needs the trace
+    store's credentials — which have no business in a query string.
+    """
+
+    config: RunConfig = Field(default_factory=RunConfig)
+    secrets: RunSecrets = Field(default_factory=RunSecrets)
+    # Off for the cheapest "is anything listening" check; on wherever the answer
+    # gates something that depends on the override.
+    with_override: bool = True
+    with_trace: bool = False
 
 
 class EvalSetSkill(BaseModel):
@@ -974,6 +1094,38 @@ class EvalSetSkills(BaseModel):
     untagged_question_count: int = 0
 
 
+class WorkspaceReadIn(BaseModel):
+    """Body of the playground's two workspace reads.
+
+    POSTs for reads, for the reason `SkillsProbeIn` gives: they may carry the
+    agent's credential, and a credential in a query string is a credential in an
+    access log. `agent_chat_url` is never called from here — it is what decides
+    whether the credential may reach the skills endpoint at all.
+    """
+
+    agent_skills_url: str = ""
+    agent_chat_url: str = ""
+    agent_auth_header: str = ""
+    agent_api_key: str = ""
+    agent_timeout_s: float | None = None
+
+
+class SkillCheckIn(BaseModel):
+    """Body of POST /optimization/skill-check.
+
+    A POST for a read, for the reason `SkillsProbeIn` gives: it may carry a
+    credential. `agent_chat_url` is not called — it is here so the seam can
+    decide whether the credential may travel to the skills endpoint.
+    """
+
+    skill_name: str = Field(min_length=1)
+    agent_skills_url: str = ""
+    agent_chat_url: str = ""
+    agent_auth_header: str = ""
+    agent_api_key: str = ""
+    agent_timeout_s: float | None = Field(default=None, gt=0)
+
+
 class SkillCheck(BaseModel):
     """Whether the agent has the skill the questions are tagged with."""
 
@@ -988,9 +1140,9 @@ class SkillCheck(BaseModel):
     n_chars: int = 0
     has_frontmatter: bool = False
     # Which agent server answered. The check used to read only the server's own
-    # environment while the wizard collected a base URL of its own, so a
-    # developer could clear a skill against one agent and run against another.
-    agent_base_url: str = ""
+    # environment while the wizard collected a URL of its own, so a developer
+    # could clear a skill against one agent and run against another.
+    agent_skills_url: str = ""
     # Set when routing mode cannot be offered, with the reason to show instead.
     routing_blocked_reason: str | None = None
     available_skills: list[str] = Field(default_factory=list)
@@ -1011,7 +1163,11 @@ class OptimizationConfig(BaseModel):
     """
 
     # Connections
-    agent_base_url: str = ""
+    agent_chat_url: str = ""
+    agent_skills_url: str = ""
+    # See `RunConfig.agent_auth_header`: the header the agent's credential goes
+    # in, not the credential.
+    agent_auth_header: str = ""
     agent_timeout_s: float | None = None
     langfuse_host: str = ""
     langfuse_public_key: str = ""
@@ -1071,6 +1227,7 @@ class OptimizationSecrets(BaseModel):
 
     llm_api_key: str = ""
     langfuse_secret_key: str = ""
+    agent_api_key: str = ""
 
 
 class DetectorConfig(BaseModel):

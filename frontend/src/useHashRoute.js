@@ -31,6 +31,11 @@ export const href = {
   },
   playground: () => "#/playground",
   optimize: () => "#/optimize",
+  // The doc, and optionally the section of it being asked about. Callers pass
+  // an anchor because the "?" beside a field is a specific question — landing
+  // on a table of contents makes someone find the answer twice.
+  docs: (doc = "agent-server", anchor = "") =>
+    `#/documentation/${doc}${anchor ? `#${anchor}` : ""}`,
   // Reached from the user menu rather than the side rail: it is about the person
   // signed in, not about a fourth thing the product does.
   settings: (panel = "defaults") => `#/settings/${panel}`,
@@ -60,6 +65,17 @@ export function parseHash(hash) {
   const q = new URLSearchParams(search || "");
 
   if (parts[0] === "playground") return { section: "playground" };
+  // Before the evaluation fallthrough below, which swallows anything it does
+  // not recognise — an unlisted section here is not a 404, it is the home page
+  // opening instead, which reads as a broken link with no error.
+  if (parts[0] === "documentation") {
+    // The anchor rides inside the hash route, so it arrives glued to the doc
+    // name: `#/documentation/agent-server#chat-endpoint`. The browser will not
+    // scroll to it — there is only ever one `#` as far as it is concerned — so
+    // it is handed to the page to scroll to itself.
+    const [doc, anchor = ""] = (parts[1] || "agent-server").split("#");
+    return { section: "documentation", doc: doc || "agent-server", anchor };
+  }
   // The settings page's own left column is a route rather than component state,
   // for the same reason every other tier here is one: it survives a reload and
   // it is a link somebody can send.

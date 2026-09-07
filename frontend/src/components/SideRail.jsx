@@ -3,6 +3,7 @@ import { href } from "../useHashRoute.js";
 import BrandMark from "./BrandMark.jsx";
 import {
   IconBeaker,
+  IconFileText,
   IconPanelLeft,
   IconSparkles,
   IconTarget,
@@ -19,6 +20,14 @@ export const SECTIONS = [
   { id: "evaluation", label: "Evaluation", icon: IconTarget, to: href.evaluation() },
   { id: "playground", label: "Playground", icon: IconBeaker, to: href.playground() },
   { id: "optimize", label: "Optimize", icon: IconSparkles, to: href.optimize() },
+];
+
+// Reference material, not a fourth thing the product does — so it sits at the
+// foot of the rail rather than in the list above. Somebody arrives here from a
+// "?" beside a field far more often than by looking for it, which is also why
+// those links carry an anchor.
+export const FOOTER_SECTIONS = [
+  { id: "documentation", label: "Documentation", icon: IconFileText, to: href.docs() },
 ];
 
 const KEY = "rail-collapsed";
@@ -76,6 +85,22 @@ export default function SideRail({ section, collapsed, onToggle }) {
                 <span className="rail-label">{label}</span>
               </a>
             )}
+          </li>
+        ))}
+      </ul>
+
+      <ul className="rail-list rail-list-foot">
+        {FOOTER_SECTIONS.map(({ id, label, icon: Icon, to }) => (
+          <li key={id}>
+            <a
+              className={`rail-item${section === id ? " active" : ""}`}
+              href={to}
+              aria-current={section === id ? "page" : undefined}
+              title={label}
+            >
+              <Icon size={17} />
+              <span className="rail-label">{label}</span>
+            </a>
           </li>
         ))}
       </ul>

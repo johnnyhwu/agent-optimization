@@ -382,7 +382,7 @@ async def test_a_config_without_the_flag_still_diagnoses(seams):
     """
     _diagnosable(seams)
     run, questions = make_run(), [make_question()]
-    run.config = {"agent_base_url": "https://agent.test"}  # a real config, no flag
+    run.config = {"agent_chat_url": "https://agent.test/v1/chat/completions"}  # a real config, no flag
     session = StubSession(run, questions)
     await orchestrator._execute_run(session, run)
 
@@ -878,14 +878,14 @@ async def test_the_version_probe_uses_its_own_short_timeout(monkeypatch, configu
     with configure(agent_timeout_s=120.0, agent_probe_timeout_s=5.0,
                    workspace_impl="real"):
         version = await orchestrator.agent_version(
-            {"agent_timeout_s": 120.0, "agent_base_url": "http://agent-b:8080"}
+            {"agent_timeout_s": 120.0, "agent_skills_url": "http://agent-b:8080/skills"}
         )
 
     assert version == "cfg-1"
     assert seen["agent_timeout_s"] == 5.0
     # Only the timeout is replaced: the version has to come from the agent this
     # run is actually pointed at, or it describes a different server entirely.
-    assert seen["agent_base_url"] == "http://agent-b:8080"
+    assert seen["agent_skills_url"] == "http://agent-b:8080/skills"
 
 
 async def test_a_fake_workspace_seam_pins_no_version_at_all(configure):
@@ -899,7 +899,7 @@ async def test_a_fake_workspace_seam_pins_no_version_at_all(configure):
     contract warns implementers about.
     """
     with configure(workspace_impl="fake", agent_impl="real",
-                   agent_base_url="http://agent.example:9000"):
+                   agent_chat_url="http://agent.example:9000/v1/chat/completions"):
         assert await orchestrator.agent_version({}) is None
 
 

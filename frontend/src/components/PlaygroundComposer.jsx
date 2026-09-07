@@ -66,6 +66,13 @@ const PANELS = {
 export default function PlaygroundComposer({
   draft, setDraft, form, set, setNum, secrets, setSecrets, impls, onSend, busy,
   connected = true,
+  // Whether the agent answered its test question, and why not. Separate from
+  // `connected`, which is about reading the skill files: an agent whose files
+  // we can read but which will not answer is connected and unusable, and a
+  // send button that simply refuses says neither half.
+  agentAnswering = true,
+  agentBlockedReason = "",
+  agentWarnings = [],
   workspace, workspaceEdit, onWorkspaceEdit, workspaceLoading, workspaceError,
   onReloadWorkspace,
   status,
@@ -75,7 +82,8 @@ export default function PlaygroundComposer({
   const questionRef = useRef(null);
 
   const field = (key) => (e) => setDraft({ ...draft, [key]: e.target.value });
-  const canSend = connected && draft.question.trim().length > 0 && !busy;
+  const canSend =
+    connected && agentAnswering && draft.question.trim().length > 0 && !busy;
 
   // Grow with the question rather than sit at a fixed height. Two rows is enough
   // for most questions and less than the old fixed box, which is where the space
@@ -157,10 +165,24 @@ export default function PlaygroundComposer({
           disabled={!canSend}
           loading={busy}
           onClick={onSend}
+          // A button that will not depress reads as a broken screen unless it
+          // says why. The reason is the agent's own words, not a summary.
+          title={!agentAnswering ? agentBlockedReason : undefined}
         >
           {busy ? "Sending…" : "Ask the agent"}
         </Button>
       </div>
+
+      {/* Warnings, not blocks: an override that did not land still leaves a
+          useful screen — the questions go to the agent's deployed skills — and
+          the check has real false positives. Said once, above the trace, where
+          it explains a result that is about to look wrong. */}
+      {connected && agentWarnings.map((text) => (
+        <div key={text} className="hint amber-text composer-alert">
+          <IconAlert size={13} />
+          <span>{text}</span>
+        </div>
+      ))}
 
       {/* Loud even from the closed state: a workspace nobody can read is the
           reason someone retypes a skill from memory and tests the wrong text.

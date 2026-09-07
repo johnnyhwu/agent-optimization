@@ -13,7 +13,8 @@ import Button from "./ui/Button.jsx";
 // note below says so rather than showing nine blanks.
 const SECTIONS = [
   ["Agent", [
-    ["agent_base_url", "Base URL"],
+    ["agent_chat_url", "Chat endpoint"],
+    ["agent_skills_url", "Skills endpoint"],
     ["agent_timeout_s", "Timeout (sec)"],
     ["concurrency", "Concurrency"],
   ]],

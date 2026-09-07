@@ -250,9 +250,9 @@ function SkillCard({ group, selected, multiple, status, check, mode, onSelect, o
           <>
             <p className="opt-hint">
               Skill found on agent server
-              {result.agent_base_url && (
+              {result.agent_skills_url && (
                 <>
-                  {" "}(<code>{result.agent_base_url}</code>)
+                  {" "}(<code>{result.agent_skills_url}</code>)
                 </>
               )}
             </p>
@@ -281,9 +281,9 @@ function SkillCard({ group, selected, multiple, status, check, mode, onSelect, o
         {result && !result.exists && (
           <p className="opt-hint">
             Not found on agent server
-            {result.agent_base_url && (
+            {result.agent_skills_url && (
               <>
-                {" "}(<code>{result.agent_base_url}</code>)
+                {" "}(<code>{result.agent_skills_url}</code>)
               </>
             )}
             . It has: {result.available_skills?.join(", ") || "no skills at all"}.

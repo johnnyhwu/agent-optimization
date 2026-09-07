@@ -26,6 +26,7 @@
 // filed under the skill asked for. There is no reset to forget.
 
 import { canStart } from "./optimize_split.js";
+import { gateFor } from "./agent_endpoints.js";
 
 // Mode comes first, and the agent check now lives on the Skill step rather than
 // on a Target step of its own.
@@ -387,10 +388,23 @@ export function blockingReason(state) {
   const { stepIndex } = state;
   const id = STEPS[stepIndex]?.id;
 
-  // `mode` asks nothing: it opens with `isolated` already chosen, and both
-  // modes are always offerable because what makes `routing` impossible is a
-  // property of a skill, which has not been picked yet.
-  if (id === "mode") return null;
+  // The mode itself asks nothing: it opens with `isolated` already chosen, and
+  // both modes are always offerable because what makes `routing` impossible is
+  // a property of a skill, which has not been picked yet.
+  //
+  // The agent on this step does ask something, and it asks the strictest
+  // version of it. An optimization run sends a candidate skill with every
+  // rollout and proves the agent used it by reading the trace, so all four
+  // checks have to hold — a run that starts without them spends an hour
+  // measuring the deployed skill and reports the flat line as a finding.
+  //
+  // Nothing here blocks on a check that has not been *run*: `gateFor` reads an
+  // absent check as "not asked", so Continue stays pressable and pressing it is
+  // what asks. Blocking while somebody is halfway through typing a URL would
+  // make the button flicker at every keystroke.
+  if (id === "mode") {
+    return gateFor("optimization", state.agentChecks || {}).reason || null;
+  }
 
   // The questions load themselves as soon as a set is ticked, so nothing here
   // asks for an action any more — it reports. It used to say "Load the questions

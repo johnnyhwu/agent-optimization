@@ -34,7 +34,11 @@ _SECRET_ENDPOINTS = dict(settings_catalog.SECRET_ENDPOINTS)
 
 # The same credentials as UI-facing slot names. Only these names are ever sent
 # outward — the values behind them stay in the database.
-_SECRET_SLOTS = {"llm_api_key": "llm", "langfuse_secret_key": "langfuse"}
+_SECRET_SLOTS = {
+    "llm_api_key": "llm",
+    "langfuse_secret_key": "langfuse",
+    "agent_api_key": "agent",
+}
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}/runs", tags=["runs"])
 

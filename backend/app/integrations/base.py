@@ -42,6 +42,16 @@ class AgentResponse:
     # developer nothing once the agent is a real service.
     error: str | None = None
     latency_ms: int | None = None
+    # Two things the chat-completions envelope hands over for free, and that the
+    # old `{"content": ...}` body could not carry.
+    #
+    # `truncated` is `finish_reason == "length"`: the answer is real and is
+    # graded, but it stopped because the agent hit its own output cap. Failing
+    # it instead would wipe out every long answer; saying nothing would leave a
+    # low score with no visible cause.
+    truncated: bool = False
+    # The provider's `usage` block verbatim, or None. Recorded, never required.
+    usage: dict | None = None
 
 
 @dataclass
