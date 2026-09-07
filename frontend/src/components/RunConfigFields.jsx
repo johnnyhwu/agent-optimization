@@ -2,9 +2,8 @@ import React from "react";
 import Field, { FormSection } from "./ui/Field.jsx";
 import Badge from "./ui/Badge.jsx";
 import Banner from "./ui/Banner.jsx";
-import AgentEndpointsFields from "./AgentEndpointsFields.jsx";
-import Button from "./ui/Button.jsx";
-import { IconCheck, IconRefresh } from "./icons.jsx";
+import AgentEndpointsFields, { EndpointGroup } from "./AgentEndpointsFields.jsx";
+import { IconCheck } from "./icons.jsx";
 import { plural } from "../plural.js";
 import NumberInput from "./ui/NumberInput.jsx";
 
@@ -44,28 +43,19 @@ import NumberInput from "./ui/NumberInput.jsx";
 //
 // Keeping both in one block was what made a failed read say two different
 // things in two places, one of them stale.
-export function AgentProbe({ probe, coverage, onRetry }) {
+export function AgentProbe({ probe, coverage }) {
   // Nothing to report about a seam that is not being asked: the section's
   // `simulated` badge has already said so, and a count here would be describing
   // a connection that was never made.
   if (probe.state === "simulated") return null;
 
-  if (probe.state === "failed") {
-    // The reason is already on screen under the field. What is not is a way
-    // back from it: a read can fail because a server was restarting, and
-    // retyping the URL to re-trigger the check is not a fix anyone should have
-    // to discover.
-    return onRetry ? (
-      <div className="cfg-probe">
-        <Button size="sm" icon={<IconRefresh size={13} />} onClick={onRetry}>
-          Try again
-        </Button>
-      </div>
-    ) : null;
-  }
-
-  // `none` — no skills endpoint — says its piece on the field's status line.
-  // A count here would be describing a listing nobody asked for.
+  // A failure says its piece under the field that caused it, and the way back
+  // from one — "Read again" — is on the same line, where what it retries is
+  // visible. It used to be here instead: a lone "Try again" at the foot of the
+  // whole block, far enough from the error to read as a button with no subject.
+  //
+  // `none` — no skills endpoint — also says its piece on the field's status
+  // line. A count here would be describing a listing nobody asked for.
   if (probe.state !== "connected") return null;
 
   return (
@@ -167,19 +157,20 @@ export default function RunConfigFields({
                   response_preview: probe.response_preview }
               : null}
             skillsBusy={probe?.state === "checking"}
+            onRetrySkills={onRetryProbe}
             idPrefix="run"
           />
-          {probe && (
-            <AgentProbe probe={probe} coverage={coverage} onRetry={onRetryProbe} />
-          )}
-          <Field label="Timeout" hint="seconds">
-            <NumberInput
-              min="1"
-              value={form.agent_timeout_s ?? ""}
-              disabled={fake("agent")}
-              onChange={(e) => setNum("agent_timeout_s", e.target.value)}
-            />
-          </Field>
+          {probe && <AgentProbe probe={probe} coverage={coverage} />}
+          <EndpointGroup title="Request timeout">
+            <Field label="Seconds" help="How long one question may take before the run counts it as failed.">
+              <NumberInput
+                min="1"
+                value={form.agent_timeout_s ?? ""}
+                disabled={fake("agent")}
+                onChange={(e) => setNum("agent_timeout_s", e.target.value)}
+              />
+            </Field>
+          </EndpointGroup>
         </FormSection>
       )}
       {showConcurrency && (
@@ -281,14 +272,4 @@ export default function RunConfigFields({
       </FormSection>
     </>
   );
-}
-
-// One line describing what the run will actually talk to, for the closed state of
-// the "Advanced" disclosure. Someone who only wants to press the button should be
-// able to satisfy themselves without opening anything.
-export function servicesSummary(impls = {}) {
-  const simulated = ["agent", "judge", "trace", "diagnosis"].filter((s) => impls[s] === "fake");
-  if (simulated.length === 0) return "Using this environment's configured services";
-  if (simulated.length === 4) return "Demo mode — every service is simulated";
-  return `Using this environment's services · ${simulated.length} simulated`;
 }

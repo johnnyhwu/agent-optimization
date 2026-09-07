@@ -1,16 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import Modal from "./Modal.jsx";
-import RunConfigFields, {
-  DiagnosisModelField,
-  servicesSummary,
-} from "./RunConfigFields.jsx";
+import RunConfigFields, { DiagnosisModelField } from "./RunConfigFields.jsx";
 import RunPicker from "./RunPicker.jsx";
 import DefaultsNotice from "./settings/DefaultsNotice.jsx";
 import Button from "./ui/Button.jsx";
-import Field, { Disclosure, FormSection } from "./ui/Field.jsx";
+import Field, { FormSection } from "./ui/Field.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
-import { IconAlert, IconGear, IconPlay } from "./icons.jsx";
+import { IconPlay } from "./icons.jsx";
 import { useDebounced } from "../useDebounced.js";
 import { coverageWarning, skillCoverage } from "../skill_coverage.js";
 import { gateFor, probeMatches } from "../agent_endpoints.js";
@@ -64,10 +61,6 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // address it describes — see `probeMatches`.
   const [chatProbe, setChatProbe] = useState(null);
   const [chatBusy, setChatBusy] = useState(false);
-  // Opened only when a check fails on the way to starting. Controlled rather
-  // than left to the Disclosure's own state so that a failure can open it,
-  // while everything else about it stays the developer's to close.
-  const [connOpen, setConnOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -344,9 +337,10 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
     })) {
       const result = await testChat();
       if (result?.chat?.ok === false) {
-        // Only a failure opens the panel. Auto-opening on the way in would make
-        // the form jump under the cursor and re-open something just closed.
-        setConnOpen(true);
+        // The failure is already on screen — the chat endpoint's own status
+        // line says it, and the banner at the top of the form says the run is
+        // blocked. Nothing to open now that the fields are not folded away; all
+        // this has to do is stop.
         return;
       }
     }
@@ -387,8 +381,10 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
             onClick={submit}
             // The button explains its own disabled state. Without this, a
             // button that will not depress reads as a broken dialog rather than
-            // as a target that is not there.
-            title={blocked ? `${gate.reason} See Connection settings.` : undefined}
+            // as a target that is not there. It no longer points at a panel to
+            // open — there is none — and the banner at the top of the form says
+            // the same thing where it can be read without hovering.
+            title={blocked ? gate.reason : undefined}
           >
             {busy
               ? "Starting…"
@@ -412,84 +408,87 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       {form && (
         <>
           <DefaultsNotice defaults={defaults} systemDefaults={systemDefaults} />
-          <Field label="Run name" help="Shown in the run history. Leave the timestamp if you have nothing better.">
-            <input value={form.name} onChange={(e) => set("name", e.target.value)} autoFocus />
-          </Field>
 
-          <Field
-            label="Start from an earlier run's settings"
-            help={
-              reuseFrom
-                ? needsRetype.length === 0
-                  ? "That run's keys carry over — no need to retype them."
-                  : `Its endpoint changed, so re-enter: ${needsRetype
-                      .map((k) => (k === "llm_api_key" ? "the LLM API key" : "the trace store secret key"))
-                      .join(", ")}.`
-                : undefined
-            }
+          {/* Every block on this form is a FormSection, in the order the
+              settings are decided in: what this run is called, what it starts
+              from, what it talks to, what it does with a wrong answer, and how
+              an answer is judged. They used to be a mix of loose fields, one
+              disclosure and two sections, so the only visible structure was
+              wherever a heading happened to have been written. */}
+          <FormSection title="Run name" description="Shown in the run history. Leave the timestamp if you have nothing better.">
+            <Field htmlFor="run-name">
+              <input
+                id="run-name"
+                aria-label="Run name"
+                value={form.name}
+                onChange={(e) => set("name", e.target.value)}
+                autoFocus
+              />
+            </Field>
+          </FormSection>
+
+          <FormSection
+            title="Start from an earlier run"
+            description="Copies that run's settings into the fields below. Leave it on your defaults to start from them."
           >
-            <RunPicker evalSetId={evalSetId} value={reuseFrom} onChange={applyReuse} />
-          </Field>
+            <Field
+              help={
+                reuseFrom
+                  ? needsRetype.length === 0
+                    ? "That run's keys carry over — no need to retype them."
+                    : `Its endpoint changed, so re-enter: ${needsRetype
+                        .map((k) => (k === "llm_api_key" ? "the LLM API key" : "the trace store secret key"))
+                        .join(", ")}.`
+                  : undefined
+              }
+            >
+              <RunPicker evalSetId={evalSetId} value={reuseFrom} onChange={applyReuse} />
+            </Field>
+          </FormSection>
 
-          {/* Eleven connection fields used to sit open in front of anyone who
-              only wanted to press the button, most of them greyed out and
-              captioned with an environment-variable name. They are still all
-              here — a run records the exact settings it was triggered with, and
-              overriding one is a real need — but behind a summary that answers
-              "do I need to look at this?" without being opened. */}
-          <Disclosure
-            summary="Connection settings"
-            detail={servicesSummary(impls)}
-            icon={<IconGear size={14} />}
-            // Controlled, but only in one direction: a failed check on the way
-            // to starting opens it, and after that it is the developer's to
-            // close. A panel that re-opened whenever a check was unhappy would
-            // fight whoever had just decided to ignore it.
-            //
-            // Nothing opens it on the way *in*. The skills read resolves after
-            // the dialog is already on screen, so auto-opening would make the
-            // form jump under the cursor. That is what the mark below is for.
-            open={connOpen}
-            onOpenChange={setConnOpen}
-            aside={
-              blocked ? (
-                <span className="error-text" title={gate.reason}>
-                  <IconAlert size={14} />
-                </span>
-              ) : gate.warnings.length ? (
-                <span className="amber-text" title={gate.warnings[0]}>
-                  <IconAlert size={14} />
-                </span>
-              ) : probe?.state === "connected" && coverage ? (
-                <span className="amber-text" title="Some questions need skills this agent does not have">
-                  <IconAlert size={14} />
-                </span>
-              ) : null
-            }
-          >
-            <RunConfigFields
-              form={form}
-              set={set}
-              setNum={setNum}
-              secrets={secrets}
-              setSecrets={setSecrets}
-              impls={impls}
-              kept={kept}
-              showDiagnosisModel={false}
-              probe={probe}
-              coverage={coverage}
-              onRetryProbe={() => setProbeNonce((n) => n + 1)}
-              chatProbe={chatProbe}
-              chatBusy={chatBusy}
-              onTestChat={testChat}
-            />
-          </Disclosure>
+          {/* Flat, not folded. These eleven fields sat behind a "Connection
+              settings" disclosure so that somebody who only wanted to press the
+              button was not made to read them — but a run is triggered *into* a
+              specific agent, and a panel that hides the address is a panel
+              people open every time anyway. Folding it also cost the form its
+              through-line: the reader met one summary row between two headed
+              sections and could not tell whether it was a setting, a status or
+              a section. Which seams are live is said more precisely by the
+              "simulated" badge on each section than by the one summary line
+              that lid carried.
 
-          {/* Outside the disclosure on purpose. Everything inside it answers
-              "which services does this talk to"; this answers "what will this
-              run spend", which is a decision rather than a connection detail —
-              and one taken by exactly the person who would otherwise press the
-              button without opening anything.
+              The warning mark that used to sit on the closed lid becomes the
+              banner below: a check that blocks the run has to be readable
+              without opening anything, and now there is nothing to open. */}
+          {blocked && (
+            <Banner tone="warning" title="This run cannot start yet">
+              <BannerDetail>{gate.reason}</BannerDetail>
+            </Banner>
+          )}
+          {!blocked && gate.warnings.length > 0 && (
+            <Banner tone="warning" title={gate.warnings[0]} />
+          )}
+
+          <RunConfigFields
+            form={form}
+            set={set}
+            setNum={setNum}
+            secrets={secrets}
+            setSecrets={setSecrets}
+            impls={impls}
+            kept={kept}
+            showDiagnosisModel={false}
+            probe={probe}
+            coverage={coverage}
+            onRetryProbe={() => setProbeNonce((n) => n + 1)}
+            chatProbe={chatProbe}
+            chatBusy={chatBusy}
+            onTestChat={testChat}
+          />
+
+          {/* Its own section, after the connection ones. Those answer "which
+              services does this talk to"; this answers "what will this run
+              spend", which is a decision rather than a connection detail.
 
               The two lines of explanation are the whole reason the switch is
               safe to offer. Turning off something called "trace diagnosis" is

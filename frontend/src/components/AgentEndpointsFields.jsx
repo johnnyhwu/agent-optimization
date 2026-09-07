@@ -1,11 +1,10 @@
 import React from "react";
-import { IconAlert, IconCheck, IconInfo } from "./icons.jsx";
-import Button from "./ui/Button.jsx";
+import { IconAlert, IconCheck, IconInfo, IconRefresh, IconSend } from "./icons.jsx";
+import Button, { IconButton } from "./ui/Button.jsx";
 import Field, { Disclosure } from "./ui/Field.jsx";
 import {
   credentialReachesSkills,
   deriveSkillsUrl,
-  looksUnauthorized,
   splitHint,
 } from "../agent_endpoints.js";
 import { href } from "../useHashRoute.js";
@@ -24,15 +23,20 @@ import { href } from "../useHashRoute.js";
 //     but a guess written into a field reads as a value somebody chose, so it
 //     only fills a field the developer has not touched, and only when the chat
 //     URL sits at the conventional path.
-//   * **The chat endpoint has a button and the skills endpoint does not.** The
-//     asymmetry is cost, not taste: reading a skill listing is a free GET the
-//     caller can fire on a keystroke, while the chat probe spends a real model
-//     call. Nothing may spend that on somebody's behalf.
-//   * **Authentication is folded away and opens itself.** Most agent servers
-//     ask for no credential, so a key field beside the URL would be a question
-//     nearly everybody has to decide not to answer. It is a panel instead — and
-//     when a server answers 401 the panel opens, because nobody goes looking
-//     for a field they have no reason to believe exists.
+//   * **The chat endpoint has a test control and the skills endpoint does not.**
+//     The asymmetry is cost, not taste: reading a skill listing is a free GET
+//     the caller can fire on a keystroke, while the chat probe spends a real
+//     model call. Nothing may spend that on somebody's behalf. It is an icon on
+//     the field's own row rather than a button on a line of its own — a
+//     full-width form with a stray button under one of its inputs reads as an
+//     action on the form, not on the address above it.
+//   * **The three groups are laid out in the order they are decided in**, each
+//     under its own heading and none of them folded away: the credential first,
+//     because it applies to both addresses under it, then the endpoint every run
+//     needs, then the optional one. This was three nested disclosures — a panel
+//     inside a panel inside a panel — which is how a form ends up with more
+//     chevrons than fields. The one thing still folded is the raw exchange,
+//     which is debug detail rather than a setting.
 //   * **The request is shown before it is sent.** An implementer reading the
 //     actual bytes finds a field-name mismatch in seconds; the same mismatch
 //     hides in a prose spec for an afternoon. So the preview panel is populated
@@ -87,6 +91,22 @@ function HelpLink({ anchor, label }) {
   );
 }
 
+// One named group of fields inside the agent block. Not a `FormSection`: these
+// sit *inside* one, and reusing that heading would give a group the same weight
+// as the section containing it.
+//
+// Exported because the block does not end at this component: the host adds the
+// timeout, and a field with no heading after three that have one reads as part
+// of whichever group it happens to follow.
+export function EndpointGroup({ title, children }) {
+  return (
+    <div className="agent-ep-group">
+      <h5 className="agent-ep-group-title">{title}</h5>
+      {children}
+    </div>
+  );
+}
+
 // What was sent and what came back, folded away. Debug detail by default,
 // because the one-line status above answers the question most people have.
 function Exchange({ request, response }) {
@@ -110,8 +130,14 @@ function Exchange({ request, response }) {
 }
 
 // The credential, and the header it goes in. Rendered only for a screen that
-// passes `onChangeApiKey`; every screen that does keeps it folded until it is
-// needed.
+// passes `onChangeApiKey`.
+//
+// It leads the block rather than trailing it. Most agent servers need no
+// credential, which was the case for folding it away — but a panel nobody opens
+// is also a panel nobody finds when a server does answer 401, and the field it
+// hides applies to both addresses underneath it. Reading top to bottom now
+// matches the order the settings are decided in: who am I, where do questions
+// go, where are the skills.
 function Authentication({
   apiKey,
   authHeader,
@@ -122,18 +148,10 @@ function Authentication({
   skillsUrl,
   disabled,
   idPrefix,
-  open,
-  onOpenChange,
 }) {
   const reaches = credentialReachesSkills(chatUrl, skillsUrl);
   return (
-    <Disclosure
-      summary="Authentication"
-      detail="Optional"
-      className="agent-ep-auth"
-      open={open}
-      onOpenChange={onOpenChange}
-    >
+    <EndpointGroup title="Endpoint authentication">
       <Field
         label="API key"
         htmlFor={`${idPrefix}-api-key`}
@@ -173,7 +191,7 @@ function Authentication({
           this key is not sent there.
         </div>
       )}
-    </Disclosure>
+    </EndpointGroup>
   );
 }
 
@@ -183,7 +201,7 @@ export default function AgentEndpointsFields({
   onChangeChat,
   onChangeSkills,
   // Credentials are opt-in per screen: a screen that cannot store one does not
-  // show the panel. `keptApiKey` is the placeholder for a value already saved,
+  // show the group. `keptApiKey` is the placeholder for a value already saved,
   // which is never sent back to the browser.
   apiKey = "",
   authHeader = "",
@@ -198,18 +216,12 @@ export default function AgentEndpointsFields({
   // the first read is in flight.
   skillsProbe = null,
   skillsBusy = false,
+  // Re-runs the skills read. Beside the status line it is about, because a bare
+  // "Try again" at the bottom of the block was a button with no visible subject.
+  onRetrySkills = null,
   disabled = false,
   idPrefix = "agent",
 }) {
-  // Folded by default and opened by a refusal — never closed again by one, so
-  // it does not shut under someone who opened it to type.
-  const [authOpen, setAuthOpen] = React.useState(false);
-  const refused =
-    looksUnauthorized(chatProbe?.chat) || looksUnauthorized(skillsProbe?.check);
-  React.useEffect(() => {
-    if (refused) setAuthOpen(true);
-  }, [refused]);
-
   // Prefilling only ever writes into an empty field. Overwriting a URL somebody
   // typed because they then edited the chat one is the kind of help that loses
   // work.
@@ -221,97 +233,6 @@ export default function AgentEndpointsFields({
 
   return (
     <>
-      <Field
-        label="Chat endpoint"
-        htmlFor={`${idPrefix}-chat-url`}
-        hint={<HelpLink anchor="chat-endpoint" label="What this endpoint must do" />}
-        help="Where questions are sent. OpenAI chat completions."
-      >
-        <input
-          id={`${idPrefix}-chat-url`}
-          value={chatUrl}
-          placeholder="http://agent-host:8080/v1/chat/completions"
-          spellCheck={false}
-          disabled={disabled}
-          onChange={(e) => onChangeChat(e.target.value)}
-          onBlur={(e) => fillSkills(e.target.value)}
-        />
-      </Field>
-      <div className="agent-ep-result">
-        <StatusLine
-          check={chatProbe?.chat}
-          busy={chatBusy}
-          busyLabel="Asking the agent a test question…"
-        />
-        {chatProbe?.override?.ok === false && (
-          <div className="agent-ep-status amber-text">
-            <IconAlert size={13} /> {chatProbe.override.error}
-          </div>
-        )}
-        {chatProbe?.override?.ok === true && (
-          <div className="agent-ep-status ok-text">
-            <IconCheck size={13} /> {chatProbe.override.detail}
-          </div>
-        )}
-        {chatProbe?.trace?.ok === false && (
-          <div className="agent-ep-status amber-text">
-            <IconAlert size={13} /> {chatProbe.trace.error}
-          </div>
-        )}
-        {chatProbe?.trace?.ok === true && (
-          <div className="agent-ep-status ok-text">
-            <IconCheck size={13} /> {chatProbe.trace.detail}
-          </div>
-        )}
-        {onTestChat && (
-          <Button
-            size="sm"
-            loading={chatBusy}
-            disabled={disabled || !chatUrl.trim()}
-            onClick={onTestChat}
-            // Said on the button, not in a tooltip: it spends a model call, and
-            // a cost nobody was warned about is a cost they did not agree to.
-            title="Sends one real question to this agent"
-          >
-            {chatBusy ? "Testing…" : "Test endpoint"}
-          </Button>
-        )}
-        <Exchange
-          request={chatProbe?.request_preview}
-          response={chatProbe?.response_preview}
-        />
-      </div>
-
-      <Field
-        label="Skills endpoint"
-        htmlFor={`${idPrefix}-skills-url`}
-        hint={<HelpLink anchor="skills-endpoint" label="What this endpoint must do" />}
-        help={
-          "Optional. Without it an evaluation still runs — the playground, the " +
-          "skill-coverage warning and optimization are what need it."
-        }
-      >
-        <input
-          id={`${idPrefix}-skills-url`}
-          value={skillsUrl}
-          placeholder="http://agent-host:8080/skills"
-          spellCheck={false}
-          disabled={disabled}
-          onChange={(e) => onChangeSkills(e.target.value)}
-        />
-      </Field>
-      <div className="agent-ep-result">
-        <StatusLine
-          check={skillsProbe?.check}
-          busy={skillsBusy}
-          busyLabel="Reading this agent's skill files…"
-        />
-        <Exchange
-          request={skillsProbe?.request_preview}
-          response={skillsProbe?.response_preview}
-        />
-      </div>
-
       {onChangeApiKey && (
         <Authentication
           apiKey={apiKey}
@@ -323,10 +244,115 @@ export default function AgentEndpointsFields({
           skillsUrl={skillsUrl}
           disabled={disabled}
           idPrefix={idPrefix}
-          open={authOpen}
-          onOpenChange={setAuthOpen}
         />
       )}
+
+      <EndpointGroup title="Chat endpoint">
+        <Field
+          label="URL"
+          htmlFor={`${idPrefix}-chat-url`}
+          hint={<HelpLink anchor="chat-endpoint" label="What this endpoint must do" />}
+          help="Where questions are sent. OpenAI chat completions."
+        >
+          <div className="agent-ep-row">
+            <input
+              id={`${idPrefix}-chat-url`}
+              value={chatUrl}
+              placeholder="http://agent-host:8080/v1/chat/completions"
+              spellCheck={false}
+              disabled={disabled}
+              onChange={(e) => onChangeChat(e.target.value)}
+              onBlur={(e) => fillSkills(e.target.value)}
+            />
+            {onTestChat && (
+              <IconButton
+                variant="secondary"
+                icon={<IconSend size={14} />}
+                loading={chatBusy}
+                disabled={disabled || !chatUrl.trim()}
+                onClick={onTestChat}
+                // The name carries the cost. It spends a real model call, and a
+                // cost nobody was warned about is a cost they did not agree to
+                // — so the warning is in the accessible name rather than only
+                // in a tooltip that touch never shows.
+                label="Test endpoint — sends one real question to this agent"
+              />
+            )}
+          </div>
+        </Field>
+        <div className="agent-ep-result">
+          <StatusLine
+            check={chatProbe?.chat}
+            busy={chatBusy}
+            busyLabel="Asking the agent a test question…"
+          />
+          {chatProbe?.override?.ok === false && (
+            <div className="agent-ep-status amber-text">
+              <IconAlert size={13} /> {chatProbe.override.error}
+            </div>
+          )}
+          {chatProbe?.override?.ok === true && (
+            <div className="agent-ep-status ok-text">
+              <IconCheck size={13} /> {chatProbe.override.detail}
+            </div>
+          )}
+          {chatProbe?.trace?.ok === false && (
+            <div className="agent-ep-status amber-text">
+              <IconAlert size={13} /> {chatProbe.trace.error}
+            </div>
+          )}
+          {chatProbe?.trace?.ok === true && (
+            <div className="agent-ep-status ok-text">
+              <IconCheck size={13} /> {chatProbe.trace.detail}
+            </div>
+          )}
+          <Exchange
+            request={chatProbe?.request_preview}
+            response={chatProbe?.response_preview}
+          />
+        </div>
+      </EndpointGroup>
+
+      <EndpointGroup title="Skills endpoint">
+        <Field
+          label="URL"
+          htmlFor={`${idPrefix}-skills-url`}
+          hint={<HelpLink anchor="skills-endpoint" label="What this endpoint must do" />}
+          help={
+            "Optional. Without it an evaluation still runs — the playground, the " +
+            "skill-coverage warning and optimization are what need it."
+          }
+        >
+          <input
+            id={`${idPrefix}-skills-url`}
+            value={skillsUrl}
+            placeholder="http://agent-host:8080/skills"
+            spellCheck={false}
+            disabled={disabled}
+            onChange={(e) => onChangeSkills(e.target.value)}
+          />
+        </Field>
+        <div className="agent-ep-result">
+          <StatusLine
+            check={skillsProbe?.check}
+            busy={skillsBusy}
+            busyLabel="Reading this agent's skill files…"
+          />
+          {/* Under the line that failed, so what is being tried again is the
+              read whose error is directly above. A read can fail because a
+              server was restarting, and retyping the URL to re-trigger the
+              check is not a fix anyone should have to discover. */}
+          {onRetrySkills && skillsProbe?.check?.ok === false && !skillsBusy && (
+            <Button size="sm" icon={<IconRefresh size={13} />} onClick={onRetrySkills}>
+              Read again
+            </Button>
+          )}
+          <Exchange
+            request={skillsProbe?.request_preview}
+            response={skillsProbe?.response_preview}
+          />
+        </div>
+      </EndpointGroup>
     </>
   );
 }
