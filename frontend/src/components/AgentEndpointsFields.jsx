@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { IconAlert, IconCheck, IconInfo, IconRefresh, IconSend } from "./icons.jsx";
 import Button, { IconButton } from "./ui/Button.jsx";
 import Field, { Disclosure } from "./ui/Field.jsx";
 import {
   credentialReachesSkills,
   deriveSkillsUrl,
+  looksUnauthorized,
   splitHint,
 } from "../agent_endpoints.js";
 import DocsHelp from "./DocsHelp.jsx";
@@ -30,13 +31,12 @@ import DocsHelp from "./DocsHelp.jsx";
 //     the field's own row rather than a button on a line of its own — a
 //     full-width form with a stray button under one of its inputs reads as an
 //     action on the form, not on the address above it.
-//   * **The three groups are laid out in the order they are decided in**, each
-//     under its own heading and none of them folded away: the credential first,
-//     because it applies to both addresses under it, then the endpoint every run
-//     needs, then the optional one. This was three nested disclosures — a panel
-//     inside a panel inside a panel — which is how a form ends up with more
-//     chevrons than fields. The one thing still folded is the raw exchange,
-//     which is debug detail rather than a setting.
+//   * **The groups are laid out in the order they are decided in**: the
+//     credential first, because it applies to both addresses under it, then the
+//     endpoint every run needs, then the optional one. Only the credential is
+//     folded — see `EndpointAuthGroup` for why that one and not the others.
+//     This was once three nested disclosures, a panel inside a panel inside a
+//     panel, which is how a form ends up with more chevrons than fields.
 //   * **The request is shown before it is sent.** An implementer reading the
 //     actual bytes finds a field-name mismatch in seconds; the same mismatch
 //     hides in a prose spec for an afternoon. So the preview panel is populated
@@ -113,34 +113,61 @@ function Exchange({ request, response }) {
   );
 }
 
-// The credential, and the header it goes in. Rendered only for a screen that
-// passes `onChangeApiKey`.
+// The credential, and the header it goes in.
 //
-// It leads the block rather than trailing it. Most agent servers need no
-// credential, which was the case for folding it away — but a panel nobody opens
-// is also a panel nobody finds when a server does answer 401, and the field it
-// hides applies to both addresses underneath it. Reading top to bottom now
-// matches the order the settings are decided in: who am I, where do questions
-// go, where are the skills.
-function Authentication({
+// Folded, and labelled optional, because most agent servers ask for no
+// credential: two more fields open in front of everybody is a question everybody
+// has to decide not to answer. That is the playground's bargain
+// (`AgentConnectionBar`) and this is the same one, so the three screens that ask
+// for an agent server now ask for it the same way.
+//
+// Folding an optional field is only safe if it opens itself when it stops being
+// optional, and there are two such moments:
+//
+//   * the server refused the call — a folded panel is not where anyone looks
+//     for a field they have no reason to believe exists, and "401" beside a URL
+//     is not an instruction;
+//   * a credential is already set, saved or typed. A key hidden behind a lid
+//     reads as a form with no key in it.
+//
+// Opened by either, never closed by either: it must not shut under somebody who
+// opened it to type.
+export function EndpointAuthGroup({
   apiKey,
   authHeader,
   onChangeApiKey,
   onChangeAuthHeader,
-  keptPlaceholder,
-  chatUrl,
-  skillsUrl,
+  keptPlaceholder = "",
+  apiKeyHelp = "Most agent servers need none. Leave this blank and nothing is sent.",
+  chatUrl = "",
+  skillsUrl = "",
+  // The checks whose refusal is a reason to open this. Any tri-state check
+  // object; `looksUnauthorized` reads the backend's own hint, not a status code.
+  refusals = [],
   disabled,
   idPrefix,
 }) {
   const reaches = credentialReachesSkills(chatUrl, skillsUrl);
+  const [open, setOpen] = useState(false);
+  const wanted =
+    Boolean(apiKey) || Boolean(keptPlaceholder) || refusals.some(looksUnauthorized);
+  useEffect(() => {
+    if (wanted) setOpen(true);
+  }, [wanted]);
+
   return (
-    <EndpointGroup title="Endpoint authentication">
+    <Disclosure
+      summary="Endpoint authentication"
+      detail="Optional"
+      className="agent-ep-auth"
+      open={open}
+      onOpenChange={setOpen}
+    >
       <Field
         label="API key"
         htmlFor={`${idPrefix}-api-key`}
         hint={<DocsHelp anchor="authentication" label="How the platform sends a credential" />}
-        help="Most agent servers need none. Leave this blank and nothing is sent."
+        help={apiKeyHelp}
       >
         <input
           id={`${idPrefix}-api-key`}
@@ -176,7 +203,7 @@ function Authentication({
           this key is not sent there.
         </div>
       )}
-    </EndpointGroup>
+    </Disclosure>
   );
 }
 
@@ -219,7 +246,7 @@ export default function AgentEndpointsFields({
   return (
     <>
       {onChangeApiKey && (
-        <Authentication
+        <EndpointAuthGroup
           apiKey={apiKey}
           authHeader={authHeader}
           onChangeApiKey={onChangeApiKey}
@@ -227,6 +254,7 @@ export default function AgentEndpointsFields({
           keptPlaceholder={keptApiKey}
           chatUrl={chatUrl}
           skillsUrl={skillsUrl}
+          refusals={[chatProbe?.chat, skillsProbe?.check]}
           disabled={disabled}
           idPrefix={idPrefix}
         />

@@ -1284,6 +1284,11 @@ select { cursor: pointer; }
   margin-top: var(--space-4); padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
+/* The one folded group in the block. It is a panel with a border of its own, so
+   it wants the gap the rule above gives between two open groups — which cannot
+   reach it, because the group after it no longer follows a `.agent-ep-group`. */
+.agent-ep-auth + .agent-ep-group { margin-top: var(--space-4); }
+
 /* Below the section heading it sits under and above the field labels it names:
    sentence case where the section is uppercase, and the full text colour where
    a label is the same size but not bold. */
