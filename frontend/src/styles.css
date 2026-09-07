@@ -1952,15 +1952,8 @@ pre.prompt-text {
    Upload dialog — metadata explanation, and the expanded preview editor.
    ============================================================================ */
 
-/* "Custom metadata" sits right under Description and says what it buys you.
-   The known keys are the ones this workspace already filters by, so they're
+/* The known keys are the ones this workspace already filters by, so they're
    clickable rather than a list of words. */
-.meta-help { margin: 0 0 var(--space-2); max-width: 62ch; line-height: 1.5; }
-.meta-help code {
-  font-family: var(--font-mono); font-size: var(--text-micro);
-  background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 1px 5px; white-space: nowrap;
-}
 .meta-keys { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
 .meta-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; }
 

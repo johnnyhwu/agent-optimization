@@ -10,6 +10,7 @@ import { useRevealedError } from "../useRevealedError.js";
 import UploadPreviewEditor from "./UploadPreviewEditor.jsx";
 import { IconPlus, IconUpload, IconX } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
+import Field, { FormSection } from "./ui/Field.jsx";
 import {
   clampPage,
   detectFormat,
@@ -309,24 +310,51 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
         </div>
       )}
 
+      {/* Sections, like the run dialog's — the two dialogs ask for a comparable
+          amount and this one used to be a flat stack of eleven `.field` divs
+          with no headings, so what was one decision and what was the next was
+          left to the reader to work out from the spacing. Help text goes to
+          `Field`'s `help` so it is tied to its control rather than sitting
+          under it, and every control has an id its label points at. */}
       {!expanded && (
         <>
-          <div className="field">
-            <label>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My eval set" autoFocus />
-          </div>
-          <div className="field">
-            <label>Description</label>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} />
-          </div>
+          <FormSection
+            title="Name and description"
+            description="What this set is called wherever it appears."
+          >
+            <Field label="Name" htmlFor="upload-name" required>
+              <input
+                id="upload-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="My eval set"
+                autoFocus
+              />
+            </Field>
+            <Field
+              label="Description"
+              htmlFor="upload-description"
+              hint="optional"
+              help="One line about what these questions cover."
+            >
+              <input
+                id="upload-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </Field>
+          </FormSection>
 
-          <div className="field">
-            <label>Custom metadata <span className="hint">· optional</span></label>
-            <p className="hint meta-help">
-              Labels for finding this set later — you can filter by them on the home page,
-              and they show on the set&rsquo;s card. For example <code>team = billing</code> or{" "}
-              <code>quarter = 2026Q3</code>.
-            </p>
+          <FormSection
+            title="Custom metadata"
+            description={
+              <>
+                Labels for finding this set later — you can filter by them on the
+                home page, and they show on the set&rsquo;s card. For example{" "}
+                <code>team = billing</code> or <code>quarter = 2026Q3</code>.
+              </>
+            }
+          >
             {knownKeys.length > 0 && (
               <div className="meta-keys">
                 <span className="hint">Already in use:</span>
@@ -353,19 +381,23 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             ))}
             <datalist id="known-keys">{knownKeys.map((k) => <option key={k} value={k} />)}</datalist>
             <Button size="sm" icon={<IconPlus size={14} />} onClick={() => setMetaRows((r) => [...r, { k: "", v: "" }])}>Add label</Button>
-          </div>
+          </FormSection>
 
-          <div className="field">
-            <label>Share with</label>
+          <FormSection
+            title="Share with"
+            description="Who else sees this set. Everyone you add can run it; owners can also change it."
+          >
             <ShareEditor shares={shares} setShares={setShares} currentUser={subject} />
-          </div>
+          </FormSection>
         </>
       )}
 
       {!expanded && (
-      <div className="field">
-        <label>Eval file <span className="hint">· JSONL, CSV, or a Python script</span></label>
-        <div className="upload-picker">
+        <FormSection
+          title="Eval file"
+          description="A JSONL or CSV file, or a Python script that queries your database."
+        >
+          <div className="upload-picker">
           <input
             ref={fileRef}
             type="file"
@@ -393,29 +425,31 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             <BannerDetail>{parseErrors.join("\n")}</BannerDetail>
           </Banner>
         )}
-        {isScript && (
-          <ScriptRunPanel
-            fileName={script.fileName}
-            validation={validation}
-            connection={connection}
-            setConnection={setConnection}
-            onRun={runScript}
-            running={running}
-            result={runResult}
-          />
-        )}
-      </div>
+          {isScript && (
+            <ScriptRunPanel
+              fileName={script.fileName}
+              validation={validation}
+              connection={connection}
+              setConnection={setConnection}
+              onRun={runScript}
+              running={running}
+              result={runResult}
+            />
+          )}
+        </FormSection>
       )}
 
-      <div className={`field${expanded ? " field-fill" : ""}`}>
-        <div className="field-head">
-          <label>Preview {!expanded && rows.length > 0 && <span className="hint">· edit any cell before creating</span>}</label>
-          <span className="grow" />
-          <Button variant="link" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? "Collapse" : "Expand"}
-          </Button>
-        </div>
-        {expanded ? (
+      {/* Two modes, two shapes, rather than one block of nested ternaries: the
+          expanded editor and the collapsed table never render together, and the
+          expanded one is a full-height pane the dialog is laid out around
+          (`.field-fill`), not a section in a stack of them. */}
+      {expanded ? (
+        <div className="field field-fill">
+          <div className="field-head">
+            <label>Preview</label>
+            <span className="grow" />
+            <Button variant="link" onClick={() => setExpanded(false)}>Collapse</Button>
+          </div>
           <UploadPreviewEditor
             rows={rows}
             setCell={setCell}
@@ -426,65 +460,75 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
             setPage={setPage}
             setPageSize={setPageSize}
           />
-        ) : rows.length === 0 ? (
-          <div className="upload-empty">
-            {isScript
-              ? "No rows yet — fill in the database connection above and run the script."
-              : "No rows yet — choose a JSONL/CSV file, load the sample, or add a row."}
-          </div>
-        ) : (
-          <>
-            <div className="upload-table-wrap">
-              <table className="upload-table">
-                <thead>
-                  <tr>
-                    <th className="rownum">#</th>
-                    <th>question</th>
-                    <th>ground_truth_response</th>
-                    <th>reasoning_process_description</th>
-                    <th className="skillcol">skill(s)</th>
-                    <th className="qidcol">question_id</th>
-                    <th aria-label="remove" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageRows.map((r, i) => {
-                    // Every write goes through the global index. Editing row 3 of
-                    // page 2 must change row 23, not row 3 — see globalIndex and
-                    // its tests in upload_parse.test.js.
-                    const gi = globalIndex(page, pageSize, i);
-                    return (
-                      <tr key={gi}>
-                        <td className="rownum">{gi + 1}</td>
-                        <td><textarea rows={2} value={r.question} onChange={(e) => setCell(gi, "question", e.target.value)} /></td>
-                        <td><textarea rows={2} value={r.response} onChange={(e) => setCell(gi, "response", e.target.value)} /></td>
-                        <td><textarea rows={2} value={r.reasoning} onChange={(e) => setCell(gi, "reasoning", e.target.value)} /></td>
-                        <td className="skillcol"><input placeholder="billing, reports" value={r.skill} onChange={(e) => setCell(gi, "skill", e.target.value)} /></td>
-                        <td className="qidcol"><input placeholder="auto" value={r.question_id} onChange={(e) => setCell(gi, "question_id", e.target.value)} /></td>
-                        <td>
-                          <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={() => removeRow(gi)} aria-label={`Remove row ${gi + 1}`}>
-                            <IconX size={15} />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+        </div>
+      ) : (
+        <FormSection
+          title="Preview"
+          description={
+            rows.length > 0
+              ? "Edit any cell before creating. The set is locked once it exists."
+              : "The rows this set will be created with."
+          }
+          aside={<Button variant="link" onClick={() => setExpanded(true)}>Expand</Button>}
+        >
+          {rows.length === 0 ? (
+            <div className="upload-empty">
+              {isScript
+                ? "No rows yet — fill in the database connection above and run the script."
+                : "No rows yet — choose a JSONL/CSV file, load the sample, or add a row."}
             </div>
-            <PreviewPager
-              total={rows.length}
-              page={page}
-              size={pageSize}
-              onPage={setPage}
-              onSize={setPageSize}
-            />
-          </>
-        )}
-        {!expanded && (
+          ) : (
+            <>
+              <div className="upload-table-wrap">
+                <table className="upload-table">
+                  <thead>
+                    <tr>
+                      <th className="rownum">#</th>
+                      <th>question</th>
+                      <th>ground_truth_response</th>
+                      <th>reasoning_process_description</th>
+                      <th className="skillcol">skill(s)</th>
+                      <th className="qidcol">question_id</th>
+                      <th aria-label="remove" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((r, i) => {
+                      // Every write goes through the global index. Editing row 3
+                      // of page 2 must change row 23, not row 3 — see
+                      // globalIndex and its tests in upload_parse.test.js.
+                      const gi = globalIndex(page, pageSize, i);
+                      return (
+                        <tr key={gi}>
+                          <td className="rownum">{gi + 1}</td>
+                          <td><textarea rows={2} value={r.question} onChange={(e) => setCell(gi, "question", e.target.value)} /></td>
+                          <td><textarea rows={2} value={r.response} onChange={(e) => setCell(gi, "response", e.target.value)} /></td>
+                          <td><textarea rows={2} value={r.reasoning} onChange={(e) => setCell(gi, "reasoning", e.target.value)} /></td>
+                          <td className="skillcol"><input placeholder="billing, reports" value={r.skill} onChange={(e) => setCell(gi, "skill", e.target.value)} /></td>
+                          <td className="qidcol"><input placeholder="auto" value={r.question_id} onChange={(e) => setCell(gi, "question_id", e.target.value)} /></td>
+                          <td>
+                            <button className="ui-btn ui-btn-ghost ui-btn-icon" onClick={() => removeRow(gi)} aria-label={`Remove row ${gi + 1}`}>
+                              <IconX size={15} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <PreviewPager
+                total={rows.length}
+                page={page}
+                size={pageSize}
+                onPage={setPage}
+                onSize={setPageSize}
+              />
+            </>
+          )}
           <Button size="sm" style={{ marginTop: 8 }} icon={<IconPlus size={14} />} onClick={addRow}>Add row</Button>
-        )}
-      </div>
+        </FormSection>
+      )}
     </Modal>
   );
 }
