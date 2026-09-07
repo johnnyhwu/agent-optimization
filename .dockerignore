@@ -1,0 +1,24 @@
+# The backend image builds from the repository root — it needs `backend/` *and*
+# `docs/`, and a context can only have one root. Everything below is either
+# rebuilt inside the image, belongs to a different image, or has no business
+# leaving the machine.
+#
+# Only the root context reads this file. `frontend/` builds from its own context
+# and keeps its own frontend/.dockerignore. There is no backend/.dockerignore any
+# more: it would never be read, because no context is rooted there.
+.git/
+.gitignore
+
+# The frontend's own image, built from ./frontend. node_modules alone is tens of
+# thousands of files and would be sent to the daemon on every backend build.
+frontend/
+
+# Docs the UI does not serve are still cheap to copy, so they stay: docs/ goes
+# in whole, and `routers/docs.py` decides what is reachable by name.
+
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.pytest_cache/
+**/.env
+**/*.log

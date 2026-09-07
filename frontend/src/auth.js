@@ -15,10 +15,45 @@
 // and the SSE client (api.js) calls it again on every reconnect instead of
 // reusing the URL it first connected with.
 import { cfg, isKeycloak } from "./app_config.js";
+import { loginRedirect, routeAfterLogin } from "./login_redirect.js";
 import { installRandomUUID } from "./web_crypto_shim.js";
 
 let keycloak = null;
 let fakeSubject = localStorage.getItem("subject") || "alice";
+
+// Where the route is kept while the browser is away at the identity provider.
+// sessionStorage rather than localStorage: the redirect comes back to the tab it
+// left from, and two tabs signing in at once must not overwrite each other's
+// destination.
+const ROUTE_KEY = "postLoginRoute";
+
+/**
+ * The fragment-free address to sign in against, with this page's route parked
+ * for the trip. See `login_redirect.js` for why the fragment cannot come along.
+ */
+function loginRedirectUri() {
+  const { redirectUri, route } = loginRedirect(window.location);
+  if (route) sessionStorage.setItem(ROUTE_KEY, route);
+  return redirectUri;
+}
+
+/**
+ * Put the parked route back, once identity is settled and before the first
+ * render.
+ *
+ * `replaceState` rather than assigning `location.hash`: this is a correction to
+ * an address the user never saw, and pushing it would make Back return to a
+ * sign-in redirect. Nothing has rendered yet, so no `hashchange` listener is
+ * waiting to be told — `App` reads the hash when it mounts, which happens after
+ * `initAuth()` resolves.
+ */
+function restoreRoute() {
+  const saved = sessionStorage.getItem(ROUTE_KEY);
+  if (!saved) return;
+  sessionStorage.removeItem(ROUTE_KEY);
+  const next = routeAfterLogin(window.location, saved);
+  if (next) window.history.replaceState(null, "", next);
+}
 
 /** The signed-in username. Lower-cased to match what the backend stores. */
 export function getUsername() {
@@ -52,7 +87,12 @@ export async function getAuthHeaders() {
   } catch {
     // The refresh token is gone (12h lifetime, or the session was ended
     // elsewhere). There is nothing to recover to but a fresh login.
-    keycloak.login();
+    //
+    // Same fragment-free redirect as the initial sign-in, and for the same
+    // reason: by this point the user is deep in the app, so `location.href`
+    // always carries a route — a re-login from here would hit the provider
+    // error that only a deep link used to.
+    keycloak.login({ redirectUri: loginRedirectUri() });
     throw new Error("session expired");
   }
   return { Authorization: `Bearer ${keycloak.token}` };
@@ -110,12 +150,20 @@ export async function initAuth() {
 
   const authenticated = await keycloak.init({
     onLoad: "login-required",
+    // Without this the redirect URI is `location.href`, fragment and all — see
+    // `loginRedirectUri`. It is computed before `init` because `init` is what
+    // navigates away.
+    redirectUri: loginRedirectUri(),
     // The check runs in a hidden iframe and needs third-party cookies, which
     // browsers increasingly refuse. `updateToken` already tells us when the
     // session is gone.
     checkLoginIframe: false,
     pkceMethod,
   });
+
+  // The tab came back from the provider at the bare app URL; put the route the
+  // user actually asked for back on it, before anything renders.
+  restoreRoute();
 
   // Backstop for the on-demand refresh in `getAuthHeaders`: it keeps a session
   // alive across a long idle stretch on an open tab, so someone who steps away

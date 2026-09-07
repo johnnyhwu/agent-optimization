@@ -1,5 +1,17 @@
 # Backend container: FastAPI + Alembic, deps installed with uv (not pip).
 #
+# **The build context is the repository root, not ./backend** (see
+# docker-compose.yml), so every COPY below is written `backend/...`. What needs
+# the wider context is `docs/`: the reference documentation the UI serves is the
+# repository's own markdown, there is deliberately no second copy of it, and it
+# sits a level above the backend — so it has to reach the image somehow. It used to arrive as a bind mount, which
+# meant a host without the repository checked out beside the compose file — or a
+# deployment that copied only the compose file over — started a container whose
+# /app/docs was an empty directory the mount had just created. The Documentation
+# page then answered "could not read agent-server-api.md [Errno 2]", which reads
+# as a broken app rather than as a missing mount. Shipping the files in the image
+# makes the page a property of the build.
+#
 # The base image pins CPython 3.12 — inside the container there is no need for
 # the "find an interpreter in [3.10, 3.13]" dance the host script used to do,
 # because the pinned deps always get the interpreter they have wheels for.
@@ -34,7 +46,7 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin scriptrunner
 
 # Copy the requirements alone first so the dependency layer is cached across
 # source-only edits.
-COPY requirements.txt ./
+COPY backend/requirements.txt ./
 RUN uv pip install --system --no-cache -r requirements.txt
 
 # The packages an *uploaded* script may import (pandas, tabulate), installed
@@ -51,11 +63,15 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # umask — a strict one produces a tree the runner uid cannot read, which is
 # exactly the bug _stage() in script_runner.py exists to document. a+rX (capital
 # X: directories and already-executable files only) leaves nothing writable.
-COPY requirements-scripts.txt ./
+COPY backend/requirements-scripts.txt ./
 RUN uv pip install --target /opt/scriptlibs --no-cache -r requirements-scripts.txt \
  && chmod -R a+rX /opt/scriptlibs
 
-COPY . .
+COPY backend/ .
+# The reference documentation, at the path `routers/docs.py` looks for it. Last,
+# and in its own layer, so editing a document rebuilds one small layer rather
+# than invalidating the source copy above it.
+COPY docs/ ./docs/
 RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000

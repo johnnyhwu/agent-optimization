@@ -29,7 +29,7 @@ from app.services.agent_skills import top_level_skills
 
 # --- What counts as a skill on an agent -------------------------------------
 
-def test_a_skills_directory_is_named_by_its_top_level_folder():
+def test_a_skills_directory_is_named_by_the_folder_holding_its_entry_point():
     assert top_level_skills(
         {
             "billing/SKILL.md": "…",
@@ -39,10 +39,41 @@ def test_a_skills_directory_is_named_by_its_top_level_folder():
     ) == ["billing", "reporting"]
 
 
-def test_a_skill_stored_as_a_single_file_is_still_a_skill():
-    # An agent that keeps one file per skill rather than a directory per skill
-    # is not a broken agent, and its skills still have names.
-    assert top_level_skills({"escalation": "…"}) == ["escalation"]
+def test_a_directory_with_no_entry_point_is_not_a_skill():
+    """The count this fixes.
+
+    Everything the agent serves used to be a skill, because the rule was "the
+    first path segment". A workspace with a README, a directory of shared
+    prose and one real skill reported three, and the number is the one a
+    developer holds their own skills directory against.
+    """
+    assert top_level_skills(
+        {
+            "README.md": "…",
+            "LICENSE": "…",
+            "shared/snippets/tone.md": "…",
+            "shared/snippets/style.md": "…",
+            "billing/SKILL.md": "…",
+            "billing/references/refunds.md": "…",
+        }
+    ) == ["billing"]
+
+
+def test_a_skill_carries_its_whole_path_when_the_workspace_nests_them():
+    # `skills/billing`, not `billing`: every consumer joins the name back to a
+    # path — `f"{name}/SKILL.md"`, `startswith(f"{name}/")` — and a bare last
+    # segment names a skill that cannot be found again.
+    assert top_level_skills(
+        {"skills/billing/SKILL.md": "…", "skills/reporting/SKILL.md": "…"}
+    ) == ["skills/billing", "skills/reporting"]
+
+
+def test_a_loose_file_is_not_a_skill():
+    # It has no directory, so there is no name to hand back. An agent keeping
+    # one file per skill has nothing this platform can send back either: the
+    # optimizer reads `<skill>/SKILL.md` as the body it edits.
+    assert top_level_skills({"escalation": "…"}) == []
+    assert top_level_skills({"SKILL.md": "…"}) == []
 
 
 def test_an_agent_with_no_skills_is_an_empty_list_not_an_error():
@@ -50,7 +81,7 @@ def test_an_agent_with_no_skills_is_an_empty_list_not_an_error():
 
 
 def test_the_optimizer_wizard_and_the_probe_agree_on_the_names():
-    """One definition, two callers.
+    """One definition, three callers.
 
     `optimization/skill-check` reports the same list under `available_skills`,
     and it used to compute it inline. Two implementations of "what is a skill
@@ -58,12 +89,34 @@ def test_the_optimizer_wizard_and_the_probe_agree_on_the_names():
     coverage warning on one screen and none on the other for the same agent.
     """
     from app.routers import optimization as opt
+    from app.services import agent_probe as probe
 
-    files = {"billing/SKILL.md": "…", "reporting/SKILL.md": "…"}
-    assert top_level_skills(files) == sorted(
-        {path.split("/", 1)[0] for path in files}
-    )
     assert opt.top_level_skills is top_level_skills
+    assert probe.top_level_skills is top_level_skills
+
+
+def test_the_probe_reports_skills_and_files_separately():
+    """One skill is routinely half a dozen files.
+
+    The status line said "11 skill files", which is true and reads as eleven
+    skills. Both numbers now, because they answer different questions.
+    """
+    assert agent_probe.skills_detail(
+        [
+            "billing/SKILL.md",
+            "billing/references/refunds.md",
+            "reporting/SKILL.md",
+        ]
+    ) == "2 skills in 3 files"
+    # Singular on both halves independently: a one-file skill is the common
+    # first thing anyone writes, and "1 skills in 1 files" is the tell that
+    # nobody read the sentence back.
+    assert agent_probe.skills_detail(["billing/SKILL.md"]) == "1 skill in 1 file"
+    # An agent serving only reference material has no skills, and saying so is
+    # the point — this is exactly the case the old count reported as several.
+    assert agent_probe.skills_detail(["README.md", "shared/tone.md"]) == (
+        "0 skills in 2 files"
+    )
 
 
 # --- The endpoint -----------------------------------------------------------
