@@ -5,6 +5,7 @@ import {
   SOURCE_TONE,
   editsProposed,
   groupResults,
+  editOutcomeLead,
   minibatchLabel,
   outcomeOf,
   truncationSummary,
@@ -240,4 +241,14 @@ test("a routing step's one call is not numbered like the first of several", () =
   assert.equal(minibatchLabel({ minibatch_no: 0 }, { mode: "routing" }), "The step's analyst call");
   assert.equal(minibatchLabel({ minibatch_no: 0 }, { mode: "isolated" }), "Minibatch 0");
   assert.equal(minibatchLabel({ minibatch_no: 3 }, { mode: "isolated" }), "Minibatch 3");
+});
+
+test("only a step that merged several patches says whose count it is", () => {
+  // Routing makes one analyst call, so "across the whole step" would point at a
+  // difference between two populations that are the same one.
+  assert.equal(editOutcomeLead("routing"), "");
+  assert.equal(editOutcomeLead("isolated"), "Across the whole step: ");
+  // A caller that does not know the mode gets the common wording. The panel
+  // this lives on once read `mode` without being passed it, which threw.
+  assert.equal(editOutcomeLead(undefined), "Across the whole step: ");
 });

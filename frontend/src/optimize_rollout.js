@@ -159,3 +159,21 @@ export function minibatchLabel(minibatch, { mode = "isolated" } = {}) {
   if (mode === "routing") return "The step's analyst call";
   return `Minibatch ${minibatch?.minibatch_no ?? 0}`;
 }
+
+/** How to introduce the step's applied-edit count on one analyst call's panel.
+ *
+ * The count belongs to the *step*, not to the call being read: in isolated mode
+ * several analysts' patches are merged and ranked before anything is applied, so
+ * an edit proposed on this panel may have been collapsed into another one's.
+ * Saying whose count it is stops the two numbers looking like they disagree.
+ *
+ * A routing step makes one analyst call and merges nothing, so there the two
+ * populations are the same one and the framing would send a reader to reconcile
+ * a difference that cannot exist.
+ *
+ * Defaulted like `minibatchLabel` above: a caller that does not know the mode
+ * gets the common wording rather than an exception.
+ */
+export function editOutcomeLead(mode = "isolated") {
+  return mode === "routing" ? "" : "Across the whole step: ";
+}
