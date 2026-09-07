@@ -992,6 +992,13 @@ select { cursor: pointer; }
 }
 .dialog-body { padding: 16px 20px; overflow: auto; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
+/* The wrapper a dialog's failure is scrolled and focused onto. It carries no
+   appearance of its own — the banner inside it is the message — only the
+   scroll margin that keeps it clear of the dialog's head, and no focus ring:
+   the focus here is programmatic, moved so the message is announced, and a ring
+   around an unfocusable box reads as a control. */
+.dialog-alert { scroll-margin-block: var(--space-4); }
+.dialog-alert:focus { outline: none; }
 /* The pre-primitive form field, still used by ten screens that have not been
    rebuilt on `Field`. Its label and spacing are held identical to
    `.ui-field-label` and `.ui-field` on purpose: while both exist, a dialog that

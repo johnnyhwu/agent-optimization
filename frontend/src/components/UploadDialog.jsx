@@ -6,6 +6,7 @@ import PreviewPager from "./PreviewPager.jsx";
 import ScriptRunPanel from "./ScriptRunPanel.jsx";
 import ShareEditor from "./ShareEditor.jsx";
 import { useToast } from "./Toast.jsx";
+import { useRevealedError } from "../useRevealedError.js";
 import UploadPreviewEditor from "./UploadPreviewEditor.jsx";
 import { IconPlus, IconUpload, IconX } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
@@ -79,6 +80,10 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   const [shares, setShares] = useState([]);
   const [knownKeys, setKnownKeys] = useState([]);
   const [error, setError] = useState(null);
+  // Presses of Create. The dialog is taller than the window and Create is at the
+  // bottom of it, so a validation message at the top is out of sight from where
+  // it is produced — see `useRevealedError`.
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   // The preview has two shapes: the parsed-file table, and a full-height
   // two-pane editor for actually rewriting rows. Same `rows` either way, so
@@ -220,6 +225,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
 
   async function submit() {
     setError(null);
+    setAttempt((n) => n + 1);
     if (!name.trim()) return setError("Name is required.");
     const rowErrors = validateRows(rows);
     if (rowErrors.length) {
@@ -266,6 +272,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
   }
 
   const isScript = sourceFormat === "python" && script;
+  const errorRef = useRevealedError(error, attempt);
 
   return (
     <Modal
@@ -292,10 +299,14 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
         </>
       }
     >
+      {/* `is-block`: the default banner margin insets a note inside a card, and
+          in a dialog it left the message narrower than the fields around it. */}
       {error && (
-        <Banner tone="error" title="Could not read that file">
-          <BannerDetail>{error}</BannerDetail>
-        </Banner>
+        <div ref={errorRef} tabIndex={-1} className="dialog-alert">
+          <Banner tone="error" className="is-block" title="Could not read that file">
+            <BannerDetail>{error}</BannerDetail>
+          </Banner>
+        </div>
       )}
 
       {!expanded && (
@@ -378,7 +389,7 @@ export default function UploadDialog({ onClose, onCreated, subject }) {
           <FormatHelp onLoadSample={loadSample} />
         </div>
         {parseErrors.length > 0 && (
-          <Banner tone="warning" title="Some rows could not be read">
+          <Banner tone="warning" className="is-block" title="Some rows could not be read">
             <BannerDetail>{parseErrors.join("\n")}</BannerDetail>
           </Banner>
         )}

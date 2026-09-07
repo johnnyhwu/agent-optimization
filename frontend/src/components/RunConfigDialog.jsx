@@ -8,6 +8,7 @@ import Field, { FormSection } from "./ui/Field.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
 import { IconPlay } from "./icons.jsx";
 import { useDebounced } from "../useDebounced.js";
+import { useRevealedError } from "../useRevealedError.js";
 import { coverageWarning, skillCoverage } from "../skill_coverage.js";
 import { gateFor, probeMatches } from "../agent_endpoints.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
@@ -45,6 +46,9 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // page it fetched and the endpoint-match rule below needs the run's config.
   const [source, setSource] = useState(null);
   const [error, setError] = useState(null);
+  // Presses of "Run eval", not failures. The failure it explains may arrive a
+  // model call later — see `useRevealedError`.
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   // The pre-flight. `null` until the defaults have arrived and there is a URL to
   // check; then "checking" -> "connected" | "failed" | "simulated".
@@ -317,6 +321,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
 
   async function submit() {
     setError(null);
+    setAttempt((n) => n + 1);
 
     // Test the chat endpoint on the way past, but only when nothing has proved
     // it yet for *these* URLs. Doing it every time would spend a model call and
@@ -354,6 +359,11 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       setBusy(false);
     }
   }
+
+  // Why this press produced nothing. The POST's own error first — it is the
+  // outcome of what was actually asked for — then the pre-flight's.
+  const failure = error || (blocked ? gate.reason : "");
+  const failureRef = useRevealedError(failure, attempt);
 
   // Only promise a borrowed key when it will actually be carried over.
   const kept = (secretKey) =>
@@ -393,10 +403,17 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
         </>
       }
     >
+      {/* `is-block` because this is the block, not a note inset in a card: the
+          default banner margin is a card's inset, and in a dialog it left the
+          message 32px narrower than the fields it is about.
+          `tabIndex` so the reveal can move focus here, which is what announces
+          it to a screen reader rather than only showing it. */}
       {error && (
-        <Banner tone="error" title="Could not start the run">
-          <BannerDetail>{error}</BannerDetail>
-        </Banner>
+        <div ref={failureRef} tabIndex={-1} className="dialog-alert">
+          <Banner tone="error" className="is-block" title="Could not start the run">
+            <BannerDetail>{error}</BannerDetail>
+          </Banner>
+        </div>
       )}
       {!form && <Skeleton variant="text" count={4} />}
 
@@ -454,12 +471,16 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
               banner below: a check that blocks the run has to be readable
               without opening anything, and now there is nothing to open. */}
           {blocked && (
-            <Banner tone="warning" title="This run cannot start yet">
-              <BannerDetail>{gate.reason}</BannerDetail>
-            </Banner>
+            // Only the ref-holder when there is no error above it, so one press
+            // never has two things claiming to be the thing to look at.
+            <div ref={error ? undefined : failureRef} tabIndex={-1} className="dialog-alert">
+              <Banner tone="warning" className="is-block" title="This run cannot start yet">
+                <BannerDetail>{gate.reason}</BannerDetail>
+              </Banner>
+            </div>
           )}
           {!blocked && gate.warnings.length > 0 && (
-            <Banner tone="warning" title={gate.warnings[0]} />
+            <Banner tone="warning" className="is-block" title={gate.warnings[0]} />
           )}
 
           <RunConfigFields
