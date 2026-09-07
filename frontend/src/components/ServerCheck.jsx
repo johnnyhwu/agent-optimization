@@ -104,13 +104,15 @@ export default function ServerCheck() {
       />
 
       <div className="check-form">
-        {/* The same three groups, in the same order, as every other screen
-            that asks for an agent server: the credential first because it
-            applies to both addresses under it, then the endpoint the checklist
-            cannot run without, then the optional one. This block had them the
-            other way round with the credential folded away, so the one page
-            whose whole job is "did I implement the contract" disagreed with the
-            forms people implement against. */}
+        {/* The same three groups, in the same order and the same shapes as
+            every other screen that asks for an agent server: the credential
+            first because it applies to both addresses under it and folded
+            because most servers want none, then the endpoint the checklist
+            cannot run without, then the optional one. Shared components rather
+            than a copy, because the one page whose whole job is "did I
+            implement the contract" must not disagree with the forms people
+            implement against — which it did, in both directions, while these
+            two fields were written out twice. */}
         <EndpointAuthGroup
           apiKey={apiKey}
           authHeader={authHeader}
