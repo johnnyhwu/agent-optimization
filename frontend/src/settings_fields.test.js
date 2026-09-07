@@ -10,6 +10,7 @@ import {
   SYSTEM,
   OFF,
   SET,
+  usesOffState,
 } from "./settings_fields.js";
 
 // The settings page's one rule, in a module `node --test` can load.
@@ -26,6 +27,10 @@ import {
 //     `meta_skill` get three positions — follow the system, force on, force off
 //   * `early_stop_target_score` already uses blank to mean "aim at nothing", so
 //     it needs its own third position rather than overloading the first
+//
+// Optional alone is not the test. An optional *text* field — the skills
+// endpoint, the auth header — has a real empty state and no "off" worth
+// distinguishing, so it is a plain box like every other endpoint on the page.
 //
 // And the numbers that reach the wizard as percents are stored as fractions.
 // The wizard owns that conversion (`HYPER_FIELDS[...].scale`); this module reads
@@ -47,8 +52,12 @@ const TARGET = {
   key: "early_stop_target_score", kind: "fraction", minimum: 0, maximum: 1,
   optional: true,
 };
+const OPTIONAL_TEXT = {
+  key: "agent_skills_url", kind: "text", minimum: null, maximum: null,
+  optional: true,
+};
 
-const CATALOG = [TEXT, NUMBER, FLOAT, BOOL, SHARE, TARGET];
+const CATALOG = [TEXT, NUMBER, FLOAT, BOOL, SHARE, TARGET, OPTIONAL_TEXT];
 
 // --- Blank means "no opinion" ----------------------------------------------
 
@@ -114,6 +123,25 @@ test("target score can be overridden to off", () => {
 test("a stored null target score comes back as off rather than as unset", () => {
   const form = fromStored(CATALOG, { early_stop_target_score: null });
   assert.equal(form.early_stop_target_score.mode, OFF);
+});
+
+// --- Which fields have a third position -------------------------------------
+
+test("a third position is for the fields where off is a different answer", () => {
+  assert.equal(usesOffState(TARGET), true);
+  // Optional, but a blank box already says everything "off" would say.
+  assert.equal(usesOffState(OPTIONAL_TEXT), false);
+  assert.equal(usesOffState(TEXT), false);
+  assert.equal(usesOffState(NUMBER), false);
+});
+
+test("a null saved by the old control reads as following the deployment", () => {
+  // The skills endpoint was drawn as System/Off/Set to, and its "off" stored a
+  // null that the engine resolved to the deployment's URL anyway. Those rows
+  // still exist, and they mean what they always did.
+  const form = fromStored(CATALOG, { agent_skills_url: null });
+  assert.equal(form.agent_skills_url.mode, SYSTEM);
+  assert.deepEqual(overrides(CATALOG, form), {});
 });
 
 test("only an optional field may be switched off", () => {

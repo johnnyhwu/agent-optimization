@@ -1,6 +1,6 @@
 import React from "react";
 import Field from "../ui/Field.jsx";
-import { OFF, SET, SYSTEM, placeholder } from "../../settings_fields.js";
+import { OFF, SET, SYSTEM, placeholder, usesOffState } from "../../settings_fields.js";
 import { isOverridden } from "../../settings_view.js";
 
 // One setting, in the only two shapes it can take.
@@ -16,6 +16,11 @@ import { isOverridden } from "../../settings_view.js";
 // different reason — blank already means "aim at nothing", so it cannot also
 // mean "no opinion". Both get a segmented control instead, which is the same
 // idea drawn honestly rather than a checkbox that quietly loses one answer.
+//
+// Which fields those are is `usesOffState`'s decision, not "is it optional":
+// the skills endpoint and the auth header are optional and were drawn as
+// three positions, where "off" meant the same thing as "follow the deployment"
+// and read as a different one — beside a chat endpoint that is a plain box.
 //
 // Two things the legend above did not cover, and a page of twenty-five rows
 // needs both:
@@ -48,7 +53,7 @@ export default function SettingRow({ spec, entry, system, error, isNew, onChange
     </>
   );
 
-  if (spec.kind === "bool" || spec.optional) {
+  if (spec.kind === "bool" || usesOffState(spec)) {
     return (
       <Field label={label} help={spec.help} error={error} className={className}>
         <Segmented spec={spec} entry={entry} system={system} onChange={onChange} />
@@ -109,7 +114,8 @@ function unitFor(spec) {
   return undefined;
 }
 
-// Follow / on / off — or follow / off / a number, for the one optional field.
+// Follow / on / off — or follow / off / a number, for the one optional field
+// that has a real "off".
 function Segmented({ spec, entry, system, onChange }) {
   const options = spec.kind === "bool"
     ? [
