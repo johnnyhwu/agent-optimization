@@ -110,9 +110,11 @@ async def agent_skills(
     return AgentSkillsOut(
         agent_skills_url=effective_url,
         version=result.version,
-        # `top_level_skills` wants a workspace map; only the paths matter here,
-        # and the file bodies are megabytes nobody on this screen reads.
-        skills=top_level_skills({path: "" for path in result.paths}),
+        # The names, not the paths and certainly not the bodies — a workspace is
+        # routinely hundreds of kilobytes and none of it helps a screen that is
+        # asking which skills exist. What counts as one is
+        # `services/agent_skills.py`: a directory holding a `SKILL.md`.
+        skills=top_level_skills(result.paths),
         check=CheckOut(**asdict(result.skills)),
         request_preview=result.request_preview,
         response_preview=result.response_preview,

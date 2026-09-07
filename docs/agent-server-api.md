@@ -253,6 +253,13 @@ Rules for `skills`:
   build a tree.
 * **Walk every level.** Reference files matter as much as `SKILL.md`; a skill is
   a directory.
+* **A skill is a directory holding a `SKILL.md`**, and that is how Skill Studio
+  counts them — `billing/SKILL.md` plus five reference files is one skill, not
+  six. A directory with no `SKILL.md` is not counted, and neither is a loose file
+  at the root: there is no entry point to send back, no frontmatter to route on,
+  and nothing for an optimization run to edit. So a workspace that also serves a
+  README or a shared `snippets/` directory is fine — those simply do not appear
+  in the skill count or in the skill-coverage check.
 * **Full text, never truncated.** A developer edits this content in place, and a
   truncated file silently becomes a destructive edit when it is sent back.
 * **Skip binaries** that will not decode as UTF-8 — but skip them individually

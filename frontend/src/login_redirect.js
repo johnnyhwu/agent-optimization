@@ -27,16 +27,40 @@
 // deep link against a real identity provider — the case nobody re-tests.
 
 /**
- * The sign-in redirect target: this page, without its fragment.
+ * The sign-in redirect target — this page without its fragment — and what to do
+ * with the fragment that was there.
  *
- * Returns `{ redirectUri, route }` — `route` being the fragment to park for
- * `routeAfterLogin` below, or "" when there was nothing worth keeping. A bare
- * "#" is nothing worth keeping: it is not a route, and restoring it would put a
- * stray character in the address bar.
+ * Returns `{ redirectUri, route }`, where `route` is deliberately three-valued,
+ * because a sign-in is two page loads and this function runs on both:
+ *
+ *   `"#/…"`  an app route. Park it; this is the outbound leg.
+ *   `""`     nothing to come back to. Clear anything parked, so a route left
+ *            over from an attempt that never completed — the provider was
+ *            unreachable, the tab was closed at the login screen — cannot
+ *            hijack the next plain visit to the app's front door.
+ *   `null`   not ours. Leave whatever is parked alone.
+ *
+ * **`null` is the inbound leg, and it is the whole reason this is not a
+ * boolean.** `initAuth` passes the redirect URI as an argument to
+ * `keycloak.init`, so it is computed *before* `init` looks at the URL — and on
+ * the way back from the provider the fragment is still the OAuth response,
+ * `#state=…&code=…`. Treating that as a route parks it over the real one: the
+ * deep link is lost, and the authorization code is written back into the
+ * address bar immediately after keycloak-js took it out.
+ *
+ * Telling them apart on the leading `#/` rather than by sniffing for `state`:
+ * every address this app produces is `href.*` in `useHashRoute.js` and every one
+ * of them starts that way, so "is this one of ours" is the question with the
+ * cheap, total answer.
  */
 export function loginRedirect({ origin, pathname, search, hash }) {
-  const route = (hash || "").length > 1 ? hash : "";
-  return { redirectUri: `${origin}${pathname}${search || ""}`, route };
+  const fragment = hash || "";
+  const redirectUri = `${origin}${pathname}${search || ""}`;
+  if (fragment.startsWith("#/")) return { redirectUri, route: fragment };
+  // A bare "#" is not a route: restoring it would leave a stray character in
+  // the address bar, and it is what a plain visit to the app can look like.
+  if (fragment === "" || fragment === "#") return { redirectUri, route: "" };
+  return { redirectUri, route: null };
 }
 
 /**

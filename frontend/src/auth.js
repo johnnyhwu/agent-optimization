@@ -29,11 +29,15 @@ const ROUTE_KEY = "postLoginRoute";
 
 /**
  * The fragment-free address to sign in against, with this page's route parked
- * for the trip. See `login_redirect.js` for why the fragment cannot come along.
+ * for the trip. See `login_redirect.js` for why the fragment cannot come along,
+ * and why the answer has three cases rather than two — this runs on the way out
+ * *and* on the way back, and on the way back the fragment is the provider's
+ * callback, which must not be parked over the route it is bringing us home to.
  */
 function loginRedirectUri() {
   const { redirectUri, route } = loginRedirect(window.location);
   if (route) sessionStorage.setItem(ROUTE_KEY, route);
+  else if (route === "") sessionStorage.removeItem(ROUTE_KEY);
   return redirectUri;
 }
 
@@ -52,7 +56,11 @@ function restoreRoute() {
   if (!saved) return;
   sessionStorage.removeItem(ROUTE_KEY);
   const next = routeAfterLogin(window.location, saved);
-  if (next) window.history.replaceState(null, "", next);
+  // `history.state` carried through rather than replaced with null: keycloak-js
+  // has just called `replaceState` itself to strip its callback parameters, and
+  // it preserved the state for the same reason — this entry is the one the user
+  // is standing on, not a new one.
+  if (next) window.history.replaceState(window.history.state, "", next);
 }
 
 /** The signed-in username. Lower-cased to match what the backend stores. */

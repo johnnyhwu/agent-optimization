@@ -16,9 +16,16 @@ frontend/
 # Docs the UI does not serve are still cheap to copy, so they stay: docs/ goes
 # in whole, and `routers/docs.py` decides what is reachable by name.
 
+# Credentials. Nothing below /app is COPYed from these paths, but the context is
+# still handed to the daemon whole, and `.gitignore` says the repo-root .env is
+# where real endpoint credentials live. The example file is documentation and
+# stays.
+**/.env
+**/.env.*
+!**/.env.example
+
 **/__pycache__/
 **/*.pyc
 **/.venv/
 **/.pytest_cache/
-**/.env
 **/*.log
