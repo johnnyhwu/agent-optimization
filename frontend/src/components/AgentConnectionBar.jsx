@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { IconAlert, IconCheck, IconRefresh, IconTarget } from "./icons.jsx";
 import Button from "./ui/Button.jsx";
 import NumberInput from "./ui/NumberInput.jsx";
-import { Disclosure } from "./ui/Field.jsx";
+import Field, { Disclosure } from "./ui/Field.jsx";
+import DocsHelp from "./DocsHelp.jsx";
 import { deriveSkillsUrl, looksUnauthorized, splitHint } from "../agent_endpoints.js";
 
 // Which agent the playground is talking to.
@@ -194,8 +195,16 @@ export default function AgentConnectionBar({
         </div>
 
         <div className="agent-bar-fields">
-          <div className="field">
-            <label htmlFor="agent-chat-url">Chat endpoint</label>
+          {/* The primitive, so the "?" sits where it sits on every other screen
+              that asks for these two URLs — `.ui-field-hint` pushes it to the
+              far end of the label row. This bar had hand-rolled labels and no
+              help at all, which made the documentation look like something the
+              run dialog had and the playground did not. */}
+          <Field
+            label="Chat endpoint"
+            htmlFor="agent-chat-url"
+            hint={<DocsHelp anchor="chat-endpoint" label="What this endpoint must do" />}
+          >
             <input
               id="agent-chat-url"
               value={chat}
@@ -213,9 +222,12 @@ export default function AgentConnectionBar({
               }}
               onKeyDown={(e) => e.key === "Enter" && submit()}
             />
-          </div>
-          <div className="field">
-            <label htmlFor="agent-skills-url">Skills endpoint</label>
+          </Field>
+          <Field
+            label="Skills endpoint"
+            htmlFor="agent-skills-url"
+            hint={<DocsHelp anchor="skills-endpoint" label="What this endpoint must do" />}
+          >
             <input
               id="agent-skills-url"
               value={skills}
@@ -224,9 +236,8 @@ export default function AgentConnectionBar({
               onChange={(e) => setSkills(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submit()}
             />
-          </div>
-          <div className="field agent-bar-timeout">
-            <label htmlFor="agent-timeout">Timeout (sec)</label>
+          </Field>
+          <Field label="Timeout" htmlFor="agent-timeout" hint="seconds" className="agent-bar-timeout">
             <NumberInput
               id="agent-timeout"
               min="1"
@@ -234,7 +245,7 @@ export default function AgentConnectionBar({
               onChange={(e) => setTimeout_s(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submit()}
             />
-          </div>
+          </Field>
           <Button variant="primary" disabled={!chat.trim()} loading={busy} onClick={submit}>
             {busy ? "Connecting…" : "Connect"}
           </Button>
@@ -252,8 +263,11 @@ export default function AgentConnectionBar({
           onOpenChange={setAuthOpen}
         >
           <div className="agent-bar-fields">
-            <div className="field">
-              <label htmlFor="agent-api-key">API key</label>
+            <Field
+              label="API key"
+              htmlFor="agent-api-key"
+              hint={<DocsHelp anchor="authentication" label="How the platform sends a credential" />}
+            >
               <input
                 id="agent-api-key"
                 type="password"
@@ -264,9 +278,12 @@ export default function AgentConnectionBar({
                 onChange={(e) => setApiKey(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
-            </div>
-            <div className="field">
-              <label htmlFor="agent-auth-header">Auth header</label>
+            </Field>
+            <Field
+              label="Auth header"
+              htmlFor="agent-auth-header"
+              hint={<DocsHelp anchor="authentication" label="Where the credential is sent" />}
+            >
               <input
                 id="agent-auth-header"
                 value={authHeader}
@@ -275,7 +292,7 @@ export default function AgentConnectionBar({
                 onChange={(e) => setAuthHeader(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
-            </div>
+            </Field>
           </div>
         </Disclosure>
 

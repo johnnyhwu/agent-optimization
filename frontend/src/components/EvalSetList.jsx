@@ -281,12 +281,10 @@ function SetCard({ set: s, index, pinnedLabel, onOpen, onDownload, onEditQuestio
   // the default one", which is true of nearly every set and would be background
   // noise inside a week.
   const unreviewed = owner && !s.judge_prompt?.reviewed_at;
-  // Capped so the foot band is always one row tall. Cards in a grid row stretch
-  // to the tallest of them, and a set with three metadata keys used to push its
-  // own stats band a line higher than its neighbours' — which defeats the point
-  // of the band, the one thing anyone reads *across* the cards. The rest are
-  // still reachable: the row carries the full list as its tooltip, and the set's
-  // own page shows them all.
+  // Capped at three. A set with nine metadata keys would otherwise run its foot
+  // band down half the card, beside neighbours whose foot is one row. The rest
+  // are still reachable: the "+n" chip carries the full list as its tooltip,
+  // and the set's own page shows them all.
   //
   // The key being filtered on sorts first, so the card can never hide the one
   // label that explains why it is in the results — a set with five keys whose
@@ -318,31 +316,6 @@ function SetCard({ set: s, index, pinnedLabel, onOpen, onDownload, onEditQuestio
               </Badge>
             )}
           </div>
-          {/* Metadata belongs with identity, not with status. It also has to
-              live in the band that absorbs the card's spare height: the foot is
-              what the stats band is measured against across the grid, so
-              anything that can wrap to a second line cannot go there. */}
-          {allLabels.length > 0 && (
-            <BadgeRow className="set-card-labels">
-              {/* Outlined, because a metadata key is not a status. Filled tints
-                  are how this product says "something happened" — regressed,
-                  improved, failed — and a neutral tint beside them was the same
-                  shape in a different colour, which is exactly the thing colour
-                  alone should not have to carry. */}
-              {labels.map(([k, v]) => (
-                <Badge key={k} tone="neutral" outline>{k}: {String(v)}</Badge>
-              ))}
-              {hiddenLabels > 0 && (
-                <Badge
-                  tone="neutral"
-                  outline
-                  title={allLabels.map(([k, v]) => `${k}: ${v}`).join("\n")}
-                >
-                  +{hiddenLabels}
-                </Badge>
-              )}
-            </BadgeRow>
-          )}
         </div>
 
         {/* Always visible. These used to appear only on hover, which meant the
@@ -385,7 +358,13 @@ function SetCard({ set: s, index, pinnedLabel, onOpen, onDownload, onEditQuestio
         <div className="set-card-spark"><Sparkline values={s.trend} /></div>
       </div>
 
-      {(s.regressed > 0 || s.improved > 0) && (
+      {/* The foot is one row of chips at the bottom of the card, and it holds
+          both kinds: what moved since the last run, then what the set is
+          labelled with. Metadata lived up in the identity block for two
+          commits, which put a wrapping row of chips between the set's name and
+          the numbers the grid is actually scanned down. It reads as a footer,
+          so it is one. */}
+      {(s.regressed > 0 || s.improved > 0 || allLabels.length > 0) && (
         <div className="set-card-foot">
           <BadgeRow>
             {s.regressed > 0 && (
@@ -396,6 +375,23 @@ function SetCard({ set: s, index, pinnedLabel, onOpen, onDownload, onEditQuestio
             {s.improved > 0 && (
               <Badge tone="success" icon={<IconTrendUp size={11} />}>
                 {s.improved} improved
+              </Badge>
+            )}
+            {/* Outlined, because a metadata key is not a status. Filled tints
+                are how this product says "something happened" — regressed,
+                improved, failed — and a neutral tint beside them was the same
+                shape in a different colour, which is exactly the thing colour
+                alone should not have to carry. */}
+            {labels.map(([k, v]) => (
+              <Badge key={k} tone="neutral" outline>{k}: {String(v)}</Badge>
+            ))}
+            {hiddenLabels > 0 && (
+              <Badge
+                tone="neutral"
+                outline
+                title={allLabels.map(([k, v]) => `${k}: ${v}`).join("\n")}
+              >
+                +{hiddenLabels}
               </Badge>
             )}
           </BadgeRow>

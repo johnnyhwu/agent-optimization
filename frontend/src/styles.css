@@ -341,8 +341,17 @@ select { cursor: pointer; }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 /* The footer list sits at the foot of the rail rather than after the last
    section, so reference material reads as reference material and not as a
-   fourth thing the product does. */
-.rail-list-foot { margin-top: auto; }
+   fourth thing the product does.
+   It owns the *only* `margin-top: auto` in the rail. `.rail-collapse` carried
+   one too, and two auto margins in a flex column split the free space between
+   them — which left Documentation floating in the middle of the empty rail with
+   a hand's width of nothing under it, attached to neither the sections above
+   nor the control below. The rule above it is what says the two rows at the
+   bottom are one group. */
+.rail-list-foot {
+  margin-top: auto;
+  padding-top: var(--space-2); border-top: 1px solid var(--border);
+}
 
 /* Deliberately not the segmented pill (which means "filter this page") and not
    the inset accent bar (which means "this row of the list is selected"). A
@@ -371,7 +380,7 @@ select { cursor: pointer; }
   letter-spacing: 0.04em; color: var(--muted); opacity: 0.8;
 }
 .rail-collapse {
-  margin-top: auto; justify-content: flex-start; gap: var(--space-3);
+  justify-content: flex-start; gap: var(--space-3);
   padding: var(--space-2) var(--space-3); font-size: var(--text-caption);
   color: var(--muted); background: none; border: none; border-radius: var(--radius-sm);
   transition: background var(--dur), color var(--dur);
@@ -557,7 +566,19 @@ select { cursor: pointer; }
    and its labels. They are separated by real dividers rather than by spacing
    alone, because the middle band is the only one anyone scans across cards and
    it has to find the same line every time. */
-.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
+/* `align-items: start` is the whole fix for the hole that used to open in the
+   middle of a card. A grid row stretches every card to the tallest of them, so
+   a set with a short name, no runs and no labels was given the height of a
+   neighbour with a two-line title and a foot band, and had to put that
+   somewhere — which is why it rendered a title, then a band of nothing, then
+   its numbers. Sized by their own content, the cards end ragged by a band or
+   two and nothing inside them is empty; the numbers still line up across a row,
+   because what decides where they sit is the identity block above them and that
+   is the same height on every card with a one-line title. */
+.set-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4); align-items: start;
+}
 .set-card {
   display: flex; flex-direction: column; animation: fadeInUp var(--dur-slower) var(--ease) both;
   container: set-card / inline-size;
@@ -565,17 +586,18 @@ select { cursor: pointer; }
 .set-card-top {
   display: flex; align-items: flex-start; gap: var(--space-2);
   padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
-  /* Absorbs the slack. Grid rows stretch every card to the tallest of them, and
-     without this the extra height landed *below* the bands — so a card with a
-     three-line title pushed its stats band down and out of line with its
-     neighbours'. The identity band is the right place for it: it is the one
-     band read per-card rather than across them. */
-  flex: 1;
 }
 .set-card-heading { min-width: 0; flex: 1; }
 .set-card-heading h3 {
   margin: 0 0 6px; font-size: var(--text-title); font-weight: var(--fw-semibold);
   overflow-wrap: anywhere;
+  /* Two lines whether the name needs them or not. Cards size to their own
+     content now, so without this a one-line title started its card's numbers
+     twenty pixels above its neighbour's — and the stats band is the one thing
+     read *across* the grid rather than down a card. Reserved rather than
+     stretched: the space is the same on every card, which is what makes it read
+     as the layout's rhythm instead of as one card having a gap in it. */
+  line-height: 1.3; min-height: 2.6em;
   /* Two lines, then ellipsis, with the full name in the title attribute. A set
      can be named anything and a three-line one used to set the height of every
      card in its grid row — so one badly named set made the whole row taller and
@@ -618,11 +640,10 @@ select { cursor: pointer; }
 .set-stat-num-sm { font-size: 18px; padding-bottom: 3px; }
 .set-stat-lbl { font-size: var(--text-micro); color: var(--muted); margin-top: 5px; }
 .set-card-spark { margin-left: auto; padding-bottom: var(--space-1); }
+/* The chips at the foot: what moved since the last run, then the set's metadata
+   labels. The component caps the labels at three, so a set carrying nine keys
+   cannot run its foot down half the card. */
 .set-card-foot { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
-/* Metadata under the identity block. Sits in the band that absorbs the card's
-   spare height, so however many labels a set carries, the stats band below is
-   still on the same line as every other card's in the row. */
-.set-card-labels { margin-top: var(--space-2); }
 
 /* ---- run history ---- */
 .run-flags { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
@@ -943,7 +964,11 @@ select { cursor: pointer; }
   animation: popIn var(--dur-slow) var(--ease) both;
 }
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 18px 20px 12px; border-bottom: 1px solid var(--border); }
-.dialog-head h3 { margin: 0; font-size: 17px; }
+/* The type scale's title step, not a 17px one-off a pixel above it: a dialog
+   title is a card title with a heavier surface behind it, and the two being
+   almost-but-not-quite the same size is the kind of difference that reads as a
+   mistake rather than as a distinction. */
+.dialog-head h3 { margin: 0; font-size: var(--text-title); }
 .dialog-sub { margin: 3px 0 0; color: var(--muted); font-size: var(--text-caption); }
 /* An internal number in a line of plain language — the eval set's edit-conflict
    version. Marked as a thing with a definition (dotted underline, help cursor)
@@ -955,15 +980,34 @@ select { cursor: pointer; }
 }
 .dialog-body { padding: 16px 20px; overflow: auto; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
-.field { margin-bottom: 14px; }
-.field > label { display: block; font-size: var(--text-caption); font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+/* The pre-primitive form field, still used by ten screens that have not been
+   rebuilt on `Field`. Its label and spacing are held identical to
+   `.ui-field-label` and `.ui-field` on purpose: while both exist, a dialog that
+   mixes them must not be able to show two different kinds of label, and a grey
+   label beside a black one reads as one of them being disabled. */
+.field { margin-bottom: var(--space-4); }
+.field > label {
+  display: block; margin-bottom: 5px;
+  font-size: var(--text-caption); font-weight: var(--fw-semibold); color: var(--text);
+}
+/* One step below the section headings that organise them, like the primitive's
+   controls — see the note on `.ui-field-control`. */
+.field > input:not([type="checkbox"]):not([type="radio"]),
+.field > select { font-size: var(--text-body); }
 .field textarea { min-height: 120px; font-family: var(--font-mono); font-size: var(--text-caption); }
+
 .hint { font-size: var(--text-caption); color: var(--muted); }
-/* Group heading inside the run-config dialog (Agent / Langfuse / LLM). */
+/* Group heading in the screens still on the pre-primitive markup — the
+   read-only view of a past run's config, and the judge-prompt editor.
+   Same treatment as `.ui-form-section-title`, for the same reason `.field`
+   above matches `.ui-field-label`: two heading styles for the same job, one of
+   them grey and a step smaller, is the thing that made these forms read as
+   several forms stacked together. */
 .cfg-section {
   margin: 20px 0 10px; padding-top: 14px; border-top: 1px solid var(--border);
-  font-size: var(--text-caption); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--muted); display: flex; align-items: baseline; gap: 8px;
+  font-size: var(--text-body); font-weight: var(--fw-bold); letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text); display: flex; align-items: baseline; gap: 8px;
 }
 .cfg-section .hint { text-transform: none; letter-spacing: 0; font-weight: 500; }
 .field input:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1081,9 +1125,21 @@ select { cursor: pointer; }
 
 /* ---- run picker (Use config from) ---- */
 .runpicker { position: relative; }
+/* Styled like the control it replaces. It was a bare <button>, which meant the
+   UA's own `#efefef` face under the inherited page colour: in dark mode that is
+   near-white text on light grey, measured at 1.1:1 — the same failure the
+   button reset above records for `.opt-runitem`, on the one control in the run
+   dialog that is not an <input>. It has to look like the fields around it
+   anyway: it stands where a select would. */
 .runpicker-trigger {
   width: 100%; display: flex; align-items: center; justify-content: space-between;
   gap: 8px; text-align: left; font-weight: 400;
+  height: var(--ctl-h); padding: 0 10px; font-size: var(--text-body);
+  color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+}
+.runpicker-trigger:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: var(--ring);
 }
 .runpicker-trigger .chev { color: var(--muted); font-size: var(--text-micro); }
 .runpicker-pop {
@@ -1196,12 +1252,37 @@ select { cursor: pointer; }
 }
 /* Square and sized to be hit rather than aimed at, like every other icon-only
    control here. `ui-btn-icon` already sets the box; this only stops the link
-   reset from taking the underline and the text colour with it. */
-.agent-ep-help { color: var(--muted); text-decoration: none; }
-.agent-ep-help:hover { color: var(--text); }
-/* Full width like the exchange panel below it: both are folded blocks that sit
-   under a field, not beside one. */
-.agent-ep-auth { width: 100%; margin-top: var(--space-2); }
+   reset from taking the underline and the text colour with it. Named for what
+   it is rather than for the one component it started in: four screens ask for
+   an agent server and all four carry it now. */
+.docs-help { color: var(--muted); text-decoration: none; }
+.docs-help:hover { color: var(--text); text-decoration: none; }
+/* The three groups — credential, chat endpoint, skills endpoint — laid out in
+   the order they are decided in. A rule and a heading rather than three nested
+   disclosures: the fields are all needed, and a chevron on each of them was
+   three lids over a form eleven fields long.
+
+   The first group carries no rule: the FormSection heading above it is already
+   the line. */
+.agent-ep-group + .agent-ep-group {
+  margin-top: var(--space-4); padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+/* Below the section heading it sits under and above the field labels it names:
+   sentence case where the section is uppercase, and the full text colour where
+   a label is the same size but not bold. */
+.agent-ep-group-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-body); font-weight: var(--fw-semibold); color: var(--text);
+}
+/* The URL and the control that tests it, on one row. The button used to sit on
+   a line of its own under the field, where a full-width form reads it as an
+   action on the form rather than on the address above it. */
+.agent-ep-row { display: flex; align-items: center; gap: var(--space-2); }
+.agent-ep-row > input { flex: 1; min-width: 0; height: var(--ctl-h); }
+.agent-ep-row > .ui-btn { flex: none; }
+/* Full width, because it is a folded block under a field rather than beside
+   one. */
 .agent-ep-exchange { width: 100%; }
 .agent-ep-exchange-label {
   font-size: var(--text-micro); color: var(--muted);
@@ -1275,6 +1356,12 @@ select { cursor: pointer; }
   padding-top: var(--space-3); border-top: 1px solid var(--border);
 }
 .doc-body h3 { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-ui); }
+/* Every heading is a jump target — the "?" beside a field links straight to
+   one — and the top bar is sticky, so a heading scrolled to its own top lands
+   underneath it. Measured at -0.34px from the viewport top, which is to say
+   completely behind 48px of chrome. Same rule, same reason, as
+   `.settings-group`. */
+.doc-body h2, .doc-body h3 { scroll-margin-top: calc(var(--topbar-h) + var(--space-4)); }
 .doc-body p, .doc-body li { line-height: 1.65; }
 .doc-body ul, .doc-body ol { padding-left: var(--space-5); }
 .doc-body blockquote {
@@ -1339,8 +1426,8 @@ select { cursor: pointer; }
 .agent-bar-fields {
   display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap;
 }
-.agent-bar-fields .field { flex: 1; min-width: 220px; margin-bottom: 0; }
-.agent-bar-fields .agent-bar-timeout { flex: 0 0 120px; min-width: 120px; }
+.agent-bar-fields .ui-field { flex: 1; min-width: 220px; margin-bottom: 0; }
+.agent-bar-fields .agent-bar-timeout { flex: 0 0 140px; min-width: 140px; }
 /* The credential panel, folded into the connect form. Its own top margin
    because the disclosure sits between two rows of fields and would otherwise
    read as part of the row above it. */

@@ -321,6 +321,16 @@
 .ui-field-control > input,
 .ui-field-control > textarea,
 .ui-field-control > select { width: 100%; }
+/* The value a form is holding must not out-size the heading of the section it
+   is in. The app's base size is 14px and `font: inherit` handed that to every
+   control, so a run-config dialog set its typed URLs a step *above* its own
+   "AGENT" and "TRACE STORE" headings — every field louder than the structure
+   organising it. One step down puts them level with the group titles and above
+   the labels, which is the order they should be read in. Descendant rather than
+   child: a field that pairs its input with a button wraps the two in a row. */
+.ui-field-control input:not([type="checkbox"]):not([type="radio"]),
+.ui-field-control textarea,
+.ui-field-control select { font-size: var(--text-body); }
 .ui-field-control > input:not([type="checkbox"]):not([type="radio"]),
 .ui-field-control > select { height: var(--ctl-h); }
 /* A disabled control has to look disabled. The old rule was scoped to `.field
@@ -344,9 +354,15 @@
   margin-bottom: var(--space-3); padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
+/* The strongest line inside a form, and it has to be: a section heading set in
+   12px grey sat *below* the 14px black values under it in every dialog in the
+   product, so the only thing telling one section from the next was the rule
+   under the words. Full text colour and one step up the scale; uppercase and
+   the letter-spacing are what keep it distinct from the group titles and field
+   labels it now shares a colour with. */
 .ui-form-section-title {
-  margin: 0; font-size: var(--text-caption); font-weight: var(--fw-bold);
-  text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+  margin: 0; font-size: var(--text-body); font-weight: var(--fw-bold);
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--text);
 }
 .ui-form-section-desc { margin: 4px 0 0; font-size: var(--text-caption); color: var(--muted); }
 .ui-form-section-aside { flex: none; }

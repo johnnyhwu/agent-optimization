@@ -13,7 +13,7 @@ import { plural } from "../../plural.js";
 import { useToast } from "../Toast.jsx";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
-import AgentEndpointsFields from "../AgentEndpointsFields.jsx";
+import AgentEndpointsFields, { EndpointGroup } from "../AgentEndpointsFields.jsx";
 import { useDebounced } from "../../useDebounced.js";
 import { counts, makeSplit } from "../../optimize_split.js";
 import { gateFor, probeMatches } from "../../agent_endpoints.js";
@@ -866,17 +866,23 @@ function ModeStep({
         skillsBusy={skillsBusy}
         idPrefix="opt"
       />
-      <Field
-        label="Request timeout (seconds)"
-        help="How long one question may take before the run counts it as failed."
-      >
-        <NumberInput
-          min={1}
-          value={config.agent_timeout_s ?? ""}
-          onChange={set("agent_timeout_s")}
-          placeholder={defaults.agent_timeout_s}
-        />
-      </Field>
+      {/* Grouped like the three above it. A field left bare after three that
+          carry a heading reads as part of whichever one it happens to follow —
+          here, as a property of the skills endpoint rather than of every
+          request the run makes. */}
+      <EndpointGroup title="Request timeout">
+        <Field
+          label="Seconds"
+          help="How long one question may take before the run counts it as failed."
+        >
+          <NumberInput
+            min={1}
+            value={config.agent_timeout_s ?? ""}
+            onChange={set("agent_timeout_s")}
+            placeholder={defaults.agent_timeout_s}
+          />
+        </Field>
+      </EndpointGroup>
     </FormSection>
     </>
   );

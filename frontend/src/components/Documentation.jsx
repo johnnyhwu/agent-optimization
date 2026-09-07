@@ -18,6 +18,16 @@ import { href } from "../useHashRoute.js";
 // they were filling in, with a specific question, which is why the route
 // carries an anchor and why this scrolls to it rather than dropping the reader
 // at a table of contents to find the answer a second time.
+// The ancestor that actually scrolls. The app shell scrolls its main column
+// rather than the window, so `window.scrollTo` is a no-op here and naming the
+// class would tie this file to the shell's markup.
+function scrollContainer(el) {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+  }
+  return null;
+}
+
 export default function Documentation({ doc, anchor }) {
   const [state, setState] = useState({ status: "loading" });
   const bodyRef = useRef(null);
@@ -43,13 +53,29 @@ export default function Documentation({ doc, anchor }) {
 
   // After the HTML is in the DOM, not before: the element being scrolled to is
   // created by this render.
+  //
+  // The two cases are not the same scroll, which is the bug this replaces.
+  // `scrollIntoView` on the body aligns the *body* with the top of the viewport
+  // — so arriving with no anchor scrolled the page 138px and put "Agent Server
+  // API" seventy pixels above the window. Opening the docs from the rail landed
+  // the reader in the middle of a document with its title gone, which reads
+  // exactly like a page that failed to load.
+  //
+  // With no anchor there is nothing to scroll *to*: the page wants to be at its
+  // own top, which means resetting the scroll container rather than moving an
+  // element into view. Following two doc links in a row still starts at the
+  // top, which is what that scroll was for.
   useEffect(() => {
     if (!rendered || !bodyRef.current) return;
     const id = findAnchor(rendered.headings, anchor);
     const target = id ? bodyRef.current.querySelector(`#${CSS.escape(id)}`) : null;
-    // Top of the document when no anchor was asked for, so following two links
-    // in a row does not leave the second one scrolled to where the first was.
-    (target || bodyRef.current).scrollIntoView({ block: "start" });
+    if (target) {
+      // `.doc-body h2/h3` carry `scroll-margin-top`, so this clears the sticky
+      // top bar rather than parking the heading behind it.
+      target.scrollIntoView({ block: "start" });
+      return;
+    }
+    scrollContainer(bodyRef.current)?.scrollTo({ top: 0 });
   }, [rendered, anchor]);
 
   if (state.status === "loading") return <Skeleton variant="text" count={8} />;
