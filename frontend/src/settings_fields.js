@@ -210,14 +210,4 @@ export function changedKeys(catalog, form) {
   return out.sort();
 }
 
-// Whether the values a defaults endpoint returned differ from what the
-// deployment alone would have produced — the one line the three working pages
-// show, in place of a marker on every field.
-export function differsFromSystem(defaults, systemDefaults) {
-  if (!defaults || !systemDefaults) return false;
-  return Object.keys(systemDefaults).some(
-    (key) => JSON.stringify(defaults[key]) !== JSON.stringify(systemDefaults[key])
-  );
-}
-
 export { specOf };

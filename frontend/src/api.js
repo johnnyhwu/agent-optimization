@@ -239,9 +239,11 @@ export const api = {
   listRuns: (id, params = {}) => req("GET", `/eval-sets/${id}/runs${qs(params)}`),
   getRun: (id, runId) => req("GET", `/eval-sets/${id}/runs/${runId}`),
   // Prefill for the run-config dialog + which seams are live. `defaults` is this
-  // deployment's values with the signed-in developer's own laid over them;
-  // `system_defaults` is the deployment's alone, which is the only way the page
-  // can tell whether anything came from the settings page.
+  // deployment's values with the signed-in developer's own laid over them. The
+  // response also carries `system_defaults`, the deployment's alone; no form
+  // reads it any more — where a value came from is the settings page's subject,
+  // and a line saying so on top of every prefilled form was one more thing to
+  // read on the way to pressing the button.
   runConfigDefaults: () => req("GET", "/run-config/defaults"),
   triggerRun: (id, payload) => req("POST", `/eval-sets/${id}/runs`, payload),
   cancelRun: (id, runId) => req("POST", `/eval-sets/${id}/runs/${runId}/cancel`),

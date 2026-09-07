@@ -3,7 +3,6 @@ import { api } from "../api.js";
 import Modal from "./Modal.jsx";
 import RunConfigFields, { DiagnosisModelField } from "./RunConfigFields.jsx";
 import RunPicker from "./RunPicker.jsx";
-import DefaultsNotice from "./settings/DefaultsNotice.jsx";
 import Button from "./ui/Button.jsx";
 import Field, { FormSection } from "./ui/Field.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
@@ -33,9 +32,6 @@ const SECRET_PAIRS = [
 
 export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) {
   const [defaults, setDefaults] = useState(null);
-  // What the deployment alone would have prefilled. Only used to decide whether
-  // to say the values came from the developer's own settings.
-  const [systemDefaults, setSystemDefaults] = useState(null);
   const [impls, setImpls] = useState({});
   const [form, setForm] = useState(null);
   const [secrets, setSecrets] = useState({
@@ -67,7 +63,6 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
       .runConfigDefaults()
       .then((r) => {
         setDefaults(r.defaults);
-        setSystemDefaults(r.system_defaults);
         setImpls(r.impls || {});
         setForm({ name: new Date().toLocaleString(), ...r.defaults });
       })
@@ -407,8 +402,6 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
 
       {form && (
         <>
-          <DefaultsNotice defaults={defaults} systemDefaults={systemDefaults} />
-
           {/* Every block on this form is a FormSection, in the order the
               settings are decided in: what this run is called, what it starts
               from, what it talks to, what it does with a wrong answer, and how

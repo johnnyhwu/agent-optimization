@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 import { href, navigate } from "../../useHashRoute.js";
 import Banner from "../ui/Banner.jsx";
-import DefaultsNotice from "../settings/DefaultsNotice.jsx";
 import Button from "../ui/Button.jsx";
 import Card, { CardHeader } from "../ui/Card.jsx";
 import Field, { FormSection } from "../ui/Field.jsx";
@@ -524,18 +523,17 @@ export default function Wizard() {
     <div className="opt-wizard">
       <StepBar steps={STEPS} current={stepIndex} onGo={setStepIndex} furthest={reachable} />
 
-      <DefaultsNotice
-        defaults={defaults.defaults}
-        systemDefaults={defaults.system_defaults}
-      />
-
-      {error && (
-        <Banner tone="error" title="That did not work">
-          {error}
-        </Banner>
-      )}
-
+      {/* Inside the body, not above it. Only the body and the footer carry this
+          route's gutter padding — the wizard is full-bleed so that the scroll
+          region reaches both edges of the window — so anything between the step
+          bar and the body renders flush against the window's left edge, a
+          column of its own beside every other thing on the page. */}
       <div className="opt-wizard-body">
+        {error && (
+          <Banner tone="error" title="That did not work">
+            {error}
+          </Banner>
+        )}
         {step.id === "mode" && (
           <ModeStep
             mode={mode}
