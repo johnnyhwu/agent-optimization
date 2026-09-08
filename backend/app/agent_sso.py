@@ -50,7 +50,7 @@ import httpx
 
 from app import keycloak
 from app.config import settings
-from app.integrations.real.agent_auth import Credential
+from app.integrations.real.agent_auth import Credential, StaticCredential
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +187,61 @@ def seam_kwargs(scope_id) -> dict:
     if not registered(scope_id):
         return {}
     return {"agent_credential": credential_for(scope_id)}
+
+
+def probe_key(api_key: str | None, caller_token: str | None) -> str:
+    """The credential for an agent call made *inside* a request.
+
+    The synchronous counterpart to the registry, and one rule rather than five
+    copies of it. A probe, a skills read or a wizard check finishes while the
+    caller is still on the other end of the socket, so it has their own bearer
+    token to hand and needs no refresh: the browser renewed it at a 30s margin
+    before sending. Nothing is registered and nothing can expire — the registry
+    exists only for work that outlives the request.
+
+    Same precedence as `agent_auth.resolve_credential`, which is the rule for
+    the background half: a key typed for this agent wins, then the signed-in
+    user, then — by returning `""` and letting the seam fall back — the
+    deployment's own `AGENT_API_KEY`.
+
+    Every endpoint that reads the agent server needs this. Under
+    `AGENT_SSO_ENABLED` with no deployment-wide key there is no other credential
+    in play, so a site that forgets it does not degrade gracefully: a healthy
+    agent answers 401, which reads on the screen as a broken agent server.
+
+    **What this hands out, and to whom.** The destination is a URL the caller
+    typed — that is deliberate throughout this platform (a probe that always
+    asked the deployment's default could go green against one agent while the
+    run went to another), and it is unchanged here. What *is* new is the
+    credential: it used to be a service key somebody chose to enter, and under
+    SSO it is the caller's own bearer token. So a developer who types an
+    unrelated host into the conformance page or the playground sends their own
+    identity to it. The token is audience-bound to the agent server, which
+    limits what a third party could do with it, and the whole path is off unless
+    an operator turns `AGENT_SSO_ENABLED` on — but restricting the destination
+    to the deployment's own agent would break pointing at a dev agent, which is
+    the case these screens exist for. Whether that trade is right for a given
+    realm is the operator's call, and this is where it is written down.
+    """
+    typed = (api_key or "").strip()
+    if typed:
+        return typed
+    if caller_token and enabled():
+        return caller_token
+    return ""
+
+
+def probe_kwargs(caller_token: str | None) -> dict:
+    """`probe_key`'s rule as a `build_seams` keyword, for the callers that pass
+    a whole secrets dict rather than a single key — writing the token into that
+    dict would put it one `model_dump()` away from a `secrets` column.
+
+    Empty rather than `agent_credential=None`, for the reason `seam_kwargs`
+    gives: a deployment without SSO makes the call it has always made, down to
+    the argument list.
+    """
+    key = probe_key(None, caller_token)
+    return {"agent_credential": StaticCredential(key)} if key else {}
 
 
 def credential_for(scope_id) -> Credential:

@@ -22,18 +22,29 @@ export { getUsername as getSubject } from "./auth.js";
 // needed where a background task outlives its request, and sending it
 // everywhere else would broadcast a long-lived credential for no reason.
 // See `app/agent_sso.py` and `app/auth.js:getRefreshToken`.
+//
+// **Passed to `req` as this function, never as its result.** `getAuthHeaders()`
+// may rotate the refresh token on the way past — that is what `updateToken(30)`
+// does — so a value read before that await can be the one Keycloak has just
+// retired. On a realm that revokes on rotation the backend would then register
+// a dead token and the run would stop at its first question, which is the one
+// failure this whole path exists to avoid. Read after, or not at all.
 function sessionHeader() {
   const token = getRefreshToken();
   return token ? { "X-Sso-Refresh-Token": token } : {};
 }
 
 async function req(method, path, body, extraHeaders) {
+  // Before the headers below are assembled, and deliberately on its own line:
+  // this is the call that can renew the session, so anything reading session
+  // state has to run after it. See `sessionHeader`.
+  const auth = await getAuthHeaders();
   const res = await fetch(BASE + path, {
     method,
     headers: {
       "Content-Type": "application/json",
-      ...(await getAuthHeaders()),
-      ...(extraHeaders || {}),
+      ...auth,
+      ...(typeof extraHeaders === "function" ? extraHeaders() : extraHeaders || {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -257,7 +268,7 @@ export const api = {
   // read on the way to pressing the button.
   runConfigDefaults: () => req("GET", "/run-config/defaults"),
   triggerRun: (id, payload) =>
-    req("POST", `/eval-sets/${id}/runs`, payload, sessionHeader()),
+    req("POST", `/eval-sets/${id}/runs`, payload, sessionHeader),
   cancelRun: (id, runId) => req("POST", `/eval-sets/${id}/runs/${runId}/cancel`),
   // A run's name, after the fact. It could only be set when the run was
   // triggered, which is before anyone knows what it turned out to be about.
@@ -318,7 +329,7 @@ export const api = {
     req("POST", "/playground/workspace/version", agentBody(agent, secrets)),
   listAttempts: () => req("GET", "/playground/attempts"),
   createAttempt: (payload) =>
-    req("POST", "/playground/attempts", payload, sessionHeader()),
+    req("POST", "/playground/attempts", payload, sessionHeader),
   getAttempt: (attemptId) => req("GET", `/playground/attempts/${attemptId}`),
   cancelAttempt: (attemptId) => req("POST", `/playground/attempts/${attemptId}/cancel`),
   deleteAttempt: (attemptId) => req("DELETE", `/playground/attempts/${attemptId}`),
@@ -383,7 +394,7 @@ export const api = {
       agent_timeout_s: agent.agent_timeout_s,
     }),
   createOptimizationRun: (payload) =>
-    req("POST", "/optimization/runs", payload, sessionHeader()),
+    req("POST", "/optimization/runs", payload, sessionHeader),
 
   listOptimizationRuns: (params = {}) =>
     req("GET", `/optimization/runs${qs(params)}`),
@@ -399,7 +410,7 @@ export const api = {
     // The resume carries a session header too, and that is the point: the
     // one the run started under is gone, so it continues under the one the
     // resumer is signed in with now.
-    req("POST", `/optimization/runs/${runId}/resume`, undefined, sessionHeader()),
+    req("POST", `/optimization/runs/${runId}/resume`, undefined, sessionHeader),
   deleteOptimizationRun: (runId) => req("DELETE", `/optimization/runs/${runId}`),
   openOptimizationProgress: (runId) =>
     openStream(`/optimization/runs/${runId}/progress`),

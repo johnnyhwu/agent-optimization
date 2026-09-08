@@ -4,7 +4,6 @@ import {
   DRAFT_VERSION,
   SECRET_FIELDS,
   clearDraft,
-  hasDraft,
   loadDraft,
   saveDraft,
   withoutSecrets,
@@ -52,7 +51,6 @@ test("a draft survives a round trip", () => {
 
 test("nothing saved means nothing to restore", () => {
   assert.equal(loadDraft("alice"), null);
-  assert.equal(hasDraft("alice"), false);
 });
 
 test("a draft is scoped to its subject", () => {
@@ -134,7 +132,6 @@ test("storage that throws does not take the wizard down", () => {
   assert.equal(saveDraft("alice", { mode: "routing" }), false);
   assert.equal(loadDraft("alice"), null);
   assert.equal(clearDraft("alice"), false);
-  assert.equal(hasDraft("alice"), false);
 });
 
 test("a non-object draft is refused rather than stored", () => {

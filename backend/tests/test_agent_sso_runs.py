@@ -278,44 +278,18 @@ async def test_registering_never_mutates_the_secrets_passed_alongside_it(configu
 
 
 # --- The in-request probe uses the caller's own token ----------------------
+#
+# The version probe in `POST /runs` runs before the run does, inside the
+# request, so it has the caller's own token to hand and needs no refresh —
+# registering a scope for something that finishes in seconds would be a lifetime
+# to manage for no reason. The rule itself and the eight other endpoints that
+# share it live in `test_agent_sso_probes.py`; this is only the seam that ties
+# it to a run.
 
 
 def test_the_trigger_time_probe_uses_the_callers_bearer_token(configure):
-    """The version probe in `POST /runs` runs before the run does, inside the
-    request — so it has the caller's own token to hand and needs no refresh.
-    Registering a scope for something that finishes in seconds would be a
-    lifetime to manage for no reason."""
-    from app.routers.runs import _probe_credential
-
     with sso_on(configure):
-        kwargs = _probe_credential("at-live")
-    assert set(kwargs) == {"agent_credential"}
-
-
-async def test_the_probe_credential_is_the_token_verbatim(configure):
-    from app.routers.runs import _probe_credential
-
-    with sso_on(configure):
-        cred = _probe_credential("at-live")["agent_credential"]
-    assert await cred.value() == "at-live"
-
-
-def test_the_probe_sends_nothing_when_sso_is_off(configure):
-    """The regression guard: with the switch off, `agent_version` is called with
-    the argument list it has always been called with."""
-    from app.routers.runs import _probe_credential
-
-    with configure(auth_mode="keycloak", agent_sso_enabled=False):
-        assert _probe_credential("at-live") == {}
-
-
-def test_the_probe_sends_nothing_in_fake_mode(configure):
-    """`current_token` is None there, and there is no identity worth forwarding
-    — fake mode decides who you are from a header anyone can set."""
-    from app.routers.runs import _probe_credential
-
-    with configure(auth_mode="fake", agent_sso_enabled=True):
-        assert _probe_credential(None) == {}
+        assert set(agent_sso.probe_kwargs("at-live")) == {"agent_credential"}
 
 
 # --- Refusing before the work starts --------------------------------------

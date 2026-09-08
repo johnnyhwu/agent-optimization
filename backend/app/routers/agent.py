@@ -50,7 +50,8 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends
 
-from app.auth import current_subject
+from app import agent_sso
+from app.auth import current_subject, current_token
 from app.config import settings
 from app.integrations import build_seams
 from app.schemas import (
@@ -76,6 +77,7 @@ async def agent_skills(
     # reason the query parameter it replaced was `Annotated`. Never mutated.
     body: SkillsProbeIn = SkillsProbeIn(),
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
 ):
     """Which skills this agent has — and, by answering at all, that it is there.
 
@@ -104,7 +106,11 @@ async def agent_skills(
         # against the chat endpoint reaches the skills endpoint only when they
         # are the same server.
         chat_url=(config.agent_chat_url or "").strip() or settings.agent_chat_url,
-        api_key=body.secrets.agent_api_key,
+        # The signed-in user's own token when the deployment forwards
+        # identity and nothing was typed — see `agent_sso.probe_key`. Without
+        # it this probe is the one call in the request that goes out
+        # anonymous, and an agent that is working answers 401.
+        api_key=agent_sso.probe_key(body.secrets.agent_api_key, caller_token),
         auth_header=config.agent_auth_header,
     )
     return AgentSkillsOut(
@@ -125,6 +131,7 @@ async def agent_skills(
 async def chat_probe(
     body: ChatProbeIn,
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
 ):
     """Ask this agent one question, and report what that proved.
 
@@ -156,7 +163,7 @@ async def chat_probe(
             config.get("agent_timeout_s") or settings.agent_timeout_s,
             with_override=body.with_override,
             trace_client=trace_client,
-            api_key=body.secrets.agent_api_key,
+            api_key=agent_sso.probe_key(body.secrets.agent_api_key, caller_token),
             auth_header=config.get("agent_auth_header") or "",
         )
     except RuntimeError as exc:  # a seam that could not be built at all
@@ -177,6 +184,7 @@ async def chat_probe(
 async def conformance(
     body: ConformanceIn,
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
 ):
     """Run the whole acceptance checklist against one agent server.
 
@@ -193,7 +201,7 @@ async def conformance(
         body.agent_chat_url,
         body.agent_skills_url,
         body.agent_timeout_s or settings.agent_timeout_s,
-        api_key=body.agent_api_key,
+        api_key=agent_sso.probe_key(body.agent_api_key, caller_token),
         auth_header=body.agent_auth_header,
     )
     return ConformanceOut(

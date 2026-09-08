@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app import agent_sso, cancellation
-from app.auth import current_subject, sso_refresh_token
+from app.auth import current_subject, current_token, sso_refresh_token
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.integrations import build_seams
@@ -400,6 +400,7 @@ async def _read_workspace(seams):
 async def skill_check(
     body: SkillCheckIn,
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
 ):
     """Does the agent actually have this skill directory? (wizard step 3)
 
@@ -431,7 +432,15 @@ async def skill_check(
         "agent_auth_header": body.agent_auth_header,
         "agent_timeout_s": body.agent_timeout_s,
     }
-    seams = build_seams(config, {"agent_api_key": body.agent_api_key}, include_workspace=True)
+    # The signed-in user's own token when nothing was typed and the deployment
+    # forwards identity (`agent_sso.probe_key`). This check reads the agent
+    # inside the request, so it needs the request-scoped credential — without it
+    # wizard step 3 cannot pass against an agent that is working perfectly.
+    seams = build_seams(
+        config,
+        {"agent_api_key": agent_sso.probe_key(body.agent_api_key, caller_token)},
+        include_workspace=True,
+    )
     # What the run would resolve to, by the same rule `run_config.resolve` uses —
     # so the card names the agent that answered rather than the box that was
     # left blank.
@@ -474,6 +483,7 @@ async def create_optimization_run(
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
     refresh_token: str | None = Depends(sso_refresh_token),
+    caller_token: str | None = Depends(current_token),
 ):
     """Snapshot the dataset and the skill, then start the run (wizard step 6).
 
@@ -483,13 +493,33 @@ async def create_optimization_run(
     that fails at step 0 having already spent a batch of agent calls, and a list
     accumulating dead rows for typos.
     """
+    # 0. The config and the credentials, resolved up front.
+    #
+    #    Materialised the same way `run_config.resolve` does for an eval run: a
+    #    field left blank is stored with the environment's value, so the record
+    #    is readable after the environment has moved on.
+    #
+    #    Resolved *here*, ahead of the refusal, rather than at the row below,
+    #    because the refusal has to ask the same question the run will. The
+    #    credential a run executes with is what was typed into this request or
+    #    this developer's saved key for the endpoint it is pointed at; asking
+    #    `body.secrets` alone turns a working setup away with a message about
+    #    signing in. `_resolve_optimization_config` reads nothing and raises
+    #    nothing, so hoisting it changes no outcome — only what can see it.
+    config = _resolve_optimization_config(body.config)
+    resolved_secrets = user_secrets.inject(
+        await user_settings.stored_secrets(session, subject),
+        config,
+        body.secrets.model_dump(),
+    )
+
     # Before the skill snapshot below, which reads the agent: refusing after it
     # would spend a request that was always going to be refused, and an
     # optimization run is the most expensive thing to start wrongly. See
     # `agent_sso.refusal_reason`.
     refusal = agent_sso.refusal_reason(
         refresh_token,
-        (body.secrets.agent_api_key or "") or settings.agent_api_key,
+        resolved_secrets.get("agent_api_key") or settings.agent_api_key,
     )
     if refusal:
         raise HTTPException(status_code=400, detail=refusal)
@@ -539,8 +569,18 @@ async def create_optimization_run(
 
     # 3. The skill, read from the agent and pinned. A run optimises a snapshot;
     #    if the agent moves underneath it the numbers still describe the snapshot.
-    seams = build_seams(body.config.model_dump(), body.secrets.model_dump(),
-                        include_workspace=True)
+    # Resolved secrets, not the request's: a saved key for this endpoint is what
+    # the run itself will use, so the snapshot has to be read with it too. And
+    # the caller's own token where the deployment forwards identity — this read
+    # happens inside the request, so it uses `probe_key` rather than the
+    # registry the run will use.
+    seams = build_seams(
+        config,
+        {**resolved_secrets,
+         "agent_api_key": agent_sso.probe_key(
+             resolved_secrets.get("agent_api_key"), caller_token)},
+        include_workspace=True,
+    )
     workspace = await _read_workspace(seams)
     initial = {
         path: text for path, text in workspace.skills.items()
@@ -576,11 +616,6 @@ async def create_optimization_run(
                 ),
             )
 
-    # 4. Materialise the config, the same way `run_config.resolve` does for an
-    #    eval run: a field left blank is stored with the environment's value, so
-    #    the record is readable after the environment has moved on.
-    config = _resolve_optimization_config(body.config)
-
     n_train = len(body.train)
     steps_per_epoch = max(1, math.ceil(n_train / max(body.batch_size, 1)))
     run = OptimizationRun(
@@ -594,11 +629,7 @@ async def create_optimization_run(
         # endpoint this run is actually pointed at. Same `inject` as the eval and
         # playground paths — one implementation, so the endpoint binding cannot
         # hold on two screens and not the third.
-        secrets=user_secrets.inject(
-            await user_settings.stored_secrets(session, subject),
-            config,
-            body.secrets.model_dump(),
-        ),
+        secrets=resolved_secrets,
         workspace_version=workspace.version,
         target_skills=targets,
         initial_skill=initial,

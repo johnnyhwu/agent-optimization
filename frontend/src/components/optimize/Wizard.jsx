@@ -51,6 +51,11 @@ import {
 export default function Wizard({ sessionBlocked = null }) {
   const toast = useToast();
   const [stepIndex, setStepIndex] = useState(0);
+  // Whether this wizard opened on somebody's earlier answers. Rendered as a
+  // line they can act on, because a form that silently fills itself in reads as
+  // values somebody chose on purpose — and the one thing worse than losing a
+  // draft is starting a paid run on a stale one without noticing.
+  const [restoredDraft, setRestoredDraft] = useState(false);
   const [skillsProbe, setSkillsProbe] = useState(null);
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [chatProbe, setChatProbe] = useState(null);
@@ -483,6 +488,16 @@ export default function Wizard({ sessionBlocked = null }) {
     }
   }
 
+  // The abandon half of the draft's contract, and the only one there is: the
+  // wizard is a route, so leaving it is a navigation and fires nothing we could
+  // hook. Reloading is what resets six steps' worth of React state without
+  // listing every setter here and getting one wrong the next time a step gains
+  // a field; the draft is dropped first, so the reload comes up clean.
+  function startOver() {
+    clearDraft(getSubject());
+    window.location.reload();
+  }
+
   // One description of where the wizard is, read by the footer, the step bar and
   // the Start button alike. They used to compute reachability separately from
   // blocking, which is how the bar could offer a step whose body rendered
@@ -531,6 +546,7 @@ export default function Wizard({ sessionBlocked = null }) {
     restored.current = true;
     const draft = loadDraft(getSubject());
     if (!draft) return;
+    setRestoredDraft(true);
     if (typeof draft.mode === "string") setMode(draft.mode);
     if (Array.isArray(draft.sourceIds)) setSourceIds(draft.sourceIds);
     if (Array.isArray(draft.skills) && draft.skills.length) {
@@ -574,6 +590,17 @@ export default function Wizard({ sessionBlocked = null }) {
           bar and the body renders flush against the window's left edge, a
           column of its own beside every other thing on the page. */}
       <div className="opt-wizard-body">
+        {restoredDraft && (
+          <Banner tone="info" title="Picked up where you left off">
+            These answers were saved in this tab — after a re-login, a refresh,
+            or a step away. Credentials were never saved and are the one thing
+            to re-enter.
+            {" "}
+            <Button variant="link" onClick={startOver}>
+              Start over
+            </Button>
+          </Banner>
+        )}
         {error && (
           <Banner tone="error" title="That did not work">
             {error}

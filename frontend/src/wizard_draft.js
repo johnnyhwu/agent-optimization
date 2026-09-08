@@ -93,7 +93,15 @@ export function loadDraft(subject) {
   }
 }
 
-/** Forget it. Called when the run starts, and when the wizard is abandoned. */
+/**
+ * Forget it. Called when the answers become a run, and when the developer
+ * presses Start over on the restored-draft notice.
+ *
+ * There is no third caller and deliberately no `hasDraft` beside this: the
+ * wizard restores unconditionally and *says* that it did, which is a notice one
+ * component renders rather than a question two of them could answer
+ * differently.
+ */
 export function clearDraft(subject) {
   try {
     sessionStorage.removeItem(storageKey(subject));
@@ -101,9 +109,4 @@ export function clearDraft(subject) {
   } catch {
     return false;
   }
-}
-
-/** Is there something to offer to restore? */
-export function hasDraft(subject) {
-  return loadDraft(subject) !== null;
 }
