@@ -365,6 +365,14 @@
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--text);
 }
 .ui-form-section-desc { margin: 4px 0 0; font-size: var(--text-caption); color: var(--muted); }
+/* A description that names a value — `team = billing` — marks it as one rather
+   than letting it read as more prose. It came from the upload dialog's own
+   metadata help, which was a loose paragraph before this became a section. */
+.ui-form-section-desc code {
+  font-family: var(--font-mono); font-size: var(--text-micro);
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+}
 .ui-form-section-aside { flex: none; }
 
 .ui-disclosure {

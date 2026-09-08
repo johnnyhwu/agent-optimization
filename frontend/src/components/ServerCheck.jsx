@@ -4,7 +4,7 @@ import { deriveSkillsUrl, splitHint, TIER_LABELS } from "../agent_endpoints.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 import Button from "./ui/Button.jsx";
 import Field from "./ui/Field.jsx";
-import { EndpointGroup } from "./AgentEndpointsFields.jsx";
+import { EndpointAuthGroup, EndpointGroup } from "./AgentEndpointsFields.jsx";
 import PageHeader from "./ui/PageHeader.jsx";
 import DocsHelp from "./DocsHelp.jsx";
 import { IconAlert, IconCheck, IconInfo, IconPlay } from "./icons.jsx";
@@ -64,11 +64,11 @@ export default function ServerCheck() {
   const [skillsUrl, setSkillsUrl] = useState("");
   // Optional, and folded away. Without it this page would be unusable by
   // exactly the people most likely to need it: someone who has just written a
-  // server and put it behind their team's gateway.
+  // server and put it behind their team's gateway. Opening it on a refusal is
+  // `EndpointAuthGroup`'s job, which is why the panel is shared with the other
+  // two screens rather than repeated here.
   const [apiKey, setApiKey] = useState("");
   const [authHeader, setAuthHeader] = useState("");
-  // Opened by a refusal and never closed by one, so it does not shut under
-  // somebody who opened it to type. Same rule as the other two screens.
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
@@ -104,47 +104,31 @@ export default function ServerCheck() {
       />
 
       <div className="check-form">
-        {/* The same three groups, in the same order, as every other screen
-            that asks for an agent server: the credential first because it
-            applies to both addresses under it, then the endpoint the checklist
-            cannot run without, then the optional one. This block had them the
-            other way round with the credential folded away, so the one page
-            whose whole job is "did I implement the contract" disagreed with the
-            forms people implement against. */}
-        <EndpointGroup title="Endpoint authentication">
-          <Field
-            label="API key"
-            htmlFor="check-api-key"
-            hint={<DocsHelp anchor="authentication" label="How the platform sends a credential" />}
-            help={
-              "Most agent servers need none, and nothing here checks whether " +
-              "yours does — asking for no credential is not a defect."
-            }
-          >
-            <input
-              id="check-api-key"
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              spellCheck={false}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </Field>
-          <Field
-            label="Auth header"
-            htmlFor="check-auth-header"
-            hint={<DocsHelp anchor="authentication" label="Where the credential is sent" />}
-            help="Blank sends Authorization: Bearer. Name a header to send the key as its value instead."
-          >
-            <input
-              id="check-auth-header"
-              value={authHeader}
-              placeholder="Authorization"
-              spellCheck={false}
-              onChange={(e) => setAuthHeader(e.target.value)}
-            />
-          </Field>
-        </EndpointGroup>
+        {/* The same three groups, in the same order and the same shapes as
+            every other screen that asks for an agent server: the credential
+            first because it applies to both addresses under it and folded
+            because most servers want none, then the endpoint the checklist
+            cannot run without, then the optional one. Shared components rather
+            than a copy, because the one page whose whole job is "did I
+            implement the contract" must not disagree with the forms people
+            implement against — which it did, in both directions, while these
+            two fields were written out twice. */}
+        <EndpointAuthGroup
+          apiKey={apiKey}
+          authHeader={authHeader}
+          onChangeApiKey={setApiKey}
+          onChangeAuthHeader={setAuthHeader}
+          apiKeyHelp={
+            "Most agent servers need none, and nothing here checks whether " +
+            "yours does — asking for no credential is not a defect."
+          }
+          chatUrl={chatUrl}
+          skillsUrl={skillsUrl}
+          // The checklist reports per case rather than as a probe, so the chat
+          // case's own result is what says "this server wants a credential".
+          refusals={[report?.cases?.find((c) => c.id === "chat")?.result]}
+          idPrefix="check"
+        />
         <EndpointGroup title="Chat endpoint">
           <Field
             label="URL"

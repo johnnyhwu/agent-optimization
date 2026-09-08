@@ -16,6 +16,8 @@
 //     Overloading it to also mean "no opinion" would take away the only way to
 //     say the first one.
 //
+// A text field is neither, however optional it is — see `usesOffState`.
+//
 // The percent conversion is the other trap. The Optimize wizard types these
 // error shares as whole percents and the API stores them as fractions
 // (`HYPER_FIELDS[...].scale` in optimize_wizard.js). A settings page that did
@@ -35,6 +37,22 @@ function unround(value) {
   return Number(value.toPrecision(12));
 }
 
+/** Does this setting need a third position — an explicit "off" — of its own?
+ *
+ * Only where "off" is a different answer from "follow the deployment". For a
+ * URL or a header name it is not: the engine resolves
+ * `(yours or "").strip() or the deployment's` (`routers/agent.py`), so a stored
+ * `null` for `agent_skills_url` has always fallen back to the deployment's URL,
+ * exactly as no opinion does. The segmented control offered a choice with no
+ * consequence, in place of the plain box every other endpoint on the page uses.
+ *
+ * `early_stop_target_score` is the case that does need it: blank there already
+ * means "aim at nothing", so it cannot also mean "no opinion".
+ */
+export function usesOffState(spec) {
+  return Boolean(spec.optional) && spec.kind !== "text";
+}
+
 function specOf(catalog, key) {
   return catalog.find((s) => s.key === key);
 }
@@ -52,7 +70,10 @@ export function fieldFromStored(spec, values) {
   if (value === null) {
     // A null for a field with no "off" is a stored value that has stopped making
     // sense; fall back rather than render a control in an impossible state.
-    return spec.optional ? { mode: OFF, raw: "" } : { mode: SYSTEM, raw: "" };
+    // That now includes text fields saved by the older three-position control:
+    // read as "follow the deployment", which is what such a value already did
+    // once it reached the engine.
+    return usesOffState(spec) ? { mode: OFF, raw: "" } : { mode: SYSTEM, raw: "" };
   }
   if (spec.kind === "bool") return { mode: SET, raw: value ? "true" : "false" };
   if (spec.kind === "fraction") {
@@ -187,16 +208,6 @@ export function changedKeys(catalog, form) {
   const out = [];
   walk(catalog, form, (spec) => out.push(spec.key), () => {});
   return out.sort();
-}
-
-// Whether the values a defaults endpoint returned differ from what the
-// deployment alone would have produced — the one line the three working pages
-// show, in place of a marker on every field.
-export function differsFromSystem(defaults, systemDefaults) {
-  if (!defaults || !systemDefaults) return false;
-  return Object.keys(systemDefaults).some(
-    (key) => JSON.stringify(defaults[key]) !== JSON.stringify(systemDefaults[key])
-  );
 }
 
 export { specOf };

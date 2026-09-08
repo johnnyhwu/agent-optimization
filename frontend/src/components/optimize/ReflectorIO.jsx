@@ -7,6 +7,7 @@ import { Collapsible } from "../SpanPayload.jsx";
 import {
   SOURCE_LABEL,
   SOURCE_TONE,
+  editOutcomeLead,
   editsProposed,
   minibatchLabel,
   truncationSummary,
@@ -81,6 +82,7 @@ export default function ReflectorIO({
         nApplied={nApplied}
         nSkipped={nSkipped}
         onOpenSkill={onOpenSkill}
+        mode={mode}
       />
 
       <PromptRecord
@@ -183,7 +185,7 @@ function FailureSummary({ lines }) {
 // the skill? — and answering it used to mean leaving the page. The step's edit
 // reports say per edit, so each proposal now carries its own outcome, and the
 // summary line above them is the step's own count.
-function PatchList({ patch, reports = [], nApplied, nSkipped, onOpenSkill }) {
+function PatchList({ patch, reports = [], nApplied, nSkipped, onOpenSkill, mode }) {
   const edits = patch?.edits || [];
   if (!edits.length) return <p className="opt-hint">No edits were proposed.</p>;
   return (
@@ -195,18 +197,15 @@ function PatchList({ patch, reports = [], nApplied, nSkipped, onOpenSkill }) {
         </div>
       )}
 
-      {/* The step's outcome, not this minibatch's: the analysts' patches are
-          merged and ranked before anything is applied, so an edit proposed here
-          may be collapsed into another one's. Saying whose count it is stops
-          the two numbers looking like they disagree.
-
-          In routing the two populations are the same one — a single call, no
-          merge — so the framing is dropped rather than sending a reader to
-          reconcile a difference that cannot exist. */}
+      {/* The step's outcome, not this minibatch's — `editOutcomeLead` owns the
+          wording and the reason for it. It lives in `optimize_rollout.js`
+          because it is a rule about `mode`, and because this component read
+          `mode` here without taking it as a prop: a ReferenceError that emptied
+          the whole pane the moment an analyst call with edits was opened. */}
       {nApplied != null && (
         <div className="opt-editoutcome">
           <span>
-            {mode === "routing" ? "" : "Across the whole step: "}
+            {editOutcomeLead(mode)}
             <strong>{plural(nApplied, "edit")} applied</strong>
             {nSkipped ? `, ${nSkipped} refused` : ""}
           </span>

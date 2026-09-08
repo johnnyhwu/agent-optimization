@@ -587,17 +587,29 @@ select { cursor: pointer; }
   display: flex; align-items: flex-start; gap: var(--space-2);
   padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
 }
-.set-card-heading { min-width: 0; flex: 1; }
+.set-card-heading {
+  min-width: 0; flex: 1;
+  /* Two title lines' worth of height, reserved for the heading *block* rather
+     than for the title alone. Cards size to their own content, so without a
+     reservation a one-line title started its card's numbers twenty pixels above
+     its neighbour's — and the stats band is the one thing read *across* the grid
+     rather than down a card.
+     It was on the `h3`, which put the slack between the name and the badges
+     under it: a one-line card showed a blank line where a reader expects the
+     name and its role to sit together. Reserving the block instead leaves the
+     slack after the meta row, where nothing is looking for it, and the stats
+     band still lands at the same y on every card in the row.
+     Written as what it is made of — two lines of the title at its 1.3
+     line-height, the title's margin, and the meta row — so it follows the type
+     scale instead of being a number somebody measured once. */
+  min-height: calc(2 * 1.3 * var(--text-title) + 6px + 22px);
+}
 .set-card-heading h3 {
   margin: 0 0 6px; font-size: var(--text-title); font-weight: var(--fw-semibold);
   overflow-wrap: anywhere;
-  /* Two lines whether the name needs them or not. Cards size to their own
-     content now, so without this a one-line title started its card's numbers
-     twenty pixels above its neighbour's — and the stats band is the one thing
-     read *across* the grid rather than down a card. Reserved rather than
-     stretched: the space is the same on every card, which is what makes it read
-     as the layout's rhythm instead of as one card having a gap in it. */
-  line-height: 1.3; min-height: 2.6em;
+  /* The reservation that keeps the stats bands level is on `.set-card-heading`
+     above, not here — see the note there. */
+  line-height: 1.3;
   /* Two lines, then ellipsis, with the full name in the title attribute. A set
      can be named anything and a three-line one used to set the height of every
      card in its grid row — so one badly named set made the whole row taller and
@@ -980,6 +992,13 @@ select { cursor: pointer; }
 }
 .dialog-body { padding: 16px 20px; overflow: auto; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
+/* The wrapper a dialog's failure is scrolled and focused onto. It carries no
+   appearance of its own — the banner inside it is the message — only the
+   scroll margin that keeps it clear of the dialog's head, and no focus ring:
+   the focus here is programmatic, moved so the message is announced, and a ring
+   around an unfocusable box reads as a control. */
+.dialog-alert { scroll-margin-block: var(--space-4); }
+.dialog-alert:focus { outline: none; }
 /* The pre-primitive form field, still used by ten screens that have not been
    rebuilt on `Field`. Its label and spacing are held identical to
    `.ui-field-label` and `.ui-field` on purpose: while both exist, a dialog that
@@ -1052,9 +1071,13 @@ select { cursor: pointer; }
    the same grid, not because two hardcoded widths happened to be close. */
 /* Capped: a row is a name and a role, and stretching that pair across a 1000px
    dialog leaves the role marooned at the far edge of its own row. */
+/* Full width, because the width belongs to the form, not to this block. The
+   640px cap it used to carry was the width of the one dialog it was written in;
+   in the 960px upload dialog it made the username box 515px beside 890px name
+   and description fields, which reads as a field that has been cut short. */
 .share-editor {
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  overflow: hidden; max-width: 640px;
+  overflow: hidden;
 }
 .share-list { display: flex; flex-direction: column; }
 .share-row {
@@ -1268,6 +1291,11 @@ select { cursor: pointer; }
   margin-top: var(--space-4); padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
+/* The one folded group in the block. It is a panel with a border of its own, so
+   it wants the gap the rule above gives between two open groups — which cannot
+   reach it, because the group after it no longer follows a `.agent-ep-group`. */
+.agent-ep-auth + .agent-ep-group { margin-top: var(--space-4); }
+
 /* Below the section heading it sits under and above the field labels it names:
    sentence case where the section is uppercase, and the full text colour where
    a label is the same size but not bold. */
@@ -1924,15 +1952,8 @@ pre.prompt-text {
    Upload dialog — metadata explanation, and the expanded preview editor.
    ============================================================================ */
 
-/* "Custom metadata" sits right under Description and says what it buys you.
-   The known keys are the ones this workspace already filters by, so they're
+/* The known keys are the ones this workspace already filters by, so they're
    clickable rather than a list of words. */
-.meta-help { margin: 0 0 var(--space-2); max-width: 62ch; line-height: 1.5; }
-.meta-help code {
-  font-family: var(--font-mono); font-size: var(--text-micro);
-  background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 1px 5px; white-space: nowrap;
-}
 .meta-keys { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
 .meta-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; }
 
