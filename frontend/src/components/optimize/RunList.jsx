@@ -24,7 +24,13 @@ export const STATUS_TONE = {
   interrupted: "warning",
 };
 
-export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, revision = 0 }) {
+export default function RunList({
+  subject, activeId, onOpen, onNew, onLoaded, revision = 0,
+  // Why a new run cannot be started, or null. An optimization run is the
+  // longest thing this product does, so an expiring sign-in is the one
+  // pre-flight worth applying at the button rather than at step six.
+  blockedReason = null,
+}) {
   const [runs, setRuns] = useState(null);
   const [error, setError] = useState(null);
   // Held in a ref so the fetch effect does not re-run when the parent hands it a
@@ -71,6 +77,8 @@ export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, re
             variant="secondary"
             size="sm"
             icon={<IconPlus size={14} />}
+            disabled={Boolean(blockedReason)}
+            title={blockedReason || undefined}
             onClick={onNew}
           >
             New
@@ -134,14 +142,20 @@ export default function RunList({ subject, activeId, onOpen, onNew, onLoaded, re
   );
 }
 
-RunList.Intro = function Intro({ onNew }) {
+RunList.Intro = function Intro({ onNew, blockedReason = null }) {
   return (
     <EmptyState
       icon={<IconSparkles size={22} />}
       title="Train a skill against your eval sets"
       size="lg"
       action={
-        <Button variant="primary" icon={<IconPlus size={15} />} onClick={onNew}>
+        <Button
+          variant="primary"
+          icon={<IconPlus size={15} />}
+          disabled={Boolean(blockedReason)}
+          title={blockedReason || undefined}
+          onClick={onNew}
+        >
           New optimization run
         </Button>
       }

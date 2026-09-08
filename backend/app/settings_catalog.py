@@ -359,6 +359,14 @@ EXCLUDED_SETTINGS: dict[str, str] = {
     # the day one of them gets a field, it belongs in CATALOG.
     "agent_max_retries": "no control on any form yet",
     "agent_probe_timeout_s": "no control on any form yet — the dialog's pre-flight budget",
+    # How the platform authenticates to the agent server, which the deployment
+    # and the agent server agree on between them. A person choosing this for
+    # themselves would be choosing whose identity their runs execute under.
+    "agent_sso_enabled": "deployment-wide identity decision, not a preference",
+    "agent_sso_refresh_margin_s": (
+        "operational safety margin against token expiry, not a preference — a "
+        "user who could shorten it would be choosing to fail their own run"
+    ),
     "llm_timeout_s": "no control on any form yet",
     "llm_max_retries": "no control on any form yet",
     "synthesis_model": "no control on any form yet",

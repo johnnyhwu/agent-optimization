@@ -32,6 +32,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
+from app.agent_sso import SsoSessionExpired
 from app.config import settings
 from app.integrations import Seams
 from app.integrations.base import LlmOutputError, WorkspaceOverride
@@ -307,6 +308,12 @@ async def _run_item(
         row.failure_kind = "cancelled"
         row.error_message = "Cancelled while waiting for the agent."
         return row
+    except SsoSessionExpired:
+        # Ends the run, not the item — and for an optimization run that means
+        # `interrupted` rather than `failed`, so every finished step survives.
+        # See `optimizer/engine.py`'s handler. Recording it per item would
+        # instead read as an agent that refused a few thousand questions.
+        raise
     except Exception as exc:  # noqa: BLE001
         message, kind = describe_failure(
             "agent", exc, timeout_s=timeout_s,

@@ -398,14 +398,23 @@ server that accepts any request is a supported server, it passes every case in
 the acceptance checklist, and it is what most agents behind this platform are.
 Skip this section entirely if that is you.
 
+If, on the other hand, you want to know *which developer* a question came from
+so you can apply their permissions, read "The caller's own SSO token" below —
+that is the mode built for you.
+
 What the platform can do is *send* a credential, so that an agent sitting behind
 a gateway is reachable at all. Whether that credential is demanded, ignored, or
 never sent is your decision and the platform has no opinion about it.
 
 ### What gets sent
 
-A developer may enter an API key beside the two URLs (or save one as a personal
-default). When they have, every request carries one header:
+There are two ways a credential can arrive, and they put the same header on the
+wire. Which one a deployment uses is its own choice; your server cannot tell them
+apart and does not need to.
+
+**A key somebody typed.** A developer may enter an API key beside the two URLs
+(or save one as a personal default). When they have, every request carries one
+header:
 
 ```http
 Authorization: Bearer <key>
@@ -416,6 +425,41 @@ key is sent as that header's value with **no** `Bearer` prefix.
 
 With no key entered, no such header is sent at all. Not an empty one: the
 request is byte for byte what it was before this existed.
+
+**The caller's own SSO token.** A deployment with `AGENT_SSO_ENABLED=true`
+authenticates to you as *whoever is signed in to the platform*, rather than with
+one shared key:
+
+```http
+Authorization: Bearer <that developer's access token>
+```
+
+This is the mode to want if your agent does its own per-user permission control,
+because it is the only one that tells you who is asking. Two requirements, and
+they are separate questions:
+
+  * Your server must accept tokens from the **same realm** as the platform — it
+    is the platform's own token, forwarded, not one minted for you.
+  * It must accept the **same audience**. Same realm does not imply same `aud`:
+    an identity provider only writes a client id into `aud` when an audience
+    mapper says so. If you check `aud` strictly, confirm this before anything
+    else — a mismatch fails *every* request with a message that names nothing
+    useful.
+
+The platform refreshes the token as needed, so a long run does not arrive with
+an expired one. **Do not assume the token is the same string from one call to
+the next**: an eval run spans minutes and an optimization run spans hours, and
+tokens are re-minted throughout. Anything you cache should be keyed on the
+claims, not on the token text.
+
+Nothing about this changes the request body, the endpoints, or any other part of
+this document. A server built for a shared key works unchanged for a deployment
+that later switches to SSO, provided it accepts the realm and audience above.
+
+**The two can coexist.** A deployment that forwards identities may still have one
+agent that wants its own gateway key: a key entered for that agent takes
+precedence over the forwarded token, so you get exactly one `Authorization`
+header either way and never both.
 
 ### Where it goes
 
@@ -467,7 +511,7 @@ envelope, the sentence inside it is what gets shown:
 | 200 + empty/whitespace `content` | The question fails: "empty answer". |
 | 200 + no `choices` | The question fails, with your body quoted. |
 | 200 + a body starting with `<` | The question fails: "markup, not a chat completion". |
-| **401 / 403** | The question fails, and the check that reported it says a credential is missing or was refused (§8). **Not retried.** |
+| **401 / 403** | The question fails, and the check that reported it says a credential is missing or was refused (§8). **Not retried.** Under SSO forwarding the platform does not treat this as an expired session — it is your server declining a valid token, which is a permission answer and is reported as one. |
 | **4xx** (other) | The question fails immediately, carrying your status and message. **Not retried** — a bad request fails identically every time. |
 | **5xx** | The question fails, carrying your status and message. **Not retried.** |
 | Connection refused / reset | Fails the question. **Not** retried — see the note in §3.3. |

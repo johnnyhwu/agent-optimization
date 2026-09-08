@@ -106,6 +106,34 @@ export async function getAuthHeaders() {
   return { Authorization: `Bearer ${keycloak.token}` };
 }
 
+/**
+ * The refresh token, for the one thing that needs it: long-running work the
+ * backend continues after this request returns.
+ *
+ * Handed over on exactly four calls (see `api.js`), never on every request.
+ * `app/agent_sso.py` explains what the backend does with it and why it is never
+ * persisted; the short version is that an access token lives ten minutes and an
+ * Optimize run takes hours.
+ */
+export function getRefreshToken() {
+  if (!isKeycloak) return null;
+  return keycloak?.refreshToken || null;
+}
+
+/**
+ * When the sign-in itself ends, as a Unix timestamp — or `null` if unknown.
+ *
+ * The *refresh* token's expiry, not the access token's. The access token lives
+ * about a minute of real use and is renewed silently by `getAuthHeaders()`; the
+ * refresh token is what bounds the session as a whole, and it is the one that
+ * cannot be renewed. `session_expiry.js` turns this into what the page shows.
+ */
+export function getSessionExpiry() {
+  if (!isKeycloak) return null;
+  const exp = keycloak?.refreshTokenParsed?.exp;
+  return typeof exp === "number" ? exp : null;
+}
+
 export function logout() {
   if (!isKeycloak) return;
   keycloak.logout({ redirectUri: window.location.origin });

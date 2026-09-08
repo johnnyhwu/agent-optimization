@@ -1268,3 +1268,91 @@ async def test_a_request_carrying_the_old_detector_knobs_is_still_accepted(
     row = await session.get(OptimizationRun, run.id)
     assert "path_patterns" not in row.detector
     assert "detectable" not in row.detector
+
+
+# --- The SSO pre-flight must not refuse a run that would have worked --------
+#
+# Appended here rather than in `test_agent_sso_runs.py` because these two need
+# the database fixtures above: the credential a run executes with is not the one
+# in the request body — it is that, or this developer's saved key for the
+# endpoint the run is pointed at (`services/user_secrets.inject`), and only a
+# stored row can tell the two apart.
+#
+# The pre-flight exists so a run that cannot possibly work is refused before a
+# row exists. Refusing one that *would* have worked is the same bug with the
+# sign flipped, and it is the easier one to write: reading `body.secrets` alone
+# turns a working setup away with a message about signing in.
+
+
+def _sso_on(configure, **overrides):
+    return configure(
+        auth_mode="keycloak", agent_sso_enabled=True,
+        keycloak_url="https://kc.test/auth", keycloak_realm="tsmc",
+        **overrides,
+    )
+
+
+async def test_a_saved_agent_key_is_enough_to_start_a_run_under_sso(
+    session, configure, monkeypatch
+):
+    """A developer with a stored key for this endpoint and no browser session.
+
+    Nothing here needs an SSO session at all — the agent server is reached with
+    the key they saved. The refusal has to see it, which means resolving the
+    secrets before asking rather than after.
+    """
+    from cryptography.fernet import Fernet
+
+    from app.services import user_secrets, user_settings
+
+    _stub_start(monkeypatch)
+
+    class Fake:
+        async def get_workspace(self):
+            class Workspace:
+                version = "v1"
+                skills = dict(MULTI_WORKSPACE)
+
+            return Workspace()
+
+    class Seams:
+        workspace = Fake()
+
+    monkeypatch.setattr(opt, "build_seams", lambda *a, **k: Seams())
+    _, _, keys = await make_runnable_set(session)
+
+    with _sso_on(configure, settings_secret_key=Fernet.generate_key().decode(),
+                 agent_api_key=""):
+        await user_settings.save_secret(
+            session, "alice", "agent_api_key",
+            user_secrets.entry("agent_api_key", "saved-key",
+                               endpoint=settings.agent_chat_url),
+        )
+        run = await opt.create_optimization_run(
+            create_body(keys[:14], keys[14:]),
+            subject="alice", session=session, refresh_token=None, caller_token=None,
+        )
+
+    assert run.status == "pending"
+    # And the row carries the saved key, which is what the run will authenticate
+    # with — the same resolution the refusal asked about.
+    row = await session.get(OptimizationRun, run.id)
+    assert row.secrets["agent_api_key"] == "saved-key"
+
+
+async def test_a_run_with_no_credential_at_all_is_still_refused(
+    session, configure, monkeypatch
+):
+    """The other direction, so the test above cannot pass by never refusing."""
+    _stub_start(monkeypatch)
+    _, _, keys = await make_runnable_set(session)
+
+    with _sso_on(configure, agent_api_key=""):
+        with pytest.raises(HTTPException) as exc:
+            await opt.create_optimization_run(
+                create_body(keys[:14], keys[14:]),
+                subject="alice", session=session, refresh_token=None, caller_token=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "sign in" in exc.value.detail.lower()

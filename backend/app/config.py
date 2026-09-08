@@ -189,6 +189,25 @@ class Settings(BaseSettings):
     # and naming a header instead (`X-Api-Key`) sends the key verbatim.
     agent_api_key: str = ""
     agent_auth_header: str = ""
+
+    # --- Forwarding the signed-in user's SSO token (app/agent_sso.py) --------
+    # Off by default, and off is the byte-for-byte status quo: with this false
+    # nothing reads a token, nothing calls Keycloak, and the agent server sees
+    # exactly the headers it saw before this existed.
+    #
+    # On (and only meaningful with AUTH_MODE=keycloak), the platform
+    # authenticates to the agent server as whoever is signed in, so the agent can
+    # do its own per-user permission control instead of trusting one shared key.
+    # Requires the agent server to accept the same realm *and* the same audience
+    # as this platform — see app/keycloak.py on why those are two questions.
+    agent_sso_enabled: bool = False
+
+    # How much life an access token must have left to be reused rather than
+    # re-minted. Company tokens live 10 minutes, so 180s means a refresh roughly
+    # every 7 — deliberately conservative, because the cost of refreshing early
+    # is one HTTP call and the cost of refreshing late is a failed question in
+    # the middle of somebody's run.
+    agent_sso_refresh_margin_s: int = 180
     # How long the "Run eval" dialog's pre-flight waits for the agent server
     # before calling it unreachable. Emphatically *not* `agent_timeout_s`: that
     # is the budget for answering a question, and the Start button stays

@@ -47,7 +47,13 @@ import httpx
 
 from app.config import settings
 from app.integrations.base import Workspace, derived_version
-from app.integrations.real.agent_auth import auth_headers, credentialed_client, redact
+from app.integrations.real.agent_auth import (
+    Credential,
+    auth_headers,
+    credentialed_client,
+    redact,
+    resolve_credential,
+)
 
 
 class WorkspaceFetchError(RuntimeError):
@@ -92,6 +98,7 @@ class HttpWorkspaceClient:
         timeout_s: float | None = None,
         api_key: str | None = None,
         auth_header: str | None = None,
+        credential: Credential | None = None,
     ) -> None:
         self.skills_url = (skills_url or settings.agent_skills_url).strip().rstrip("/")
         if not self.skills_url:
@@ -108,19 +115,29 @@ class HttpWorkspaceClient:
         # what it was handed, so a test can construct it either way.
         self.api_key = (api_key or "").strip()
         self.auth_header = (auth_header or "").strip()
+        # Same rule as the chat client, from the same function: with no
+        # `credential` this is the static key above; given both, an entered key
+        # wins. No environment fallback here — this client never had one, and
+        # `integrations/__init__._workspace_auth` is what decides what reaches
+        # it at all.
+        self.credential: Credential = resolve_credential(api_key, credential)
 
     async def _get(self) -> Any:
+        # Resolved once so the header, the origin guard and the redaction
+        # below all describe the same credential — see the chat client's
+        # `call` for why that matters once a token rotates.
+        key = await self.credential.value()
         try:
             # See `credentialed_client`: a redirect off this origin loses the
             # credential rather than carrying it to whatever answered.
             async with credentialed_client(
                 self.skills_url,
                 timeout_s=self.timeout_s,
-                api_key=self.api_key,
+                api_key=key,
                 auth_header=self.auth_header,
             ) as client:
                 resp = await client.get(
-                    self.skills_url, headers=auth_headers(self.api_key, self.auth_header)
+                    self.skills_url, headers=auth_headers(key, self.auth_header)
                 )
         except httpx.HTTPError as exc:
             raise WorkspaceFetchError(
@@ -130,7 +147,7 @@ class HttpWorkspaceClient:
         if resp.status_code >= 400:
             raise WorkspaceFetchError(
                 f"agent server returned {resp.status_code} for {self.skills_url}: "
-                f"{redact(resp.text[:200], self.api_key)}"
+                f"{redact(resp.text[:200], key)}"
             )
         try:
             return resp.json()

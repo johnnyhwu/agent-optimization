@@ -388,6 +388,13 @@ export function blockingReason(state) {
   const { stepIndex } = state;
   const id = STEPS[stepIndex]?.id;
 
+  // Ahead of every step-specific rule, because it is true on all of them and
+  // because the honest place to say "this cannot start" is as early as
+  // possible. The entry buttons in `OptimizeSection` already refuse, so
+  // reaching this means the session ran out *while* the form was being filled
+  // in — the case the draft in `wizard_draft.js` exists to make survivable.
+  if (state.sessionBlocked) return state.sessionBlocked;
+
   // The mode itself asks nothing: it opens with `isolated` already chosen, and
   // both modes are always offerable because what makes `routing` impossible is
   // a property of a skill, which has not been picked yet.

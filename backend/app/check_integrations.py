@@ -13,6 +13,7 @@ import sys
 
 import httpx
 
+from app import agent_sso
 from app.config import settings
 
 OK = "  OK   "
@@ -43,6 +44,18 @@ async def check_agent() -> bool:
     if not settings.agent_chat_url:
         _line(FAIL, "agent", "AGENT_CHAT_URL is empty")
         return False
+    # A CLI preflight has no signed-in user, so under SSO forwarding there is no
+    # identity to send and the agent server will refuse — which is not a broken
+    # deployment and must not be reported as one. Skipped with the reason named,
+    # the same way an empty AGENT_SKILLS_URL is: this check cannot answer the
+    # question, and saying so beats a red line nobody can act on.
+    if agent_sso.enabled() and not settings.agent_api_key:
+        _line(
+            SKIP, "agent",
+            "AGENT_SSO_ENABLED sends the signed-in user's token, and a preflight "
+            "has no session — check this from the browser instead",
+        )
+        return True
     from app.services.agent_probe import probe_chat
 
     try:
@@ -139,6 +152,18 @@ async def check_workspace() -> bool:
             SKIP, "workspace",
             "AGENT_SKILLS_URL is empty — evaluation works; the playground, the "
             "skill-coverage warning and optimization need it",
+        )
+        return True
+    # A CLI preflight has no signed-in user, so under SSO forwarding there is no
+    # identity to send and the agent server will refuse — which is not a broken
+    # deployment and must not be reported as one. Skipped with the reason named,
+    # the same way an empty AGENT_SKILLS_URL is: this check cannot answer the
+    # question, and saying so beats a red line nobody can act on.
+    if agent_sso.enabled() and not settings.agent_api_key:
+        _line(
+            SKIP, "workspace",
+            "AGENT_SSO_ENABLED sends the signed-in user's token, and a preflight "
+            "has no session — check this from the browser instead",
         )
         return True
     from app.integrations.real.workspace import HttpWorkspaceClient

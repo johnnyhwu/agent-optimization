@@ -11,6 +11,7 @@ import { useDebounced } from "../useDebounced.js";
 import { useRevealedError } from "../useRevealedError.js";
 import { coverageWarning, skillCoverage } from "../skill_coverage.js";
 import { gateFor, probeMatches } from "../agent_endpoints.js";
+import { blockedReason } from "../session_expiry.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 
 // Config for one run (§9.2 seams), chosen at trigger time instead of baked into
@@ -31,7 +32,14 @@ const SECRET_PAIRS = [
   ["agent_api_key", "agent_chat_url"],
 ];
 
-export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) {
+export default function RunConfigDialog({
+  evalSetId,
+  evalSet,
+  onClose,
+  onRun,
+  // The sign-in state, from the app shell by way of RunHistory.
+  session = null,
+}) {
   const [defaults, setDefaults] = useState(null);
   const [impls, setImpls] = useState({});
   const [form, setForm] = useState(null);
@@ -238,7 +246,15 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
   // An eval run never sends a skills override and never reads a trace, so a
   // broken skills endpoint costs it the coverage warning and nothing else. Only
   // a chat endpoint that has actually failed stops a run.
-  const blocked = gate.blocked;
+  //
+  // The sign-in is the other way to be unable to start, and it has to be
+  // re-checked *here* rather than only on the button that opened this dialog: a
+  // form takes minutes to fill in, and a session that was fine when it opened
+  // can be gone by the time Start is pressed. Same last-line check the wizard
+  // applies through `optimize_wizard.blockingReason`.
+  const sessionBlocked = blockedReason(session);
+  const blocked = gate.blocked || Boolean(sessionBlocked);
+  const blockedReasonText = sessionBlocked || gate.reason;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   // A cleared number input parses to 0/NaN, which the backend would reject
@@ -389,7 +405,7 @@ export default function RunConfigDialog({ evalSetId, evalSet, onClose, onRun }) 
             // as a target that is not there. It no longer points at a panel to
             // open — there is none — and the banner at the top of the form says
             // the same thing where it can be read without hovering.
-            title={blocked ? gate.reason : undefined}
+            title={blocked ? blockedReasonText : undefined}
           >
             {busy
               ? "Starting…"

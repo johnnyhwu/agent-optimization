@@ -25,8 +25,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import cancellation, playground
-from app.auth import current_subject
+from app import agent_sso, cancellation, playground
+from app.config import settings
+from app.auth import current_subject, current_token, sso_refresh_token
 from app.integrations import build_seams
 from app.integrations.base import WorkspaceOverride
 from app.playground import PlaygroundAttempt
@@ -115,6 +116,7 @@ def _workspace_client(agent: "WorkspaceReadIn"):
 async def get_workspace(
     agent: WorkspaceReadIn = WorkspaceReadIn(),
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
 ):
     """The agent's skill files, so an edit starts from the real thing.
 
@@ -130,7 +132,12 @@ async def get_workspace(
     the developer silently loses the starting point and retypes the skill from
     memory — then tests the wrong text.
     """
-    client = _workspace_client(agent)
+    # Resolved once and used twice: the client sends it, and the 401 hint below
+    # reports whether anything was sent at all. Two answers from one value,
+    # because a hint saying "no credential" about a request that carried the
+    # caller's own token sends the reader to the wrong field.
+    key = agent_sso.probe_key(agent.agent_api_key, caller_token)
+    client = _workspace_client(agent.model_copy(update={"agent_api_key": key}))
     try:
         ws = await client.get_workspace()
     except Exception as exc:  # noqa: BLE001
@@ -142,7 +149,7 @@ async def get_workspace(
             detail=with_auth_hint(
                 f"could not read the agent's workspace: {exc}",
                 credential=credential_state(
-                    agent.agent_api_key,
+                    key,
                     chat_url=agent.agent_chat_url,
                     target_url=agent.agent_skills_url,
                 ),
@@ -155,6 +162,7 @@ async def get_workspace(
 async def get_workspace_version(
     agent: WorkspaceReadIn = WorkspaceReadIn(),
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
 ):
     """Just the version, checked before a send to catch a stale snapshot.
 
@@ -166,7 +174,8 @@ async def get_workspace_version(
     `_workspace_client`: a version fetched from a different server than the
     snapshot came from can only ever produce a false answer, in either direction.
     """
-    client = _workspace_client(agent)
+    key = agent_sso.probe_key(agent.agent_api_key, caller_token)
+    client = _workspace_client(agent.model_copy(update={"agent_api_key": key}))
     try:
         return WorkspaceVersionOut(version=await client.get_version())
     except Exception as exc:  # noqa: BLE001
@@ -175,7 +184,7 @@ async def get_workspace_version(
             detail=with_auth_hint(
                 f"could not read the workspace version: {exc}",
                 credential=credential_state(
-                    agent.agent_api_key,
+                    key,
                     chat_url=agent.agent_chat_url,
                     target_url=agent.agent_skills_url,
                 ),
@@ -289,7 +298,9 @@ def _load(attempt_id: uuid.UUID, subject: str) -> PlaygroundAttempt:
 async def create_attempt(
     body: PlaygroundCreate,
     subject: str = Depends(current_subject),
+    caller_token: str | None = Depends(current_token),
     session: AsyncSession = Depends(get_session),
+    refresh_token: str | None = Depends(sso_refresh_token),
 ):
     # Resolved before anything reads the agent, because the baseline lookup
     # below is one of those reads: typed into this request, else this
@@ -301,6 +312,15 @@ async def create_attempt(
         body.config.model_dump(),
         body.secrets.model_dump(),
     )
+
+    # Before the baseline read below, not just before the attempt: that read
+    # talks to the agent too, so refusing later would spend a request that was
+    # always going to be refused. See `agent_sso.refusal_reason`.
+    refusal = agent_sso.refusal_reason(
+        refresh_token, resolved_secrets.get("agent_api_key") or settings.agent_api_key
+    )
+    if refusal:
+        raise HTTPException(status_code=400, detail=refusal)
 
     override = None
     if body.workspace is not None and not body.workspace.is_empty:
@@ -331,7 +351,13 @@ async def create_attempt(
                         agent_skills_url=body.config.agent_skills_url,
                         agent_chat_url=body.config.agent_chat_url,
                         agent_auth_header=body.config.agent_auth_header,
-                        agent_api_key=resolved_secrets.get("agent_api_key", ""),
+                        # Read inside the request, so the caller's own token
+                        # stands in where nothing was typed and the deployment
+                        # forwards identity — not the session the attempt is
+                        # about to register. See `agent_sso.probe_key`.
+                        agent_api_key=agent_sso.probe_key(
+                            resolved_secrets.get("agent_api_key"), caller_token
+                        ),
                     )
                 ).get_workspace(),
                 timeout=BASELINE_TIMEOUT_S,
@@ -371,6 +397,7 @@ async def create_attempt(
         secrets=resolved_secrets,
         correlation_id=uuid.uuid4().hex,
     )
+    agent_sso.register(attempt.id, refresh_token, subject)
     playground.start(attempt)
     return _detail(attempt)
 

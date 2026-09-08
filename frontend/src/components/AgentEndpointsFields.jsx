@@ -144,6 +144,16 @@ export function EndpointAuthGroup({
   // The checks whose refusal is a reason to open this. Any tri-state check
   // object; `looksUnauthorized` reads the backend's own hint, not a status code.
   refusals = [],
+  // This deployment sends the signed-in user's SSO token, so the platform owns
+  // the credential and the reader has nothing to type. See `app/agent_sso.py`.
+  //
+  // The fields are not removed, only demoted: an agent server that wants its
+  // own gateway key rather than the caller's identity is still a supported
+  // configuration, and a key entered here still wins (`user_secrets.inject`
+  // takes what was typed over anything else). Deleting them would leave that
+  // deployment with a 401 and no field on any screen to answer it — exactly
+  // the situation these fields were added to fix.
+  sso = false,
   disabled,
   idPrefix,
 }) {
@@ -157,12 +167,19 @@ export function EndpointAuthGroup({
 
   return (
     <Disclosure
-      summary="Endpoint authentication"
-      detail="Optional"
+      summary={sso ? "Endpoint authentication (advanced)" : "Endpoint authentication"}
+      detail={sso ? "Handled for you" : "Optional"}
       className="agent-ep-auth"
       open={open}
       onOpenChange={setOpen}
     >
+      {sso && (
+        <div className="agent-ep-status hint">
+          <IconInfo size={13} /> Requests are sent to this agent as you, using
+          your sign-in. Leave these blank unless the agent server wants its own
+          key instead.
+        </div>
+      )}
       <Field
         label="API key"
         htmlFor={`${idPrefix}-api-key`}
@@ -220,6 +237,9 @@ export default function AgentEndpointsFields({
   onChangeApiKey,
   onChangeAuthHeader,
   keptApiKey = "",
+  // True where the deployment forwards the caller's SSO token. Only changes how
+  // the credential group presents itself — see `EndpointAuthGroup`.
+  sso = false,
   // { chat, override, trace } tri-states plus previews, or null before a probe.
   chatProbe = null,
   chatBusy = false,
@@ -252,6 +272,7 @@ export default function AgentEndpointsFields({
           onChangeApiKey={onChangeApiKey}
           onChangeAuthHeader={onChangeAuthHeader}
           keptPlaceholder={keptApiKey}
+          sso={sso}
           chatUrl={chatUrl}
           skillsUrl={skillsUrl}
           refusals={[chatProbe?.chat, skillsProbe?.check]}

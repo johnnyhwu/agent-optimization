@@ -24,6 +24,7 @@ import {
 } from "../../optimize_steps.js";
 import ProgressChart from "./ProgressChart.jsx";
 import StepCard from "./StepCard.jsx";
+import { interruptedReason } from "../../session_expiry.js";
 
 // One run's overview. This is the header and the live state; the chart, the
 // step table and the two detail views land on top of it in the next phases.
@@ -33,6 +34,22 @@ import StepCard from "./StepCard.jsx";
 // arrives on the stream too, which also means a developer opening the page
 // halfway through gets the steps that already happened rather than a blank
 // screen until the next one lands.
+
+// Why the run stopped, and what to do about it. Two causes wear the same
+// status: a backend restart is resumable right now, an ended sign-in only after
+// signing in again. Telling someone to press Resume when their sign-in is what
+// ended sends them round the loop a second time — so the reason is read once
+// (`interruptedReason`) and both halves come from that one reading.
+function InterruptedBanner({ run }) {
+  const reason = interruptedReason(run.error_message);
+  return (
+    <Banner tone="warning" title="This run was interrupted">
+      {reason.summary} {reason.action} Every completed step is on disk, so it
+      continues from the one after the last that finished rather than starting
+      over.
+    </Banner>
+  );
+}
 
 export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted }) {
   const toast = useToast();
@@ -242,13 +259,7 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
           onDelete={() => setConfirmingDelete(true)}
         />
 
-        {run.status === "interrupted" && (
-          <Banner tone="warning" title="This run was interrupted">
-            The backend restarted while it was running. Every completed step is on
-            disk — resuming continues from the one after the last that finished
-            rather than starting over.
-          </Banner>
-        )}
+        {run.status === "interrupted" && <InterruptedBanner run={run} />}
         {run.error_message && run.status === "failed" && (
           <Banner tone="error" title="This run stopped early">
             {run.error_message}

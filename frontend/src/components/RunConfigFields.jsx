@@ -148,6 +148,10 @@ export default function RunConfigFields({
             onChangeApiKey={(v) => setSecrets((s) => ({ ...s, agent_api_key: v }))}
             onChangeAuthHeader={(v) => set("agent_auth_header", v)}
             keptApiKey={kept("agent_api_key")}
+            // Not a seam, but it arrives in the same payload: true means the
+            // platform sends the caller's SSO token, so the fields become an
+            // advanced escape hatch rather than something to fill in.
+            sso={Boolean(impls.agent_sso)}
             disabled={fake("agent")}
             chatProbe={chatProbe}
             chatBusy={chatBusy}

@@ -5,6 +5,7 @@ import RunList from "./RunList.jsx";
 import RunPanel from "./RunPanel.jsx";
 import SkillDiff from "./SkillDiff.jsx";
 import Wizard from "./Wizard.jsx";
+import { blockedReason } from "../../session_expiry.js";
 
 // The Optimize section: a list of past runs on the left, and whatever the route
 // names on the right.
@@ -14,7 +15,11 @@ import Wizard from "./Wizard.jsx";
 // run history would leave both cramped — the list is for returning to a run, and
 // while a new one is being configured there is nothing to return to.
 
-export default function OptimizeSection({ route, subject }) {
+export default function OptimizeSection({ route, subject, session = null }) {
+  // Read once for both New buttons and the wizard, so the rail, the empty
+  // state and the wizard's own Start cannot disagree about whether a run
+  // can be started.
+  const sessionBlocked = blockedReason(session);
   // The rail has no stream of its own — one per visible run would be a
   // connection each — so the open run's panel tells it when something moved.
   // Held here because the rail and the panel are siblings.
@@ -23,7 +28,7 @@ export default function OptimizeSection({ route, subject }) {
   // unknown, because that is what the rail's own skeleton is occupying.
   const [hasRuns, setHasRuns] = useState(null);
 
-  if (route.tier === "new") return <Wizard />;
+  if (route.tier === "new") return <Wizard sessionBlocked={sessionBlocked} />;
   // Part 1 takes the whole width too. It is two columns of its own — the
   // grouped question list and the analyst pane, which itself opens into the
   // two-column span viewer — and none of that survives being folded into the
@@ -88,6 +93,7 @@ export default function OptimizeSection({ route, subject }) {
         activeId={route.tier === "run" ? route.runId : null}
         onOpen={(run) => navigate(href.optimizeRun(run.id))}
         onNew={() => navigate(href.optimizeNew())}
+        blockedReason={sessionBlocked}
         onLoaded={onRunsLoaded}
       />
       <div className="opt-pane">
@@ -113,7 +119,10 @@ export default function OptimizeSection({ route, subject }) {
           // New button is therefore the only one on the screen: the rail keeps
           // its own for when there is a list to sit above, and the two used to
           // be shown together beside two stacked empty states.
-          <RunList.Intro onNew={() => navigate(href.optimizeNew())} />
+          <RunList.Intro
+            onNew={() => navigate(href.optimizeNew())}
+            blockedReason={sessionBlocked}
+          />
         )}
       </div>
     </div>

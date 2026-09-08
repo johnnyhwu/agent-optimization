@@ -15,6 +15,7 @@ from app.auth import current_subject
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.models import EvalSetRole, Run
+from app import agent_sso
 from app.optimizer.runner import reap_interrupted_optimization_runs
 from app.routers import (
     agent,
@@ -242,6 +243,11 @@ async def run_config_defaults(
             # edits are canned, so the Optimize section is demonstrable on
             # Docker alone like every other part of the product.
             "optimizer": settings.optimizer_impl,
+            # Not a seam, but the same question this block answers: is this
+            # thing live? True means the agent server is reached as the
+            # signed-in user, so the credential fields are the platform's job
+            # and not the reader's. See `app/agent_sso.py`.
+            "agent_sso": agent_sso.enabled(),
         },
     }
 

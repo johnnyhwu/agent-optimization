@@ -12,8 +12,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app import cancellation
-from app.auth import current_subject, require_owner, require_reader, role_for
+from app import agent_sso, cancellation
+from app.config import settings
+from app.auth import (
+    current_subject,
+    require_owner,
+    require_reader,
+    current_token,
+    role_for,
+    sso_refresh_token,
+)
 from app.db import SessionLocal, get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import agent_version, run_eval
@@ -191,6 +199,8 @@ async def trigger_run(
     body: RunCreate | None = None,
     subject: str = Depends(require_reader),  # owner OR viewer may run (§6.16)
     session: AsyncSession = Depends(get_session),
+    refresh_token: str | None = Depends(sso_refresh_token),
+    caller_token: str | None = Depends(current_token),
 ):
     es = await session.get(EvalSet, eval_set_id)
     if es is None:
@@ -212,6 +222,15 @@ async def trigger_run(
     )
     secrets = await _resolve_secrets(session, eval_set_id, body, config, subject)
 
+    # Refuse before the row exists, rather than starting work that would fail
+    # every question with the real cause nowhere on the page. See
+    # `agent_sso.refusal_reason`.
+    refusal = agent_sso.refusal_reason(
+        refresh_token, secrets.get("agent_api_key") or settings.agent_api_key
+    )
+    if refusal:
+        raise HTTPException(status_code=400, detail=refusal)
+
     run = Run(
         eval_set_id=eval_set_id, triggered_by=subject, status="running",
         name=(body.name or "").strip() or None, config=config, secrets=secrets,
@@ -219,11 +238,18 @@ async def trigger_run(
         # agent that will not answer this costs the run its drift check, not its
         # start — the Run eval dialog's own pre-flight already refused to enable
         # Start against an agent that is not there.
-        workspace_version=await agent_version(config, secrets),
+        workspace_version=await agent_version(
+            config, secrets, **agent_sso.probe_kwargs(caller_token)
+        ),
     )
     session.add(run)
     await session.commit()
     await session.refresh(run)
+
+    # Before the task starts, so its first question already has a credential.
+    # Nothing is written to the row: the token lives in this process for as long
+    # as the run does and no longer — see `app/agent_sso.py`.
+    agent_sso.register(run.id, refresh_token, subject)
 
     task = asyncio.create_task(run_eval(run.id))
     _background_tasks.add(task)

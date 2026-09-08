@@ -71,6 +71,18 @@ def issuer() -> str:
     return _realm_base()
 
 
+def token_endpoint() -> str:
+    """Where a refresh token is exchanged for a fresh access token.
+
+    Public, and built from `_realm_base()` rather than assembled again by the
+    caller, so token *verification* and token *minting* cannot end up pointing
+    at different realms. `app/agent_sso.py` is the one caller; its whole job
+    depends on the answer being the same realm that issued the token it was
+    handed.
+    """
+    return f"{_realm_base()}/protocol/openid-connect/token"
+
+
 async def _fetch_jwks() -> dict[str, Any]:
     url = f"{_realm_base()}/protocol/openid-connect/certs"
     try:

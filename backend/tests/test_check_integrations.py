@@ -109,3 +109,73 @@ async def test_the_agent_check_names_a_missing_chat_url(configure, capsys):
     with configure(agent_impl="real", agent_chat_url=""):
         assert await ci.check_agent() is False
     assert "AGENT_CHAT_URL" in capsys.readouterr().out
+
+
+# --- The preflight under SSO forwarding ----------------------------------
+#
+# `make preflight` runs from a CLI, where there is no signed-in user. Under
+# AGENT_SSO_ENABLED there is therefore no identity to send, and the agent server
+# refuses — which is not a broken deployment. Reporting it as FAIL would tell
+# whoever just switched the feature on that they had broken their stack.
+
+
+async def test_the_agent_check_skips_rather_than_failing_under_sso(configure, capsys):
+    from app.check_integrations import check_agent
+
+    with configure(
+        agent_impl="real",
+        agent_chat_url="https://agent.test/v1/chat/completions",
+        auth_mode="keycloak",
+        agent_sso_enabled=True,
+        agent_api_key="",
+    ):
+        assert await check_agent() is True
+    out = capsys.readouterr().out
+    assert "SKIP" in out
+    assert "no session" in out, "the reason has to name why, or the line is unactionable"
+
+
+async def test_the_workspace_check_skips_too(configure, capsys):
+    from app.check_integrations import check_workspace
+
+    with configure(
+        workspace_impl="real",
+        agent_skills_url="https://agent.test/skills",
+        auth_mode="keycloak",
+        agent_sso_enabled=True,
+        agent_api_key="",
+    ):
+        assert await check_workspace() is True
+    assert "SKIP" in capsys.readouterr().out
+
+
+async def test_a_deployment_key_still_gets_a_real_check(configure):
+    """The escape hatch again: with a key to send there is something to verify,
+    so the preflight must not skip and claim it cannot know."""
+    import respx
+
+    from app.check_integrations import check_agent
+
+    with configure(
+        agent_impl="real",
+        agent_chat_url="https://agent.test/v1/chat/completions",
+        auth_mode="keycloak",
+        agent_sso_enabled=True,
+        agent_api_key="sk-env",
+    ):
+        with respx.mock:
+            respx.post("https://agent.test/v1/chat/completions").mock(
+                side_effect=httpx.ConnectError("no route")
+            )
+            # Reaches the probe rather than skipping — the outcome does not
+            # matter here, only that it was attempted.
+            assert await check_agent() is False
+
+
+async def test_sso_off_is_unchanged(configure, capsys):
+    """The regression guard: nothing about the switched-off path moved."""
+    from app.check_integrations import check_agent
+
+    with configure(agent_impl="fake"):
+        assert await check_agent() is True
+    assert "AGENT_IMPL=fake" in capsys.readouterr().out
