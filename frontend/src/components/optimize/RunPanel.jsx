@@ -24,6 +24,7 @@ import {
 } from "../../optimize_steps.js";
 import ProgressChart from "./ProgressChart.jsx";
 import StepCard from "./StepCard.jsx";
+import { interruptedReason } from "../../session_expiry.js";
 
 // One run's overview. This is the header and the live state; the chart, the
 // step table and the two detail views land on top of it in the next phases.
@@ -244,8 +245,12 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
 
         {run.status === "interrupted" && (
           <Banner tone="warning" title="This run was interrupted">
-            The backend restarted while it was running. Every completed step is on
-            disk — resuming continues from the one after the last that finished
+            {/* Two causes, two next actions — see `interruptedReason`. Telling
+                someone to press Resume when their sign-in is what ended would
+                send them round the loop a second time. */}
+            {interruptedReason(run.error_message).summary}{" "}
+            {interruptedReason(run.error_message).action} Every completed step is
+            on disk, so it continues from the one after the last that finished
             rather than starting over.
           </Banner>
         )}

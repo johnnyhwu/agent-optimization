@@ -19,9 +19,20 @@ that wants `X-Api-Key` instead. A free-form table of headers was the obvious
 generalisation and is a worse product: nothing in it can be validated, nothing
 can tell which row is the secret (so neither redaction nor endpoint binding
 works), and it invites pasting a session cookie into a stored credential.
+
+**Two kinds of credential, one wire format.** Everything above describes a key
+somebody typed: one string, unchanged for as long as the client lives. A
+deployment that forwards the signed-in user's SSO token
+(`AGENT_SSO_ENABLED=true`, see `app/agent_sso.py`) has a credential that is a
+*different string on almost every call*, because a 10-minute access token has
+to be re-minted mid-run. `Credential` below is the seam between those two, and
+it resolves to a plain string before anything else here runs — which is why
+`auth_headers`, `credentialed_client`, `redact` and `same_origin` are unchanged
+by SSO forwarding and mean exactly what they always did.
 """
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 import httpx
@@ -31,6 +42,37 @@ import httpx
 # `X-Api-Key: Bearer abc` would be rejected by the gateway that asked for it.
 DEFAULT_AUTH_HEADER = "Authorization"
 BEARER_PREFIX = "Bearer "
+
+
+@runtime_checkable
+class Credential(Protocol):
+    """The credential for one outbound request, resolved at the moment of use.
+
+    Async even though the common implementation is a stored string, because the
+    other one talks to the identity provider. One shape means the clients below
+    have a single call site instead of a branch, and a branch is where "which
+    credential did this call actually use?" stops having one answer — the
+    question `redact` depends on getting right.
+    """
+
+    async def value(self) -> str:
+        """The credential, or `""` for "this request carries none"."""
+        ...
+
+
+class StaticCredential:
+    """A credential that is one string for the life of the client.
+
+    Every caller that existed before SSO forwarding gets one of these, holding
+    exactly the key it used to pass, so its requests are byte-for-byte what they
+    were.
+    """
+
+    def __init__(self, key: str | None = "") -> None:
+        self._key = (key or "").strip()
+
+    async def value(self) -> str:
+        return self._key
 
 
 def auth_headers(api_key: str | None, header_name: str | None = None) -> dict[str, str]:

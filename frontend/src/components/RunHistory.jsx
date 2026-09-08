@@ -24,6 +24,7 @@ import {
   IconFileText, IconInbox, IconPlay, IconStop, IconTrash,
 } from "./icons.jsx";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
+import { blockedReason } from "../session_expiry.js";
 
 // Which questions the detail view treats as incorrect when several runs are
 // compared. Named for what they do rather than for the set operation they are:
@@ -55,7 +56,15 @@ function runLabel(r) {
 // Runs page in newest-first as you scroll. Selection is held as a list of run
 // ids rather than indices, so multi-select survives an append — the whole point
 // of the multi-run modes is comparing runs that may be pages apart.
-export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChanged }) {
+export default function RunHistory({
+  evalSet,
+  myRole,
+  onOpenRuns,
+  onEvalSetChanged,
+  // The sign-in state, from the app shell. `expired` means starting a run
+  // now would stop it almost immediately, so the button says so instead.
+  session,
+}) {
   const toast = useToast();
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState([]);
@@ -217,13 +226,23 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
     },
   ];
 
+  // Read once for both buttons, so the empty state and the header cannot
+  // disagree about whether a run can be started.
+  const sessionBlocked = blockedReason(session);
+
   return (
     <div>
       <PageHeader
         title={evalSet.name}
         subtitle="Every run recorded against this set. Open one to see where its wrong answers went off the rails."
         primary={
-          <Button variant="primary" icon={<IconPlay size={14} />} onClick={() => setShowRunConfig(true)}>
+          <Button
+            variant="primary"
+            icon={<IconPlay size={14} />}
+            disabled={Boolean(sessionBlocked)}
+            title={sessionBlocked || undefined}
+            onClick={() => setShowRunConfig(true)}
+          >
             Run eval
           </Button>
         }
@@ -326,7 +345,13 @@ export default function RunHistory({ evalSet, myRole, onOpenRuns, onEvalSetChang
               icon={<IconInbox size={22} />}
               title="No runs yet"
               action={
-                <Button variant="primary" icon={<IconPlay size={14} />} onClick={() => setShowRunConfig(true)}>
+                <Button
+                  variant="primary"
+                  icon={<IconPlay size={14} />}
+                  disabled={Boolean(sessionBlocked)}
+                  title={sessionBlocked || undefined}
+                  onClick={() => setShowRunConfig(true)}
+                >
                   Run eval
                 </Button>
               }

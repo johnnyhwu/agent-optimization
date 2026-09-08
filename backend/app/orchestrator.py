@@ -58,7 +58,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app import cancellation
+from app import agent_sso, cancellation
+from app.agent_sso import SsoSessionExpired
 from app.config import settings
 from app.db import SessionLocal
 from app.integrations import Seams, build_seams
@@ -80,7 +81,9 @@ from app.sse import hub
 log = logging.getLogger(__name__)
 
 
-async def agent_version(config: dict, secrets: dict | None = None) -> str | None:
+async def agent_version(
+    config: dict, secrets: dict | None = None, agent_credential=None
+) -> str | None:
     """The agent's version right now, or None if it cannot be had.
 
     Never raises, and that is the whole design. By the time this is called at
@@ -116,6 +119,12 @@ async def agent_version(config: dict, secrets: dict | None = None) -> str | None
             },
             secrets or {},
             include_workspace=True,
+            # Under SSO forwarding the stored secrets hold no key, so without
+            # this the probe would 401 and the run would silently lose its drift
+            # check — the column would read "no version" rather than "not
+            # asked". Best-effort either way: a refusal here is logged, not
+            # raised.
+            **({} if agent_credential is None else {"agent_credential": agent_credential}),
         )
         client = getattr(seams, "workspace", None)
         if client is None:
@@ -139,6 +148,7 @@ async def run_eval(run_id: uuid.UUID) -> None:
             await _finalize_failed(session, run_id, exc)
         finally:
             cancellation.clear(run_id)
+            agent_sso.clear(run_id)
 
 
 async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
@@ -149,7 +159,17 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     # to the environment, so a run started before per-run config existed — or the
     # seeded fake demo — behaves exactly as it used to.
     config = run.config or {}
-    seams = seams or build_seams(config, run.secrets or {})
+    # A credential for this run only when one was registered for it — see
+    # `app/agent_sso.py`. Keyed on the run id rather than passed through
+    # `run_eval`, so the background task needs nothing threaded across the
+    # `create_task` boundary and a resumed scope is picked up by id.
+    #
+    # The keyword is passed only when there is one, for the same reason
+    # `pipeline.call_agent` does it: with SSO off this is the call it has always
+    # been, including for a `build_seams` stub that never grew the parameter.
+    seams = seams or build_seams(
+        config, run.secrets or {}, **agent_sso.seam_kwargs(run_id)
+    )
     agent_timeout_s = config.get("agent_timeout_s") or settings.agent_timeout_s
     # Whether this run diagnoses its wrong answers (§6.9). Deliberately not the
     # `x or default` idiom every line around it uses: `False` is falsy and is
@@ -224,6 +244,18 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     for res in results:
         if isinstance(res, BaseException):
             log.exception("unexpected per-question error", exc_info=res)
+    # One exception is not per-question at all: an expired SSO session means no
+    # remaining question can be asked either. Raised here rather than inside a
+    # worker so its siblings still finish writing their rows — `run_eval`
+    # catches it and finalizes the run once, with a sentence that names the
+    # login rather than the agent. Eval runs are not resumable (no checkpoint —
+    # see `models.py` on why `interrupted` is optimization-only), so this is
+    # `failed`; the work is minutes, not hours, and re-running is the fix.
+    expired = next(
+        (r for r in results if isinstance(r, SsoSessionExpired)), None
+    )
+    if expired is not None:
+        raise expired
 
     # Finalize aggregates (§6.13 card reads these directly).
     cancelled = cancel_event.is_set()
@@ -240,7 +272,9 @@ async def _execute_run(session, run: Run, seams: Seams | None = None) -> None:
     # Asked once, at the end, and compared against what was pinned at the start.
     # Recorded even on a cancelled run: a partial run is still a thing someone
     # will read, and "was the agent the same throughout?" is the same question.
-    run.workspace_version_end = await agent_version(config, run.secrets or {})
+    run.workspace_version_end = await agent_version(
+        config, run.secrets or {}, **agent_sso.seam_kwargs(run_id)
+    )
     await session.commit()
 
     await hub.publish(
@@ -323,6 +357,14 @@ async def _process_question(session, run_id, item, total, state, lock, user_id, 
     except RunCancelled:
         await cancel("Run cancelled while waiting for the agent.")
         return
+    except SsoSessionExpired:
+        # Not this question's failure and not the agent's. Every sibling shares
+        # the same session, so recording it per question would turn one expired
+        # login into a screenful of identical agent errors with the real cause
+        # nowhere on the page. Re-raised, collected after the gather below, and
+        # reported once against the run. The row stays 'pending', which reads as
+        # "stopped after N of M" — the same honesty the cancel path keeps.
+        raise
     except Exception as exc:  # noqa: BLE001
         log.warning("agent call failed for %s: %s", correlation_id, exc)
         message, kind = describe_failure(
@@ -474,7 +516,14 @@ async def _finalize_failed(session, run_id: uuid.UUID, exc: Exception) -> None:
         if run is not None:
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
-            run.error_message = clip(f"{type(exc).__name__}: {exc}")
+            # An expired session is the one failure whose message is already a
+            # sentence written for the reader; prefixing it with a class name
+            # would bury "sign in again" behind "SsoSessionExpired:".
+            run.error_message = clip(
+                str(exc)
+                if isinstance(exc, SsoSessionExpired)
+                else f"{type(exc).__name__}: {exc}"
+            )
             await session.commit()
     except Exception:  # noqa: BLE001 - the SSE terminator still has to go out
         log.exception("could not persist failed state for run %s", run_id)

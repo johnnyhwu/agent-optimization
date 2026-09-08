@@ -25,8 +25,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import cancellation, playground
-from app.auth import current_subject
+from app import agent_sso, cancellation, playground
+from app.auth import current_subject, sso_refresh_token
 from app.integrations import build_seams
 from app.integrations.base import WorkspaceOverride
 from app.playground import PlaygroundAttempt
@@ -290,6 +290,7 @@ async def create_attempt(
     body: PlaygroundCreate,
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
+    refresh_token: str | None = Depends(sso_refresh_token),
 ):
     # Resolved before anything reads the agent, because the baseline lookup
     # below is one of those reads: typed into this request, else this
@@ -371,6 +372,7 @@ async def create_attempt(
         secrets=resolved_secrets,
         correlation_id=uuid.uuid4().hex,
     )
+    agent_sso.register(attempt.id, refresh_token, subject)
     playground.start(attempt)
     return _detail(attempt)
 

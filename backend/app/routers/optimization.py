@@ -28,8 +28,8 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app import cancellation
-from app.auth import current_subject
+from app import agent_sso, cancellation
+from app.auth import current_subject, sso_refresh_token
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.integrations import build_seams
@@ -277,6 +277,11 @@ async def optimization_defaults(
             # optimizer model field below it would otherwise look like it does
             # something.
             "optimizer": settings.optimizer_impl,
+            # Not a seam, but the same question this block answers: is this
+            # thing live? True means the agent server is reached as the
+            # signed-in user, so the credential fields are the platform's job
+            # and not the reader's. See `app/agent_sso.py`.
+            "agent_sso": agent_sso.enabled(),
         },
     }
 
@@ -468,6 +473,7 @@ async def create_optimization_run(
     body: OptimizationRunCreate,
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
+    refresh_token: str | None = Depends(sso_refresh_token),
 ):
     """Snapshot the dataset and the skill, then start the run (wizard step 6).
 
@@ -625,6 +631,11 @@ async def create_optimization_run(
 
     # Only now. The background task opens its own session and reads the run by
     # id, so spawning it before the commit would race the transaction.
+    # Before the task starts, so its first rollout already has a credential.
+    # Nothing reaches `run.secrets`: the token lives in this process only, and a
+    # restart that loses it leaves the run `interrupted` and resumable, which is
+    # where the Resume below re-registers a fresh one. See `app/agent_sso.py`.
+    agent_sso.register(run.id, refresh_token, subject)
     runner.start(run.id)
     return await _one_run_out(session, run)
 
@@ -1011,6 +1022,7 @@ async def resume_optimization_run(
     run_id: uuid.UUID,
     subject: str = Depends(current_subject),
     session: AsyncSession = Depends(get_session),
+    refresh_token: str | None = Depends(sso_refresh_token),
 ):
     """Continue a run the backend restart left `interrupted`. Creator only.
 
@@ -1039,6 +1051,10 @@ async def resume_optimization_run(
     run.cancel_requested = False
     await session.commit()
     cancellation.clear(run_id)
+    # The point of re-registering rather than reusing: whatever session the run
+    # started under is gone (that is usually *why* it stopped), so the run
+    # continues under the one the resumer is signed in with now.
+    agent_sso.register(run_id, refresh_token, subject)
     runner.start(run_id)
     return await _one_run_out(session, run)
 

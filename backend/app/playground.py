@@ -39,7 +39,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app import cancellation
+from app import agent_sso, cancellation
 from app.config import settings
 from app.integrations import Seams, build_seams
 from app.integrations.base import Trace, Verdict, WorkspaceOverride
@@ -307,12 +307,19 @@ async def execute(attempt_id: uuid.UUID) -> None:
         await _publish(attempt, "attempt_completed")
     finally:
         cancellation.clear(attempt_id)
+        agent_sso.clear(attempt_id)
 
 
 async def _execute(attempt: PlaygroundAttempt) -> None:
     cancel_event = cancellation.event_for(attempt.id)
     try:
-        seams = build_seams(attempt.config, attempt.secrets)
+        # An attempt is short, but it is still a background task: the request
+        # that created it has already returned, so its own bearer token is gone.
+        # Keyed on the attempt id, and the keyword is omitted when there is no
+        # session to forward — see `app/agent_sso.py`.
+        seams = build_seams(
+            attempt.config, attempt.secrets, **agent_sso.seam_kwargs(attempt.id)
+        )
     except Exception as exc:  # noqa: BLE001 - misconfiguration, not a bug
         # e.g. JUDGE_IMPL=real with no model. Reported on the attempt rather than
         # raised, so the developer reads the reason instead of a 500.

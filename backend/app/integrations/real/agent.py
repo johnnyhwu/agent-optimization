@@ -41,7 +41,13 @@ import httpx
 
 from app.config import settings
 from app.integrations.base import AgentResponse, WorkspaceOverride
-from app.integrations.real.agent_auth import auth_headers, credentialed_client, redact
+from app.integrations.real.agent_auth import (
+    Credential,
+    StaticCredential,
+    auth_headers,
+    credentialed_client,
+    redact,
+)
 
 # The vendor namespace every platform-specific field lives under. One name, in
 # one place, because it appears in the payload, in the docs and in the probe.
@@ -241,6 +247,7 @@ class HttpAgentClient:
         timeout_s: float | None = None,
         api_key: str | None = None,
         auth_header: str | None = None,
+        credential: Credential | None = None,
     ) -> None:
         self.chat_url = (chat_url or settings.agent_chat_url).strip().rstrip("/")
         if not self.chat_url:
@@ -255,21 +262,36 @@ class HttpAgentClient:
         # require any, and most servers this talks to ask for none.
         self.api_key = (api_key or settings.agent_api_key or "").strip()
         self.auth_header = (auth_header or settings.agent_auth_header or "").strip()
+        # How each request's credential is obtained. `None` means the static key
+        # above — every caller that predates SSO forwarding, and every
+        # deployment with `AGENT_SSO_ENABLED` off. See `agent_auth.Credential`.
+        self.credential: Credential = credential or StaticCredential(self.api_key)
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, key: str | None = None) -> dict[str, str]:
+        """Headers for one request, built from the credential that request resolved.
+
+        `key=None` means the static key, which is what this always used and is
+        why existing callers need no change. The parameter exists because a
+        forwarded SSO token is a different string on almost every call, and the
+        header and `_safe` below must be built from the *same* one: a request
+        authenticated with this call's token and a redaction pass keyed on the
+        previous one would write a live credential into a run record.
+        """
+        resolved = self.api_key if key is None else key
         return {
             "Content-Type": "application/json",
-            **auth_headers(self.api_key, self.auth_header),
+            **auth_headers(resolved, self.auth_header),
         }
 
-    def _safe(self, text: str) -> str:
+    def _safe(self, text: str, key: str | None = None) -> str:
         """Whatever the agent said, with our credential taken back out.
 
         Every error path below quotes the response body, and those quotes end up
         in run records and on screen. A gateway that echoes request headers into
         its error body is the case this covers.
         """
-        return redact(text, self.api_key)
+        resolved = self.api_key if key is None else key
+        return redact(text, resolved)
 
     def build_payload(
         self, question: str, correlation_id: str, user_id: str,
@@ -290,16 +312,22 @@ class HttpAgentClient:
         )
         started = time.monotonic()
 
+        # Resolved once, then used for the header, the origin guard and every
+        # redaction below. A forwarded SSO token changes between calls, so
+        # re-resolving per use could authenticate with one string and redact
+        # another.
+        key = await self.credential.value()
+
         # Not a plain client: the credential is bound to the URL it was typed
         # against, so a redirect cannot carry it to another server.
         async with credentialed_client(
             self.chat_url,
             timeout_s=self.timeout_s,
-            api_key=self.api_key,
+            api_key=key,
             auth_header=self.auth_header,
         ) as client:
             resp = await client.post(
-                self.chat_url, json=payload, headers=self._headers()
+                self.chat_url, json=payload, headers=self._headers(key)
             )
 
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -307,11 +335,11 @@ class HttpAgentClient:
         # Let 5xx/timeouts raise so the orchestrator's retry policy sees them;
         # a 4xx is a request problem and will fail identically on every retry.
         if resp.status_code >= 500:
-            raise AgentHttpError(self._safe(_extract_error(resp)))
+            raise AgentHttpError(self._safe(_extract_error(resp), key))
         if resp.status_code >= 400:
             return AgentResponse(
                 response="", correlation_id=correlation_id, failed=True,
-                error=self._safe(_extract_error(resp)), latency_ms=latency_ms,
+                error=self._safe(_extract_error(resp), key), latency_ms=latency_ms,
             )
 
         if _looks_like_markup(resp.text):
@@ -319,7 +347,7 @@ class HttpAgentClient:
                 response="", correlation_id=correlation_id, failed=True,
                 error=(
                     "the agent server answered 200 with markup, not a chat "
-                    f"completion: {self._safe(resp.text[:500])}"
+                    f"completion: {self._safe(resp.text[:500], key)}"
                 ),
                 latency_ms=latency_ms,
             )
@@ -334,7 +362,7 @@ class HttpAgentClient:
                 response="", correlation_id=correlation_id, failed=True,
                 error=(
                     "the response was not a chat completion carrying a text "
-                    f"answer: {self._safe(resp.text[:500])}"
+                    f"answer: {self._safe(resp.text[:500], key)}"
                 ),
                 latency_ms=latency_ms,
             )

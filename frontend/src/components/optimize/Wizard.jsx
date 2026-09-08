@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api } from "../../api.js";
+import { api, getSubject } from "../../api.js";
 import { href, navigate } from "../../useHashRoute.js";
 import Banner from "../ui/Banner.jsx";
 import Button from "../ui/Button.jsx";
@@ -10,6 +10,7 @@ import Skeleton from "../ui/Skeleton.jsx";
 import { IconCheck, IconPlay, IconRefresh } from "../icons.jsx";
 import { plural } from "../../plural.js";
 import { useToast } from "../Toast.jsx";
+import { clearDraft, loadDraft, saveDraft } from "../../wizard_draft.js";
 import SkillGroups from "./SkillGroups.jsx";
 import SplitEditor from "./SplitEditor.jsx";
 import AgentEndpointsFields, { EndpointGroup } from "../AgentEndpointsFields.jsx";
@@ -47,7 +48,7 @@ import {
 // hides one. Every conditional wizard turns "how much is left" into a question
 // nobody can answer, and this one asks for real money at the end.
 
-export default function Wizard() {
+export default function Wizard({ sessionBlocked = null }) {
   const toast = useToast();
   const [stepIndex, setStepIndex] = useState(0);
   const [skillsProbe, setSkillsProbe] = useState(null);
@@ -471,6 +472,10 @@ export default function Wizard() {
           ? `Optimization run started for ${skills.length} skills.`
           : `Optimization run started for ${skills[0]}.`,
       );
+      // The answers are now a run. Keeping the draft would reopen the wizard
+      // on a configuration that has already been submitted, which reads as an
+      // unsaved form rather than as a finished one.
+      clearDraft(getSubject());
       navigate(href.optimizeRun(run.id));
     } catch (e) {
       setError(e.message);
@@ -509,9 +514,49 @@ export default function Wizard() {
     setStepIndex((i) => i + 1);
   }
 
+  // --- Draft ---------------------------------------------------------------
+  //
+  // Six steps of answers used to live only in React state, so any reload lost
+  // all of them — an accidental refresh, a closed tab, and above all a
+  // re-login, which is the whole reason the sign-in check moved outward. The
+  // route already survives the round trip to the identity provider
+  // (`login_redirect.js`); this is the rest of the work surviving with it.
+  //
+  // Restored once, on mount, and only into fields that are still empty of the
+  // developer's own input — `restored` guards against a second pass reverting
+  // an edit made after the restore.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    const draft = loadDraft(getSubject());
+    if (!draft) return;
+    if (typeof draft.mode === "string") setMode(draft.mode);
+    if (Array.isArray(draft.sourceIds)) setSourceIds(draft.sourceIds);
+    if (Array.isArray(draft.skills) && draft.skills.length) {
+      setSkills(draft.skills);
+      // Marked as the developer's, because it was: restoring it as the
+      // wizard's own default would let the next preview quietly re-pick.
+      setSkillTouched(true);
+    }
+    if (draft.config && typeof draft.config === "object") setConfig(draft.config);
+    if (typeof draft.name === "string") setName(draft.name);
+    if (draft.hyper && typeof draft.hyper === "object") setHyper(draft.hyper);
+    if (typeof draft.stepIndex === "number") setStepIndex(draft.stepIndex);
+  }, []);
+
+  // Saved on every change rather than on step transitions: a session can end
+  // while somebody is halfway through typing, and the step they were on is
+  // exactly what they do not want to redo. `saveDraft` strips credentials and
+  // swallows storage failures, so nothing here needs to.
+  useEffect(() => {
+    if (!restored.current) return;
+    saveDraft(getSubject(), { stepIndex, mode, sourceIds, skills, config, name, hyper });
+  }, [stepIndex, mode, sourceIds, skills, config, name, hyper]);
+
   const wizardState = {
     stepIndex, sourceIds, preview, previewError, skills, split, limits, checks, mode,
-    hyper, defaults: defaults?.defaults, agentChecks,
+    hyper, defaults: defaults?.defaults, agentChecks, sessionBlocked,
   };
   const blocked = blockingReason(wizardState);
   const reachable = furthestStep(wizardState);
@@ -801,6 +846,10 @@ function ModeStep({
   secrets, onSecrets,
 }) {
   const set = (key) => (e) => onConfig({ ...config, [key]: e.target.value });
+  // Rides in the same payload as the seams: true means the platform sends the
+  // caller's SSO token, so the credential fields become an advanced escape
+  // hatch rather than something to fill in. See `app/agent_sso.py`.
+  const sso = Boolean(impls?.agent_sso);
 
   return (
     <>
@@ -857,6 +906,7 @@ function ModeStep({
         authHeader={config.agent_auth_header || ""}
         onChangeApiKey={(v) => onSecrets({ ...secrets, agent_api_key: v })}
         onChangeAuthHeader={(v) => onConfig({ ...config, agent_auth_header: v })}
+        sso={sso}
         chatProbe={chatProbe}
         chatBusy={chatBusy}
         onTestChat={onTestChat}

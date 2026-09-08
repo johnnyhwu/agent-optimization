@@ -80,24 +80,37 @@ def _get(config: dict | None, key: str):
     return value
 
 
-def _workspace_auth(config: dict | None, secrets: dict | None, skills_url: str) -> dict:
+def _workspace_auth(
+    config: dict | None,
+    secrets: dict | None,
+    skills_url: str,
+    agent_credential=None,
+) -> dict:
     """The credential arguments for the skills client: the chat endpoint's, or none.
 
     Split out so the rule has one name and one test. Returning a dict of kwargs
     rather than a key keeps the "send nothing" case free of an explicit
     `api_key=None` at the call site, which is the case that must stay obviously
     inert.
+
+    **Same-origin first, and it applies to both credential kinds.** A forwarded
+    SSO token is a credential like any other, so a skills endpoint on another
+    host gets nothing from it either — the rule is about the address, not about
+    where the string came from. Checking the origin before looking at what we
+    hold is what makes that hard to get wrong later.
     """
     from app.integrations.real.agent_auth import same_origin
 
-    api_key = _get(secrets, "agent_api_key") or settings.agent_api_key
     chat_url = _get(config, "agent_chat_url") or settings.agent_chat_url
-    if not api_key or not same_origin(chat_url, skills_url):
+    if not same_origin(chat_url, skills_url):
         return {}
-    return {
-        "api_key": api_key,
-        "auth_header": _get(config, "agent_auth_header") or settings.agent_auth_header,
-    }
+    auth_header = _get(config, "agent_auth_header") or settings.agent_auth_header
+    if agent_credential is not None:
+        return {"credential": agent_credential, "auth_header": auth_header}
+    api_key = _get(secrets, "agent_api_key") or settings.agent_api_key
+    if not api_key:
+        return {}
+    return {"api_key": api_key, "auth_header": auth_header}
 
 
 def build_seams(
@@ -105,6 +118,7 @@ def build_seams(
     secrets: dict | None = None,
     include_workspace: bool = False,
     include_optimizer: bool = False,
+    agent_credential=None,
 ) -> Seams:
     """Build the clients for one run. Blank config falls back to the environment.
 
@@ -120,6 +134,12 @@ def build_seams(
     optimization — are the ones that have to say so. Callers must handle `None`;
     the ones that cannot work without it turn it into a sentence naming the
     missing endpoint.
+
+    `agent_credential` is how a caller that authenticates as the signed-in
+    user (`app/agent_sso.py`) supplies a credential that changes between
+    calls. Left `None` — every caller before SSO forwarding, and every
+    deployment with it switched off — the credential is the stored key, and
+    the requests are byte-for-byte what they were.
     """
     agent: AgentClient
     if settings.agent_impl == "real":
@@ -133,6 +153,7 @@ def build_seams(
             # allowed near a response model. The header name is not a secret.
             api_key=_get(secrets, "agent_api_key"),
             auth_header=_get(config, "agent_auth_header"),
+            credential=agent_credential,
         )
     else:
         agent = FakeAgentClient()
@@ -216,7 +237,9 @@ def build_seams(
                     # a credential typed against one host must not follow the
                     # other field wherever it is pointed. See
                     # `services/user_secrets.py` on endpoint binding.
-                    **_workspace_auth(config, secrets, skills_url),
+                    **_workspace_auth(
+                        config, secrets, skills_url, agent_credential
+                    ),
                 )
         else:
             workspace = FakeWorkspaceClient()

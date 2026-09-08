@@ -51,6 +51,7 @@ from app.optimizer.stopping import (
     StopPolicy,
     decide_stop,
 )
+from app.agent_sso import SsoSessionExpired
 from app.optimizer.store import Item, OptimizationStore, ResumeState, RunSpec
 from app.optimizer.longitudinal import run_epoch_boundary
 from app.optimizer.update import run_update_stage
@@ -136,20 +137,37 @@ async def run_optimization(
         )
     except RunAborted as exc:
         status, error_message, stop_reason = "failed", clip(str(exc)), "failed"
+    except SsoSessionExpired as exc:
+        # The one failure that is neither the agent's fault nor this run's, and
+        # the reason `interrupted` already exists: every finished step is on
+        # disk and still worth having. Sending it down the `failed` path below
+        # would throw away hours of work over an expired login, and `failed` is
+        # deliberately not resumable (see `routers/optimization.py:resume`).
+        # The resumer signs in again and the run continues from its last step.
+        log.warning("optimization run %s stopped: %s", run_id, exc)
+        status, error_message, stop_reason = "interrupted", clip(str(exc)), None
     except Exception as exc:  # noqa: BLE001 - last line of defence
         log.exception("optimization run %s failed", run_id)
         status, error_message = "failed", clip(f"{type(exc).__name__}: {exc}")
         stop_reason = "failed"
     finally:
-        await store.finish_run(
-            run_id, status=status, error_message=error_message,
+        finished = {
+            "run_id": run_id, "status": status, "error_message": error_message,
             # Why it ended, which `status` cannot say: a run that stopped
             # because validation hit its target and one that ran out of steps
             # are both 'completed', and the difference is the whole result.
-            stop_reason=stop_reason,
-            best_step=state.best_step, best_score=state.best_score,
-            completed_at=datetime.now(timezone.utc),
-        )
+            "stop_reason": stop_reason,
+            "best_step": state.best_step, "best_score": state.best_score,
+        }
+        # `interrupted` is the one status that must NOT stamp `completed_at`,
+        # because the run has not completed — it is resumable. The reaper
+        # already leaves it NULL (`optimizer/runner.py`), a backend test pins it
+        # ("an interrupted run has not completed"), and `optimize_duration.js`
+        # reads the NULL to show how far the run got rather than a span that
+        # would silently include however long it then sat waiting to be resumed.
+        if status != "interrupted":
+            finished["completed_at"] = datetime.now(timezone.utc)
+        await store.finish_run(**finished)
         await publish({
             "type": "run_completed", "status": status,
             "stop_reason": stop_reason,

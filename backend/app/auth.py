@@ -90,6 +90,43 @@ async def current_subject(
     return username
 
 
+async def current_token(request: Request) -> str | None:
+    """The caller's own bearer token, for the calls we make on their behalf.
+
+    Deliberately separate from `current_subject`, which stays exactly what it
+    was: identity is a string and every permission check keys off that string.
+    This is the *credential*, and only the handful of endpoints that talk to the
+    agent server inside the request ask for it — see `app/agent_sso.py` for why
+    the background paths cannot use it and need a refresh token instead.
+
+    Not verified again here. Any endpoint depending on this also depends on
+    `current_subject`, which is what rejects a token Keycloak did not issue; a
+    second verification would double the work and let the two disagree about
+    what "valid" means. `None` in fake mode, where there is no token to forward.
+    """
+    if settings.auth_mode == "fake":
+        return None
+    return _bearer(request)
+
+
+async def sso_refresh_token(
+    x_sso_refresh_token: str | None = Header(default=None),
+) -> str | None:
+    """The refresh token the browser sends when it starts long-running work.
+
+    A header rather than a body field, for one structural reason: a body field
+    would live on a Pydantic model, and `.model_dump()` of those models is what
+    gets written into `runs.secrets`, `optimization_runs.secrets` and the
+    playground attempt. A header cannot be persisted by accident. It is the same
+    reasoning `current_subject` applies in the other direction — a credential in
+    a header is fine, a credential in a URL lands in the proxy's access log.
+    """
+    if settings.auth_mode == "fake":
+        return None
+    value = (x_sso_refresh_token or "").strip()
+    return value or None
+
+
 async def role_for(session: AsyncSession, eval_set_id: uuid.UUID, subject: str) -> str | None:
     """The caller's role on one eval set, or None. Public because a couple of
     endpoints (run cancel) need a rule the two guards below don't express:

@@ -12,8 +12,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app import cancellation
-from app.auth import current_subject, require_owner, require_reader, role_for
+from app import agent_sso, cancellation
+from app.integrations.real.agent_auth import StaticCredential
+from app.auth import (
+    current_subject,
+    require_owner,
+    require_reader,
+    current_token,
+    role_for,
+    sso_refresh_token,
+)
 from app.db import SessionLocal, get_session
 from app.models import EvalSet, QuestionResult, Run
 from app.orchestrator import agent_version, run_eval
@@ -41,6 +49,23 @@ _SECRET_SLOTS = {
 }
 
 router = APIRouter(prefix="/eval-sets/{eval_set_id}/runs", tags=["runs"])
+
+
+def _probe_credential(caller_token: str | None) -> dict:
+    """The credential for the version probe that runs *inside* this request.
+
+    Unlike the run itself, this one has the caller's own bearer token to hand and
+    needs no refresh: it is already fresh (the browser renews at a 30s margin
+    before sending) and the probe finishes in seconds. So there is nothing to
+    register and nothing to expire — the registry exists only for the work that
+    outlives the request.
+
+    Empty unless the deployment actually forwards identity, which keeps the
+    argument list — and the request on the wire — unchanged everywhere else.
+    """
+    if not caller_token or not agent_sso.enabled():
+        return {}
+    return {"agent_credential": StaticCredential(caller_token)}
 
 
 def _now_iso() -> str:
@@ -191,6 +216,8 @@ async def trigger_run(
     body: RunCreate | None = None,
     subject: str = Depends(require_reader),  # owner OR viewer may run (§6.16)
     session: AsyncSession = Depends(get_session),
+    refresh_token: str | None = Depends(sso_refresh_token),
+    caller_token: str | None = Depends(current_token),
 ):
     es = await session.get(EvalSet, eval_set_id)
     if es is None:
@@ -219,11 +246,18 @@ async def trigger_run(
         # agent that will not answer this costs the run its drift check, not its
         # start — the Run eval dialog's own pre-flight already refused to enable
         # Start against an agent that is not there.
-        workspace_version=await agent_version(config, secrets),
+        workspace_version=await agent_version(
+            config, secrets, **_probe_credential(caller_token)
+        ),
     )
     session.add(run)
     await session.commit()
     await session.refresh(run)
+
+    # Before the task starts, so its first question already has a credential.
+    # Nothing is written to the row: the token lives in this process for as long
+    # as the run does and no longer — see `app/agent_sso.py`.
+    agent_sso.register(run.id, refresh_token, subject)
 
     task = asyncio.create_task(run_eval(run.id))
     _background_tasks.add(task)

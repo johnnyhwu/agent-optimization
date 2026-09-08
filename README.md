@@ -350,6 +350,43 @@ KEYCLOAK_CLIENT_ID=…                             # a public client; the flow i
 ./scripts/dev.sh    # same command; AUTH_MODE decides
 ```
 
+### Calling the agent server as the signed-in user
+
+By default the platform authenticates to the agent server with a key somebody
+typed — one credential, shared by everyone who uses that agent. If your agent
+server does its own **per-user** permission control, it needs to know who is
+asking, and `AGENT_SSO_ENABLED=true` (keycloak mode only) is what tells it:
+
+```bash
+AGENT_SSO_ENABLED=true
+# How much life an access token must have left to be reused. 10-minute tokens,
+# so 180s refreshes roughly every 7.
+AGENT_SSO_REFRESH_MARGIN_S=180
+```
+
+Every call then carries the caller's own token as
+`Authorization: Bearer <token>`, and the API-key fields disappear from the three
+screens that ask for an agent (an **Advanced** disclosure keeps them, for an
+agent server that wants its own gateway key instead). Your agent server has to
+accept the same realm **and** the same audience — those are two separate
+questions, and `app/keycloak.py` explains why the second one catches people out.
+
+**Nothing about the token is stored.** An access token lives ten minutes and an
+optimization run takes hours, so the browser hands over a refresh token when it
+starts one; `app/agent_sso.py` holds it in memory for the life of that run and no
+longer, which is why there is no table, no encryption key and nothing to sweep
+up. The consequences are worth knowing:
+
+| | |
+|---|---|
+| Sign-in ends mid-**eval** run | The run `failed`, saying so. Re-run it — an eval has no checkpoint and takes minutes. |
+| Sign-in ends mid-**optimize** run | The run `interrupted`, keeping every finished step. Sign in again and press **Resume**. |
+| Backend restarts | Same as above, which is what already happened before this existed. |
+| Sign-in nearly over | A banner across the top offers **Sign in again**, and the Run/Optimize entry buttons refuse rather than letting you fill in a form that cannot start. |
+
+The wizard's answers now survive that round trip (`frontend/src/wizard_draft.js`),
+so signing in again from step five does not cost you steps one to four.
+
 **Reaching a deployment over plain http takes no configuration, and costs PKCE.**
 Browsers withhold two Web Crypto APIs from origins they consider insecure —
 anything that is neither https nor `localhost`. `crypto.subtle` computes the PKCE

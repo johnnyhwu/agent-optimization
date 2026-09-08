@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "./api.js";
 import { isKeycloak } from "./app_config.js";
 import { getUsername, setUsername } from "./auth.js";
+import useSessionState from "./useSessionState.js";
 import { href, navigate, useHashRoute } from "./useHashRoute.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
@@ -15,6 +16,7 @@ import Breadcrumb from "./components/Breadcrumb.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SideRail, { useRailCollapsed } from "./components/SideRail.jsx";
 import UserMenu from "./components/UserMenu.jsx";
+import SessionBanner from "./components/SessionBanner.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
 import Skeleton from "./components/ui/Skeleton.jsx";
 import Banner, { BannerDetail } from "./components/ui/Banner.jsx";
@@ -45,6 +47,25 @@ export default function App() {
   // every page. Zero for anyone who has never opened the page — see
   // `services/user_settings.ensure_row` on why that has to be the answer.
   const [settingsAttention, setSettingsAttention] = useState(0);
+
+  // Whether this deployment reaches the agent server as the signed-in user. It
+  // decides whether the sign-in is a resource a run spends — and therefore
+  // whether any of the session warning below means anything. Asked once: it is
+  // a deployment fact, not a per-page one. A failure leaves it false, which is
+  // the quiet answer.
+  const [agentSso, setAgentSso] = useState(false);
+  useEffect(() => {
+    if (!isKeycloak) return;
+    api
+      .runConfigDefaults()
+      .then((r) => setAgentSso(Boolean(r.impls?.agent_sso)))
+      .catch(() => setAgentSso(false));
+  }, []);
+
+  // Recomputed on a timer, because a session runs out while the page sits open
+  // — which is the case the warning exists for. The rule is in
+  // `session_expiry.js`; this is just what keeps it current.
+  const session = useSessionState(agentSso);
 
   // Only fake mode has a directory to switch between; against Keycloak the
   // endpoint returns an empty list and the switcher is not rendered at all.
@@ -137,6 +158,12 @@ export default function App() {
             </div>
           </header>
 
+          {/* Outside the ErrorBoundary below, and above the page: the sign-in
+              running out is true wherever the reader is standing, and the run
+              it would stop is not scoped to a section. Renders nothing at all
+              while the session is healthy, which is almost always. */}
+          <SessionBanner state={session} />
+
           {/* Inside the page rather than around the whole shell, so a crash in
               a section leaves the rail, the top bar and the breadcrumb intact —
               the parts that get you out of it. Keyed on the route so navigating
@@ -178,6 +205,11 @@ export default function App() {
                     <RunHistory
                       evalSet={resolved}
                       myRole={myRole}
+                      // The entry gate. Refusing at the button rather than at
+                      // the end of the dialog is the whole point: a check that
+                      // only fires on Start is a check that fires after the
+                      // form is filled in.
+                      session={session}
                       // The run history can now edit the set (its judging
                       // settings), so the copy held up here has to follow —
                       // otherwise the fingerprint chips keep comparing against
@@ -222,7 +254,7 @@ export default function App() {
             )}
 
             {route.section === "optimize" && (
-              <OptimizeSection route={route} subject={subject} />
+              <OptimizeSection route={route} subject={subject} session={session} />
             )}
 
             {route.section === "settings" && (

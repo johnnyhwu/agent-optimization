@@ -11,6 +11,7 @@ import { runStartedAt } from "../../optimize_run_label.js";
 import { formatSpan, runDuration } from "../../optimize_duration.js";
 import { stopConditions, stopSentence } from "../../optimize_stopping.js";
 import { plural } from "../../plural.js";
+import { interruptedReason } from "../../session_expiry.js";
 
 // The run, at the top of its own page.
 //
@@ -280,7 +281,13 @@ function PhaseStrip({ activity }) {
 // header said so — the reader had to notice that `best: step 0` meant "nothing
 // I did helped".
 function finishedSentence(run, steps) {
-  if (run.status === "interrupted") return "Stopped mid-loop by a restart. Every finished step is kept.";
+  // `interrupted` has two causes now and they need different next actions: a
+  // restart is resumable right now, an expired sign-in only after signing in
+  // again. `interruptedReason` reads the stored message, which is the only
+  // thing on the wire that tells them apart.
+  if (run.status === "interrupted") {
+    return interruptedReason(run.error_message).summary;
+  }
   if (run.status === "failed") return "This run stopped early.";
   const scored = steps.filter((s) => s.status === "done").length;
   // "Finished 10 steps" was true and said nothing about the afternoon it took.

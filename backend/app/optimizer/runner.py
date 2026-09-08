@@ -22,7 +22,7 @@ import uuid
 
 from sqlalchemy import update
 
-from app import cancellation
+from app import agent_sso, cancellation
 from app.db import SessionLocal
 from app.integrations import build_seams
 from app.models import OptimizationRun
@@ -53,8 +53,13 @@ async def run_optimization_task(run_id: uuid.UUID) -> None:
             # `include_workspace` for the version probe only: a step records the
             # agent config it ran against, so a deploy midway through a run is
             # visible rather than merely moving the accuracy.
+            # The credential keyword is present only when this run
+            # registered an SSO session — on creation, or on the Resume that
+            # re-registered it. Omitted otherwise, so with SSO off this is the
+            # call it has always been. See `app/agent_sso.py`.
             seams = build_seams(
                 spec.config, spec.secrets, include_optimizer=True, include_workspace=True,
+                **agent_sso.seam_kwargs(run_id),
             )
             await run_optimization(
                 run_id, store=store, seams=seams,
@@ -65,6 +70,7 @@ async def run_optimization_task(run_id: uuid.UUID) -> None:
         await _finalize_unstarted(run_id)
     finally:
         cancellation.clear(run_id)
+        agent_sso.clear(run_id)
 
 
 def start(run_id: uuid.UUID) -> asyncio.Task:
