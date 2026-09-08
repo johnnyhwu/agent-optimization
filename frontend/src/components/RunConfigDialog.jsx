@@ -254,6 +254,10 @@ export default function RunConfigDialog({
   // applies through `optimize_wizard.blockingReason`.
   const sessionBlocked = blockedReason(session);
   const blocked = gate.blocked || Boolean(sessionBlocked);
+  // The one sentence for why Start is off, and the only thing anything below
+  // may read: `gate.reason` is `""` for a session-only block, so a site that
+  // reaches past this one disables the button and then announces nothing —
+  // an empty banner, and a reason that exists only in a hover title.
   const blockedReasonText = sessionBlocked || gate.reason;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -378,7 +382,7 @@ export default function RunConfigDialog({
 
   // Why this press produced nothing. The POST's own error first — it is the
   // outcome of what was actually asked for — then the pre-flight's.
-  const failure = error || (blocked ? gate.reason : "");
+  const failure = error || (blocked ? blockedReasonText : "");
   const failureRef = useRevealedError(failure, attempt);
 
   // Only promise a borrowed key when it will actually be carried over.
@@ -491,7 +495,7 @@ export default function RunConfigDialog({
             // never has two things claiming to be the thing to look at.
             <div ref={error ? undefined : failureRef} tabIndex={-1} className="dialog-alert">
               <Banner tone="warning" className="is-block" title="This run cannot start yet">
-                <BannerDetail>{gate.reason}</BannerDetail>
+                <BannerDetail>{blockedReasonText}</BannerDetail>
               </Banner>
             </div>
           )}

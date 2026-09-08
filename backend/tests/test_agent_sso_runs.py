@@ -37,7 +37,8 @@ import respx
 from app import agent_sso, orchestrator
 from app.integrations import build_seams
 from app.agent_sso import SsoSessionExpired
-from app.optimizer import engine
+from app.optimizer import adapter, engine
+from app.optimizer.store import Item
 
 
 @pytest.fixture(autouse=True)
@@ -511,3 +512,184 @@ async def test_with_sso_off_the_request_carries_no_credential_at_all(configure):
         await seams.agent.call("q", "c1", "alice")
 
     assert seen == [False]
+
+
+# --- The rollout gather ---------------------------------------------------
+#
+# The two tests above prove `engine.run_optimization` routes an expired session
+# to `interrupted`, but they raise from a stubbed `_execute` — so nothing in
+# them travels the path the exception actually takes. That path runs through
+# `adapter.run_rollout`, which gathers its items with `return_exceptions=True`
+# so that one unexpected per-item error cannot cancel the rest of the split.
+# An expired session arrived there as an exception like any other and was
+# written into a `failed` row, which meant the handler two frames up was never
+# reached: the run ended `failed`, not resumable, discarding however many hours
+# of finished steps — the exact outcome that handler exists to prevent.
+#
+# Exercised against the real `run_rollout` for that reason. A stub of it would
+# pass whatever it was written to pass.
+
+
+class _ExpiringSeams:
+    """A seam set whose agent's session ends on the nth call.
+
+    `after=0` expires immediately; a higher number lets that many items answer
+    first, which is the realistic shape — a token dies partway through a split,
+    not before it.
+    """
+
+    def __init__(self, after: int = 0):
+        self.after = after
+        self.calls = 0
+        outer = self
+
+        class _Agent:
+            async def call(self, question, correlation_id, user_id, tags, workspace=None):
+                from app.integrations.base import AgentResponse
+
+                outer.calls += 1
+                if outer.calls > outer.after:
+                    raise SsoSessionExpired(
+                        "your sign-in ended and could not be renewed; sign in again"
+                    )
+                return AgentResponse(
+                    response="an answer", correlation_id=correlation_id, latency_ms=1
+                )
+
+        class _Judge:
+            async def judge(self, question, response, ground_truth):
+                from app.integrations.base import Verdict
+
+                return Verdict(verdict="correct", score=1.0, comment="")
+
+        class _Trace:
+            async def fetch_trace(self, correlation_id):
+                return None
+
+        self.agent, self.judge, self.trace = _Agent(), _Judge(), _Trace()
+
+
+def _items(count: int):
+    return [
+        Item(
+            item_key=f"k{i}",
+            question=f"q{i}",
+            ground_truth_response="gt",
+            ground_truth_reasoning="r",
+        )
+        for i in range(count)
+    ]
+
+
+@pytest.fixture
+def _fast_traces(configure):
+    """A trace is never going to land here, and waiting for one with backoff
+    would make every test below spend its time asleep."""
+    with configure(trace_poll_max_attempts=1, trace_poll_backoff_s=[0.0]):
+        yield
+
+
+async def test_an_expired_session_escapes_the_rollout_gather(_fast_traces):
+    """The bug itself: `return_exceptions=True` must not swallow this one."""
+    with pytest.raises(SsoSessionExpired):
+        await adapter.run_rollout(
+            _items(3),
+            skill_files={"billing/SKILL.md": "# Billing\n1. Identify.\n"},
+            mode="isolated",
+            skill_name="billing",
+            seams=_ExpiringSeams(),
+            config={},
+            concurrency=2,
+        )
+
+
+async def test_it_escapes_even_when_some_items_already_answered(_fast_traces):
+    """Partway through is the realistic case, and the one where the rows that
+    did land make a `failed` row look like just another agent error."""
+    with pytest.raises(SsoSessionExpired):
+        await adapter.run_rollout(
+            _items(4),
+            skill_files={"billing/SKILL.md": "# Billing\n1. Identify.\n"},
+            mode="isolated",
+            skill_name="billing",
+            seams=_ExpiringSeams(after=2),
+            config={},
+            concurrency=1,
+        )
+
+
+async def test_the_message_the_run_ends_with_is_the_agent_sso_one(_fast_traces):
+    """It becomes the run's `error_message`, so it has to survive intact rather
+    than arrive wrapped in a row's "the agent refused" wording."""
+    with pytest.raises(SsoSessionExpired) as caught:
+        await adapter.run_rollout(
+            _items(1),
+            skill_files={"billing/SKILL.md": "# Billing\n1. Identify.\n"},
+            mode="isolated",
+            skill_name="billing",
+            seams=_ExpiringSeams(),
+            config={},
+        )
+
+    assert "sign in again" in str(caught.value)
+
+
+async def test_an_ordinary_agent_error_is_still_a_failed_row(_fast_traces):
+    """The regression guard for the re-raise above: every *other* exception
+    keeps being one item's problem. A rollout that aborted on the first timeout
+    would lose the whole split to one flaky question."""
+    class _Boom(_ExpiringSeams):
+        def __init__(self):
+            super().__init__()
+
+            class _Agent:
+                async def call(self, question, correlation_id, user_id, tags, workspace=None):
+                    raise RuntimeError("the agent server fell over")
+
+            self.agent = _Agent()
+
+    rows = await adapter.run_rollout(
+        _items(2),
+        skill_files={"billing/SKILL.md": "# Billing\n1. Identify.\n"},
+        mode="isolated",
+        skill_name="billing",
+        seams=_Boom(),
+        config={},
+    )
+
+    assert len(rows) == 2
+    assert [r.status for r in rows] == ["failed", "failed"]
+
+
+async def test_the_expiry_survives_a_step_and_lands_interrupted(monkeypatch, _fast_traces):
+    """The two halves joined: an expiry raised inside a real `run_rollout` has
+    to reach `run_optimization`'s handler and finalize the run as `interrupted`.
+
+    The step around it is stubbed — the engine's own `_execute` needs a run row
+    and a spec from the database — but the rollout inside it is the real one,
+    which is the frame the swallowed exception never got past.
+    """
+    store = RecordingStore()
+
+    async def execute(run_id, **kwargs):
+        await adapter.run_rollout(
+            _items(2),
+            skill_files={"billing/SKILL.md": "# Billing\n1. Identify.\n"},
+            mode="isolated",
+            skill_name="billing",
+            seams=_ExpiringSeams(),
+            config={},
+        )
+        return "completed", None, "finished"
+
+    monkeypatch.setattr(engine, "_execute", execute)
+    await engine.run_optimization(
+        uuid.uuid4(), store=store, seams=None,
+        publish=lambda event: asyncio.sleep(0),
+    )
+
+    assert store.finished["status"] == "interrupted", (
+        "an expiry inside the rollout must not be flattened into failed rows "
+        "that let the step report success"
+    )
+    assert store.finished.get("completed_at") is None

@@ -17,6 +17,7 @@ import {
   needsMixedWeight,
   parseCount,
   previewQuestionCount,
+  retainedSkills,
   sharedQuestionCount,
   skillStatus,
   tokenEstimate,
@@ -606,4 +607,49 @@ test("the source step counts each question once, however many tags it carries", 
 test("counting an empty preview is zero rather than a crash", () => {
   assert.equal(previewQuestionCount(null), 0);
   assert.equal(previewQuestionCount({}), 0);
+});
+
+// --- What a re-fetched preview does to the selection -----------------------
+
+test("a deliberate selection survives a preview that still offers it", () => {
+  // The case that motivated it: restoring a draft sets `sourceIds`, which fires
+  // the same fetch as ticking a set — and used to wipe the restored skills
+  // ~300ms after the wizard reopened, while the banner still said they were
+  // picked up.
+  const groups = [{ skill_name: "billing" }, { skill_name: "reporting" }];
+
+  assert.deepEqual(retainedSkills(["reporting"], groups), ["reporting"]);
+  assert.deepEqual(retainedSkills(["billing", "reporting"], groups), [
+    "billing",
+    "reporting",
+  ]);
+});
+
+test("a skill the new preview no longer has is dropped, not restored", () => {
+  // A draft can name a skill that has since left the workspace, or the sources
+  // can have changed under it. Restoring it would put a selection on the step
+  // that no card matches and no run could use.
+  const groups = [{ skill_name: "billing" }];
+
+  assert.deepEqual(retainedSkills(["reporting"], groups), []);
+  assert.deepEqual(retainedSkills(["billing", "reporting"], groups), ["billing"]);
+});
+
+test("the selection's own order is kept", () => {
+  // Isolated mode takes the first of them, so the order is the choice.
+  const groups = [{ skill_name: "billing" }, { skill_name: "reporting" }];
+
+  assert.deepEqual(retainedSkills(["reporting", "billing"], groups), [
+    "reporting",
+    "billing",
+  ]);
+});
+
+test("nothing to retain against is empty rather than a crash", () => {
+  // `loadPreview` calls this with whatever the request returned, and a preview
+  // with no groups at all is a real answer — an eval set with no tagged
+  // questions.
+  assert.deepEqual(retainedSkills(["billing"], undefined), []);
+  assert.deepEqual(retainedSkills(["billing"], []), []);
+  assert.deepEqual(retainedSkills(undefined, [{ skill_name: "billing" }]), []);
 });
