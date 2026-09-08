@@ -30,9 +30,12 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 import pytest
+import respx
 
 from app import agent_sso, orchestrator
+from app.integrations import build_seams
 from app.agent_sso import SsoSessionExpired
 from app.optimizer import engine
 
@@ -42,6 +45,10 @@ def _clean_registry():
     agent_sso._entries.clear()
     yield
     agent_sso._entries.clear()
+
+
+CHAT_URL = "https://agent.test/v1/chat/completions"
+TOKEN_URL = "https://kc.test/auth/realms/tsmc/protocol/openid-connect/token"
 
 
 def sso_on(configure, **overrides):
@@ -309,3 +316,224 @@ def test_the_probe_sends_nothing_in_fake_mode(configure):
 
     with configure(auth_mode="fake", agent_sso_enabled=True):
         assert _probe_credential(None) == {}
+
+
+# --- Refusing before the work starts --------------------------------------
+#
+# `register` is best-effort — it reports whether it stored anything — but
+# *starting anyway* is not. An agent server that wants a token would get none,
+# and the symptom is a full run whose every question fails with the real cause
+# (a browser that sent no session) nowhere on the page. The four entry points
+# refuse up front instead.
+
+
+def test_no_refusal_when_sso_is_off(configure):
+    """Every deployment that has not asked for this. The header is absent and
+    that is not a problem, so nothing may refuse."""
+    with configure(auth_mode="keycloak", agent_sso_enabled=False):
+        assert agent_sso.refusal_reason(None) is None
+
+
+def test_no_refusal_in_fake_mode(configure):
+    with configure(auth_mode="fake", agent_sso_enabled=True):
+        assert agent_sso.refusal_reason(None) is None
+
+
+def test_a_session_means_no_refusal(configure):
+    with sso_on(configure):
+        assert agent_sso.refusal_reason("rt-1") is None
+
+
+def test_sso_on_with_no_session_refuses(configure):
+    with sso_on(configure):
+        reason = agent_sso.refusal_reason(None)
+    assert reason is not None
+    # The message has to name both ways out, because which one applies depends
+    # on something the reader knows and the server does not.
+    assert "sign in again" in reason.lower()
+    assert "api key" in reason.lower()
+
+
+def test_a_typed_key_is_enough_on_its_own(configure):
+    """The escape hatch again: a deployment can forward identities *and* have
+    one agent behind a gateway that wants its own key. Where there is a
+    credential to send there is nothing to refuse."""
+    with sso_on(configure):
+        assert agent_sso.refusal_reason(None, "sk-typed") is None
+
+
+def test_the_deployment_key_also_satisfies_it(configure):
+    with sso_on(configure):
+        assert agent_sso.refusal_reason(None, "sk-env") is None
+
+
+def test_whitespace_is_neither_a_session_nor_a_key(configure):
+    with sso_on(configure):
+        assert agent_sso.refusal_reason("  ") is not None
+        assert agent_sso.refusal_reason(None, "   ") is not None
+
+
+def test_every_entry_point_applies_the_refusal():
+    """Named rather than exercised: each of the four is a different router with
+    its own session and body, and what matters is that none was forgotten. A
+    fifth entry point added later without this line is what the assertion
+    message is for."""
+    import inspect
+
+    from app.routers import optimization, playground, runs
+
+    sources = {
+        "trigger_run": inspect.getsource(runs.trigger_run),
+        "create_attempt": inspect.getsource(playground.create_attempt),
+        "create_optimization_run": inspect.getsource(optimization.create_optimization_run),
+        "resume_optimization_run": inspect.getsource(optimization.resume_optimization_run),
+    }
+    for name, src in sources.items():
+        assert "refusal_reason" in src, (
+            f"{name} starts long-running agent work but does not check "
+            "agent_sso.refusal_reason, so under SSO it can start a run that "
+            "fails every question"
+        )
+        assert "agent_sso.register" in src, f"{name} never registers a session"
+
+
+# --- End to end: registry -> build_seams -> a real request ----------------
+#
+# Every part above is tested on its own. This is the join: a token registered on
+# one side has to come out of an HTTP request on the other, refresh itself
+# halfway through, and take the run down cleanly when the session ends. A chain
+# whose links are each correct can still not be connected.
+
+
+@respx.mock
+async def test_a_registered_session_reaches_the_agent_as_a_bearer_header(configure):
+    seen: list[str] = []
+
+    def record(request):
+        seen.append(request.headers.get("authorization", ""))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}
+                ]
+            },
+        )
+
+    respx.post(CHAT_URL).mock(side_effect=record)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "at-1", "expires_in": 600, "token_type": "Bearer"}
+        )
+    )
+
+    with sso_on(configure, agent_impl="real", agent_chat_url=CHAT_URL, agent_api_key=""):
+        agent_sso.register("run-1", "rt-1", "alice")
+        seams = build_seams({"agent_chat_url": CHAT_URL}, {}, **agent_sso.seam_kwargs("run-1"))
+        answer = await seams.agent.call("q", "c1", "alice")
+
+    assert answer.response == "42"
+    assert seen == ["Bearer at-1"]
+
+
+@respx.mock
+async def test_the_token_is_re_minted_partway_through_a_run(configure):
+    """The whole point of the feature. A 10-minute token and an hours-long run:
+    the second question has to carry a token the first one did not."""
+    seen: list[str] = []
+
+    def record(request):
+        seen.append(request.headers.get("authorization", ""))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ]
+            },
+        )
+
+    respx.post(CHAT_URL).mock(side_effect=record)
+    respx.post(TOKEN_URL).mock(
+        side_effect=[
+            # Inside the 180s margin, so the next question re-mints.
+            httpx.Response(200, json={"access_token": "at-1", "expires_in": 30}),
+            httpx.Response(200, json={"access_token": "at-2", "expires_in": 600}),
+        ]
+    )
+
+    with sso_on(configure, agent_impl="real", agent_chat_url=CHAT_URL, agent_api_key=""):
+        agent_sso.register("run-1", "rt-1", "alice")
+        seams = build_seams({"agent_chat_url": CHAT_URL}, {}, **agent_sso.seam_kwargs("run-1"))
+        await seams.agent.call("q", "c1", "alice")
+        await seams.agent.call("q", "c2", "alice")
+
+    assert seen == ["Bearer at-1", "Bearer at-2"], (
+        "the second question reused the first one's token, which is exactly the "
+        "mid-run expiry this feature exists to prevent"
+    )
+
+
+@respx.mock
+async def test_an_ended_session_raises_out_of_the_agent_call(configure):
+    """It must reach the run's own handler, not be swallowed as an agent error:
+    `optimizer/engine.py` and `orchestrator.py` both branch on the type."""
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json={}))
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(400, json={"error": "invalid_grant"})
+    )
+
+    with sso_on(configure, agent_impl="real", agent_chat_url=CHAT_URL, agent_api_key=""):
+        agent_sso.register("run-1", "rt-1", "alice")
+        seams = build_seams({"agent_chat_url": CHAT_URL}, {}, **agent_sso.seam_kwargs("run-1"))
+        with pytest.raises(SsoSessionExpired):
+            await seams.agent.call("q", "c1", "alice")
+
+
+@respx.mock
+async def test_an_ended_session_is_not_retried_against_the_provider(configure):
+    """`with_retries` only retries `RETRYABLE`, so an expired session must fail
+    on the first attempt rather than hammering the identity provider three times
+    per question — which across a run is thousands of requests."""
+    from app.pipeline import call_agent
+
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json={}))
+    route = respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(400, json={"error": "invalid_grant"})
+    )
+
+    with sso_on(configure, agent_impl="real", agent_chat_url=CHAT_URL, agent_api_key=""):
+        agent_sso.register("run-1", "rt-1", "alice")
+        seams = build_seams({"agent_chat_url": CHAT_URL}, {}, **agent_sso.seam_kwargs("run-1"))
+        with pytest.raises(SsoSessionExpired):
+            await call_agent(seams, "q", "c1", "alice", [], 30.0, asyncio.Event())
+
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_with_sso_off_the_request_carries_no_credential_at_all(configure):
+    """The switched-off path, proved on the wire rather than argued about."""
+    seen: list[bool] = []
+
+    def record(request):
+        seen.append("authorization" in request.headers)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ]
+            },
+        )
+
+    respx.post(CHAT_URL).mock(side_effect=record)
+    with configure(
+        auth_mode="keycloak", agent_sso_enabled=False,
+        agent_impl="real", agent_chat_url=CHAT_URL, agent_api_key="", agent_auth_header="",
+    ):
+        agent_sso.register("run-1", "rt-1", "alice")
+        seams = build_seams({"agent_chat_url": CHAT_URL}, {}, **agent_sso.seam_kwargs("run-1"))
+        await seams.agent.call("q", "c1", "alice")
+
+    assert seen == [False]

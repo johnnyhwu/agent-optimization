@@ -55,6 +55,21 @@ from app.integrations.real.agent_auth import Credential
 log = logging.getLogger(__name__)
 
 
+# The phrase every `SsoSessionExpired` message carries.
+#
+# It exists because the browser has to tell two causes of `interrupted` apart —
+# a backend restart, which is resumable now, and an ended sign-in, which is
+# resumable only after signing in again — and the stored `error_message` is the
+# only thing on the wire that distinguishes them. Matching on incidental
+# wording is how that breaks silently the first time a message is reworded, so
+# the wording carries one deliberate constant instead. `session_expiry.js`
+# matches this, and `tests/test_agent_sso.py` checks every raise site has it.
+#
+# Phrased to read as English in the middle of a sentence, because these
+# messages are shown to people, not parsed by them.
+SESSION_MARKER = "sign-in session"
+
+
 class SsoSessionExpired(RuntimeError):
     """The user's SSO session can no longer produce a token for the agent server.
 
@@ -115,6 +130,32 @@ def register(scope_id, refresh_token: str | None, subject: str = "") -> bool:
     return True
 
 
+def refusal_reason(refresh_token: str | None, fallback_key: str | None = "") -> str | None:
+    """Why long-running work must not start, or `None` when it may.
+
+    Registering is best-effort by design — `register` just says whether it
+    stored anything — but *starting a run anyway* is not. Under SSO forwarding
+    an agent server that wants a token gets none, and the result is a run that
+    reaches every question and fails all of them, with the real cause (a browser
+    that sent no session) appearing nowhere. A pre-flight refusal costs one
+    request; the alternative costs a whole run and reads as an agent fault.
+
+    `fallback_key` is the escape hatch: a deployment can forward identities
+    *and* have one agent behind a gateway that wants its own key. Where there is
+    a key to send, there is a credential and nothing to refuse — the same
+    precedence `resolve_credential` applies.
+    """
+    if not enabled():
+        return None
+    if (refresh_token or "").strip() or (fallback_key or "").strip():
+        return None
+    return (
+        "This deployment sends your sign-in to the agent server, but your "
+        "browser supplied no session. Sign in again and retry — or enter an API "
+        "key for this agent under Endpoint authentication."
+    )
+
+
 def clear(scope_id) -> None:
     """Drop a scope's tokens. Safe for a scope that never registered."""
     _entries.pop(str(scope_id), None)
@@ -170,8 +211,8 @@ async def access_token(scope_id) -> str:
     entry = _entries.get(key)
     if entry is None:
         raise SsoSessionExpired(
-            "no SSO session is held for this run. It was most likely started "
-            "before the backend restarted; start it again from the browser."
+            f"This run holds no {SESSION_MARKER} — it was most likely started "
+            "before the backend restarted. Start it again from the browser."
         )
 
     margin = max(int(settings.agent_sso_refresh_margin_s or 0), 0)
@@ -192,7 +233,9 @@ async def _refresh(entry: _Entry) -> None:
     try:
         url = keycloak.token_endpoint()
     except keycloak.TokenError as exc:
-        raise SsoSessionExpired(str(exc)) from exc
+        raise SsoSessionExpired(
+            f"This run's {SESSION_MARKER} cannot be renewed: {exc}"
+        ) from exc
 
     data = {
         "grant_type": "refresh_token",
@@ -206,23 +249,32 @@ async def _refresh(entry: _Entry) -> None:
         # Keycloak unreachable is not the same as a session that ended, but for
         # the run it is: there is no token to make the next call with. The
         # message says which so nobody re-logs-in to fix a DNS problem.
-        raise SsoSessionExpired(f"could not reach {url} to refresh the session: {exc}") from exc
+        raise SsoSessionExpired(
+            f"Could not reach the identity provider to renew this "
+            f"{SESSION_MARKER}: {exc}"
+        ) from exc
 
     if resp.status_code >= 400:
         # Deliberately not quoting the body: a token endpoint's error can echo
         # the grant back, and this text reaches a run record and a browser.
         raise SsoSessionExpired(
-            f"the identity provider refused to refresh this session "
+            f"The identity provider refused to renew this {SESSION_MARKER} "
             f"(HTTP {resp.status_code}). Signing in again will start a new one."
         )
     try:
         body = resp.json()
     except ValueError as exc:
-        raise SsoSessionExpired(f"{url} did not return JSON") from exc
+        raise SsoSessionExpired(
+            f"The identity provider did not return JSON when renewing this "
+            f"{SESSION_MARKER}."
+        ) from exc
 
     token = body.get("access_token") if isinstance(body, dict) else None
     if not isinstance(token, str) or not token:
-        raise SsoSessionExpired(f"{url} returned no access_token")
+        raise SsoSessionExpired(
+            f"The identity provider returned no access token for this "
+            f"{SESSION_MARKER}."
+        )
 
     # `expires_in` is seconds and Keycloak always sends it. The fallback for an
     # *absent* one is the documented 10-minute default rather than 0, which

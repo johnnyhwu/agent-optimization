@@ -96,18 +96,36 @@ test("blockedReason is null for every level except expired", () => {
 
 // --- what stopped an interrupted optimization run -------------------------
 
-test("a restart and an expired sign-in are told apart", () => {
+test("a restart and an ended sign-in are told apart", () => {
   // The two need different next actions: a restart is resumable right now, an
-  // expired sign-in only after signing in again.
+  // ended sign-in only after signing in again.
   const restart = interruptedReason("the backend restarted; this run can be resumed");
   assert.equal(restart.kind, "restart");
   assert.match(restart.summary, /restart/i);
 
   const session = interruptedReason(
-    "the identity provider refused to refresh this session (HTTP 400)."
+    "The identity provider refused to renew this sign-in session (HTTP 400)."
   );
   assert.equal(session.kind, "session");
   assert.match(session.action, /sign in/i);
+});
+
+test("every message the backend writes for an ended session is recognised", () => {
+  // Mirrors `agent_sso.SESSION_MARKER`, which the backend suite checks every
+  // raise site carries. Six sentences share one constant precisely so this is a
+  // contract and not six guesses; the earlier heuristic matched two of them and
+  // silently called the rest "restart".
+  const backendMessages = [
+    "This run holds no sign-in session — it was most likely started before the backend restarted. Start it again from the browser.",
+    "This run's sign-in session cannot be renewed: KEYCLOAK_URL is not set, but AUTH_MODE=keycloak",
+    "Could not reach the identity provider to renew this sign-in session: timed out",
+    "The identity provider refused to renew this sign-in session (HTTP 400). Signing in again will start a new one.",
+    "The identity provider did not return JSON when renewing this sign-in session.",
+    "The identity provider returned no access token for this sign-in session.",
+  ];
+  for (const message of backendMessages) {
+    assert.equal(interruptedReason(message).kind, "session", message);
+  }
 });
 
 test("an interrupted run with no message reads as a restart", () => {
@@ -117,10 +135,9 @@ test("an interrupted run with no message reads as a restart", () => {
   }
 });
 
-test("the no-session-held message is recognised as a session problem", () => {
-  // What the registry says after a backend restart lost its tokens.
-  const r = interruptedReason(
-    "no SSO session is held for this run. It was most likely started before the backend restarted."
-  );
-  assert.equal(r.kind, "session");
+test("a real restart message is not mistaken for a session problem", () => {
+  // The reaper's own wording mentions restarting and must stay "restart",
+  // even though the session message mentions restarting too.
+  const r = interruptedReason("the backend restarted; this run can be resumed");
+  assert.equal(r.kind, "restart");
 });

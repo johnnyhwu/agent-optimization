@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app import agent_sso, cancellation
+from app.config import settings
 from app.integrations.real.agent_auth import StaticCredential
 from app.auth import (
     current_subject,
@@ -238,6 +239,15 @@ async def trigger_run(
         judge_prompt=(system, user, judge_prompt.fingerprint(system, user)),
     )
     secrets = await _resolve_secrets(session, eval_set_id, body, config, subject)
+
+    # Refuse before the row exists, rather than starting work that would fail
+    # every question with the real cause nowhere on the page. See
+    # `agent_sso.refusal_reason`.
+    refusal = agent_sso.refusal_reason(
+        refresh_token, secrets.get("agent_api_key") or settings.agent_api_key
+    )
+    if refusal:
+        raise HTTPException(status_code=400, detail=refusal)
 
     run = Run(
         eval_set_id=eval_set_id, triggered_by=subject, status="running",

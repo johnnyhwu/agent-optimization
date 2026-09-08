@@ -49,10 +49,10 @@ from app.config import settings
 from app.integrations.base import Workspace, derived_version
 from app.integrations.real.agent_auth import (
     Credential,
-    StaticCredential,
     auth_headers,
     credentialed_client,
     redact,
+    resolve_credential,
 )
 
 
@@ -115,10 +115,12 @@ class HttpWorkspaceClient:
         # what it was handed, so a test can construct it either way.
         self.api_key = (api_key or "").strip()
         self.auth_header = (auth_header or "").strip()
-        # Same seam as the chat client: `None` is the static key above, which
-        # is every caller that predates SSO forwarding. See
-        # `agent_auth.Credential`.
-        self.credential: Credential = credential or StaticCredential(self.api_key)
+        # Same rule as the chat client, from the same function: with no
+        # `credential` this is the static key above; given both, an entered key
+        # wins. No environment fallback here — this client never had one, and
+        # `integrations/__init__._workspace_auth` is what decides what reaches
+        # it at all.
+        self.credential: Credential = resolve_credential(api_key, credential)
 
     async def _get(self) -> Any:
         # Resolved once so the header, the origin guard and the redaction

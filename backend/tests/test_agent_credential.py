@@ -276,3 +276,99 @@ def test_a_credential_never_lands_in_the_config_or_secrets_dicts(configure, impl
         build_seams(config, secrets, agent_credential=RotatingCredential())
     assert config == {"agent_chat_url": CHAT_URL}
     assert secrets == {}
+
+
+# --- Precedence: the escape hatch has to actually open --------------------
+#
+# The UI offers the credential fields as an advanced escape hatch under SSO
+# ("leave these blank unless the agent server wants its own key instead"). A
+# typed key that was then ignored would make that sentence a lie, and the
+# symptom — an agent still refusing a key you can see in the form — names
+# nothing.
+
+
+async def test_a_typed_key_beats_a_forwarded_identity(configure):
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="", agent_auth_header=""):
+        client = HttpAgentClient(
+            chat_url=CHAT_URL, api_key="sk-typed", credential=RotatingCredential()
+        )
+    assert await client.credential.value() == "sk-typed", (
+        "the entered key was ignored, so the Advanced fields under SSO do nothing"
+    )
+
+
+async def test_a_forwarded_identity_is_used_when_no_key_was_typed(configure):
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="", agent_auth_header=""):
+        client = HttpAgentClient(chat_url=CHAT_URL, credential=RotatingCredential())
+    assert await client.credential.value() == "tok-1"
+
+
+async def test_a_forwarded_identity_beats_the_deployments_own_key(configure):
+    """`AGENT_API_KEY` is the "if nobody says otherwise" value, and under SSO the
+    platform is saying otherwise. A deployment that set both would otherwise
+    have silently switched every run back to one shared identity."""
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="sk-env", agent_auth_header=""):
+        client = HttpAgentClient(chat_url=CHAT_URL, credential=RotatingCredential())
+    assert await client.credential.value() == "tok-1"
+
+
+async def test_the_deployment_key_is_still_the_last_resort(configure):
+    """With nothing typed and no identity forwarded, this is what it has always
+    been."""
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="sk-env", agent_auth_header=""):
+        client = HttpAgentClient(chat_url=CHAT_URL)
+    assert await client.credential.value() == "sk-env"
+
+
+async def test_blank_stays_blank_whatever_is_configured(configure):
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="", agent_auth_header=""):
+        client = HttpAgentClient(chat_url=CHAT_URL)
+    assert await client.credential.value() == ""
+
+
+async def test_a_whitespace_key_does_not_count_as_typed(configure):
+    """Otherwise a stray space in the form would silently disable SSO for that
+    run and send no credential at all."""
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="", agent_auth_header=""):
+        client = HttpAgentClient(
+            chat_url=CHAT_URL, api_key="   ", credential=RotatingCredential()
+        )
+    assert await client.credential.value() == "tok-1"
+
+
+async def test_the_skills_client_applies_the_same_order(configure):
+    with configure(agent_skills_url=SKILLS_URL, agent_timeout_s=30.0):
+        client = HttpWorkspaceClient(
+            skills_url=SKILLS_URL, api_key="sk-typed", credential=RotatingCredential()
+        )
+    assert await client.credential.value() == "sk-typed"
+
+
+def test_workspace_auth_sends_the_typed_key_rather_than_the_identity(configure):
+    """`_workspace_auth` picks one, so the two halves of the rule cannot drift:
+    whatever it sends, the client resolves to the same thing."""
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="", agent_auth_header=""):
+        kwargs = _workspace_auth(
+            {"agent_chat_url": CHAT_URL},
+            {"agent_api_key": "sk-typed"},
+            SKILLS_URL,
+            RotatingCredential(),
+        )
+    assert kwargs.get("api_key") == "sk-typed"
+    assert "credential" not in kwargs
+
+
+def test_workspace_auth_falls_back_to_the_deployment_key_last(configure):
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="sk-env", agent_auth_header=""):
+        assert _workspace_auth({"agent_chat_url": CHAT_URL}, {}, SKILLS_URL) == {
+            "api_key": "sk-env",
+            "auth_header": "",
+        }
+
+
+def test_workspace_auth_prefers_the_identity_over_the_deployment_key(configure):
+    cred = RotatingCredential()
+    with configure(agent_chat_url=CHAT_URL, agent_api_key="sk-env", agent_auth_header=""):
+        kwargs = _workspace_auth({"agent_chat_url": CHAT_URL}, {}, SKILLS_URL, cred)
+    assert kwargs.get("credential") is cred
+    assert "api_key" not in kwargs

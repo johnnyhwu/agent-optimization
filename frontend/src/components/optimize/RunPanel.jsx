@@ -35,6 +35,22 @@ import { interruptedReason } from "../../session_expiry.js";
 // halfway through gets the steps that already happened rather than a blank
 // screen until the next one lands.
 
+// Why the run stopped, and what to do about it. Two causes wear the same
+// status: a backend restart is resumable right now, an ended sign-in only after
+// signing in again. Telling someone to press Resume when their sign-in is what
+// ended sends them round the loop a second time — so the reason is read once
+// (`interruptedReason`) and both halves come from that one reading.
+function InterruptedBanner({ run }) {
+  const reason = interruptedReason(run.error_message);
+  return (
+    <Banner tone="warning" title="This run was interrupted">
+      {reason.summary} {reason.action} Every completed step is on disk, so it
+      continues from the one after the last that finished rather than starting
+      over.
+    </Banner>
+  );
+}
+
 export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted }) {
   const toast = useToast();
   // Through a ref because the stream effect is keyed on `runId` alone — it must
@@ -243,17 +259,7 @@ export default function RunPanel({ runId, subject, onRunChanged, onRunDeleted })
           onDelete={() => setConfirmingDelete(true)}
         />
 
-        {run.status === "interrupted" && (
-          <Banner tone="warning" title="This run was interrupted">
-            {/* Two causes, two next actions — see `interruptedReason`. Telling
-                someone to press Resume when their sign-in is what ended would
-                send them round the loop a second time. */}
-            {interruptedReason(run.error_message).summary}{" "}
-            {interruptedReason(run.error_message).action} Every completed step is
-            on disk, so it continues from the one after the last that finished
-            rather than starting over.
-          </Banner>
-        )}
+        {run.status === "interrupted" && <InterruptedBanner run={run} />}
         {run.error_message && run.status === "failed" && (
           <Banner tone="error" title="This run stopped early">
             {run.error_message}

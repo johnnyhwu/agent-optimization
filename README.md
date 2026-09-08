@@ -366,10 +366,19 @@ AGENT_SSO_REFRESH_MARGIN_S=180
 
 Every call then carries the caller's own token as
 `Authorization: Bearer <token>`, and the API-key fields disappear from the three
-screens that ask for an agent (an **Advanced** disclosure keeps them, for an
-agent server that wants its own gateway key instead). Your agent server has to
-accept the same realm **and** the same audience — those are two separate
-questions, and `app/keycloak.py` explains why the second one catches people out.
+screens that ask for an agent — an **Advanced** disclosure keeps them, and a key
+entered there still **wins**, for the agent that wants its own gateway key
+instead. The full order is in `agent_auth.resolve_credential`: an entered key,
+then the forwarded identity, then the deployment's own `AGENT_API_KEY`. Your
+agent server has to accept the same realm **and** the same audience — those are
+two separate questions, and `app/keycloak.py` explains why the second one
+catches people out.
+
+Two things deliberately refuse rather than guess. Starting a run with SSO on and
+no session (an old cached bundle, a non-browser caller) is a **400 up front**,
+not a run that reaches every question and fails all of them. And `make preflight`
+**skips** the agent checks under SSO, because a CLI has no signed-in user and a
+red line there would report a working deployment as broken.
 
 **Nothing about the token is stored.** An access token lives ten minutes and an
 optimization run takes hours, so the browser hands over a refresh token when it

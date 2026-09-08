@@ -110,22 +110,25 @@ export function blockedReason(state) {
   return state.message;
 }
 
+// The phrase every ended-session message carries, from `app/agent_sso.py`'s
+// `SESSION_MARKER`. One deliberate constant rather than a guess at the wording:
+// the backend has six different sentences for an ended session and matching
+// their incidental phrasing broke on the first one that was reworded — which is
+// a bug nothing reports, because the banner just quietly says "restart".
+export const SESSION_MARKER = "sign-in session";
+
 /**
  * What stopped an optimization run, in the reader's terms.
  *
  * `interrupted` now has two causes and they need different next actions: a
- * backend restart is resumable right now, an expired sign-in is resumable only
- * after signing in again. Told apart by the message the backend stored, because
- * that is the only thing on the wire that distinguishes them — see
- * `app/agent_sso.py` for the sentences it writes.
+ * backend restart is resumable right now, an ended sign-in is resumable only
+ * after signing in again. The stored `error_message` is the only thing on the
+ * wire that distinguishes them, and `SESSION_MARKER` is what makes reading it
+ * a contract rather than a heuristic.
  */
 export function interruptedReason(errorMessage) {
   const text = (errorMessage || "").toLowerCase();
-  const bySession =
-    text.includes("sso session") ||
-    text.includes("refresh this session") ||
-    text.includes("session") && text.includes("sign in");
-  if (bySession) {
+  if (text.includes(SESSION_MARKER)) {
     return {
       kind: "session",
       summary: "Stopped when your sign-in ended. Every finished step is kept.",

@@ -483,6 +483,17 @@ async def create_optimization_run(
     that fails at step 0 having already spent a batch of agent calls, and a list
     accumulating dead rows for typos.
     """
+    # Before the skill snapshot below, which reads the agent: refusing after it
+    # would spend a request that was always going to be refused, and an
+    # optimization run is the most expensive thing to start wrongly. See
+    # `agent_sso.refusal_reason`.
+    refusal = agent_sso.refusal_reason(
+        refresh_token,
+        (body.secrets.agent_api_key or "") or settings.agent_api_key,
+    )
+    if refusal:
+        raise HTTPException(status_code=400, detail=refusal)
+
     if body.mode not in ("isolated", "routing"):
         raise HTTPException(status_code=400, detail=f"unknown mode {body.mode!r}")
 
@@ -1046,6 +1057,14 @@ async def resume_optimization_run(
             status_code=409,
             detail=f"only an interrupted run can be resumed; this one is {run.status}",
         )
+    refusal = agent_sso.refusal_reason(
+        refresh_token, (run.secrets or {}).get("agent_api_key") or settings.agent_api_key
+    )
+    if refusal:
+        # Refused before the status flips, so a resume that cannot run leaves
+        # the run `interrupted` and resumable rather than `running` and stalled.
+        raise HTTPException(status_code=400, detail=refusal)
+
     run.status = "running"
     run.error_message = None
     run.cancel_requested = False

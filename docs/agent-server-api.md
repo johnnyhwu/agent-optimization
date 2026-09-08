@@ -456,6 +456,11 @@ Nothing about this changes the request body, the endpoints, or any other part of
 this document. A server built for a shared key works unchanged for a deployment
 that later switches to SSO, provided it accepts the realm and audience above.
 
+**The two can coexist.** A deployment that forwards identities may still have one
+agent that wants its own gateway key: a key entered for that agent takes
+precedence over the forwarded token, so you get exactly one `Authorization`
+header either way and never both.
+
 ### Where it goes
 
 The key is entered against the **chat endpoint**, and it is sent to the skills

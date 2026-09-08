@@ -151,6 +151,12 @@ services:
       # agent server contract — see docs/agent-server-api.md §8.
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       AGENT_AUTH_HEADER: ${AGENT_AUTH_HEADER:-}
+      # Send the signed-in user's SSO token instead of a shared key, so the
+      # agent can do its own per-user permission control. Only meaningful with
+      # AUTH_MODE=keycloak, and it needs the agent server to accept the same
+      # realm *and* audience — see backend/app/agent_sso.py.
+      AGENT_SSO_ENABLED: ${AGENT_SSO_ENABLED:-false}
+      AGENT_SSO_REFRESH_MARGIN_S: ${AGENT_SSO_REFRESH_MARGIN_S:-180}
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-120}
       # The run dialog's pre-flight budget, not a question's. Short on purpose:
       # the Start button waits for this check before it can be pressed.

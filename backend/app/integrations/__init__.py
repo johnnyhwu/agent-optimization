@@ -105,12 +105,18 @@ def _workspace_auth(
     if not same_origin(chat_url, skills_url):
         return {}
     auth_header = _get(config, "agent_auth_header") or settings.agent_auth_header
+    # The same order `agent_auth.resolve_credential` applies, and for the same
+    # reasons: an entered key first, then a forwarded identity, then the
+    # deployment's own. Exactly one is sent, so the client below never has to
+    # break a tie this function has already broken.
+    explicit = _get(secrets, "agent_api_key")
+    if explicit:
+        return {"api_key": explicit, "auth_header": auth_header}
     if agent_credential is not None:
         return {"credential": agent_credential, "auth_header": auth_header}
-    api_key = _get(secrets, "agent_api_key") or settings.agent_api_key
-    if not api_key:
-        return {}
-    return {"api_key": api_key, "auth_header": auth_header}
+    if settings.agent_api_key:
+        return {"api_key": settings.agent_api_key, "auth_header": auth_header}
+    return {}
 
 
 def build_seams(

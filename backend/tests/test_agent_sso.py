@@ -269,7 +269,7 @@ async def test_an_unreachable_identity_provider_says_so(configure):
     respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("no route"))
     with sso_on(configure):
         agent_sso.register("run-1", "rt-1", "alice")
-        with pytest.raises(SsoSessionExpired, match="could not reach"):
+        with pytest.raises(SsoSessionExpired, match="Could not reach the identity provider"):
             await agent_sso.access_token("run-1")
 
 
@@ -278,7 +278,7 @@ async def test_a_response_without_an_access_token_raises(configure):
     respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"token_type": "Bearer"}))
     with sso_on(configure):
         agent_sso.register("run-1", "rt-1", "alice")
-        with pytest.raises(SsoSessionExpired, match="no access_token"):
+        with pytest.raises(SsoSessionExpired, match="returned no access token"):
             await agent_sso.access_token("run-1")
 
 
@@ -346,3 +346,83 @@ async def test_a_credential_follows_a_re_registration(configure):
         agent_sso.clear("run-1")
         agent_sso.register("run-1", "rt-9", "alice")
         assert await cred.value() == "at-2"
+
+
+# --- The marker the browser reads ----------------------------------------
+
+
+@respx.mock
+async def test_every_expiry_message_carries_the_marker(configure):
+    """`session_expiry.js` tells "the backend restarted" from "your sign-in
+    ended" by looking for `SESSION_MARKER` in the stored `error_message` — the
+    only thing on the wire that distinguishes two causes of the same
+    `interrupted` status. A message raised without it is silently shown as a
+    restart, and the reader is told to press Resume when what they need is to
+    sign in.
+
+    Every raise site is exercised rather than grepped: a constant that appears
+    in the source but not in the formatted string would pass a grep and fail a
+    reader.
+    """
+    import inspect
+
+    assert inspect.getsource(agent_sso).count("raise SsoSessionExpired(") == 6, (
+        "a raise site was added or removed — cover it below, or the browser may "
+        "report an ended sign-in as a backend restart"
+    )
+
+    messages: list[str] = []
+
+    async def capture(scope: str) -> None:
+        with pytest.raises(SsoSessionExpired) as caught:
+            await agent_sso.access_token(scope)
+        messages.append(str(caught.value))
+
+    # 1. Nothing held for this scope (a restart lost the registry).
+    with sso_on(configure):
+        await capture("never-registered")
+
+    # 2. A TokenError from keycloak.token_endpoint, wrapped.
+    with configure(auth_mode="keycloak", agent_sso_enabled=True, keycloak_url=""):
+        agent_sso.register("run-a", "rt-1", "alice")
+        await capture("run-a")
+
+    # 3-6. Every way the exchange itself can fail.
+    failures = [
+        httpx.Response(400, json={"error": "invalid_grant"}),
+        httpx.Response(200, text="not json"),
+        httpx.Response(200, json={"token_type": "Bearer"}),
+        httpx.ConnectError("no route"),
+    ]
+    for i, outcome in enumerate(failures):
+        agent_sso._entries.clear()
+        route = respx.post(TOKEN_URL)
+        if isinstance(outcome, Exception):
+            route.mock(side_effect=outcome)
+        else:
+            route.mock(return_value=outcome)
+        with sso_on(configure):
+            agent_sso.register(f"run-{i}", "rt-1", "alice")
+            await capture(f"run-{i}")
+
+    assert len(messages) == 6
+    for message in messages:
+        assert agent_sso.SESSION_MARKER in message, (
+            f"this would be shown to the reader as a backend restart: {message!r}"
+        )
+
+
+def test_the_marker_is_what_the_browser_looks_for():
+    """The two halves of the contract, side by side. `session_expiry.js` holds
+    its own copy — one string in two languages cannot be shared, so it is
+    asserted equal instead."""
+    import pathlib as _pathlib
+    import re
+
+    js = _pathlib.Path(__file__).parents[2] / "frontend" / "src" / "session_expiry.js"
+    found = re.search(r'SESSION_MARKER\s*=\s*"([^"]+)"', js.read_text())
+    assert found, "session_expiry.js no longer defines SESSION_MARKER"
+    assert found.group(1) == agent_sso.SESSION_MARKER, (
+        "the browser is looking for a different phrase than the backend writes, "
+        "so an ended sign-in will be reported as a backend restart"
+    )

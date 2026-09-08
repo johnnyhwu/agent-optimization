@@ -444,6 +444,7 @@ export default function RunHistory({
           evalSet={evalSet}
           onClose={() => setShowRunConfig(false)}
           onRun={trigger}
+          session={session}
         />
       )}
       {viewConfigRun && (

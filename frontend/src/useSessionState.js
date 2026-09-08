@@ -23,7 +23,19 @@ export default function useSessionState(enabled) {
   );
 
   useEffect(() => {
-    const read = () => setState(sessionState({ refreshExpUnix: getSessionExpiry(), enabled }));
+    const read = () =>
+      setState((previous) => {
+        const next = sessionState({ refreshExpUnix: getSessionExpiry(), enabled });
+        // Only when something the UI acts on changed. `sessionState` returns a
+        // fresh object every time, so returning it unconditionally would give
+        // the whole app tree a new prop twice a minute for the entire time
+        // anyone leaves the page open — and `secondsLeft` alone changes on
+        // every tick, which nothing renders.
+        if (previous && previous.level === next.level && previous.message === next.message) {
+          return previous;
+        }
+        return next;
+      });
     read();
     // Cleared on unmount and re-created when `enabled` arrives, which it does
     // one render after mount: the flag is fetched, so the first read runs

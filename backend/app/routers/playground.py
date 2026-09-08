@@ -26,6 +26,7 @@ from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import agent_sso, cancellation, playground
+from app.config import settings
 from app.auth import current_subject, sso_refresh_token
 from app.integrations import build_seams
 from app.integrations.base import WorkspaceOverride
@@ -302,6 +303,15 @@ async def create_attempt(
         body.config.model_dump(),
         body.secrets.model_dump(),
     )
+
+    # Before the baseline read below, not just before the attempt: that read
+    # talks to the agent too, so refusing later would spend a request that was
+    # always going to be refused. See `agent_sso.refusal_reason`.
+    refusal = agent_sso.refusal_reason(
+        refresh_token, resolved_secrets.get("agent_api_key") or settings.agent_api_key
+    )
+    if refusal:
+        raise HTTPException(status_code=400, detail=refusal)
 
     override = None
     if body.workspace is not None and not body.workspace.is_empty:

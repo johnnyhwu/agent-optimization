@@ -43,10 +43,10 @@ from app.config import settings
 from app.integrations.base import AgentResponse, WorkspaceOverride
 from app.integrations.real.agent_auth import (
     Credential,
-    StaticCredential,
     auth_headers,
     credentialed_client,
     redact,
+    resolve_credential,
 )
 
 # The vendor namespace every platform-specific field lives under. One name, in
@@ -262,10 +262,14 @@ class HttpAgentClient:
         # require any, and most servers this talks to ask for none.
         self.api_key = (api_key or settings.agent_api_key or "").strip()
         self.auth_header = (auth_header or settings.agent_auth_header or "").strip()
-        # How each request's credential is obtained. `None` means the static key
-        # above — every caller that predates SSO forwarding, and every
-        # deployment with `AGENT_SSO_ENABLED` off. See `agent_auth.Credential`.
-        self.credential: Credential = credential or StaticCredential(self.api_key)
+        # How each request's credential is obtained. With no `credential` this
+        # is the static key above — every caller that predates SSO forwarding,
+        # and every deployment with `AGENT_SSO_ENABLED` off. Given both, a key
+        # entered for *this* agent wins over a forwarded identity; see
+        # `agent_auth.resolve_credential` for the full order and why.
+        self.credential: Credential = resolve_credential(
+            api_key, credential, settings.agent_api_key
+        )
 
     def _headers(self, key: str | None = None) -> dict[str, str]:
         """Headers for one request, built from the credential that request resolved.

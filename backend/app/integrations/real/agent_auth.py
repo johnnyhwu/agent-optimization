@@ -75,6 +75,37 @@ class StaticCredential:
         return self._key
 
 
+def resolve_credential(
+    api_key: str | None,
+    credential: Credential | None,
+    fallback_key: str | None = "",
+) -> Credential:
+    """Which credential a client uses, given everything it was handed.
+
+    Precedence, highest first:
+
+      1. **A key entered for this agent** — typed into the form, or the caller's
+         saved default for this endpoint. This is what makes the credential
+         fields an escape hatch rather than decoration: a deployment that
+         forwards SSO identities may still have one agent behind a gateway that
+         wants its own key, and a field somebody fills in has to do something.
+      2. **A forwarded SSO identity**, when the deployment sends one.
+      3. **The deployment's own `AGENT_API_KEY`** — the "if nobody says
+         otherwise" value, and under SSO the platform *is* saying otherwise.
+
+    The first rule is the same one `services/user_secrets.inject` already
+    applies in the other direction: what was typed into this request beats every
+    stored default. Keeping the order in one function is what stops the chat
+    client and the skills client from disagreeing about it.
+    """
+    explicit = (api_key or "").strip()
+    if explicit:
+        return StaticCredential(explicit)
+    if credential is not None:
+        return credential
+    return StaticCredential(fallback_key)
+
+
 def auth_headers(api_key: str | None, header_name: str | None = None) -> dict[str, str]:
     """The authorization header for one request, or nothing at all.
 
