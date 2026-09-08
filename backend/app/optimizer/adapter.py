@@ -253,6 +253,19 @@ async def run_rollout(
     outcomes = await asyncio.gather(
         *(one(i, item) for i, item in enumerate(items)), return_exceptions=True
     )
+    # One exception is not per-item at all, and `return_exceptions=True` would
+    # otherwise flatten it into a row like any other agent error: an expired SSO
+    # session means no remaining item can be answered either, in this split or
+    # any later step. Re-raised here — before the loop below turns it into a
+    # `failed` row — so `engine.run_optimization` can end the run as
+    # `interrupted` and keep every finished step. Recording it per item would
+    # instead spend the run reporting an agent that refused a few thousand
+    # questions, and land it in `failed`, which is deliberately not resumable.
+    # `orchestrator.run_eval` re-raises at the same point for the same reason,
+    # differing only in where it lands (eval has no checkpoint to resume from).
+    expired = next((o for o in outcomes if isinstance(o, SsoSessionExpired)), None)
+    if expired is not None:
+        raise expired
     for position, outcome in enumerate(outcomes):
         if isinstance(outcome, BaseException):
             log.exception("unexpected rollout error", exc_info=outcome)
@@ -313,6 +326,10 @@ async def _run_item(
         # `interrupted` rather than `failed`, so every finished step survives.
         # See `optimizer/engine.py`'s handler. Recording it per item would
         # instead read as an agent that refused a few thousand questions.
+        #
+        # Raising is only half of it: `run_rollout` gathers with
+        # `return_exceptions=True`, so this has to be re-raised past the gather
+        # as well or it arrives at the caller as an ordinary failed row.
         raise
     except Exception as exc:  # noqa: BLE001
         message, kind = describe_failure(

@@ -129,6 +129,27 @@ export function defaultSkills(groups, checks, mode) {
   return [usable[0] ?? names[0]];
 }
 
+// Which of a selection is still on offer once a new preview arrives.
+//
+// The Skill step's selection is rebuilt from the preview, so a preview that has
+// just been re-fetched used to drop it entirely. That is right when the reason
+// for the re-fetch is the developer ticking another eval set — the questions
+// changed, so the split has to be rebuilt anyway — and wrong in the one case
+// that motivated the draft: restoring a draft sets `sourceIds`, which fires the
+// same fetch, so ~300ms after the wizard reopened it wiped the very selection
+// the "picked up where you left off" banner had just promised, and then saved
+// the emptied draft over the good one.
+//
+// Keeping the names that still exist covers both. A skill that survived is one
+// the developer chose and can still be run; one that did not is gone from the
+// workspace and cannot be selected whatever the draft said. The split is then
+// rebuilt from the *new* preview, so nothing carries a question the sources no
+// longer contain.
+export function retainedSkills(selected, groups) {
+  const offered = new Set((groups || []).map((g) => g.skill_name));
+  return (selected || []).filter((name) => offered.has(name));
+}
+
 // How many questions are counted under more than one skill.
 //
 // A question tagged for two skills now appears in both groups, so the counts on

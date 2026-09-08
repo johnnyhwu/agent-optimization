@@ -34,6 +34,7 @@ import {
   hyperState,
   needsMixedWeight,
   previewQuestionCount,
+  retainedSkills,
   tokenEstimate,
 } from "../../optimize_wizard.js";
 
@@ -280,9 +281,19 @@ export default function Wizard({ sessionBlocked = null }) {
       const result = await api.importPreview(ids, mode);
       if (seq !== previewSeq.current) return;
       setPreview(result);
-      setSkills([]);
-      setSkillTouched(false);
-      rebuildSplit(null);
+      // A selection the developer made themselves survives, as far as the new
+      // preview still offers it; the split is rebuilt either way, because these
+      // are different questions. Restoring a draft sets the sources, which
+      // lands here — without this the restored skills were wiped ~300ms after
+      // the wizard reopened, while the banner still said they had been kept.
+      const kept = skillTouched ? retainedSkills(skills, result?.groups) : [];
+      if (kept.length) {
+        chooseSkills(kept, { touched: true, groups: result?.groups });
+      } else {
+        setSkills([]);
+        setSkillTouched(false);
+        rebuildSplit(null);
+      }
     } catch (e) {
       if (seq !== previewSeq.current) return;
       setPreviewError(e.message);
@@ -320,7 +331,10 @@ export default function Wizard({ sessionBlocked = null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, mode]);
 
-  function chooseSkills(names, { touched = true } = {}) {
+  // `groups` is a parameter and not simply `preview?.groups` because one caller
+  // runs in the same tick as `setPreview`, where the state has not landed yet
+  // and reading it would rebuild the split from the sources being replaced.
+  function chooseSkills(names, { touched = true, groups = preview?.groups } = {}) {
     setSkills(names);
     if (touched) setSkillTouched(true);
 
@@ -330,7 +344,7 @@ export default function Wizard({ sessionBlocked = null }) {
     const seen = new Set();
     const questions = [];
     for (const name of names) {
-      const group = preview?.groups.find((g) => g.skill_name === name);
+      const group = (groups || []).find((g) => g.skill_name === name);
       for (const question of group?.questions || []) {
         if (seen.has(question.item_key)) continue;
         seen.add(question.item_key);
