@@ -49,8 +49,12 @@ steps:
   # frontend/src/lockfile_contract.test.js fails the build if the lockfile is not
   # pnpm's — an `npm install` here would rewrite it into package-lock.json and
   # the test would say so.
-  - script: corepack enable && corepack prepare pnpm@latest --activate
+  - script: corepack enable && corepack prepare pnpm@10.33.0 --activate
     displayName: Enable pnpm
+    # The same version frontend/Dockerfile pins, and it has to stay that way:
+    # this step installs the dependencies the unit tests run against, and the
+    # image installs them again from the same lockfile. `pnpm@latest` would mean
+    # a pnpm major release changing what CI does on a day nothing here changed.
 
   - script: pnpm install --frozen-lockfile
     displayName: Install dependencies
