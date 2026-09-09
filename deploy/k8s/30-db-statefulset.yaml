@@ -1,0 +1,130 @@
+# PostgreSQL.
+#
+# A StatefulSet rather than a Deployment, for the property that matters here:
+# one Pod, one PersistentVolumeClaim, and the same claim reattached to the
+# replacement Pod after a restart or a node drain. A Deployment with a PVC gives
+# you neither the stable name nor the guarantee that the old Pod is gone before
+# the new one starts — and two Postgres processes opening one data directory is
+# how a database gets corrupted.
+#
+# If your cluster offers a managed PostgreSQL service, prefer it and delete this
+# file: point DATABASE_URL and SYNC_DATABASE_URL at it instead. The database
+# image's init script exists precisely so that works — see db/README.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: skill-studio-db
+spec:
+  # Headless: the StatefulSet's governing Service. The backend connects by this
+  # name either way, and the DNS record points at the one Pod.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: skill-studio
+    app.kubernetes.io/component: db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: skill-studio-db
+spec:
+  serviceName: skill-studio-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: skill-studio
+      app.kubernetes.io/component: db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: skill-studio
+        app.kubernetes.io/component: db
+    spec:
+      securityContext:
+        # 999 is the `postgres` account in the official image. Under a restricted
+        # Pod Security Standard this is not optional and not cosmetic: the
+        # image's entrypoint starts as root to chown the data directory, and
+        # `runAsNonRoot: true` makes that fail before Postgres is ever reached.
+        # Naming the uid up front skips the step that would have failed.
+        #
+        # fsGroup is what makes the volume writable by that uid. Without it the
+        # PVC arrives owned by root and initdb stops with "could not create
+        # directory ... Permission denied".
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          # Built by db/azure-pipelines.yml. Its one addition over postgres:16 is
+          # an init script creating the pgcrypto extension, which the first
+          # migration needs and which only a superuser may create.
+          image: REPLACE-WITH-REGISTRY.example.com/skill-studio/db:REPLACE-WITH-TAG
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: agentopt
+            - name: POSTGRES_DB
+              value: agentopt
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: skill-studio-secrets
+                  key: POSTGRES_PASSWORD
+            # A *subdirectory* of the mount point, and this line is the single
+            # most common reason a first deployment of Postgres on Kubernetes
+            # fails. Most volume plugins put a `lost+found` directory at the root
+            # of a fresh filesystem; initdb refuses to run in a directory that is
+            # not empty, and says "directory /var/lib/postgresql/data exists but
+            # is not empty" — which reads like the volume already has a database
+            # on it. Pointing PGDATA one level down gives initdb an empty
+            # directory it creates itself.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agentopt", "-d", "agentopt"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agentopt", "-d", "agentopt"]
+            # Generous, and deliberately so: a liveness probe that fires during
+            # crash recovery restarts the database in the middle of recovering,
+            # which turns a slow start into a loop.
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+        # Left unset on purpose: the cluster's default StorageClass is almost
+        # always the right answer, and naming one that does not exist leaves the
+        # PVC Pending with no obvious explanation. Set it only if your platform
+        # team told you to.
+        # storageClassName: ""

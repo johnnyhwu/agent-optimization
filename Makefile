@@ -64,8 +64,8 @@ preflight:
 # --- Deployment -------------------------------------------------------------
 # Built bundle behind nginx, no reload, only the nginx port published. Needs
 # KEYCLOAK_URL, POSTGRES_PASSWORD, DATABASE_URL and SYNC_DATABASE_URL set (see
-# backend/.env.example); compose refuses to start without them rather than
-# falling back to development values.
+# .env.example at the repository root); compose refuses to start without them
+# rather than falling back to development values.
 
 prod-build:
 	$(PROD) build

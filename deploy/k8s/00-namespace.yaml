@@ -1,0 +1,8 @@
+# Optional. Many internal clusters hand a namespace out rather than let a team
+# create one — if yours does, delete this file and pass `-n <yours>` instead.
+# Every other manifest here deliberately omits `metadata.namespace` so that the
+# namespace is a property of how they are applied, not of what is committed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: skill-studio

@@ -1,0 +1,243 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: skill-studio-backend
+spec:
+  selector:
+    app.kubernetes.io/name: skill-studio
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skill-studio-backend
+spec:
+  # ONE REPLICA IS A CONSTRAINT, NOT A PLACEHOLDER. Do not raise it, and do not
+  # put a HorizontalPodAutoscaler in front of it.
+  #
+  # The playground's attempt store and the pub/sub hub behind the SSE progress
+  # stream both live in this process's memory. With two Pods, an attempt created
+  # on Pod A is a 404 on Pod B, and a progress subscription that lands on the Pod
+  # that is not running the job never receives an event — so the progress bar
+  # simply stops, with no error anywhere. Both failures are intermittent and
+  # depend on which Pod the request happened to reach, which is the most
+  # expensive kind of bug to chase.
+  #
+  # Scaling out needs a shared event bus and persisted attempts first. Until
+  # then, scale up: give this Pod more CPU and memory.
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: a rolling update briefly runs two backends,
+    # which is the very thing above. It costs a few seconds of downtime on each
+    # deploy, which is the honest price of the single-process design.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: skill-studio
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: skill-studio
+        app.kubernetes.io/component: backend
+    spec:
+      # ⚠️ MUST STAY FALSE. It is the default, and it is stated here so that
+      # nobody adds it later for a debugging session and leaves it on.
+      #
+      # The second container in this Pod runs code that users upload through a
+      # web form. It is a separate container precisely so that its /proc contains
+      # nothing but itself — no backend process, and so no /proc/<pid>/environ
+      # holding DATABASE_URL, SETTINGS_SECRET_KEY, LLM_API_KEY or the rest.
+      # Setting this to true puts the backend's process back in the sandbox's
+      # view of /proc and undoes the entire boundary in one line.
+      shareProcessNamespace: false
+      securityContext:
+        runAsNonRoot: true
+        # Applied to the emptyDir the two containers share, and added to both
+        # containers as a supplementary group. That is what lets the backend
+        # (uid 1001) connect to a socket the sandbox (uid 10001) created with
+        # mode 0660 — without it the connect fails with EACCES and every script
+        # run reports the sandbox as unreachable.
+        fsGroup: 10001
+        seccompProfile:
+          # Part of the restricted Pod Security Standard, alongside
+          # runAsNonRoot, allowPrivilegeEscalation: false and dropping all
+          # capabilities. Omitting it is what makes an otherwise-correct Pod be
+          # rejected with "seccompProfile type must be RuntimeDefault".
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: REPLACE-WITH-REGISTRY.example.com/skill-studio/backend:REPLACE-WITH-TAG
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: skill-studio-backend
+          env:
+            # Migrations are a Job (35-migrate-job.yaml). Explicit rather than
+            # relying on the default, because the entrypoint's migration step is
+            # only safe with exactly one container and this is where somebody
+            # would come looking after a rolling update went wrong.
+            - name: RUN_MIGRATIONS
+              value: "0"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: skill-studio-secrets, key: DATABASE_URL }
+            - name: SETTINGS_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: skill-studio-secrets, key: SETTINGS_SECRET_KEY }
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef: { name: skill-studio-secrets, key: LLM_API_KEY }
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef: { name: skill-studio-secrets, key: LANGFUSE_PUBLIC_KEY }
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: skill-studio-secrets, key: LANGFUSE_SECRET_KEY }
+            - name: AGENT_API_KEY
+              valueFrom:
+                secretKeyRef: { name: skill-studio-secrets, key: AGENT_API_KEY }
+          volumeMounts:
+            - name: sandbox-sock
+              mountPath: /run/sandbox
+            # tempfile needs somewhere to write, and the root filesystem is
+            # read-only below. Uploaded eval-set files spool through here.
+            - name: tmp
+              mountPath: /tmp
+            - name: ca
+              mountPath: /app/certs
+              readOnly: true
+          # /health is the only unauthenticated endpoint, which is what makes it
+          # usable as a probe at all.
+          #
+          # The application's lifespan awaits reap_interrupted_runs() against the
+          # database before it serves anything, so a backend started while
+          # Postgres is still coming up is legitimately not ready for a while.
+          # The startupProbe is what buys that time without making the liveness
+          # probe permanently slack: up to 60 × 5s = 5 minutes to come up, and a
+          # tight 10s liveness check once it has.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # No CPU limit on purpose: throttling an event loop that is waiting
+              # on an LLM makes latency worse without protecting anything the
+              # memory limit does not already protect.
+              memory: 2Gi
+
+        # --- The sandbox -----------------------------------------------------
+        # This container executes Python that a user uploaded through a web form.
+        # The reason that is survivable is that there is nothing in here to
+        # steal: no database URL, no settings key, no LLM key, no Langfuse key,
+        # no agent key, no CA bundle, no database connection.
+        #
+        # The script's SQL is forwarded over the socket to the backend, which
+        # owns the credentials and answers the query. So adding an environment
+        # variable here to "make something work" is very likely to be undoing the
+        # point of this container. Compare its `env:` with the backend's above —
+        # the difference is the security boundary.
+        - name: sandbox
+          # The same image as the backend, with a different command and a
+          # different uid. One image, one pipeline, and no way for the two halves
+          # of the protocol to drift apart.
+          image: REPLACE-WITH-REGISTRY.example.com/skill-studio/backend:REPLACE-WITH-TAG
+          args: ["python", "-m", "app.sandbox.server"]
+          env:
+            - name: RUN_MIGRATIONS
+              value: "0"
+            - name: SCRIPT_SANDBOX_SOCKET
+              value: /run/sandbox/sandbox.sock
+            - name: SCRIPT_SANDBOX_WORKDIR
+              value: /sandbox
+            - name: SCRIPT_LIBS_DIR
+              value: /opt/scriptlibs
+          volumeMounts:
+            - name: sandbox-sock
+              mountPath: /run/sandbox
+            - name: sandbox-work
+              mountPath: /sandbox
+          readinessProbe:
+            # "Is anyone listening on the socket?" — the same check the compose
+            # healthcheck uses.
+            exec:
+              command: ["python", "-m", "app.sandbox.server", "--check"]
+            periodSeconds: 10
+          securityContext:
+            # A *dedicated* uid, not 65534/nobody. RLIMIT_NPROC — one of the seven
+            # limits the supervisor sets on each run — is counted per uid across
+            # the whole node, so sharing the node's catch-all account means
+            # unrelated workloads consume this container's process budget and
+            # scripts start failing with EAGAIN on execve.
+            #
+            # app/sandbox/server.py refuses to start as root, so a manifest that
+            # forgets this line fails loudly instead of quietly serving with no
+            # boundary at all.
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              # Must exceed SCRIPT_MEMORY_MB (1024 by default) with room for the
+              # interpreter and pandas on top, or the kernel OOM-kills the
+              # container instead of the run — taking the supervisor with it. The
+              # per-run RLIMIT_AS is the limit that should bite first, because it
+              # is the one that produces a message the uploader can act on.
+              memory: 2Gi
+      volumes:
+        # The one thing the two containers share: a directory holding a single
+        # unix socket. Not the network — a sidecar shares the Pod's network
+        # namespace whatever we do here, which is why the sandbox still has
+        # egress and why app/sandbox/__init__.py says so plainly.
+        - name: sandbox-sock
+          emptyDir: {}
+        # Each run's staging directory. On a tmpfs, with a ceiling, so a runaway
+        # script cannot fill the node's disk — and sized above SCRIPT_MEMORY_MB's
+        # neighbourhood without being generous. Memory-backed emptyDir counts
+        # against the container's memory limit, which is the accounting we want.
+        - name: sandbox-work
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: ca
+          secret:
+            secretName: skill-studio-ca
+            # Optional so that a cluster whose services use publicly-trusted
+            # certificates can simply not create the Secret, rather than having
+            # the Pod stay Pending with "secret not found". SSL_CERT_FILE in the
+            # ConfigMap must come out too — pointing it at a file that is not
+            # there breaks every outbound HTTPS call.
+            optional: true

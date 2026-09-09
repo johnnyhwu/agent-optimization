@@ -53,7 +53,7 @@ if ! errors=$("${COMPOSE[@]}" config --quiet 2>&1); then
   echo
   echo "$errors"
   echo
-  echo "Set these in a repo-root .env (see backend/.env.example):"
+  echo "Set these in a repo-root .env (see .env.example):"
   echo
   echo "    POSTGRES_PASSWORD=…"
   echo "    DATABASE_URL=postgresql+asyncpg://agentopt:…@db:5432/agentopt"

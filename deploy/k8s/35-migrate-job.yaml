@@ -1,0 +1,80 @@
+# Schema migrations, as a one-shot Job.
+#
+# In the compose deployment this runs in the backend's own entrypoint, gated on
+# RUN_MIGRATIONS=1, and that is safe there only because exactly one backend
+# container is ever started. It is the wrong shape for a cluster: during a
+# rolling update two backend Pods exist at once, and both would run
+# `alembic upgrade head` against the same database at the same time. Alembic
+# takes no lock that makes that safe.
+#
+# So the release pipeline runs this Job to completion *first*, and only then
+# updates the backend Deployment. Both backend containers set RUN_MIGRATIONS=0.
+#
+# Re-running it is safe: `upgrade head` on an already-current database is a
+# no-op. That is what makes it usable as an unconditional pipeline step.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skill-studio-migrate
+  # The name must change per release, or `kubectl apply` hits an existing
+  # completed Job and does nothing — silently deploying new code against the old
+  # schema. Either delete the Job first, or template the tag into the name:
+  #
+  #     kubectl delete job skill-studio-migrate --ignore-not-found
+  #     kubectl apply -f 35-migrate-job.yaml
+  #     kubectl wait --for=condition=complete --timeout=300s job/skill-studio-migrate
+  #
+  # The `wait` is the part that matters: without it the pipeline moves on to the
+  # Deployment while the schema is still being changed.
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: skill-studio
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alembic
+          # The backend image — the migrations are part of the application and
+          # ship with it, so there is no fourth image to build or keep in step.
+          image: REPLACE-WITH-REGISTRY.example.com/skill-studio/backend:REPLACE-WITH-TAG
+          # `args`, not `command`: this replaces the image's CMD (uvicorn) and
+          # leaves its ENTRYPOINT — docker-entrypoint.sh — in place, which with
+          # RUN_MIGRATIONS unset is a plain `exec "$@"`. Set to "0" below anyway,
+          # so that a ConfigMap change can never make this Job migrate twice.
+          args: ["alembic", "upgrade", "head"]
+          # alembic.ini's `script_location` and `prepend_sys_path` are both
+          # relative, so this only works from /app. It is the image's WORKDIR
+          # already; stated here because a change to that would otherwise break
+          # the Job with a confusing "No such file or directory: alembic".
+          workingDir: /app
+          env:
+            - name: RUN_MIGRATIONS
+              value: "0"
+            # alembic/env.py reads this with os.getenv directly, not through
+            # pydantic — so unlike every other setting it cannot come from a
+            # .env file and must be a real environment variable.
+            - name: SYNC_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: skill-studio-secrets
+                  key: SYNC_DATABASE_URL
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

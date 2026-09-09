@@ -1,10 +1,11 @@
 """Reference documentation, served from the repository's own markdown.
 
-The agent-server contract exists as `docs/agent-server-api.md` and is what a
-developer is pointed at when they ask what their server has to do. Putting a
-second copy in the UI would have been easier and would have gone stale — and
-stale in the worst way, because the copy on screen is the one somebody
-implements against while the file in the repository is the one that is reviewed.
+The agent-server contract exists as `backend/docs/agent-server-api.md` and is
+what a developer is pointed at when they ask what their server has to do.
+Putting a second copy in the UI would have been easier and would have gone
+stale — and stale in the worst way, because the copy on screen is the one
+somebody implements against while the file in the repository is the one that is
+reviewed.
 
 So the file is the only copy, and this hands it over verbatim. Changing the
 contract is editing one markdown file; the UI follows without a rebuild.
@@ -29,25 +30,22 @@ router = APIRouter(prefix="/docs", tags=["docs"])
 
 
 def _docs_dir() -> Path:
-    """Where the markdown lives, in a checkout and in the image.
+    """Where the markdown lives — one answer for both a checkout and the image.
 
-    Two answers, because the backend's Docker build context is `./backend` and
-    the documents are a level above it — they cannot be copied into the image,
-    so compose mounts them at `/app/docs` instead. Searching rather than
-    assuming is what keeps `python -m pytest` and a deployed container both
-    working without a second copy of the file.
+    It used to be two, searched in order, because the documents sat at the
+    repository root while the code sat under `backend/`: no single relative path
+    reached them from both a `python -m pytest` checkout and a container whose
+    WORKDIR is `/app`. Moving `docs/` into `backend/` collapsed that — the
+    directory now sits beside `app/` in the checkout and is COPYed to the same
+    place in the image, so `parents[2]` is `backend/` on a developer's machine
+    and `/app` in the container, and `docs` hangs off it either way.
+
+    `settings.docs_dir` still wins, for a deployment that mounts them elsewhere.
     """
     if settings.docs_dir:
         return Path(settings.docs_dir)
-    for candidate in (
-        # A checkout: app/routers/docs.py -> backend -> repository root.
-        Path(__file__).resolve().parents[3] / "docs",
-        # The container, where WORKDIR is /app and ./docs is mounted read-only.
-        Path("/app/docs"),
-    ):
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).resolve().parents[3] / "docs"
+    # app/routers/docs.py -> app/routers -> app -> backend (or /app).
+    return Path(__file__).resolve().parents[2] / "docs"
 
 
 # The documents the UI may ask for, by the name it uses in its own routes.

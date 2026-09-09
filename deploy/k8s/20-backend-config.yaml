@@ -1,0 +1,70 @@
+# The backend's non-secret settings.
+#
+# Not all of them. `backend/app/config.py` holds a default for every setting, and
+# an unset variable takes that default — so what belongs here is the settings
+# whose right value depends on *this deployment*, and nothing else. Copying all
+# forty from docker-compose.yml would produce a file that has to be kept in sync
+# with the code, which is the failure this avoids.
+#
+# The full list, with what each one does, is the environment table in README.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: skill-studio-backend
+data:
+  # --- Identity -------------------------------------------------------------
+  AUTH_MODE: "keycloak"
+  KEYCLOAK_URL: "https://REPLACE-WITH-KEYCLOAK/auth"
+  KEYCLOAK_REALM: "tsmc"
+  KEYCLOAK_CLIENT_ID: "ai4bi-public"
+  # Blank switches the audience check off. Keep it set unless the token your
+  # Keycloak issues genuinely has no matching audience.
+  KEYCLOAK_AUDIENCE: "ai4bi-public"
+
+  # nginx strips /api before forwarding, so the generated /docs and
+  # /openapi.json URLs need the prefix put back. Must match the path the
+  # frontend proxies on — see 50-ingress.yaml.
+  ROOT_PATH: "/api"
+
+  # --- Trusting the internal CA ---------------------------------------------
+  # The path the bundle is mounted at by 40-backend-deployment.yaml. Delete both
+  # if your internal services use publicly-trusted certificates.
+  #
+  # Not an application setting: nothing in app/config.py reads it. OpenSSL and
+  # httpx read it straight from the process environment, which is why one value
+  # covers Keycloak, Langfuse, the agent server and the LLM endpoint at once.
+  SSL_CERT_FILE: "/app/certs/ca-bundle.crt"
+
+  # --- Which integrations are real ------------------------------------------
+  # `fake` is the seeded demo. Turn these on one at a time: WORKSPACE_IMPL is
+  # read-only and the cheapest to try first.
+  AGENT_IMPL: "fake"
+  JUDGE_IMPL: "fake"
+  TRACE_IMPL: "fake"
+  DIAGNOSIS_IMPL: "fake"
+  SYNTHESIS_IMPL: "fake"
+  WORKSPACE_IMPL: "fake"
+  OPTIMIZER_IMPL: "fake"
+
+  # --- Where the real services are ------------------------------------------
+  AGENT_CHAT_URL: ""
+  AGENT_SKILLS_URL: ""
+  LLM_BASE_URL: ""
+  LANGFUSE_HOST: ""
+  HR_API_BASE_URL: ""
+
+  # --- Uploaded-script limits -----------------------------------------------
+  # Containment boundaries, not preferences — backend/app/sandbox/__init__.py
+  # says what each one prevents. Raising SCRIPT_WALL_CLOCK_S alone is not enough:
+  # the ingress and the frontend's nginx both have to be willing to hold the
+  # request open at least as long, or they answer 504 first. See the timeout
+  # note in 50-ingress.yaml.
+  SCRIPT_WALL_CLOCK_S: "600"
+  SCRIPT_MEMORY_MB: "1024"
+  SCRIPT_MAX_CONCURRENT_RUNS: "2"
+
+  # Where the backend expects the sandbox container to be listening. The two
+  # containers in the backend Pod share an emptyDir mounted here; it is the only
+  # thing they share.
+  SCRIPT_SANDBOX_SOCKET: "/run/sandbox/sandbox.sock"
+  SCRIPT_SANDBOX_TRANSPORT: "sidecar"

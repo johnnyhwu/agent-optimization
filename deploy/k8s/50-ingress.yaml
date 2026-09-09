@@ -1,0 +1,72 @@
+# The one way in.
+#
+# Everything — the app and the API — arrives through the frontend Service, which
+# is nginx: it serves the built bundle and proxies /api/ to the backend. That is
+# not an accident of routing, it is what puts the browser on a single origin, and
+# it is why the backend's CORS configuration is inert in deployment and why one
+# Keycloak redirect URI is enough. Do NOT add a second rule sending /api
+# straight to the backend Service — it would work, and it would quietly turn
+# every API call into a cross-origin request.
+#
+# ---------------------------------------------------------------------------
+# ⚠️ THE ANNOTATIONS BELOW ARE NOT DECORATION. Two of the app's features hold an
+# HTTP response open for a long time, and an ingress controller's defaults break
+# both in ways that produce no error anywhere:
+#
+#   * Server-sent events. Run progress, optimization progress and the playground
+#     all stream. With response buffering ON — the nginx ingress default — the
+#     controller holds every event until the response ends, so the progress bar
+#     sits at zero for the whole run and then jumps to 100%. Nothing logs an
+#     error. `proxy-buffering: "off"` is the line that fixes it.
+#
+#   * Uploaded eval-set scripts. A script may run for SCRIPT_WALL_CLOCK_S (600s
+#     by default) before the request answers, so every proxy in the path has to
+#     be willing to wait longer than that. There are three:
+#         ingress           proxy-read-timeout below            660s
+#         frontend's nginx  proxy_read_timeout in
+#                           frontend/nginx.conf.template        660s
+#         the app           SCRIPT_WALL_CLOCK_S                 600s
+#     Raising the app's limit without raising the other two produces a 504 at
+#     exactly the moment a long script would have succeeded — and the 504 comes
+#     from the proxy, so nothing in the application logs mentions it.
+#
+# These annotation names are ingress-nginx's. If the internal cluster runs a
+# different controller (Traefik, HAProxy, Istio, an Azure Application Gateway),
+# the names differ but the two requirements do not — ask for "no response
+# buffering" and "a read timeout above 660 seconds" by those words.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: skill-studio
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "660"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "660"
+    # Eval sets are uploaded as CSV/JSONL files. The default cap is 1MB, and a
+    # file over it is refused with a 413 by the ingress before the application
+    # sees it — so the error message the user gets is the controller's, not the
+    # app's.
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+spec:
+  # Ask the platform team which class to name; leaving it out means "the default
+  # class", which exists on some clusters and not others.
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - REPLACE-WITH-HOSTNAME.example.com
+      # Either a Secret you create from the certificate the company issues, or
+      # one cert-manager fills in. Keycloak will not redirect back to a plain
+      # http:// origin, so this is not optional in practice.
+      secretName: skill-studio-tls
+  rules:
+    - host: REPLACE-WITH-HOSTNAME.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: skill-studio-frontend
+                port:
+                  name: http

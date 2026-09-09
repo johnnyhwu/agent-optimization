@@ -17,7 +17,13 @@
 # absent in deployment rather than merely overridden.
 services:
   db:
-    image: postgres:16
+    # Built, not pulled — see db/Dockerfile. The one thing the image adds over
+    # `postgres:16` is an init script creating the pgcrypto extension, which the
+    # first migration needs and which only a superuser may create. Doing it here
+    # means the migration Job can run as an ordinary application account.
+    build:
+      context: ./db
+    image: agentopt_db
     container_name: agentopt_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agentopt}
@@ -33,25 +39,24 @@ services:
 
   backend:
     build:
-      # The repository root, not ./backend. The reference documentation the UI
-      # serves (GET /docs/{name}) is the repository's own markdown — there is
-      # deliberately no second copy — and it lives a level above the backend, so
-      # a ./backend context could not COPY it into the image.
+      # ./backend, and nothing above it: each of the three deployable directories
+      # builds from itself, which is what lets the internal CI give each one its
+      # own pipeline (backend/azure-pipelines.yml and its two siblings).
       #
-      # It used to arrive as a `./docs:/app/docs:ro` bind mount here instead, and
-      # that is the bug this replaces: a bind mount whose *host* path does not
-      # exist is not an error, it is an empty directory Docker creates. A machine
-      # running the stack without the repository beside the compose file
-      # therefore got a container with an empty /app/docs, and every "?" help
-      # link and the rail's Documentation entry answered
-      # "could not read agent-server-api.md [Errno 2]" — a packaging failure that
-      # reads as a broken page. The docs are part of the image now, so the page
-      # works wherever the image does.
+      # The reference documentation the UI serves (GET /docs/{name}) is the
+      # repository's own markdown, with deliberately no second copy. It lives at
+      # backend/docs/ so that it is inside this context; before that it sat at the
+      # repository root and forced the context up there with it.
       #
-      # Development still bind-mounts them, in docker-compose.override.yml, so
-      # editing a document does not need a rebuild.
-      context: .
-      dockerfile: backend/Dockerfile
+      # It ships *in* the image rather than as a `./docs:/app/docs:ro` mount, and
+      # that is the bug the move preserved the fix for: a bind mount whose *host*
+      # path does not exist is not an error, it is an empty directory Docker
+      # creates. A machine running the stack without the repository beside the
+      # compose file therefore got a container with an empty /app/docs, and every
+      # "?" help link and the rail's Documentation entry answered "could not read
+      # agent-server-api.md [Errno 2]" — a packaging failure that reads as a
+      # broken page.
+      context: ./backend
     image: agentopt_backend
     container_name: agentopt_backend
     depends_on:
@@ -159,7 +164,7 @@ services:
       AGENT_SKILLS_URL: ${AGENT_SKILLS_URL:-}
       # Optional, and inert when blank: with no key the agent sees exactly the
       # headers it saw before these existed. Authentication is not part of the
-      # agent server contract — see docs/agent-server-api.md §8.
+      # agent server contract — see backend/docs/agent-server-api.md §8.
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       AGENT_AUTH_HEADER: ${AGENT_AUTH_HEADER:-}
       # Send the signed-in user's SSO token instead of a shared key, so the
@@ -286,8 +291,7 @@ services:
   # very likely to be undoing the point of this container.
   sandbox:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
     image: agentopt_backend
     container_name: agentopt_sandbox
     # The dedicated uid from the Dockerfile. Not 65534/nobody: RLIMIT_NPROC is

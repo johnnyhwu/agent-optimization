@@ -207,20 +207,30 @@ def test_a_dead_listening_socket_does_end_the_accept_loop():
 # untested. The container test asserts the outcome; these assert the two
 # mechanisms that produce it, and run everywhere.
 
+def _backend_dir():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def _repo_root():
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return root
+    return os.path.dirname(_backend_dir())
 
 
 def test_the_ca_bundle_is_kept_out_of_the_image():
-    """`COPY backend/ .` would otherwise bake it in, and the sandbox runs that image."""
-    path = os.path.join(_repo_root(), ".dockerignore")
+    """`COPY . .` would otherwise bake it in, and the sandbox runs that image.
+
+    The file to read is `backend/.dockerignore`, not the repository root's: the
+    backend's build context is `./backend`, and Docker reads the .dockerignore at
+    the root of the context and nowhere else. A rule left behind at the old
+    location would be silently inert — which is the failure mode worth a test,
+    since nothing about the build would announce it.
+    """
+    path = os.path.join(_backend_dir(), ".dockerignore")
     if not os.path.exists(path):
         pytest.skip(".dockerignore is outside the backend image")
     ignored = open(path, encoding="utf-8").read()
-    assert "backend/certs/" in ignored, (
-        "backend/certs/ must be excluded from the build context: the image it "
-        "would land in is the one the sandbox container runs"
+    assert "\ncerts/" in ignored, (
+        "certs/ must be excluded from the build context: the image it would "
+        "land in is the one the sandbox container runs"
     )
 
 
