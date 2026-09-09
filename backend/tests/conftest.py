@@ -46,3 +46,30 @@ def configure():
                 setattr(settings, key, value)
 
     return _apply
+
+
+@pytest.fixture(autouse=True, scope="session")
+def sandbox_in_process():
+    """Run the sandbox supervisor inside the test process, for the whole suite.
+
+    Not a mock. `app.sandbox.supervisor` is the production code, driven over a
+    real socketpair, forking a real child under real rlimits and killing it with
+    a real `killpg` — which is what keeps the containment assertions in
+    test_script_sandbox.py measuring the thing they claim to measure.
+
+    What it cannot reproduce is the container boundary itself: a different uid,
+    an environment with no secrets in it, a `/proc` with nothing to find. Those
+    are asserted against a running stack instead — see the `sandbox_container`
+    marker.
+
+    Session-scoped and autouse because the tests that need it do not all call
+    `run_script` directly: test_script_endpoints.py drives it through the HTTP
+    endpoint and test_script_executor.py through a real database round trip, and
+    neither has anywhere to pass a transport. One switch reaches all of them.
+    """
+    previous = settings.script_sandbox_transport
+    settings.script_sandbox_transport = "inprocess"
+    try:
+        yield
+    finally:
+        settings.script_sandbox_transport = previous

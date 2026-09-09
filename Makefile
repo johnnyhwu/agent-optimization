@@ -4,7 +4,7 @@
 #
 # Everything above the "Deployment" section runs the development stack:
 # docker-compose.yml plus the auto-loaded docker-compose.override.yml.
-.PHONY: up up-seed db build setup migrate seed backend frontend down test preflight \
+.PHONY: up up-seed db build setup migrate seed backend frontend down test test-sandbox preflight \
         prod-build prod-up prod-down prod-logs
 
 # Naming the files explicitly is what suppresses docker-compose.override.yml,
@@ -44,9 +44,18 @@ backend:
 frontend:
 	docker compose up frontend
 
-# Backend unit tests (no DB or external service needed).
+# Backend unit tests (no DB or external service needed). --no-deps keeps this
+# working without the sandbox container: the suite runs the sandbox supervisor
+# in-process (see tests/conftest.py), which is the real code over a socketpair.
 test:
 	docker compose run --rm --no-deps backend pytest -q
+
+# The isolation tests, which need the sandbox container actually running: a
+# different uid, an environment with no secrets in it, a /proc with nothing to
+# find. `make test` cannot check any of that, so this is the target that proves
+# uploaded scripts are still contained.
+test-sandbox:
+	docker compose run --rm backend pytest -q -m sandbox_container
 
 # Ping whichever integrations are set to real; reports OK/FAIL per seam.
 preflight:

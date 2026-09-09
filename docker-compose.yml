@@ -57,6 +57,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Not just ordering: a backend that starts first would answer its first
+      # script run with "the sandbox service is not answering". The transport
+      # retries for a few seconds on top of this, for the restart case.
+      sandbox:
+        condition: service_healthy
+    volumes:
+      # The socket the sandbox container listens on, and the only thing the two
+      # share. Not a bind mount: a unix socket on a host bind mount is not
+      # portable (Docker Desktop in particular), and there is nothing here a
+      # human needs to look at.
+      - agentopt_sandbox_sock:/run/sandbox
     environment:
       # Same URLs as before, with the Postgres host swapped from localhost to the
       # compose service name. Still overridable from the host environment.
@@ -251,8 +262,59 @@ services:
       # There is one uvicorn worker; each run forks a process and holds a worker
       # thread for up to SCRIPT_WALL_CLOCK_S.
       SCRIPT_MAX_CONCURRENT_RUNS: ${SCRIPT_MAX_CONCURRENT_RUNS:-2}
+      # Where the sandbox container listens. Stated on both services rather than
+      # left to the code default, because the two have to agree and a mismatch
+      # shows up as "the sandbox service is not answering" with nothing to
+      # suggest the path is the reason.
+      SCRIPT_SANDBOX_SOCKET: /run/sandbox/sandbox.sock
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # The container uploaded eval-set scripts are executed in. Same image as the
+  # backend, one command apart — see backend/Dockerfile and app/sandbox/.
+  #
+  # **Read the environment block below for what is NOT in it.** That absence is
+  # the entire feature: this process execs code somebody uploaded through a web
+  # form, and the reason that is survivable is that there is nothing here to
+  # steal. No DATABASE_URL, no SETTINGS_SECRET_KEY, no LLM_API_KEY, no
+  # LANGFUSE_SECRET_KEY, no AGENT_API_KEY, no CA bundle, no database connection.
+  # The script's queries are forwarded to the backend, which owns the credentials
+  # and answers them — so adding a variable here to "make something work" is
+  # very likely to be undoing the point of this container.
+  sandbox:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: agentopt_backend
+    container_name: agentopt_sandbox
+    # The dedicated uid from the Dockerfile. Not 65534/nobody: RLIMIT_NPROC is
+    # counted per uid across the whole host, so the node's catch-all account
+    # brings back the EAGAIN-on-execve failure _preexec documents.
+    user: "10001:10001"
+    command: ["python", "-m", "app.sandbox.server"]
+    environment:
+      # Required, and easy to miss: this is the same image and the same
+      # ENTRYPOINT as the backend, and docker-compose.prod.yml sets
+      # RUN_MIGRATIONS=1 on *that* service. Without this line a deployment would
+      # have two containers racing each other through Alembic on every start.
+      RUN_MIGRATIONS: "0"
+      SCRIPT_SANDBOX_SOCKET: /run/sandbox/sandbox.sock
+      SCRIPT_SANDBOX_WORKDIR: /sandbox
+      SCRIPT_LIBS_DIR: /opt/scriptlibs
+      SCRIPT_MAX_CONCURRENT_RUNS: ${SCRIPT_MAX_CONCURRENT_RUNS:-2}
+    volumes:
+      - agentopt_sandbox_sock:/run/sandbox
+    tmpfs:
+      # Each run's staging directory. On a tmpfs with a ceiling so that a run
+      # cannot fill the host's disk — belt to RLIMIT_FSIZE's braces, and the
+      # cheaper of the two to reason about.
+      - /sandbox:size=512m,mode=0700,uid=10001,gid=10001
+    healthcheck:
+      # Is anyone listening on the socket? The backend's depends_on waits for it.
+      test: ["CMD", "python", "-m", "app.sandbox.server", "--check"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -268,3 +330,7 @@ services:
 volumes:
   agentopt_pgdata:
   agentopt_node_modules:
+  # Carries one unix socket between the backend and the sandbox container. A
+  # named volume rather than a bind mount, and empty on first use so it inherits
+  # the image directory's ownership (see the mkdir/chown in backend/Dockerfile).
+  agentopt_sandbox_sock:

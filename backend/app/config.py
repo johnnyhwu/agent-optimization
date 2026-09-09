@@ -407,10 +407,31 @@ class Settings(BaseSettings):
     # "read it all" is a memory bomb with a friendly face.
     script_max_output_chars: int = 256 * 1024
     script_memory_mb: int = 1024
-    # There is one uvicorn worker. Each run forks a process and holds a worker
-    # thread for up to `script_wall_clock_s`, so this is the number of people who
-    # can press Run at once before the rest queue — deliberately small.
+    # There is one uvicorn worker. Each run holds a worker thread and a socket to
+    # the sandbox container for up to `script_wall_clock_s`, so this is the number
+    # of people who can press Run at once before the rest queue — deliberately
+    # small. (The fork itself happens next door now; the thread is still held.)
     script_max_concurrent_runs: int = 2
+
+    # --- Where the uploaded script actually runs -----------------------------
+    # "sidecar" is the deployed form: a second container in the same pod, running
+    # as a different uid with none of the variables above in its environment.
+    # That container is the sandbox — see app/sandbox/__init__.py.
+    #
+    # The tests set "inprocess", which runs the same supervisor code over a
+    # socketpair in the test process: a real fork under real rlimits, minus the
+    # container boundary no pytest process can create.
+    #
+    # There is deliberately no automatic fallback between them. A missing socket
+    # is a failed run with a sentence, never a quiet demotion to running the
+    # script beside the credentials — that demotion is the exact failure the
+    # split exists to remove, and it is the kind nobody notices.
+    script_sandbox_transport: str = "sidecar"
+    script_sandbox_socket: str = "/run/sandbox/sandbox.sock"
+    # How long to keep retrying a connection before calling the sandbox absent.
+    # Covers the first run after the stack starts and a sidecar restart between
+    # runs; not a substitute for `depends_on`.
+    script_sandbox_connect_timeout_s: float = 5.0
 
     @field_validator("judge_score_threshold", "early_stop_target_score", mode="before")
     @classmethod

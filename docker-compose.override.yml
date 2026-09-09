@@ -57,3 +57,15 @@ services:
     # `exec` hands PID 1 to pnpm so Ctrl-C stops the dev server promptly instead
     # of waiting out the stop grace period.
     command: ["sh", "-c", "pnpm install --frozen-lockfile && exec pnpm run dev --host 0.0.0.0"]
+
+  sandbox:
+    volumes:
+      # The same live source the backend gets. Both halves of the sandbox come
+      # out of one source tree, so mounting it on only one of them means an edit
+      # takes effect on one side of the socket and not the other — which
+      # presents as a protocol mismatch rather than as a stale container, and
+      # costs an afternoon.
+      #
+      # No --reload here: the supervisor is a socket server, not uvicorn.
+      # `docker compose restart sandbox` is the loop.
+      - ./backend:/app
