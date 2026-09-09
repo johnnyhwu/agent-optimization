@@ -276,6 +276,13 @@ span, is demonstrable on nothing but Docker.
 - **Backend:** FastAPI (async) + SQLAlchemy + Alembic + Pydantic, SSE for live run
   progress. Containerized; Python deps installed with **uv**.
 - **DB:** PostgreSQL (via docker-compose).
+- **Sandbox:** a fourth container, same image as the backend and one command
+  apart, in which uploaded eval-set scripts are executed. It runs as its own
+  unprivileged uid and is given none of the backend's environment — no database
+  URL, no encryption key, no API keys, no CA bundle — so a script that reads
+  everything it can reach finds nothing worth having. Its queries are forwarded
+  over a unix socket to the backend, which owns the connection and answers them.
+  See `backend/app/sandbox/`.
 - **Frontend:** React (Vite). Containerized; Node deps installed with **pnpm**.
   Hand-written CSS design system — no UI framework, no state library, and no
   router package: the view lives in the URL hash, parsed by a ~50-line
@@ -285,9 +292,9 @@ span, is demonstrable on nothing but Docker.
   table; serialized back to JSONL on submit (the API takes JSONL only).
 
 ## Prerequisites
-**Docker (with compose)** — and nothing else. Postgres, the backend and the
-frontend each run as their own container, so no host Python, venv, Node or
-`node_modules` is required. The backend image pins CPython 3.12 (an interpreter
+**Docker (with compose)** — and nothing else. Postgres, the backend, the
+frontend and the script sandbox each run as their own container, so no host
+Python, venv, Node or `node_modules` is required. The backend image pins CPython 3.12 (an interpreter
 the pinned deps have wheels for), which is why the old "find a Python in
 3.10–3.13 / `PYTHON_BIN=…`" dance is gone.
 

@@ -90,6 +90,18 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  sandbox:
+    # Nothing about the sandbox differs between development and deployment, which
+    # is deliberate: it is the container that holds uploaded code, and "it behaved
+    # differently in production" is the last sentence anyone wants to write about
+    # it. Only the two operational settings every service here gets.
+    #
+    # Note what is *still* absent, and must stay absent: the `certs` mount below
+    # is on `backend` only, and none of the credential variables are set here.
+    # The sandbox has no CA material and no secrets by construction.
+    restart: unless-stopped
+    logging: *logging
+
   db:
     environment:
       # No default: compose refuses to start rather than deploy the development

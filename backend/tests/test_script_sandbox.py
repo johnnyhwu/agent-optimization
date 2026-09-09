@@ -16,14 +16,16 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 import subprocess
 import sys
 import textwrap
 
 import pytest
 
+from app.sandbox import supervisor
 from app.services import script_runner
-from app.services.script_runner import Limits, QueryError, _runner_uid, run_script
+from app.services.script_runner import Limits, QueryError, run_script
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
@@ -217,12 +219,20 @@ def test_a_fork_bomb_does_not_escape():
     assert result.error is not None
 
 
-def test_the_child_is_unprivileged_and_carries_its_limits():
-    """Both halves of the containment still arrive, and in the right order.
+def test_the_child_carries_its_limits():
+    """The per-run limits still arrive in the child, asserted from inside it.
 
-    The uid drop is done by Popen and the limits by preexec_fn, which run at
-    different points in the child; asserting them from inside the script is what
-    catches either one silently going missing.
+    This used to check the uid drop as well. That half moved: the script is
+    isolated by running in a different *container* from the backend now, not by a
+    `setuid` this process performs, so there is no uid here to compare against —
+    in the test process the supervisor is us. The uid separation is asserted
+    against a running stack instead (`sandbox_container`), and a sandbox that
+    somehow starts as root refuses to serve at all (`app/sandbox/server.py`).
+
+    What is still worth asserting here is that `_preexec` runs and that the
+    numbers it applies are this run's, not a container-wide default — that is the
+    property that would silently disappear if the limits stopped travelling in
+    the `start` frame.
     """
     result = run("""
         import os, resource
@@ -237,40 +247,37 @@ def test_the_child_is_unprivileged_and_carries_its_limits():
     seen = result.value[0]
     assert seen["nproc"] == [32, 32]
     assert seen["fsize"] == [0, 0]
-    if _runner_uid() is not None:
-        # Privileged enough to drop: the script must not be running as us.
-        assert seen["uid"] != os.getuid()
-        assert seen["uid"] != 0
 
 
-def test_a_source_tree_the_runner_uid_cannot_read_still_runs(tmp_path, monkeypatch):
-    """Regression: the child must not depend on /app being readable.
+def test_the_child_executes_a_copy_of_the_module_not_the_module_in_place(tmp_path):
+    """Regression: the child must not depend on the source tree being readable.
 
-    The child is dropped to another uid, so exec'ing our module straight out of
-    /app required that uid to be able to read it — and /app's permissions come
+    This began as a test about uids — exec'ing our module straight out of /app
+    required the runner uid to be able to read it, and /app's permissions come
     from the host (a bind mount in development, the build context's file modes in
-    the image), not from anything this code controls. A strict umask on the host
-    therefore failed every run with `can't open file ... Permission denied`, right
-    after a successful exec. Here the module's directory is closed to everyone but
-    us, exactly as it was on the host that reported it, and the run must work.
+    the image), not from anything this code controls. A strict umask therefore
+    failed every run with `can't open file ... Permission denied`, right after a
+    successful exec.
+
+    The uid it was written about is gone, but the property it was protecting is
+    not, and it matters more now than it did: the sandbox container is meant to
+    be able to ship `script_runner_child.py` and `/opt/scriptlibs` without the
+    application around them. So the contract is asserted directly instead of
+    through a uid that no longer exists — `_stage` copies the module out, and the
+    modes it sets are load-bearing rather than tidy (tempfile creates 0700, and
+    the copy would otherwise inherit this process's umask).
     """
-    if _runner_uid() is None:
-        pytest.skip("unprivileged: the child is not dropped to another uid here")
+    sandbox = tmp_path / "run"
+    sandbox.mkdir()
+    workdir, child = supervisor._stage(str(sandbox))
 
-    private = tmp_path / "private"
-    private.mkdir()
-    hidden = private / os.path.basename(script_runner.CHILD)
-    hidden.write_bytes(open(script_runner.CHILD, "rb").read())
-    hidden.chmod(0o600)
-    private.chmod(0o700)  # ours to read; unreadable to the uid the child runs as
-    monkeypatch.setattr(script_runner, "CHILD", str(hidden))
-
-    result = run("""
-        def main(database_handler):
-            return [{"question": "q"}]
-    """)
-    assert result.error is None
-    assert result.value == [{"question": "q"}]
+    assert os.path.isdir(workdir)
+    assert os.listdir(workdir) == [], "the script's cwd must stay empty"
+    # Not in the cwd: the script gets an empty directory, the copy sits beside it.
+    assert os.path.dirname(child) != workdir
+    assert stat.S_IMODE(os.stat(workdir).st_mode) == 0o755
+    assert stat.S_IMODE(os.stat(child).st_mode) == 0o644
+    assert open(child, "rb").read() == open(supervisor.CHILD, "rb").read()
 
 
 def test_the_script_working_directory_is_empty():
@@ -293,7 +300,7 @@ def test_a_sandbox_that_cannot_be_laid_out_is_a_result_not_an_exception(monkeypa
     def refuse(*args, **kwargs):
         raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
 
-    monkeypatch.setattr(script_runner.shutil, "copyfile", refuse)
+    monkeypatch.setattr(supervisor.shutil, "copyfile", refuse)
 
     result = run("""
         def main(database_handler):
@@ -302,47 +309,6 @@ def test_a_sandbox_that_cannot_be_laid_out_is_a_result_not_an_exception(monkeypa
     assert result.value is None
     assert result.error is not None
     assert "could not be started" in result.error
-
-
-def test_a_busy_runner_uid_still_lets_the_sandbox_start():
-    """Regression: the fork-bomb limit must not stop the sandbox from starting.
-
-    RLIMIT_NPROC counts tasks per uid across the whole user namespace, which a
-    container shares with its host — so the uid the child is dropped to is
-    routinely busy for reasons this container cannot see. Applying the limit
-    *before* the uid drop made the kernel fail the following `execve` with EAGAIN
-    (`BlockingIOError: [Errno 11] ... '/usr/local/bin/python'`) on every single
-    run, before the script executed a line. Here the runner uid is deliberately
-    put over its limit and the run must still work.
-    """
-    credentials = _runner_uid()
-    if credentials is None:
-        pytest.skip("unprivileged: the child is not dropped to another uid here")
-    uid, gid = credentials
-
-    busy = [
-        subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            user=uid,
-            group=gid,
-            extra_groups=[],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        for _ in range(8)
-    ]
-    try:
-        result = run("""
-            def main(database_handler):
-                return [{"question": "q"}]
-        """, max_processes=4)
-    finally:
-        for proc in busy:
-            proc.kill()
-            proc.wait()
-
-    assert result.error is None
-    assert result.value == [{"question": "q"}]
 
 
 def test_a_sandbox_that_cannot_start_is_a_result_not_an_exception(monkeypatch):
@@ -356,7 +322,7 @@ def test_a_sandbox_that_cannot_start_is_a_result_not_an_exception(monkeypatch):
     def refuse(*args, **kwargs):
         raise BlockingIOError(errno.EAGAIN, os.strerror(errno.EAGAIN), sys.executable)
 
-    monkeypatch.setattr(script_runner.subprocess, "Popen", refuse)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", refuse)
 
     result = run("""
         def main(database_handler):
@@ -380,7 +346,7 @@ def test_a_failed_launch_does_not_leak_file_descriptors(monkeypatch):
     def refuse(*args, **kwargs):
         raise BlockingIOError(errno.EAGAIN, os.strerror(errno.EAGAIN), sys.executable)
 
-    monkeypatch.setattr(script_runner.subprocess, "Popen", refuse)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", refuse)
 
     def open_fds():
         return len(os.listdir("/proc/self/fd"))

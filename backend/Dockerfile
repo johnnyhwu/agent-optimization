@@ -32,17 +32,42 @@ ENV UV_SYSTEM_PYTHON=1 \
 
 WORKDIR /app
 
-# The user an uploaded eval-set script is executed as (app/services/script_runner.py).
+# This image runs in two roles: the API server, and — with `command:` overridden
+# to `python -m app.sandbox.server` — the sandbox container that executes
+# uploaded eval-set scripts. See app/sandbox/__init__.py.
 #
-# A separate uid is not cosmetic here. The server runs as root, and RLIMIT_NPROC —
-# the fork-bomb defence — is simply not enforced against a process holding
-# CAP_SYS_RESOURCE, so a child left running as root would walk through it. The
-# same uid split is what makes /proc/1/environ, the source tree under /app and any
-# mounted CA material unreadable to the script.
+# There used to be a `scriptrunner` account here, created so the server could
+# run as root and `setuid` the script's process down to it. That is gone, and its
+# absence is the point: needing root is what made the arrangement undeployable
+# under a restricted Pod Security Standard, and when the server could not be root
+# the drop silently did not happen at all — leaving an uploaded script running as
+# the server, able to read /proc/1/environ and with it every credential the
+# process was started with.
 #
-# No shell, no home directory, no group memberships: it exists to be dropped to
-# and to own nothing.
-RUN useradd --system --no-create-home --shell /usr/sbin/nologin scriptrunner
+# The boundary is a container now: the sandbox role runs as its own uid, with
+# none of the API server's environment, no CA material and no database. Nothing
+# in it is worth reading, so there is nothing to drop away from.
+#
+# Give that role a *dedicated* uid rather than 65534/nobody — RLIMIT_NPROC is
+# counted per uid across the whole host, so sharing the node's catch-all account
+# reintroduces the EAGAIN-on-execve failure `_preexec` documents. 10001 below is
+# the uid the compose file and the deployment manifests use.
+#
+# app/sandbox/server.py refuses to start as root, so a manifest that forgets the
+# uid fails loudly instead of quietly serving without a boundary.
+ARG SANDBOX_UID=10001
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin \
+            --uid "${SANDBOX_UID}" sandbox
+
+# Where the sandbox role puts its socket and each run's staging directory. Created
+# here, and owned by the sandbox uid, so that a fresh named volume mounted over
+# either one inherits that ownership — which is what keeps compose working
+# without a separate chown step. In Kubernetes the pod's `fsGroup` does the same
+# job for the emptyDir.
+RUN mkdir -p /run/sandbox /sandbox \
+ && chown "${SANDBOX_UID}:${SANDBOX_UID}" /run/sandbox /sandbox \
+ && chmod 0770 /run/sandbox \
+ && chmod 0700 /sandbox
 
 # Copy the requirements alone first so the dependency layer is cached across
 # source-only edits.
@@ -55,14 +80,15 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # --target, not --system, and that is the whole point: the two dependency trees
 # are resolved separately, so adding pandas for user scripts can never move a
 # version the API itself depends on, and a CVE in pandas does not sit in the
-# server process's import path. app/services/script_runner.py puts this directory
+# server process's import path. app/sandbox/supervisor.py puts this directory
 # on the sandbox child's sys.path and nowhere else.
 #
-# The chmod is load-bearing, not tidiness: the child is dropped to the
-# `scriptrunner` uid, and `uv pip install --target` writes with this build's
-# umask — a strict one produces a tree the runner uid cannot read, which is
-# exactly the bug _stage() in script_runner.py exists to document. a+rX (capital
-# X: directories and already-executable files only) leaves nothing writable.
+# The chmod is load-bearing, not tidiness: this layer is built as root while
+# the sandbox role runs as an unprivileged uid, and `uv pip install --target`
+# writes with the build's umask — a strict one produces a tree that uid cannot
+# read, which is exactly the bug _stage() in supervisor.py exists to document.
+# a+rX (capital X: directories and already-executable files only) leaves nothing
+# writable.
 COPY backend/requirements-scripts.txt ./
 RUN uv pip install --target /opt/scriptlibs --no-cache -r requirements-scripts.txt \
  && chmod -R a+rX /opt/scriptlibs

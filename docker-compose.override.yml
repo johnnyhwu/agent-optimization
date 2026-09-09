@@ -57,3 +57,28 @@ services:
     # `exec` hands PID 1 to pnpm so Ctrl-C stops the dev server promptly instead
     # of waiting out the stop grace period.
     command: ["sh", "-c", "pnpm install --frozen-lockfile && exec pnpm run dev --host 0.0.0.0"]
+
+  sandbox:
+    volumes:
+      # The same live source the backend gets. Both halves of the sandbox come
+      # out of one source tree, so mounting it on only one of them means an edit
+      # takes effect on one side of the socket and not the other — which
+      # presents as a protocol mismatch rather than as a stale container, and
+      # costs an afternoon.
+      #
+      # No --reload here: the supervisor is a socket server, not uvicorn.
+      # `docker compose restart sandbox` is the loop.
+      - ./backend:/app
+    tmpfs:
+      # Masks /app/certs, which the mount above would otherwise bring in.
+      #
+      # .dockerignore keeps the CA bundle out of the *image*; this is the other
+      # half of the same rule, for development, where the whole backend tree —
+      # certs included — is bind-mounted in. Without it a developer on a machine
+      # configured for the internal CA runs uploaded scripts in a container that
+      # can read the private PKI material, in the one environment where nobody
+      # is looking for that.
+      #
+      # Empty and unwritable: the sandbox has no use for a certificate. It makes
+      # no outbound TLS calls — it has no credentials to make them with.
+      - /app/certs:size=1k,mode=0500

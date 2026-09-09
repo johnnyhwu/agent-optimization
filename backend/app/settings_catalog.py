@@ -331,6 +331,20 @@ EXCLUDED_SETTINGS: dict[str, str] = {
         "developer would recognise as a preference"
     ),
     "frontend_origin": "CORS. A user-settable origin is a user-settable security boundary",
+    # Where uploaded scripts are executed. The whole point of the sandbox is that
+    # the person running a script does not get to say how it is contained, and
+    # `script_sandbox_transport` in particular decides whether the containment
+    # happens in another container at all — a control on a settings page would be
+    # a button labelled "turn off the security boundary".
+    "script_sandbox_transport": (
+        "decides whether an uploaded script runs in the sandbox container; a "
+        "user-settable containment boundary is not a boundary"
+    ),
+    "script_sandbox_socket": "where the sandbox container listens — a packaging detail",
+    "script_sandbox_connect_timeout_s": (
+        "how long to wait for the sandbox container to come up; an operational "
+        "number, not a preference"
+    ),
     "log_level": "operational, and shared by every request in the process",
     # Identity. Who the caller is, and how that is decided, is emphatically not
     # something the caller configures.

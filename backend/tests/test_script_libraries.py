@@ -20,8 +20,9 @@ import textwrap
 
 import pytest
 
+from app.sandbox import supervisor
 from app.services import script_runner
-from app.services.script_runner import Limits, _runner_uid, run_script
+from app.services.script_runner import Limits, run_script
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
@@ -29,9 +30,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 requires_libs = pytest.mark.skipif(
-    not os.path.isdir(os.path.join(script_runner.SCRIPT_LIBS, "pandas")),
+    not os.path.isdir(os.path.join(supervisor.SCRIPT_LIBS, "pandas")),
     reason=(
-        f"no script libraries at {script_runner.SCRIPT_LIBS} — run this in the "
+        f"no script libraries at {supervisor.SCRIPT_LIBS} — run this in the "
         "backend image, or point SCRIPT_LIBS_DIR at an install of "
         "requirements-scripts.txt"
     ),
@@ -117,9 +118,9 @@ def test_the_library_directory_does_not_widen_the_sandbox(monkeypatch):
     assert "OPENAI_API_KEY" not in seen["env"]
     assert "DATABASE_URL" not in seen["env"]
     assert "hunter2" not in repr(result.value)
-    if _runner_uid() is not None:
-        assert seen["uid"] != os.getuid()
-        assert seen["uid"] != 0
+    # The uid separation this used to assert is the container boundary now, and
+    # in this process the supervisor is us — see `sandbox_container` for the
+    # version of that assertion which still has something to compare against.
 
 
 def test_numeric_libraries_are_pinned_to_one_thread():
@@ -245,7 +246,7 @@ def test_a_missing_library_directory_does_not_break_a_run(monkeypatch, tmp_path)
     nothing at it. Skipping the entry has to be silent, or the feature would be
     broken everywhere it is not deployed.
     """
-    monkeypatch.setattr(script_runner, "SCRIPT_LIBS", str(tmp_path / "not-provisioned"))
+    monkeypatch.setattr(supervisor, "SCRIPT_LIBS", str(tmp_path / "not-provisioned"))
     result = run("""
         import json
 
