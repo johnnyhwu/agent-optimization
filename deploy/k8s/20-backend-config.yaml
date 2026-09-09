@@ -27,13 +27,23 @@ data:
   ROOT_PATH: "/api"
 
   # --- Trusting the internal CA ---------------------------------------------
-  # The path the bundle is mounted at by 40-backend-deployment.yaml. Delete both
-  # if your internal services use publicly-trusted certificates.
+  # Commented out on purpose, and only half of a pair: uncomment it *and* create
+  # the skill-studio-ca Secret (10-secrets.example.yaml), or neither.
+  #
+  # The Secret is optional at the volume (40-backend-deployment.yaml), so a
+  # cluster that skips it still starts. Setting this variable anyway would point
+  # it at a file that is not there — and SSL_CERT_FILE *replaces* the trust store
+  # rather than adding to it, so a missing file leaves nothing trusted at all.
+  # Every outbound HTTPS call then fails with CERTIFICATE_VERIFY_FAILED while the
+  # Pod stays Running and Ready, which is the worst shape a misconfiguration can
+  # take. Left off, the image's own trust store applies and public hosts work;
+  # the failure for forgetting to uncomment it is a TLS error against the
+  # internal host you just issued a certificate for, which points at itself.
   #
   # Not an application setting: nothing in app/config.py reads it. OpenSSL and
   # httpx read it straight from the process environment, which is why one value
   # covers Keycloak, Langfuse, the agent server and the LLM endpoint at once.
-  SSL_CERT_FILE: "/app/certs/ca-bundle.crt"
+  # SSL_CERT_FILE: "/app/certs/ca-bundle.crt"
 
   # --- Which integrations are real ------------------------------------------
   # `fake` is the seeded demo. Turn these on one at a time: WORKSPACE_IMPL is

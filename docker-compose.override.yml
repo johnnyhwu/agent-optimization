@@ -24,6 +24,14 @@ services:
       # this replaces is no longer needed to keep the Documentation page working
       # in development.
       - ./backend:/app
+      # Read-only, and only for the tests: six of them assert a contract between
+      # the backend and a file that is deliberately outside the image — the root
+      # .env.example, two under frontend/src, backend/.dockerignore, and this
+      # file. /app is the backend tree alone, so without this they cannot see
+      # their counterpart. `make test` runs in this container.
+      - .:/repo:ro
+    environment:
+      SKILL_STUDIO_REPO_ROOT: /repo
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:

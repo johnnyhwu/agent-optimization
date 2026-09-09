@@ -51,6 +51,11 @@ kubectl -n skill-studio create secret generic skill-studio-secrets \
 # The internal CA bundle, if internal services use a private CA. It REPLACES the
 # default trust store rather than adding to it, so the file must contain the
 # public roots too — copying a corporate Linux machine's own bundle gets both.
+#
+# Two halves, and both or neither: creating this Secret does nothing until
+# SSL_CERT_FILE is uncommented in 20-backend-config.yaml, and uncommenting that
+# without the Secret leaves nothing trusted at all. Skip both if your internal
+# services present publicly-trusted certificates.
 kubectl -n skill-studio create secret generic skill-studio-ca \
   --from-file=ca-bundle.crt=/etc/ssl/certs/ca-certificates.crt
 

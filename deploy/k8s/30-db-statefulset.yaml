@@ -93,12 +93,21 @@ spec:
               mountPath: /var/lib/postgresql/data
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "agentopt", "-d", "agentopt"]
+              # -h 127.0.0.1, and it is the whole point of the probe. While the
+              # entrypoint runs the scripts in /docker-entrypoint-initdb.d it
+              # starts a temporary server with listen_addresses='' — reachable
+              # on the unix socket, not on TCP. A socket pg_isready therefore
+              # answers "accepting connections" in the middle of initialisation,
+              # and the Pod goes Ready before anything can connect to it. The
+              # migrate Job that README.md runs next would then fail to connect,
+              # and with backoffLimit it can exhaust its retries on a database
+              # that was only ever a few seconds away.
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "agentopt", "-d", "agentopt"]
             initialDelaySeconds: 10
             periodSeconds: 5
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "agentopt", "-d", "agentopt"]
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "agentopt", "-d", "agentopt"]
             # Generous, and deliberately so: a liveness probe that fires during
             # crash recovery restarts the database in the middle of recovering,
             # which turns a slow start into a loop.

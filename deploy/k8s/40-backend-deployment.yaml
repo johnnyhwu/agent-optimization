@@ -252,7 +252,8 @@ spec:
             secretName: skill-studio-ca
             # Optional so that a cluster whose services use publicly-trusted
             # certificates can simply not create the Secret, rather than having
-            # the Pod stay Pending with "secret not found". SSL_CERT_FILE in the
-            # ConfigMap must come out too — pointing it at a file that is not
-            # there breaks every outbound HTTPS call.
+            # the Pod stay Pending with "secret not found". SSL_CERT_FILE is
+            # commented out in the ConfigMap to match: the two are a pair, and
+            # the variable pointing at a file that is not there breaks every
+            # outbound HTTPS call without changing the Pod's status.
             optional: true

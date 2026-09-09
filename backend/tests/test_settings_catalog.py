@@ -29,15 +29,11 @@ frontend half of the same contract lives in
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from app import settings_catalog as catalog
 from app.config import Settings
 from app.optimizer import hyperparams, stopping
 from app.schemas import OptimizationConfig, OptimizationRunCreate, RunConfig
 from app.services import run_config
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # --- A: nothing on Settings escapes a decision ------------------------------
@@ -128,8 +124,8 @@ def test_every_catalogue_entry_names_a_real_setting():
 
 # --- C: every offered key is actually configurable by a deployment ----------
 
-def test_every_catalogue_entry_has_a_variable_in_env_example():
-    text = (REPO_ROOT / ".env.example").read_text()
+def test_every_catalogue_entry_has_a_variable_in_env_example(repo_root):
+    text = (repo_root / ".env.example").read_text()
     missing = [
         spec.setting.upper()
         for spec in catalog.CATALOG
@@ -184,7 +180,7 @@ def test_catalogue_bounds_are_no_looser_than_any_consumer():
 
 # --- The JSON the frontend contract test reads ------------------------------
 
-def test_the_exported_json_matches_the_catalogue():
+def test_the_exported_json_matches_the_catalogue(repo_root):
     """`frontend/src/settings_catalog.json` is generated, checked in, and read by
     a `node --test` file that cannot import Python. This is the half that keeps
     it honest; the other half is the frontend test that reads it.
@@ -192,7 +188,7 @@ def test_the_exported_json_matches_the_catalogue():
     import json
 
     exported = json.loads(
-        (REPO_ROOT / "frontend" / "src" / "settings_catalog.json").read_text()
+        (repo_root / "frontend" / "src" / "settings_catalog.json").read_text()
     )
     assert exported == catalog.as_json(), (
         "frontend/src/settings_catalog.json is out of date. Regenerate it with "
