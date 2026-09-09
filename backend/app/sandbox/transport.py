@@ -25,7 +25,7 @@ import socket
 import threading
 import time
 
-from app.sandbox.model import Limits
+from app.sandbox.model import Limits, SandboxUnavailable
 
 # How long a run may sit on the socket beyond its own wall clock before the
 # backend gives up on the sidecar. The supervisor owns the real deadline and
@@ -100,9 +100,11 @@ def sidecar(limits: Limits, path: str | None = None, connect_timeout_s: float | 
         except (FileNotFoundError, ConnectionRefusedError) as exc:
             conn.close()
             if time.monotonic() >= deadline:
-                # Reported as an OSError so it reaches `launch_reason` like every
-                # other way the sandbox can fail to start.
-                raise OSError(
+                # A dedicated type, not a bare OSError: `launch_reason` has to
+                # tell "the sandbox is not running" apart from the identical
+                # errno arriving from a sandbox that is running fine and failed
+                # inside itself. See SandboxUnavailable.
+                raise SandboxUnavailable(
                     exc.errno or errno.ENOENT,
                     f"the sandbox did not answer on {path}",
                 ) from None

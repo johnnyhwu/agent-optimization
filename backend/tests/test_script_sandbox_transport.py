@@ -159,3 +159,18 @@ def test_a_timeout_in_one_run_leaves_the_other_alone():
     assert results["quick"].error is None
     assert results["quick"].value == [{"question": "q"}]
     assert results["slow"].orphans == 0
+
+
+def test_an_absent_sandbox_raises_the_type_that_names_it(tmp_path):
+    """The distinction `launch_reason` relies on is carried by the type.
+
+    If this ever becomes a plain OSError again, the "sandbox is not up" message
+    silently starts firing for failures that happen *inside* a running sandbox.
+    Nothing else would fail, which is why it is asserted here directly.
+    """
+    from app.sandbox.model import SandboxUnavailable
+
+    with pytest.raises(SandboxUnavailable):
+        with transport.sidecar(Limits(), path=str(tmp_path / "absent.sock"),
+                               connect_timeout_s=0.2):
+            pass

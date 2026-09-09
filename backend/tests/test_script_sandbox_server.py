@@ -145,3 +145,97 @@ def test_the_healthcheck_reports_a_listener_and_the_lack_of_one(tmp_path):
         assert server._check(path) == 0
     finally:
         sock.close()
+
+
+class _FlakySocket:
+    """A listening socket whose accept() fails on cue.
+
+    A stub rather than a real socket with a patched method, because
+    `socket.accept` is read-only — and because closing a socket does not
+    reliably wake a thread already blocked in `accept()`, so a test driven that
+    way is testing the platform's scheduling, not this loop.
+    """
+
+    def __init__(self, *errnos):
+        self.raised = []
+        self._queue = list(errnos)
+
+    def accept(self):
+        if not self._queue:
+            raise AssertionError("the loop asked for more connections than expected")
+        number = self._queue.pop(0)
+        self.raised.append(number)
+        raise OSError(number, os.strerror(number))
+
+
+def test_a_transient_accept_failure_does_not_end_the_accept_loop():
+    """EMFILE is self-clearing; treating it as shutdown takes the sandbox down for good.
+
+    The loop used to return on any OSError from `accept()`, and `main()` then
+    exited 0 — so a burst that exhausted the descriptor table left a container
+    that had "succeeded" and stopped serving. The base compose file sets no
+    restart policy, so nothing would have brought it back, and every script run
+    afterwards would have reported that the sandbox was not up.
+
+    The descriptors come back as the runs in flight finish, so the only correct
+    response is to wait and ask again.
+    """
+    import errno
+
+    sock = _FlakySocket(errno.EMFILE, errno.ENFILE, errno.ECONNABORTED, errno.EBADF)
+    server.serve(sock, max_runs=2)
+
+    # It kept going through all three transient failures and stopped only on the
+    # one that means the socket is gone.
+    assert sock.raised == [errno.EMFILE, errno.ENFILE, errno.ECONNABORTED, errno.EBADF]
+
+
+def test_a_dead_listening_socket_does_end_the_accept_loop():
+    """The fix must not turn an unrecoverable socket into an infinite spin."""
+    import errno
+
+    sock = _FlakySocket(errno.EBADF)
+    server.serve(sock, max_runs=2)
+    assert sock.raised == [errno.EBADF]
+
+
+# --- Packaging: the sandbox must not be handed the CA bundle -----------------
+# `backend/certs/` is gitignored, so it is empty on a clean checkout and holds a
+# real private-PKI bundle on every machine set up per the README's internal-CA
+# instructions. That is precisely the case these guard: the failure only exists
+# where there is something to leak, which is the worst place for it to be
+# untested. The container test asserts the outcome; these assert the two
+# mechanisms that produce it, and run everywhere.
+
+def _repo_root():
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return root
+
+
+def test_the_ca_bundle_is_kept_out_of_the_image():
+    """`COPY backend/ .` would otherwise bake it in, and the sandbox runs that image."""
+    path = os.path.join(_repo_root(), ".dockerignore")
+    if not os.path.exists(path):
+        pytest.skip(".dockerignore is outside the backend image")
+    ignored = open(path, encoding="utf-8").read()
+    assert "backend/certs/" in ignored, (
+        "backend/certs/ must be excluded from the build context: the image it "
+        "would land in is the one the sandbox container runs"
+    )
+
+
+def test_development_masks_the_ca_bundle_in_the_sandbox():
+    """The other half of the same rule, for the bind-mounted development stack.
+
+    .dockerignore cannot help here: docker-compose.override.yml mounts the whole
+    backend tree — certs included — over /app in both containers.
+    """
+    path = os.path.join(_repo_root(), "docker-compose.override.yml")
+    if not os.path.exists(path):
+        pytest.skip("compose files are outside the backend image")
+    overlay = open(path, encoding="utf-8").read()
+    sandbox_block = overlay.split("\n  sandbox:")[-1]
+    assert "/app/certs" in sandbox_block, (
+        "the sandbox service must mask /app/certs; the ./backend:/app mount "
+        "brings the CA bundle in on any machine configured for the internal CA"
+    )

@@ -24,6 +24,21 @@ frontend/
 **/.env.*
 !**/.env.example
 
+# The internal CA bundle. Gitignored, so it is absent on a clean checkout and
+# present on every machine set up per the README's internal-CA instructions —
+# which is exactly the case that matters, because `COPY backend/ .` would
+# otherwise bake it into the image.
+#
+# That image is also what the sandbox container runs, and the sandbox is
+# supposed to hold no CA material at all (app/sandbox/__init__.py). Baking it in
+# would put private-PKI material inside the container that executes uploaded
+# code, and would do it only on the machines where there is something to leak.
+#
+# The backend still gets it, by the mount docker-compose.prod.yml already makes
+# at /app/certs — which is the reason that mount exists rather than a rebuild.
+backend/certs/
+!backend/certs/README.md
+
 **/__pycache__/
 **/*.pyc
 **/.venv/

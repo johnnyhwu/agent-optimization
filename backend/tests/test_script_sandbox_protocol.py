@@ -238,3 +238,89 @@ def test_an_unknown_limit_field_does_not_fail_the_run():
     """A backend one deploy ahead of its sidecar degrades, it does not break."""
     limits = protocol.limits_from_frame({"limits": {"something_new": 5, "max_queries": 9}})
     assert limits.max_queries == 9
+
+
+# --- A lost run must never read as a bad script ------------------------------
+# Every one of these was a real defect: the backend returned a RunResult with
+# neither a value nor an error, which reads three layers up as "main() returned
+# None". The sandbox dying was therefore reported to the person who uploaded the
+# file as a bug in their code, and written to the audit log as a clean run.
+
+def test_a_socket_that_breaks_while_sending_the_script_is_reported():
+    def handler(rx, tx, sock):
+        sock.close()  # gone before the start frame lands
+
+    with _scripted_peer(handler) as connect:
+        result = run_script("def main(h): return []", FakeExecutor(), Limits(), connect=connect)
+
+    assert result.value is None
+    assert result.error is not None
+    assert "run was lost" in result.error
+
+
+def test_a_socket_that_breaks_while_returning_rows_is_reported():
+    """The sandbox asks a query, then vanishes before it can be answered."""
+
+    def handler(rx, tx, sock):
+        rx.readline()  # start
+        tx.write(json.dumps({"t": "sql", "sql": "SELECT 1", "params": None}) + "\n")
+        tx.flush()
+        sock.close()
+
+    executor = FakeExecutor()
+    with _scripted_peer(handler) as connect:
+        result = run_script("x", executor, Limits(), connect=connect)
+
+    assert result.value is None
+    assert result.error is not None
+    assert "run was lost" in result.error
+
+
+def test_a_lost_run_is_never_an_empty_success():
+    """The property behind all of the above, stated once.
+
+    `_execute` in the router turns `value=None, error=None` into a complaint
+    about the script's return type, and `_audit` logs it as outcome=ok. So a
+    RunResult that carries neither is not merely unhelpful — it is actively
+    wrong twice, and it is the shape a container boundary produces that a
+    function call never did.
+    """
+
+    def handler(rx, tx, sock):
+        rx.readline()
+        sock.close()
+
+    with _scripted_peer(handler) as connect:
+        result = run_script("x", FakeExecutor(), Limits(), connect=connect)
+
+    assert not (result.value is None and result.error is None), (
+        "a lost run must carry an error; without one it is reported as a bad script"
+    )
+
+
+def test_a_supervisor_side_enoent_is_not_blamed_on_the_service_being_down():
+    """The same errno, two very different call-outs.
+
+    `ENOENT` from the transport means the sandbox container is not running.
+    `ENOENT` forwarded from a supervisor that *is* running means something
+    inside it failed — a missing staging volume, an interpreter that would not
+    exec. Telling an operator to go check a service that is up, while the real
+    fault is inside it, is the kind of message that costs an hour.
+    """
+    import errno as _errno
+
+    def handler(rx, tx, sock):
+        rx.readline()
+        tx.write(
+            protocol.done_frame(launch=OSError(_errno.ENOENT, "No such file or directory"))
+            + "\n"
+        )
+        tx.flush()
+
+    with _scripted_peer(handler) as connect:
+        result = run_script("x", FakeExecutor(), Limits(), connect=connect)
+
+    assert result.error is not None
+    assert "could not be started" in result.error
+    assert "not answering" not in result.error, "this sandbox is up; do not say it is down"
+    assert "is not up" not in result.error

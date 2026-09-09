@@ -48,7 +48,13 @@ from app.sandbox import transport as _transport
 # keep one import site for the sandbox's vocabulary. They live in their own
 # module because the supervisor needs `Limits` without needing a database, and
 # `script_executor` needs `Limits` and `QueryError` without needing either half.
-from app.sandbox.model import Limits, QueryError, QueryLog, RunResult  # noqa: F401
+from app.sandbox.model import (  # noqa: F401
+    Limits,
+    QueryError,
+    QueryLog,
+    RunResult,
+    SandboxUnavailable,
+)
 
 # The one import that crosses into the sandbox's half, and only in this
 # direction: the child is stdlib-only so that it can run with no `app` package on
@@ -87,6 +93,22 @@ def run_script(source: str, executor, limits: Limits | None = None, *, connect=N
     return result
 
 
+def _lost(detail: str) -> str:
+    """One sentence for every way the conversation with the sandbox can break.
+
+    Kept in one place because the failures it covers are indistinguishable to
+    the person who pressed Run — the sandbox container died, was restarted
+    underneath the run, or stopped answering — and because the thing that
+    matters about all of them is the same: this is not the script's fault, and
+    the run did not produce a result.
+    """
+    return (
+        f"The run was lost: the sandbox {detail}. Nothing was returned, so this "
+        "is not a result to act on — try again, and if it keeps happening this "
+        "needs an administrator."
+    )
+
+
 def _converse(source, executor, limits: Limits, result: RunResult, to_sandbox, from_sandbox):
     """The RPC loop: hand over the source, then answer queries until `done`.
 
@@ -98,10 +120,17 @@ def _converse(source, executor, limits: Limits, result: RunResult, to_sandbox, f
     rather than returned — a run we cannot account for is not a run we should
     report as clean.
     """
+    # Every early return below sets an error, and that is not defensive tidiness.
+    # A RunResult with no error and no value reads, three layers up, as "main()
+    # returned None" — so a sandbox that died or wedged would be reported to the
+    # user as a bug in the script they uploaded, and logged by `_audit` as a run
+    # that went fine. Before the split this could not happen: there was always a
+    # process to ask, and `_exit_reason` always had something to say about it.
     try:
         to_sandbox.write(protocol.start_frame(source, limits) + "\n")
         to_sandbox.flush()
-    except (BrokenPipeError, OSError):
+    except (BrokenPipeError, OSError) as exc:
+        result.error = _lost(f"the script could not be sent to it ({exc})")
         return
 
     verdict = None
@@ -109,14 +138,19 @@ def _converse(source, executor, limits: Limits, result: RunResult, to_sandbox, f
     while True:
         try:
             line = from_sandbox.readline()
-        except OSError:
+        except OSError as exc:
+            # Includes the socket deadline: `transport` sets a timeout of the
+            # wall clock plus a grace period, so a supervisor that stops
+            # answering surfaces here rather than holding the worker thread.
+            result.value = None
+            result.error = _lost(f"it stopped answering ({exc})")
             return
         if not line:
             # The supervisor went away without a verdict *and* without a `done`.
             # Anything already collected is unaccountable, so it is not kept.
             result.value = None
-            result.error = result.error or (
-                "The sandbox stopped answering before the script finished."
+            result.error = result.error or _lost(
+                "it stopped answering before the script finished"
             )
             return
         try:
@@ -153,7 +187,9 @@ def _converse(source, executor, limits: Limits, result: RunResult, to_sandbox, f
         try:
             to_sandbox.write(payload + "\n")
             to_sandbox.flush()
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError) as exc:
+            result.value = None
+            result.error = _lost(f"the query results could not be sent to it ({exc})")
             return
 
 
@@ -311,10 +347,12 @@ def launch_reason(exc: OSError) -> str:
             "scripts run as. Try again in a moment; if it persists, this needs "
             "an administrator."
         )
-    if exc.errno in (errno.ENOENT, errno.ECONNREFUSED, errno.ECONNRESET, errno.EPIPE):
-        # Named separately because the action is different: nothing about the
-        # script or the limits will change this, and the person who can fix it is
-        # whoever runs the deployment.
+    if isinstance(exc, SandboxUnavailable):
+        # Decided by the type, never by the errno. The transport raises this when
+        # it cannot reach the container at all; the same errno forwarded from a
+        # supervisor that *is* running means something else entirely, and falls
+        # through to the plain message below rather than sending an operator to
+        # check a service that is up.
         return (
             "The script could not be started: the sandbox service is not "
             "answering. Scripts run in a separate container from the rest of the "

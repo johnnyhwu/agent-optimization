@@ -15,6 +15,22 @@ class QueryError(RuntimeError):
     """The database refused a statement. Raised into the script, catchable there."""
 
 
+class SandboxUnavailable(OSError):
+    """The sandbox container could not be reached at all.
+
+    A distinct type rather than an errno, because the errno cannot carry the
+    distinction. `ENOENT` from the transport means "there is no socket, the
+    sandbox is not running"; the very same `ENOENT`, forwarded from a healthy
+    supervisor that failed to lay out a run, means "the sandbox is up and
+    something inside it is wrong" — a missing staging volume, an interpreter
+    that would not exec. Those send whoever is on call to opposite ends of the
+    deployment, so they must not share a sentence.
+
+    Subclasses OSError so that `run_script` keeps catching it with everything
+    else that can go wrong on the way to a process.
+    """
+
+
 @dataclass
 class Limits:
     # Per query. Breaching it raises into the script rather than truncating:

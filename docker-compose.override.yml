@@ -69,3 +69,16 @@ services:
       # No --reload here: the supervisor is a socket server, not uvicorn.
       # `docker compose restart sandbox` is the loop.
       - ./backend:/app
+    tmpfs:
+      # Masks /app/certs, which the mount above would otherwise bring in.
+      #
+      # .dockerignore keeps the CA bundle out of the *image*; this is the other
+      # half of the same rule, for development, where the whole backend tree —
+      # certs included — is bind-mounted in. Without it a developer on a machine
+      # configured for the internal CA runs uploaded scripts in a container that
+      # can read the private PKI material, in the one environment where nobody
+      # is looking for that.
+      #
+      # Empty and unwritable: the sandbox has no use for a certificate. It makes
+      # no outbound TLS calls — it has no credentials to make them with.
+      - /app/certs:size=1k,mode=0500

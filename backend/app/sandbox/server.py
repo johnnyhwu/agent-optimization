@@ -20,10 +20,18 @@ import socket
 import stat
 import sys
 import threading
+import time
 
 from app.sandbox import protocol, supervisor
 
 DEFAULT_SOCKET = "/run/sandbox/sandbox.sock"
+
+# accept() failures that mean "try again", not "stop serving". EMFILE/ENFILE
+# clear as running scripts release their descriptors; ECONNABORTED is a peer
+# that gave up between the SYN and the accept; EINTR is a signal.
+_TRANSIENT_ACCEPT_ERRORS = frozenset(
+    {errno.EMFILE, errno.ENFILE, errno.ECONNABORTED, errno.EINTR, errno.EAGAIN}
+)
 
 
 def check_uid(allow_root: bool = False) -> None:
@@ -89,7 +97,25 @@ def serve(sock: socket.socket, max_runs: int) -> None:
     while True:
         try:
             conn, _ = sock.accept()
-        except OSError:
+        except OSError as exc:
+            # Not every OSError here is a shutdown, and treating them alike is
+            # how a sandbox stops serving without anyone noticing. Running out
+            # of descriptors (EMFILE/ENFILE) is transient and self-clearing —
+            # the runs in flight will return theirs — but it would otherwise
+            # end this loop, exit 0, and leave the container "successfully"
+            # dead: the base compose file sets no restart policy, so nothing
+            # would bring it back, and every script run afterwards would report
+            # that the sandbox is not up.
+            if exc.errno in _TRANSIENT_ACCEPT_ERRORS:
+                time.sleep(0.1)
+                continue
+            # EBADF/EINVAL and anything else: the socket is not coming back,
+            # so spinning on it would be worse than stopping.
+            #
+            # Note this is not how the container shuts down — that is SIGTERM,
+            # which never reaches this branch. Closing the listening socket does
+            # not reliably wake a thread already blocked in accept(), so nothing
+            # should be built on the assumption that it does.
             return
         if not live.acquire(blocking=False):
             _refuse(conn)
