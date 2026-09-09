@@ -26,8 +26,8 @@ def test_the_contract_is_served_from_the_repository_file():
 def test_the_served_text_is_byte_for_byte_the_file():
     from pathlib import Path
 
-    root = Path(docs_router.__file__).resolve().parents[3]
-    on_disk = (root / "docs/agent-server-api.md").read_text("utf-8")
+    backend = Path(docs_router.__file__).resolve().parents[2]
+    on_disk = (backend / "docs/agent-server-api.md").read_text("utf-8")
 
     assert docs_router.get_doc("agent-server", subject="alice").markdown == on_disk
 
@@ -55,14 +55,14 @@ def test_traversal_shapes_are_simply_not_in_the_map(name):
     assert caught.value.status_code == 404
 
 
-def test_the_docs_directory_is_found_rather_than_assumed(configure, tmp_path):
-    """The path that only breaks in a container.
+def test_the_docs_directory_can_be_pointed_elsewhere(configure, tmp_path):
+    """One path now, plus an override.
 
-    `parents[3]` is the repository root in a checkout and `/` inside the image —
-    the backend's Docker build context is `./backend`, so the documents are a
-    level above anything that can be COPYed in, and compose mounts them at
-    `/app/docs` instead. Assuming either one alone leaves the Documentation page
-    and every "?" help link answering 500 in exactly one of the two.
+    `parents[2]` is `backend/` in a checkout and `/app` in the image, because the
+    documents live inside the backend directory and are COPYed to the same place
+    beside `app/`. That is why there is no longer a list of candidates to search:
+    the two cases have the same answer. `docs_dir` remains for a deployment that
+    mounts them somewhere else entirely.
     """
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -71,7 +71,7 @@ def test_the_docs_directory_is_found_rather_than_assumed(configure, tmp_path):
     with configure(docs_dir=str(elsewhere)):
         assert docs_router.get_doc("agent-server", subject="alice").markdown == "# Moved\n"
 
-    # Unset, it finds the checkout's own copy without being told.
+    # Unset, it finds the copy beside the code without being told.
     assert "chat endpoint" in (
         docs_router.get_doc("agent-server", subject="alice").markdown.lower()
     )

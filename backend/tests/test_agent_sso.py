@@ -412,14 +412,13 @@ async def test_every_expiry_message_carries_the_marker(configure):
         )
 
 
-def test_the_marker_is_what_the_browser_looks_for():
+def test_the_marker_is_what_the_browser_looks_for(repo_root):
     """The two halves of the contract, side by side. `session_expiry.js` holds
     its own copy — one string in two languages cannot be shared, so it is
     asserted equal instead."""
-    import pathlib as _pathlib
     import re
 
-    js = _pathlib.Path(__file__).parents[2] / "frontend" / "src" / "session_expiry.js"
+    js = repo_root / "frontend" / "src" / "session_expiry.js"
     found = re.search(r'SESSION_MARKER\s*=\s*"([^"]+)"', js.read_text())
     assert found, "session_expiry.js no longer defines SESSION_MARKER"
     assert found.group(1) == agent_sso.SESSION_MARKER, (

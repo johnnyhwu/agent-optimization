@@ -1,0 +1,22 @@
+-- Extensions the application's first migration needs, created here rather than
+-- there.
+--
+-- `alembic/versions/0001_stage1_schema.py` opens with
+-- `CREATE EXTENSION IF NOT EXISTS pgcrypto` because the schema's primary keys
+-- default to `gen_random_uuid()`. In PostgreSQL 16 pgcrypto is *not* a trusted
+-- extension, so creating it requires a superuser.
+--
+-- That worked for as long as the application connected as the account
+-- `POSTGRES_USER` names, which the official entrypoint makes the bootstrap
+-- superuser. It is a hidden premise, and the kind that holds right up until the
+-- deployment that breaks it: a managed PostgreSQL service, or a DBA who hands
+-- out an ordinary owner account, and the very first migration fails with
+-- "permission denied to create extension".
+--
+-- This script runs as that bootstrap superuser during `initdb`, before anything
+-- else can connect. The migration's own statement stays where it is and becomes
+-- a no-op: `IF NOT EXISTS` on an extension that already exists returns without
+-- checking privileges, so it neither fails for an unprivileged account nor
+-- stops working for a database that was created from the plain `postgres:16`
+-- image.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;

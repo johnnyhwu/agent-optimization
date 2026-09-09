@@ -1,0 +1,99 @@
+# CI for the frontend image.
+#
+# One of three pipelines, one per deployable directory. Point Azure DevOps at
+# this file (Pipelines → New → "Existing Azure Pipelines YAML file" →
+# /frontend/azure-pipelines.yml) and a push touching `frontend/` runs the unit
+# tests, builds the nginx image and pushes it to the registry.
+#
+# The three placeholder values below are the same three each of the three
+# pipelines needs — see the longer explanation at the top of
+# backend/azure-pipelines.yml.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - frontend/*
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - frontend/*
+
+variables:
+  dockerRegistryServiceConnection: 'REPLACE-WITH-SERVICE-CONNECTION-NAME'
+  containerRegistry: 'REPLACE-WITH-REGISTRY.example.com'
+  imageRepository: 'skill-studio/frontend'
+  buildContext: '$(Build.SourcesDirectory)/frontend'
+  dockerfilePath: '$(Build.SourcesDirectory)/frontend/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - task: NodeTool@0
+    displayName: Use Node 20
+    inputs:
+      # Matches the `node:20-slim` base in frontend/Dockerfile. The tests run on
+      # the agent rather than in the image because the deployed image is nginx
+      # with static files in it — it has no Node in it to run them with.
+      versionSpec: '20.x'
+
+  # pnpm, not npm. frontend/CLAUDE.md requires it and
+  # frontend/src/lockfile_contract.test.js fails the build if the lockfile is not
+  # pnpm's — an `npm install` here would rewrite it into package-lock.json and
+  # the test would say so.
+  - script: corepack enable && corepack prepare pnpm@10.33.0 --activate
+    displayName: Enable pnpm
+    # The same version frontend/Dockerfile pins, and it has to stay that way:
+    # this step installs the dependencies the unit tests run against, and the
+    # image installs them again from the same lockfile. `pnpm@latest` would mean
+    # a pnpm major release changing what CI does on a day nothing here changed.
+
+  - script: pnpm install --frozen-lockfile
+    displayName: Install dependencies
+    workingDirectory: $(buildContext)
+    # --frozen-lockfile, so CI fails on a lockfile that does not match
+    # package.json rather than quietly resolving something else than a developer
+    # has.
+
+  - script: pnpm test
+    displayName: Run the unit tests
+    workingDirectory: $(buildContext)
+    # `node --test src/*.test.js`: no DOM, no network, no browser to install.
+
+  - task: Docker@2
+    displayName: Build the frontend image
+    inputs:
+      command: build
+      repository: $(imageRepository)
+      dockerfile: $(dockerfilePath)
+      buildContext: $(buildContext)
+      containerRegistry: $(dockerRegistryServiceConnection)
+      # The nginx stage. Without this the build would stop at `dev`, the Vite
+      # dev-server stage, and ship a development server as production.
+      arguments: '--target runner'
+      tags: |
+        $(tag)
+        $(Build.SourceVersion)
+    env:
+      # The runner stage uses `COPY --chmod`, which is BuildKit-only. Hosted
+      # agents default to BuildKit already; this makes it not depend on that.
+      DOCKER_BUILDKIT: 1
+
+  - task: Docker@2
+    displayName: Push the image
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    inputs:
+      command: push
+      repository: $(imageRepository)
+      containerRegistry: $(dockerRegistryServiceConnection)
+      tags: |
+        $(tag)
+        $(Build.SourceVersion)

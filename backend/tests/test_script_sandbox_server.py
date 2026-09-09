@@ -205,35 +205,56 @@ def test_a_dead_listening_socket_does_end_the_accept_loop():
 # instructions. That is precisely the case these guard: the failure only exists
 # where there is something to leak, which is the worst place for it to be
 # untested. The container test asserts the outcome; these assert the two
-# mechanisms that produce it, and run everywhere.
+# mechanisms that produce it, from the checkout — see the `repo_root` fixture for
+# why that is a fixture rather than a path derived from __file__.
 
-def _repo_root():
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return root
+def test_the_ca_bundle_is_kept_out_of_the_image(repo_root):
+    """`COPY . .` would otherwise bake it in, and the sandbox runs that image.
 
-
-def test_the_ca_bundle_is_kept_out_of_the_image():
-    """`COPY backend/ .` would otherwise bake it in, and the sandbox runs that image."""
-    path = os.path.join(_repo_root(), ".dockerignore")
-    if not os.path.exists(path):
-        pytest.skip(".dockerignore is outside the backend image")
-    ignored = open(path, encoding="utf-8").read()
-    assert "backend/certs/" in ignored, (
-        "backend/certs/ must be excluded from the build context: the image it "
-        "would land in is the one the sandbox container runs"
+    The file to read is `backend/.dockerignore`, not the repository root's: the
+    backend's build context is `./backend`, and Docker reads the .dockerignore at
+    the root of the context and nowhere else. A rule left behind at the old
+    location would be silently inert — which is the failure mode worth a test,
+    since nothing about the build would announce it.
+    """
+    ignored = (repo_root / "backend" / ".dockerignore").read_text(encoding="utf-8")
+    assert "\ncerts/" in ignored, (
+        "certs/ must be excluded from the build context: the image it would "
+        "land in is the one the sandbox container runs"
     )
 
 
-def test_development_masks_the_ca_bundle_in_the_sandbox():
+def test_bytecode_rules_are_recursive(repo_root):
+    """The same silent-failure shape as the rule above, one line down.
+
+    A .dockerignore pattern is matched against a file's whole path relative to
+    the context root, so `__pycache__/` excludes exactly one directory — the one
+    at the top — and every `__pycache__` that actually exists is nested. Dropping
+    the `**/` prefix therefore does not fail: it copies one machine's bytecode
+    into the image, and into the image the sandbox container runs, while the
+    build reports success.
+    """
+    patterns = [
+        line.strip()
+        for line in (repo_root / "backend" / ".dockerignore")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    for name in ("__pycache__/", "*.pyc", ".pytest_cache/", ".venv/"):
+        assert f"**/{name}" in patterns, (
+            f"{name} must be written `**/{name}`: unprefixed, it matches only at "
+            "the root of the build context, and every one that matters is nested"
+        )
+
+
+def test_development_masks_the_ca_bundle_in_the_sandbox(repo_root):
     """The other half of the same rule, for the bind-mounted development stack.
 
     .dockerignore cannot help here: docker-compose.override.yml mounts the whole
     backend tree — certs included — over /app in both containers.
     """
-    path = os.path.join(_repo_root(), "docker-compose.override.yml")
-    if not os.path.exists(path):
-        pytest.skip("compose files are outside the backend image")
-    overlay = open(path, encoding="utf-8").read()
+    overlay = (repo_root / "docker-compose.override.yml").read_text(encoding="utf-8")
     sandbox_block = overlay.split("\n  sandbox:")[-1]
     assert "/app/certs" in sandbox_block, (
         "the sandbox service must mask /app/certs; the ./backend:/app mount "

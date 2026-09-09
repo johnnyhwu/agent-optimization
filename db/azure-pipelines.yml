@@ -1,0 +1,113 @@
+# CI for the database image.
+#
+# One of three pipelines, one per deployable directory. Point Azure DevOps at
+# this file (Pipelines → New → "Existing Azure Pipelines YAML file" →
+# /db/azure-pipelines.yml).
+#
+# The three placeholder values below are the same three each of the three
+# pipelines needs — see the longer explanation at the top of
+# backend/azure-pipelines.yml.
+#
+# There is no test step, and that is not an omission: the image is `postgres:16`
+# plus one init script, and what could go wrong with it — the script failing, or
+# never running because the volume already had data — only shows up against a
+# real data directory. The smoke test below is what can honestly be checked
+# here, and it checks exactly that: bring the image up empty and ask whether the
+# extension exists.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - db/*
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - db/*
+
+variables:
+  dockerRegistryServiceConnection: 'REPLACE-WITH-SERVICE-CONNECTION-NAME'
+  containerRegistry: 'REPLACE-WITH-REGISTRY.example.com'
+  imageRepository: 'skill-studio/db'
+  buildContext: '$(Build.SourcesDirectory)/db'
+  dockerfilePath: '$(Build.SourcesDirectory)/db/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - task: Docker@2
+    displayName: Build the database image
+    inputs:
+      command: build
+      repository: $(imageRepository)
+      dockerfile: $(dockerfilePath)
+      buildContext: $(buildContext)
+      containerRegistry: $(dockerRegistryServiceConnection)
+      tags: |
+        $(tag)
+        $(Build.SourceVersion)
+
+  - script: |
+      set -euo pipefail
+      docker run -d --name dbsmoke-$(Build.BuildId) \
+        -e POSTGRES_PASSWORD=smoke -e POSTGRES_USER=smoke -e POSTGRES_DB=smoke \
+        $(containerRegistry)/$(imageRepository):$(tag)
+      # `-h 127.0.0.1` is what makes this wait for the *real* server. While the
+      # official entrypoint runs the scripts in /docker-entrypoint-initdb.d it
+      # has a temporary server up, started with `listen_addresses=''` — reachable
+      # on the unix socket, on no network address. A plain `pg_isready` inside
+      # the container therefore reports ready while the init script is still
+      # running, and the pgcrypto check below would then run before the extension
+      # exists and fail a perfectly good image. Over TCP there is nothing to talk
+      # to until setup has finished.
+      #
+      # No `$( )` command substitution anywhere in this script: Azure DevOps
+      # rewrites `$(name)` as a pipeline variable before bash sees it.
+      ready=no
+      for _ in {1..30}; do
+        if docker exec dbsmoke-$(Build.BuildId) pg_isready -h 127.0.0.1 -U smoke -d smoke >/dev/null 2>&1; then
+          ready=yes
+          break
+        fi
+        sleep 2
+      done
+      if [ "$ready" != yes ]; then
+        echo "the database did not become ready in 60s"
+        docker logs dbsmoke-$(Build.BuildId)
+        exit 1
+      fi
+      # The one thing this image exists to do. `-t -A` strips the formatting so
+      # the answer is the bare value and not a padded table cell. The result goes
+      # through a file rather than a `$( )` capture, for the reason above.
+      docker exec dbsmoke-$(Build.BuildId) psql -U smoke -d smoke -t -A \
+        -c "SELECT count(*) FROM pg_extension WHERE extname = 'pgcrypto'" > pgcrypto.count
+      if ! grep -qx '1' pgcrypto.count; then
+        echo "pgcrypto was not created by the init script; the first migration will fail"
+        docker logs dbsmoke-$(Build.BuildId)
+        exit 1
+      fi
+      echo "pgcrypto present"
+    displayName: Smoke-test the init script
+
+  - script: docker rm -f dbsmoke-$(Build.BuildId) || true
+    displayName: Tear down the smoke-test container
+    condition: always()
+
+  - task: Docker@2
+    displayName: Push the image
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    inputs:
+      command: push
+      repository: $(imageRepository)
+      containerRegistry: $(dockerRegistryServiceConnection)
+      tags: |
+        $(tag)
+        $(Build.SourceVersion)

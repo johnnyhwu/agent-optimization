@@ -73,3 +73,38 @@ def sandbox_in_process():
         yield
     finally:
         settings.script_sandbox_transport = previous
+
+
+@pytest.fixture(scope="session")
+def repo_root():
+    """The repository root, for the tests that assert a contract with a file
+    outside `backend/`.
+
+    A handful of them have to: the settings catalogue is answerable only against
+    the root `.env.example` and the JSON the frontend reads, the session-expiry
+    marker is one string in two languages, and the packaging guards read
+    `.dockerignore` and `docker-compose.override.yml`. None of those files is in
+    the backend image, and none should be — the image's build context is
+    `./backend`.
+
+    So the path cannot be derived from `__file__` alone. In a checkout it is two
+    levels up; in the image that is `/`, where nothing matches and the tests
+    would fail on files that were never meant to be there. `SKILL_STUDIO_REPO_ROOT`
+    is how CI closes that gap: backend/azure-pipelines.yml bind-mounts the
+    checkout into the test container and points this at it, so these run in the
+    pipeline rather than skipping. The skip is the last resort, for an image run
+    with no checkout beside it — and it is deliberately conditioned on the tree
+    being absent, not on one file being missing, so a *deleted* contract file
+    still fails instead of quietly skipping.
+    """
+    import os
+    from pathlib import Path
+
+    override = os.environ.get("SKILL_STUDIO_REPO_ROOT")
+    root = Path(override) if override else Path(__file__).resolve().parents[2]
+    if not (root / "backend").is_dir() or not (root / "frontend").is_dir():
+        pytest.skip(
+            f"no repository checkout at {root} — these assert contracts with "
+            "files that live outside the backend image (set SKILL_STUDIO_REPO_ROOT)"
+        )
+    return root

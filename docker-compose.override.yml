@@ -19,13 +19,19 @@ services:
     volumes:
       # Live source for --reload; deps live in system site-packages, so this
       # mount cannot shadow them.
+      # The docs the UI serves come along with it: they live at backend/docs/,
+      # so the one mount covers both and the separate `./docs:/app/docs:ro` line
+      # this replaces is no longer needed to keep the Documentation page working
+      # in development.
       - ./backend:/app
-      # The reference documentation the UI serves. It *is* in the image (see
-      # docker-compose.yml), but the mount above replaces the whole of /app with
-      # the backend directory, which does not contain it — so without this line
-      # the Documentation page 500s in development only. Read-only: the UI serves
-      # these files, it never writes them.
-      - ./docs:/app/docs:ro
+      # Read-only, and only for the tests: six of them assert a contract between
+      # the backend and a file that is deliberately outside the image — the root
+      # .env.example, two under frontend/src, backend/.dockerignore, and this
+      # file. /app is the backend tree alone, so without this they cannot see
+      # their counterpart. `make test` runs in this container.
+      - .:/repo:ro
+    environment:
+      SKILL_STUDIO_REPO_ROOT: /repo
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:

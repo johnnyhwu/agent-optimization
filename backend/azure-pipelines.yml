@@ -1,0 +1,172 @@
+# CI for the backend image.
+#
+# One of three pipelines, one per deployable directory. Azure DevOps is pointed
+# at this file (Pipelines → New → "Existing Azure Pipelines YAML file" →
+# /backend/azure-pipelines.yml), and from then on a push that touches `backend/`
+# builds the image, runs the test suite *inside* it, and pushes it to the
+# registry tagged with the build number and the commit.
+#
+# The deployment that follows is a separate thing — a release pipeline that
+# applies deploy/k8s/ with these tags. Nothing here talks to the cluster.
+#
+# ---------------------------------------------------------------------------
+# Before this runs for the first time, three values below have to be filled in.
+# They are placeholders, not defaults, and the pipeline is meant to fail loudly
+# rather than push somewhere unintended:
+#
+#   dockerRegistryServiceConnection
+#       The *name* of a Docker Registry service connection, created once in
+#       Project Settings → Service connections. It holds the registry
+#       credentials, so no password appears in this file or in a variable.
+#   containerRegistry
+#       The registry's login server, e.g. `contoso.azurecr.io`. It must match
+#       the service connection above.
+#   imageRepository
+#       The path within the registry, e.g. `skill-studio/backend`.
+#
+# Ask whoever administers the internal Azure DevOps for all three; they are the
+# same three in each of the three pipelines, differing only in the repository.
+# ---------------------------------------------------------------------------
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - backend/*
+
+# Build pull requests too, but do not push an image from one: a PR build proves
+# the tests pass, and an image nobody has reviewed has no business in the
+# registry. The `push` step below is what enforces that.
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - backend/*
+
+variables:
+  dockerRegistryServiceConnection: 'REPLACE-WITH-SERVICE-CONNECTION-NAME'
+  containerRegistry: 'REPLACE-WITH-REGISTRY.example.com'
+  imageRepository: 'skill-studio/backend'
+  # `./backend`, not the repository root. Each of the three directories builds
+  # from itself — that is the property that lets them have separate pipelines at
+  # all — and the reference documentation the UI serves lives at backend/docs/
+  # so that it is inside this context.
+  buildContext: '$(Build.SourcesDirectory)/backend'
+  dockerfilePath: '$(Build.SourcesDirectory)/backend/Dockerfile'
+  # Two tags on the same image. The build number is what a release pipeline
+  # picks; the commit sha is what tells you months later which source a running
+  # container came from. Deliberately no `latest`: a cluster pulling a moving
+  # tag cannot be rolled back to a known state.
+  tag: '$(Build.BuildId)'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - task: Docker@2
+    displayName: Build the backend image
+    inputs:
+      command: build
+      repository: $(imageRepository)
+      dockerfile: $(dockerfilePath)
+      buildContext: $(buildContext)
+      containerRegistry: $(dockerRegistryServiceConnection)
+      tags: |
+        $(tag)
+        $(Build.SourceVersion)
+
+  # The suite runs in the image that was just built, not on the agent. Two of
+  # its files need that: the script-sandbox tests require Linux and the
+  # /opt/scriptlibs tree the Dockerfile installs, and testing the artefact you
+  # are about to ship is the point of building it first.
+  #
+  # A Postgres container comes up alongside it. Locally `make test` runs with
+  # --no-deps and no database, which skips 32 test files; CI is where they are
+  # worth paying for, and running them is the most substantial thing this
+  # pipeline adds over what a developer already does.
+  - script: |
+      set -euo pipefail
+      docker network create ci-$(Build.BuildId)
+      docker run -d --name pg-$(Build.BuildId) --network ci-$(Build.BuildId) \
+        -e POSTGRES_PASSWORD=ci -e POSTGRES_USER=ci -e POSTGRES_DB=ci \
+        postgres:16
+      # Wait for it rather than sleeping: an arbitrary sleep is either slower
+      # than it needs to be or flaky, and usually both.
+      #
+      # `-h 127.0.0.1`, and that flag is the whole point of this loop. The
+      # official entrypoint runs a *temporary* server while it sets the database
+      # up, started with `listen_addresses=''` so that it answers on the unix
+      # socket and on no network address at all. A plain `pg_isready` inside the
+      # container talks to that socket, so it reports ready during setup — while
+      # the tests, which connect over TCP from another container, still cannot
+      # reach anything. Asking over TCP is what makes this loop wait for the real
+      # server rather than the bootstrap one.
+      #
+      # Written without a `$( )` command substitution on purpose. Azure DevOps
+      # rewrites `$(name)` in a script body as a pipeline variable before bash
+      # ever sees it, so shell constructs that share the syntax are a trap.
+      ready=no
+      for _ in {1..30}; do
+        if docker exec pg-$(Build.BuildId) pg_isready -h 127.0.0.1 -U ci -d ci >/dev/null 2>&1; then
+          ready=yes
+          break
+        fi
+        sleep 2
+      done
+      if [ "$ready" != yes ]; then
+        echo "Postgres did not become ready in 60s"
+        docker logs pg-$(Build.BuildId)
+        exit 1
+      fi
+    displayName: Start Postgres for the database-backed tests
+
+  - script: |
+      set -euo pipefail
+      docker run --rm --network ci-$(Build.BuildId) \
+        -e TEST_DATABASE_URL='postgresql+asyncpg://ci:ci@pg-$(Build.BuildId):5432/ci' \
+        -e RUN_MIGRATIONS=0 \
+        -e SKILL_STUDIO_REPO_ROOT=/repo \
+        -v $(Build.SourcesDirectory):/repo:ro \
+        -w /app \
+        $(containerRegistry)/$(imageRepository):$(tag) \
+        pytest -q
+    displayName: Run the test suite inside the image
+    # The working directory must be /app: pytest.ini sets `pythonpath = .`, so
+    # `app` is importable from there and nowhere else. RUN_MIGRATIONS=0 keeps the
+    # entrypoint a passthrough — the DB-backed tests create their own schema and
+    # must not be handed a migrated one.
+    #
+    # The checkout is mounted read-only beside the image because six tests assert
+    # a contract between the backend and a file that is deliberately *not* in the
+    # image: the root .env.example, two files under frontend/src, backend's own
+    # .dockerignore, and docker-compose.override.yml. Without the mount they skip
+    # — and the regressions they exist to catch (a CA bundle baked into the image
+    # the sandbox runs, a settings key with no variable to set it) would pass a
+    # green pipeline. The `repo_root` fixture in backend/tests/conftest.py reads
+    # SKILL_STUDIO_REPO_ROOT and explains the rest.
+
+  - script: |
+      docker rm -f pg-$(Build.BuildId) || true
+      docker network rm ci-$(Build.BuildId) || true
+    displayName: Tear down Postgres
+    condition: always()
+
+  # Note what is *not* run here: there is no linter, formatter or type checker in
+  # this repository — no ruff, black, mypy or pyproject config — so the tests are
+  # the whole quality gate. Adding one is a change to the repository first and to
+  # this file second, in that order.
+
+  - task: Docker@2
+    displayName: Push the image
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    inputs:
+      command: push
+      repository: $(imageRepository)
+      containerRegistry: $(dockerRegistryServiceConnection)
+      tags: |
+        $(tag)
+        $(Build.SourceVersion)

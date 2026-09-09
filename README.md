@@ -4,7 +4,7 @@
 
 Where a domain agent's **skills** get measured, tried and trained. Three
 sections, all runnable end to end; the design record is
-[`docs/spec.md`](docs/spec.md).
+[`backend/docs/spec.md`](backend/docs/spec.md).
 
 - **Evaluation** — upload an eval set, run it through a platform-owned
   orchestrator, and for wrong answers show an LLM **clue-style diagnosis** that
@@ -51,7 +51,7 @@ a deployed build behind nginx — see [Deploying it](#deploying-it).
 
 > **New to this codebase?** Read [The problem](#the-problem) and
 > [Life of a run](#life-of-a-run) below, then
-> **[`docs/spec.md`](docs/spec.md)** — the single authoritative technical
+> **[`backend/docs/spec.md`](backend/docs/spec.md)** — the single authoritative technical
 > document, covering what the system is for, why it is designed this way, and
 > exactly what is and isn't built. It is self-contained: it can be read without
 > the code. This README is the operating manual; the spec is the design and
@@ -60,12 +60,12 @@ a deployed build behind nginx — see [Deploying it](#deploying-it).
 > **Optimize's `routing` mode no longer runs SkillOpt's algorithm.** It
 > optimises a one-line description rather than a skill body, which changes what
 > a minibatch, a merge and a trajectory are each worth — see
-> [`docs/routing-optimization.md`](docs/routing-optimization.md) for the three
+> [`backend/docs/routing-optimization.md`](backend/docs/routing-optimization.md) for the three
 > arguments and what they cost. `isolated` mode is unchanged.
 >
 > ⚠️ **The `§` numbers in code comments are stale.** Around 179 comments cite an
 > older spec that has been deleted (it lives on in git history only). Their
-> numbering does **not** line up with today's `docs/spec.md` — a comment saying
+> numbering does **not** line up with today's `backend/docs/spec.md` — a comment saying
 > `§6.13` means the frontend's three tiers, which is now §10.1. Treat a `§` in
 > the source as a historical marker, not a lookup key.
 
@@ -233,7 +233,7 @@ button.
 Two endpoints on the **agent server**, given as two absolute URLs — nothing is
 appended to a base. Only the first is required. The full contract, written so an
 agent developer can implement from it alone with no other context, is
-**[`docs/agent-server-api.md`](docs/agent-server-api.md)**, and it is readable
+**[`backend/docs/agent-server-api.md`](backend/docs/agent-server-api.md)**, and it is readable
 inside the app under Documentation.
 
 ```
@@ -266,7 +266,7 @@ that exists only in the copy it sent; if the trace shows the skill being read
 but not the marker, the agent is answering from its own files and the run stops
 there instead of spending an hour producing a flat line. Agent developers who
 see that marker in their logs can find out what it is in
-[`docs/agent-server-api.md` §8](docs/agent-server-api.md#8-the-probe-marker-you-will-see-in-your-logs).
+[`backend/docs/agent-server-api.md` §8](backend/docs/agent-server-api.md#8-the-probe-marker-you-will-see-in-your-logs).
 
 With `WORKSPACE_IMPL=fake` (the default) the skill files are canned, and the
 editor says so — so the whole flow, including seeing an override appear in a
@@ -467,7 +467,7 @@ service definition:
 
 | file | what's in it |
 |---|---|
-| `docker-compose.yml` | the three services, minus anything development-only |
+| `docker-compose.yml` | the four services, minus anything development-only |
 | `docker-compose.override.yml` | published ports, source bind-mounts, both reload loops. **Compose loads this automatically**, so everything above this section is unchanged |
 | `docker-compose.prod.yml` | the deployed form — `make prod-up` names its files explicitly, which is what leaves the override out |
 
@@ -562,6 +562,41 @@ curl -N -H "Authorization: Bearer <token>" \
 Events must trickle out one at a time. All at once at the end means
 `proxy_buffering` isn't off and every progress bar in the app will look frozen.
 
+### Deploying to Kubernetes, through Azure DevOps
+
+Compose deploys the whole system to one machine. The other supported shape is a
+Kubernetes cluster fed by three CI pipelines, which is what an internal Azure
+DevOps installation expects.
+
+The repository is laid out for it: **`frontend/`, `backend/` and `db/` each
+build from their own directory and each carry their own
+`azure-pipelines.yml`.** Point Azure DevOps at each file once (Pipelines → New →
+"Existing Azure Pipelines YAML file") and a push touching one directory rebuilds
+and pushes that one image — tagged with the build number and the commit, never
+`latest`.
+
+| pipeline | what it does beyond building |
+|---|---|
+| `backend/azure-pipelines.yml` | runs the test suite **inside the built image**, against a real Postgres. That is what unlocks the 32 test files `make test` skips for want of `TEST_DATABASE_URL` |
+| `frontend/azure-pipelines.yml` | `pnpm install --frozen-lockfile` and `pnpm test` before the image is built |
+| `db/azure-pipelines.yml` | starts the image and checks the `pgcrypto` extension actually exists, since that is the only thing the image adds |
+
+Each file opens with the three values that must be filled in — the registry, its
+service connection, and the repository path within it. There are no working
+defaults, on purpose.
+
+The deployment side is `deploy/k8s/`, applied by a release pipeline in a fixed
+order: migrations run as a **Job that must complete** before the backend
+Deployment is updated. `deploy/k8s/README.md` is the operator's guide — what to
+apply, what to fill in, and the handful of things that fail silently (an ingress
+that buffers SSE, a `PGDATA` that is not a subdirectory, a second backend
+replica).
+
+Two properties of the compose deployment carry over unchanged and are worth
+knowing before reading the manifests: **one backend replica** is a constraint,
+not a starting point, and uploaded scripts run in a **second container in the
+backend's Pod** under a different uid with none of the backend's environment.
+
 ## Going from fake to real
 Out of the box every external dependency is faked, so the demo runs with nothing
 but Docker. The seven seams (spec §3.2) each have their own switch, so you can
@@ -575,7 +610,7 @@ so on.
 | `TRACE_IMPL` | `TraceClient` | read the trace back from Langfuse (`LANGFUSE_HOST` + key pair) |
 | `DIAGNOSIS_IMPL` | `DiagnosisClient` | clue-style diagnosis (spec §8.2) over the same LLM endpoint (`DIAGNOSIS_MODEL`) |
 | `SYNTHESIS_IMPL` | `SynthesisClient` | draft an expected reasoning process from a trace, for a question being promoted out of the playground. Shares the LLM endpoint with the judge and the diagnosis; `SYNTHESIS_MODEL` picks the model |
-| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's skill files: `GET AGENT_SKILLS_URL` ([contract](docs/agent-server-api.md)). Read-only, so it is the cheapest one to switch on first. With no URL there is simply no workspace client: evaluation runs regardless, and the playground, the coverage warning and optimization are what say so |
+| `WORKSPACE_IMPL` | `WorkspaceClient` | read the agent's skill files: `GET AGENT_SKILLS_URL` ([contract](backend/docs/agent-server-api.md)). Read-only, so it is the cheapest one to switch on first. With no URL there is simply no workspace client: evaluation runs regardless, and the playground, the coverage warning and optimization are what say so |
 | `OPTIMIZER_IMPL` | `OptimizerClient` | the model that edits the skill in Optimize — reflect, merge and rank all call it and nothing else (`LLM_BASE_URL`, `OPTIMIZER_MODEL`). The fake one returns deterministic patches, which is enough to exercise accept, reject and multi-file diffs end to end |
 
 Put the settings in a repo-root `.env` (or export them) — `docker-compose.yml`
@@ -611,7 +646,7 @@ WORKSPACE_IMPL=real  AGENT_SKILLS_URL=https://your-agent-server/skills
 
 # only if your agent is behind a gateway. Blank sends no authorization header at
 # all, which is what most agent servers here want — authentication is not part
-# of the agent contract (docs/agent-server-api.md §8)
+# of the agent contract (backend/docs/agent-server-api.md §8)
 AGENT_API_KEY=...    # AGENT_AUTH_HEADER=X-Api-Key if it is not Authorization
 ```
 Then check the wiring before spending a run on it:
@@ -636,7 +671,7 @@ attempt sends the same shape with `tags: ["playground"]`, plus
 ([the playground](#the-playground)) — an eval run never sends that key at all.
 
 `timeout_s` is the budget the agent server should give **itself** for this one
-question ([contract](docs/agent-server-api.md)), and it is sent on every call. Both ends need a
+question ([contract](backend/docs/agent-server-api.md)), and it is sent on every call. Both ends need a
 deadline: the agent server enforces its own limit, so until it is told ours it
 uses a built-in default — which is why raising the timeout in the UI past that
 default used to change nothing. The value sent is `AGENT_TIMEOUT_S` minus a
@@ -791,8 +826,11 @@ Notes:
 ## Where the important pieces live
 | Concern | File |
 |---|---|
-| Container topology (db + backend + frontend) | `docker-compose.yml` |
+| Container topology (db + backend + sandbox + frontend) | `docker-compose.yml` |
+| Kubernetes manifests, and the order to apply them | `deploy/k8s/` (start with its `README.md`) |
+| The three CI pipelines | `backend/azure-pipelines.yml`, `frontend/azure-pipelines.yml`, `db/azure-pipelines.yml` |
 | Backend image (deps via uv) | `backend/Dockerfile` |
+| Database image (postgres + the pgcrypto init script) | `db/Dockerfile` |
 | Frontend image (deps via pnpm) | `frontend/Dockerfile` |
 | App DB schema (spec §5.1), the 7 tables | `backend/alembic/versions/0001_stage1_schema.py` |
 | Columns the real integrations need | `backend/alembic/versions/0002_real_integration.py` |
@@ -827,7 +865,7 @@ Notes:
 | Body truncation, diagnosis prompt only (spec §4.4) | `backend/app/services/truncation.py` |
 | A trace folded into one conversation, for the analyst prompt | `backend/app/optimizer/trajectory.py` |
 | The analyst prompt itself (minibatch of trajectories) | `backend/app/optimizer/analyst.py` |
-| **Why routing mode leaves SkillOpt's algorithm** | [`docs/routing-optimization.md`](docs/routing-optimization.md) |
+| **Why routing mode leaves SkillOpt's algorithm** | [`backend/docs/routing-optimization.md`](backend/docs/routing-optimization.md) |
 | Routing's confusion matrix + the frozen agent setup | `backend/app/optimizer/routing_digest.py` |
 | Span input/output rendered as a chat exchange | `frontend/src/components/SpanPayload.jsx` |
 | Incorrect modes + regression + `phase` | `backend/app/services/aggregation.py` |
