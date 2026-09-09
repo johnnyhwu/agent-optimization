@@ -97,12 +97,21 @@ steps:
       # Wait for it rather than sleeping: an arbitrary sleep is either slower
       # than it needs to be or flaky, and usually both.
       #
+      # `-h 127.0.0.1`, and that flag is the whole point of this loop. The
+      # official entrypoint runs a *temporary* server while it sets the database
+      # up, started with `listen_addresses=''` so that it answers on the unix
+      # socket and on no network address at all. A plain `pg_isready` inside the
+      # container talks to that socket, so it reports ready during setup — while
+      # the tests, which connect over TCP from another container, still cannot
+      # reach anything. Asking over TCP is what makes this loop wait for the real
+      # server rather than the bootstrap one.
+      #
       # Written without a `$( )` command substitution on purpose. Azure DevOps
       # rewrites `$(name)` in a script body as a pipeline variable before bash
       # ever sees it, so shell constructs that share the syntax are a trap.
       ready=no
       for _ in {1..30}; do
-        if docker exec pg-$(Build.BuildId) pg_isready -U ci -d ci >/dev/null 2>&1; then
+        if docker exec pg-$(Build.BuildId) pg_isready -h 127.0.0.1 -U ci -d ci >/dev/null 2>&1; then
           ready=yes
           break
         fi

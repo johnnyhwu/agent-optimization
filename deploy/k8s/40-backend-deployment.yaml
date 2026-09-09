@@ -176,6 +176,21 @@ spec:
               value: /sandbox
             - name: SCRIPT_LIBS_DIR
               value: /opt/scriptlibs
+            # Must be kept equal to the backend's. The backend uses it as the
+            # semaphore that gates how many runs it will start; this container
+            # reads it from *its own* environment to size its accept ceiling at
+            # twice that (app/sandbox/server.py). Raise it in the ConfigMap and
+            # forget this line and the two disagree: the backend admits runs the
+            # sandbox then refuses, which surfaces to the person who uploaded the
+            # script as "the sandbox is at its concurrent run limit".
+            #
+            # Not a secret, so unlike everything else absent from this container
+            # it costs the boundary nothing.
+            - name: SCRIPT_MAX_CONCURRENT_RUNS
+              valueFrom:
+                configMapKeyRef:
+                  name: skill-studio-backend
+                  key: SCRIPT_MAX_CONCURRENT_RUNS
           volumeMounts:
             - name: sandbox-sock
               mountPath: /run/sandbox

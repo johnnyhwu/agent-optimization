@@ -234,6 +234,31 @@ def test_the_ca_bundle_is_kept_out_of_the_image():
     )
 
 
+def test_bytecode_rules_are_recursive():
+    """The same silent-failure shape as the rule above, one line down.
+
+    A .dockerignore pattern is matched against a file's whole path relative to
+    the context root, so `__pycache__/` excludes exactly one directory — the one
+    at the top — and every `__pycache__` that actually exists is nested. Dropping
+    the `**/` prefix therefore does not fail: it copies one machine's bytecode
+    into the image, and into the image the sandbox container runs, while the
+    build reports success.
+    """
+    path = os.path.join(_backend_dir(), ".dockerignore")
+    if not os.path.exists(path):
+        pytest.skip(".dockerignore is outside the backend image")
+    patterns = [
+        line.strip()
+        for line in open(path, encoding="utf-8")
+        if line.strip() and not line.startswith("#")
+    ]
+    for name in ("__pycache__/", "*.pyc", ".pytest_cache/", ".venv/"):
+        assert f"**/{name}" in patterns, (
+            f"{name} must be written `**/{name}`: unprefixed, it matches only at "
+            "the root of the build context, and every one that matters is nested"
+        )
+
+
 def test_development_masks_the_ca_bundle_in_the_sandbox():
     """The other half of the same rule, for the bind-mounted development stack.
 

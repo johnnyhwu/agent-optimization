@@ -29,8 +29,19 @@
 certs/
 !certs/README.md
 
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-*.log
+# `**/`, and it is load-bearing rather than decoration. A .dockerignore pattern
+# is matched against a file's whole path relative to the context root, so a bare
+# `__pycache__/` excludes only one at the top level — and every one that matters
+# is nested (app/__pycache__, app/sandbox/__pycache__, tests/__pycache__, all of
+# which exist after a single local `pytest` run).
+#
+# Without the prefix those are handed to the daemon and copied in by `COPY . .`,
+# which busts the source layer's cache on every local test run and ships one
+# machine's bytecode inside the image — including the image the sandbox runs.
+# The rules above are deliberately not prefixed: `.env` and `certs/` mean those
+# files at the root of this directory and nowhere else.
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.pytest_cache/
+**/*.log

@@ -60,11 +60,20 @@ steps:
       docker run -d --name dbsmoke-$(Build.BuildId) \
         -e POSTGRES_PASSWORD=smoke -e POSTGRES_USER=smoke -e POSTGRES_DB=smoke \
         $(containerRegistry)/$(imageRepository):$(tag)
+      # `-h 127.0.0.1` is what makes this wait for the *real* server. While the
+      # official entrypoint runs the scripts in /docker-entrypoint-initdb.d it
+      # has a temporary server up, started with `listen_addresses=''` — reachable
+      # on the unix socket, on no network address. A plain `pg_isready` inside
+      # the container therefore reports ready while the init script is still
+      # running, and the pgcrypto check below would then run before the extension
+      # exists and fail a perfectly good image. Over TCP there is nothing to talk
+      # to until setup has finished.
+      #
       # No `$( )` command substitution anywhere in this script: Azure DevOps
       # rewrites `$(name)` as a pipeline variable before bash sees it.
       ready=no
       for _ in {1..30}; do
-        if docker exec dbsmoke-$(Build.BuildId) pg_isready -U smoke -d smoke >/dev/null 2>&1; then
+        if docker exec dbsmoke-$(Build.BuildId) pg_isready -h 127.0.0.1 -U smoke -d smoke >/dev/null 2>&1; then
           ready=yes
           break
         fi
