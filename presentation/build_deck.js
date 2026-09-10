@@ -35,12 +35,12 @@ const CW = W - ML * 2;       // content width
 function titleSlide(s, text, eyebrow) {
   if (eyebrow) {
     s.addText(eyebrow.toUpperCase(), {
-      x: ML, y: 0.42, w: CW, h: 0.3, isTextBox: true, margin: 0,
+      x: ML, y: 0.42, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
       fontFace: H, fontSize: 11, bold: true, color: TEAL, charSpacing: 2,
     });
   }
   s.addText(text, {
-    x: ML, y: eyebrow ? 0.72 : 0.6, w: CW, h: 0.75, isTextBox: true, margin: 0,
+    x: ML, y: eyebrow ? 0.72 : 0.6, w: CW, h: 0.75, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 30, bold: true, color: INK,
   });
 }
@@ -93,7 +93,7 @@ function bullets(s, items, o) {
 
 function footnote(s, text) {
   s.addText(text, {
-    x: ML, y: 6.82, w: CW, h: 0.32, isTextBox: true, margin: 0,
+    x: ML, y: 6.82, w: CW, h: 0.32, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 11, italic: true, color: MUTED,
   });
 }
@@ -102,16 +102,16 @@ function footnote(s, text) {
 let s = pres.addSlide();
 s.background = { color: INK };
 s.addText("SPRINT DEMO", {
-  x: ML, y: 2.0, w: CW, h: 0.3, isTextBox: true, margin: 0,
+  x: ML, y: 2.0, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 12, bold: true, color: MINT, charSpacing: 3,
 });
 s.addText("Plugging your domain agent\ninto the platform", {
-  x: ML, y: 2.4, w: 9.6, h: 1.9, isTextBox: true, margin: 0,
+  x: ML, y: 2.4, w: 9.6, h: 1.9, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 40, bold: true, color: WHITE, lineSpacing: 46,
 });
 s.addText(
   "Two endpoints, three levels of integration — and what we learned pointing the eval loop at skill selection.",
-  { x: ML, y: 4.45, w: 9.8, h: 0.5, isTextBox: true, margin: 0,
+  { x: ML, y: 4.45, w: 9.8, h: 0.5, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 15.5, color: MUTED_LT }
 );
 token(s, { x: ML, y: 5.35, w: 0.34, h: 0.34, label: "1", fontSize: 12 });
@@ -138,7 +138,7 @@ titleSlide(s, "Where your agent meets the platform", "Part 1 · The seam");
 // platform block
 card(s, { x: ML, y: 1.75, w: 4.3, h: 3.75, fill: PANEL, line: PANEL_2 });
 s.addText("THE PLATFORM", {
-  x: ML + 0.28, y: 1.98, w: 3.8, h: 0.28, isTextBox: true, margin: 0,
+  x: ML + 0.28, y: 1.98, w: 3.8, h: 0.28, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 10.5, bold: true, color: TEAL, charSpacing: 2,
 });
 const feats = [
@@ -150,11 +150,11 @@ feats.forEach(([name, desc], i) => {
   const y = 2.42 + i * 1.0;
   card(s, { x: ML + 0.28, y, w: 3.74, h: 0.85, fill: WHITE, line: PANEL_2 });
   s.addText(name, {
-    x: ML + 0.46, y: y + 0.1, w: 3.4, h: 0.26, isTextBox: true, margin: 0,
+    x: ML + 0.46, y: y + 0.1, w: 3.4, h: 0.26, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 13, bold: true, color: INK,
   });
   s.addText(desc, {
-    x: ML + 0.46, y: y + 0.36, w: 3.4, h: 0.42, isTextBox: true, margin: 0,
+    x: ML + 0.46, y: y + 0.36, w: 3.4, h: 0.42, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 10.5, color: MUTED,
   });
 });
@@ -162,11 +162,11 @@ feats.forEach(([name, desc], i) => {
 // http server block
 card(s, { x: 5.45, y: 2.35, w: 2.5, h: 2.55, fill: TEAL, line: TEAL });
 s.addText("YOUR HTTP SERVER", {
-  x: 5.6, y: 2.58, w: 2.2, h: 0.3, isTextBox: true, margin: 0,
+  x: 5.6, y: 2.58, w: 2.2, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 11, bold: true, color: WHITE, align: "center", charSpacing: 1,
 });
 s.addText("the only thing this\nsprint asks you to write", {
-  x: 5.6, y: 2.9, w: 2.2, h: 0.5, isTextBox: true, margin: 0,
+  x: 5.6, y: 2.9, w: 2.2, h: 0.5, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 10, italic: true, color: "BFE7E8", align: "center",
 });
 [["POST  chat", 3.5], ["GET  skills", 4.14]].forEach(([label, y]) => {
@@ -184,15 +184,15 @@ s.addText("the only thing this\nsprint asks you to write", {
 // agent block
 card(s, { x: 9.05, y: 2.35, w: 3.58, h: 2.55, fill: INK, line: INK });
 s.addText("YOUR DOMAIN AGENT", {
-  x: 9.25, y: 2.62, w: 3.2, h: 0.3, isTextBox: true, margin: 0,
+  x: 9.25, y: 2.62, w: 3.2, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 11, bold: true, color: MINT, align: "center", charSpacing: 1,
 });
 s.addText("A black box.", {
-  x: 9.25, y: 3.1, w: 3.2, h: 0.4, isTextBox: true, margin: 0,
+  x: 9.25, y: 3.1, w: 3.2, h: 0.4, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 18, bold: true, color: WHITE, align: "center",
 });
 s.addText("The platform never sees your model,\nyour tools, or your prompt — only\nwhat these two endpoints return.", {
-  x: 9.25, y: 3.6, w: 3.2, h: 0.9, isTextBox: true, margin: 0,
+  x: 9.25, y: 3.6, w: 3.2, h: 0.9, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 11, color: MUTED_LT, align: "center",
 });
 
@@ -204,17 +204,17 @@ s.addText("The platform never sees your model,\nyour tools, or your prompt — o
   });
 });
 s.addText("HTTP", {
-  x: 4.95, y: 3.24, w: 0.6, h: 0.3, isTextBox: true, margin: 0,
+  x: 4.95, y: 3.24, w: 0.6, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 9.5, color: MUTED, align: "center",
 });
 s.addText("your call", {
-  x: 8.0, y: 3.24, w: 1.0, h: 0.3, isTextBox: true, margin: 0,
+  x: 8.0, y: 3.24, w: 1.0, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 9.5, color: MUTED, align: "center",
 });
 
 s.addText(
   "Traces close the loop: your agent writes to Langfuse under the trace id we send, and the platform reads them back.",
-  { x: ML, y: 5.75, w: CW, h: 0.34, isTextBox: true, margin: 0,
+  { x: ML, y: 5.75, w: CW, h: 0.34, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 12.5, color: BODY }
 );
 footnote(s, "Everything left of the seam is ours to maintain. Everything right of it stays yours.");
@@ -229,6 +229,10 @@ s.addNotes(
 // ============================================================ 3 — two endpoints
 s = pres.addSlide();
 titleSlide(s, "Two endpoints — and only the first is required", "Part 1 · The contract");
+s.addText("Two absolute URLs, entered separately — nothing is appended to a base URL, and no path is imposed.", {
+  x: ML, y: 1.44, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
+  fontFace: B, fontSize: 12.5, color: MUTED,
+});
 
 const epCards = [
   {
@@ -253,37 +257,66 @@ const epCards = [
   },
 ];
 epCards.forEach((c) => {
-  card(s, { x: c.x, y: 1.75, w: 5.78, h: 3.5, fill: c.fill, line: c.line || c.fill });
+  card(s, { x: c.x, y: 1.82, w: 5.78, h: 3.15, fill: c.fill, line: c.line || c.fill });
   s.addText(c.sig, {
-    x: c.x + 0.32, y: 2.0, w: 5.14, h: 0.36, isTextBox: true, margin: 0,
+    x: c.x + 0.32, y: 2.05, w: 5.14, h: 0.36, isTextBox: true, margin: 0, valign: "top",
     fontFace: M, fontSize: 15, bold: true, color: c.sigColor,
   });
   s.addText(c.purpose, {
-    x: c.x + 0.32, y: 2.42, w: 5.14, h: 0.32, isTextBox: true, margin: 0,
+    x: c.x + 0.32, y: 2.45, w: 5.14, h: 0.32, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 15, bold: true, color: c.sigColor,
   });
   bullets(s, c.items, {
-    x: c.x + 0.32, y: 2.95, w: 5.14, h: 2.4, color: c.textColor, fontSize: 12.5,
-    paraSpaceAfter: 9,
+    x: c.x + 0.32, y: 2.95, w: 5.14, h: 1.9, color: c.textColor, fontSize: 12.5,
+    paraSpaceAfter: 8,
   });
 });
 
-card(s, { x: ML, y: 5.45, w: CW, h: 1.1, fill: WHITE, line: PANEL_2 });
-s.addText("Authentication unlocks nothing", {
-  x: ML + 0.3, y: 5.6, w: CW - 0.6, h: 0.28, isTextBox: true, margin: 0,
-  fontFace: H, fontSize: 13, bold: true, color: INK,
+// Authentication: two credential modes, one header on the wire.
+card(s, { x: ML, y: 5.25, w: CW, h: 1.75, fill: WHITE, line: PANEL_2 });
+s.addText(
+  [
+    { text: "Authentication unlocks no feature — ", options: { bold: true, color: INK } },
+    { text: "but the platform can send a credential, in either of two shapes.", options: {} },
+  ],
+  { x: ML + 0.3, y: 5.42, w: CW - 0.6, h: 0.3, isTextBox: true, margin: 0, valign: "top",
+    fontFace: B, fontSize: 12.5, color: BODY }
+);
+const authModes = [
+  {
+    x: ML + 0.3, label: "A key somebody typed",
+    body: "A developer enters an API key beside the URL, and every request then carries Authorization: Bearer <key> — or a header you name, such as X-Api-Key. With no key entered, no such header is sent at all.",
+  },
+  {
+    x: ML + 6.17, label: "The caller's own SSO token",
+    body: "The platform can instead authenticate to you as whoever is signed in — the only mode that tells you who is asking, so an agent with its own per-user authorization can apply it. Accept the same realm and audience; tokens are re-minted mid-run, so cache on the claims, not the token text.",
+  },
+];
+authModes.forEach((m) => {
+  s.addText(m.label, {
+    x: m.x, y: 5.78, w: 5.46, h: 0.26, isTextBox: true, margin: 0, valign: "top",
+    fontFace: H, fontSize: 12.5, bold: true, color: TEAL_DK,
+  });
+  s.addText(m.body, {
+    x: m.x, y: 6.06, w: 5.46, h: 0.9, isTextBox: true, margin: 0, valign: "top",
+    fontFace: B, fontSize: 11, color: BODY,
+  });
 });
-s.addText("A server that demands a credential and one that demands none are equally usable here. If yours sits behind a gateway, a developer types the key beside the URL and every request carries it — as a Bearer header, or as a header you name. With no key entered, the request is byte for byte what it was before.", {
-  x: ML + 0.3, y: 5.92, w: CW - 0.6, h: 0.5, isTextBox: true, margin: 0,
-  fontFace: B, fontSize: 11.5, color: BODY,
-});
-footnote(s, "Two absolute URLs, entered separately. Nothing is appended to a base URL and no path is imposed — different prefixes, gateways, even different hosts are all fine.");
 s.addNotes(
-  "約 1 分鐘。\n" +
+  "約 1.5 分鐘。\n" +
   "重點一句話：只有 chat endpoint 是必須的，而且它就是一個標準的 OpenAI compatible chat completions endpoint。" +
   "大部分 agent 前面本來就有一個，所以你今天其實就可以被 evaluate。\n" +
   "skills endpoint 是選配的，它讓系統知道你身上現在有哪些 skill 檔案。\n" +
-  "另外強調：這是兩個各自獨立的絕對 URL，我們不會幫你組路徑，你要放在不同 host、不同 gateway 後面都可以。"
+  "這是兩個各自獨立的絕對 URL，我們不會幫你組路徑，你要放在不同 host、不同 gateway 後面都可以。\n" +
+  "下面那塊 authentication 想特別講：你的 server 要不要驗證，系統沒有意見，兩種都支援。" +
+  "但如果你需要驗，我們可以送兩種東西過去——\n" +
+  "一種是開發者自己填的 API key（Bearer，或你指定的 header 名稱）；\n" +
+  "另一種是把「當下登入這個系統的那個人」的 SSO token 直接 forward 給你。" +
+  "第二種是重點：它是唯一會告訴你「是誰在問」的模式，所以如果你在自己的 agent server 上已經做了 per-user 的權限控制，" +
+  "是可以直接接上來的，不用為了這個平台開一個共用的後門帳號。\n" +
+  "要注意的是 realm 跟 audience 要對得起來（同 realm 不代表同 aud），" +
+  "而且 token 在長時間的 run 中會被重新簽發，所以不要用 token 字串本身當 cache key，要用 claims。\n" +
+  "兩者可以並存：某個 agent 有自己填 key 的話，那把 key 優先，你永遠只會收到一個 Authorization header。"
 );
 
 // ============================================================ 4 — chat endpoint
@@ -343,7 +376,7 @@ s.addText(
     { text: "choices[0].message.content", options: { fontFace: M, color: TEAL_DK } },
     { text: ". Never return an empty answer or a tool-call-only message — that fails the question rather than scoring it. If you have nothing to say, return a 5xx with a reason.", options: {} },
   ],
-  { x: ML + 0.28, y: 6.05, w: CW - 0.56, h: 0.55, isTextBox: true, margin: 0,
+  { x: ML + 0.28, y: 6.05, w: CW - 0.56, h: 0.55, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 12, color: BODY }
 );
 s.addNotes(
@@ -378,7 +411,7 @@ codeBlock(s, {
 });
 
 s.addText("Four rules that matter", {
-  x: ML + 6.75, y: 1.72, w: 5.18, h: 0.3, isTextBox: true, margin: 0,
+  x: ML + 6.75, y: 1.72, w: 5.18, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 14, bold: true, color: INK,
 });
 bullets(s, [
@@ -389,7 +422,7 @@ bullets(s, [
 ], { x: ML + 6.75, y: 2.12, w: 5.18, h: 2.5, fontSize: 12, paraSpaceAfter: 8 });
 
 s.addText("The skills override has three states — test for the key, not for truthiness", {
-  x: ML, y: 4.72, w: CW, h: 0.3, isTextBox: true, margin: 0,
+  x: ML, y: 4.72, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 14, bold: true, color: INK,
 });
 const states = [
@@ -401,11 +434,11 @@ states.forEach(([k, v], i) => {
   const x = ML + i * 4.04;
   card(s, { x, y: 5.12, w: 3.84, h: 1.42, fill: WHITE, line: PANEL_2 });
   s.addText(k, {
-    x: x + 0.22, y: 5.26, w: 3.4, h: 0.28, isTextBox: true, margin: 0,
+    x: x + 0.22, y: 5.26, w: 3.4, h: 0.28, isTextBox: true, margin: 0, valign: "top",
     fontFace: M, fontSize: 12.5, bold: true, color: TEAL_DK,
   });
   s.addText(v, {
-    x: x + 0.22, y: 5.58, w: 3.4, h: 0.85, isTextBox: true, margin: 0,
+    x: x + 0.22, y: 5.58, w: 3.4, h: 0.85, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 11.5, color: BODY,
   });
 });
@@ -424,7 +457,7 @@ s.addNotes(
 s = pres.addSlide();
 titleSlide(s, "You do not have to build all of it", "Part 1 · Three levels");
 s.addText("The platform works with what you give it, and tells you what you are missing rather than refusing to start.", {
-  x: ML, y: 1.42, w: CW, h: 0.3, isTextBox: true, margin: 0,
+  x: ML, y: 1.42, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 13, color: MUTED,
 });
 
@@ -456,23 +489,23 @@ levels.forEach((L, i) => {
   card(s, { x, y: L.y, w: 3.84, h: L.h, fill: L.fill, line: L.line });
   token(s, { x: x + 0.24, y: L.y + 0.24, w: 0.44, h: 0.44, label: L.n, fill: L.tok, fontSize: 15 });
   s.addText(L.build, {
-    x: x + 0.82, y: L.y + 0.2, w: 2.8, h: 0.6, isTextBox: true, margin: 0,
+    x: x + 0.82, y: L.y + 0.2, w: 2.8, h: 0.6, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 12.5, bold: true, color: L.head,
   });
   s.addText(L.sub, {
-    x: x + 0.24, y: L.y + 0.86, w: 3.36, h: 0.26, isTextBox: true, margin: 0,
+    x: x + 0.24, y: L.y + 0.86, w: 3.36, h: 0.26, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 10.5, italic: true, color: i === 2 ? "BFE7E8" : MUTED,
   });
   s.addText("YOU GET", {
-    x: x + 0.24, y: L.y + 1.22, w: 3.36, h: 0.24, isTextBox: true, margin: 0,
+    x: x + 0.24, y: L.y + 1.22, w: 3.36, h: 0.24, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 9.5, bold: true, color: i === 2 ? MINT : TEAL, charSpacing: 2,
   });
   s.addText(L.unlock, {
-    x: x + 0.24, y: L.y + 1.46, w: 3.36, h: 0.34, isTextBox: true, margin: 0,
+    x: x + 0.24, y: L.y + 1.46, w: 3.36, h: 0.34, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 17, bold: true, color: L.head,
   });
   s.addText(L.detail, {
-    x: x + 0.24, y: L.y + 1.94, w: 3.36, h: L.h - 2.14, isTextBox: true, margin: 0,
+    x: x + 0.24, y: L.y + 1.94, w: 3.36, h: L.h - 2.14, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 11.5, color: L.body,
   });
 });
@@ -493,7 +526,7 @@ s = pres.addSlide();
 titleSlide(s, "You probably should not write this by hand", "Part 1 · Getting there");
 
 s.addText("The API reference is written to be handed to a machine: self-contained, no cross-references into our repo, with a reference implementation and an acceptance checklist at the end.", {
-  x: ML, y: 1.5, w: 6.5, h: 0.7, isTextBox: true, margin: 0,
+  x: ML, y: 1.5, w: 6.5, h: 0.7, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 13.5, color: BODY,
 });
 
@@ -506,11 +539,11 @@ steps.forEach(([head, body], i) => {
   const y = 2.42 + i * 1.24;
   token(s, { x: ML, y, w: 0.44, h: 0.44, label: String(i + 1), fontSize: 15 });
   s.addText(head, {
-    x: ML + 0.66, y: y - 0.02, w: 5.8, h: 0.3, isTextBox: true, margin: 0,
+    x: ML + 0.66, y: y - 0.02, w: 5.8, h: 0.3, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 14.5, bold: true, color: INK,
   });
   s.addText(body, {
-    x: ML + 0.66, y: y + 0.32, w: 5.8, h: 0.62, isTextBox: true, margin: 0,
+    x: ML + 0.66, y: y + 0.32, w: 5.8, h: 0.62, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 12, color: MUTED,
   });
 });
@@ -533,7 +566,7 @@ s.addText("Documentation", {
 });
 card(s, { x: ML + 6.9, y: 2.14, w: 1.85, h: 3.88, fill: "FAFBFC", line: PANEL_2 });
 s.addText("AGENT SERVER", {
-  x: ML + 7.06, y: 2.32, w: 1.6, h: 0.24, isTextBox: true, margin: 0,
+  x: ML + 7.06, y: 2.32, w: 1.6, h: 0.24, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 8.5, bold: true, color: MUTED, charSpacing: 1,
 });
 s.addShape(pres.ShapeType.roundRect, {
@@ -549,7 +582,7 @@ s.addText("Test your server", {
   fontFace: B, fontSize: 10, color: BODY, valign: "middle",
 });
 s.addText("Agent Server API", {
-  x: ML + 8.95, y: 2.36, w: 2.8, h: 0.3, isTextBox: true, margin: 0,
+  x: ML + 8.95, y: 2.36, w: 2.8, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 13, bold: true, color: INK,
 });
 [
@@ -568,7 +601,7 @@ s.addText("Agent Server API", {
 });
 
 s.addText("→  DEMO: the docs page, then Test your server", {
-  x: ML, y: 6.25, w: CW, h: 0.42, isTextBox: true, margin: 0,
+  x: ML, y: 6.25, w: CW, h: 0.42, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 15, bold: true, color: TEAL,
 });
 s.addNotes(
@@ -586,7 +619,7 @@ s.addNotes(
 s = pres.addSlide();
 titleSlide(s, "The same eval loop, pointed at skill selection", "Part 2 · A second use");
 s.addText("Evaluation was built to grade the answer. It grades a routing decision just as well — the trick is entirely in how the question is phrased.", {
-  x: ML, y: 1.45, w: CW, h: 0.34, isTextBox: true, margin: 0,
+  x: ML, y: 1.45, w: CW, h: 0.34, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 13.5, color: MUTED,
 });
 
@@ -605,15 +638,15 @@ const qs = [
 qs.forEach((c) => {
   card(s, { x: c.x, y: 2.0, w: 5.78, h: 2.35, fill: c.fill, line: c.line });
   s.addText(c.tag, {
-    x: c.x + 0.3, y: 2.22, w: 5.2, h: 0.26, isTextBox: true, margin: 0,
+    x: c.x + 0.3, y: 2.22, w: 5.2, h: 0.26, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 9.5, bold: true, color: c.tagColor, charSpacing: 2,
   });
   s.addText("“" + c.q + "”", {
-    x: c.x + 0.3, y: 2.56, w: 5.2, h: 1.05, isTextBox: true, margin: 0,
+    x: c.x + 0.3, y: 2.56, w: 5.2, h: 1.05, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 15, bold: true, color: INK,
   });
   s.addText(c.graded, {
-    x: c.x + 0.3, y: 3.78, w: 5.2, h: 0.3, isTextBox: true, margin: 0,
+    x: c.x + 0.3, y: 3.78, w: 5.2, h: 0.3, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 12, italic: true, color: BODY,
   });
 });
@@ -623,7 +656,7 @@ s.addShape(pres.ShapeType.line, {
 });
 
 s.addText("What that buys us", {
-  x: ML, y: 4.62, w: CW, h: 0.3, isTextBox: true, margin: 0,
+  x: ML, y: 4.62, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 14, bold: true, color: INK,
 });
 const buys = [
@@ -635,11 +668,11 @@ buys.forEach(([head, body], i) => {
   const x = ML + i * 4.04;
   card(s, { x, y: 5.02, w: 3.84, h: 1.55, fill: WHITE, line: PANEL_2 });
   s.addText(head, {
-    x: x + 0.24, y: 5.18, w: 3.4, h: 0.28, isTextBox: true, margin: 0,
+    x: x + 0.24, y: 5.18, w: 3.4, h: 0.28, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 12.5, bold: true, color: TEAL_DK,
   });
   s.addText(body, {
-    x: x + 0.24, y: 5.5, w: 3.4, h: 0.95, isTextBox: true, margin: 0,
+    x: x + 0.24, y: 5.5, w: 3.4, h: 0.95, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 11, color: BODY,
   });
 });
@@ -658,29 +691,29 @@ titleSlide(s, "Routing optimization: why SkillOpt did not transfer", "Part 2 · 
 
 card(s, { x: ML, y: 1.72, w: 6.06, h: 3.05, fill: PANEL, line: PANEL_2 });
 s.addText("WHAT WE TRIED", {
-  x: ML + 0.3, y: 1.94, w: 5.4, h: 0.26, isTextBox: true, margin: 0,
+  x: ML + 0.3, y: 1.94, w: 5.4, h: 0.26, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 9.5, bold: true, color: MUTED, charSpacing: 2,
 });
 s.addText("Isolated mode's algorithm, pointed at the description", {
-  x: ML + 0.3, y: 2.24, w: 5.46, h: 0.34, isTextBox: true, margin: 0,
+  x: ML + 0.3, y: 2.24, w: 5.46, h: 0.34, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 15, bold: true, color: INK,
 });
 s.addText("Small minibatches, an analyst call each, then a merge. It does not converge: the description keeps being rewritten and the score keeps moving without settling.", {
-  x: ML + 0.3, y: 2.66, w: 5.46, h: 0.7, isTextBox: true, margin: 0,
+  x: ML + 0.3, y: 2.66, w: 5.46, h: 0.7, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 12, color: BODY,
 });
 s.addText("Optimizing a skill body is a large model: thousands of words, an edit appends to one section, and the loss follows the gradient down. A description is two or three sentences — a representation space so small that every edit is a rewrite, so the loss jumps across the surface instead of descending it.", {
-  x: ML + 0.3, y: 3.42, w: 5.46, h: 1.2, isTextBox: true, margin: 0,
+  x: ML + 0.3, y: 3.42, w: 5.46, h: 1.2, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 12, italic: true, color: TEAL_DK,
 });
 
 card(s, { x: ML + 6.32, y: 1.72, w: 5.61, h: 3.05, fill: TEAL, line: TEAL });
 s.addText("WHAT WE DO NOW", {
-  x: ML + 6.62, y: 1.94, w: 5.0, h: 0.26, isTextBox: true, margin: 0,
+  x: ML + 6.62, y: 1.94, w: 5.0, h: 0.26, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 9.5, bold: true, color: MINT, charSpacing: 2,
 });
 s.addText("One larger, stratified batch per step", {
-  x: ML + 6.62, y: 2.24, w: 5.0, h: 0.34, isTextBox: true, margin: 0,
+  x: ML + 6.62, y: 2.24, w: 5.0, h: 0.34, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 15, bold: true, color: WHITE,
 });
 bullets(s, [
@@ -691,11 +724,11 @@ bullets(s, [
 
 card(s, { x: ML, y: 4.95, w: 6.06, h: 1.6, fill: WHITE, line: PANEL_2 });
 s.addText("The context problem a big batch creates", {
-  x: ML + 0.3, y: 5.12, w: 5.46, h: 0.28, isTextBox: true, margin: 0,
+  x: ML + 0.3, y: 5.12, w: 5.46, h: 0.28, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 13, bold: true, color: INK,
 });
 s.addText("Hundreds of full traces do not fit in the optimizer's context window. So the step sends a digest instead: a per-skill confusion matrix of what was tagged versus what was opened, plus the agent's own setup, folded once and marked where it varied.", {
-  x: ML + 0.3, y: 5.44, w: 5.46, h: 1.0, isTextBox: true, margin: 0,
+  x: ML + 0.3, y: 5.44, w: 5.46, h: 1.0, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 11.5, color: BODY,
 });
 
@@ -706,7 +739,7 @@ s.addText("Still in flight", {
   fontFace: H, fontSize: 14, bold: true, color: "8A5E08", valign: "middle",
 });
 s.addText("The experiments are running now — no convergence numbers to show yet. What is settled is the diagnosis and the shape of the fix; the results land next sprint.", {
-  x: ML + 6.62, y: 5.62, w: 5.0, h: 0.8, isTextBox: true, margin: 0,
+  x: ML + 6.62, y: 5.62, w: 5.0, h: 0.8, isTextBox: true, margin: 0, valign: "top",
   fontFace: B, fontSize: 11.5, color: "6B4A06",
 });
 s.addNotes(
@@ -726,11 +759,11 @@ s.addNotes(
 s = pres.addSlide();
 s.background = { color: INK };
 s.addText("WHAT I'D LIKE FROM YOU", {
-  x: ML, y: 1.15, w: CW, h: 0.3, isTextBox: true, margin: 0,
+  x: ML, y: 1.15, w: CW, h: 0.3, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 12, bold: true, color: MINT, charSpacing: 3,
 });
 s.addText("Start at level 1. It is smaller than it looks.", {
-  x: ML, y: 1.55, w: 10.5, h: 0.6, isTextBox: true, margin: 0,
+  x: ML, y: 1.55, w: 10.5, h: 0.6, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 30, bold: true, color: WHITE,
 });
 
@@ -746,16 +779,16 @@ asks.forEach(([head, body], i) => {
   card(s, { x, y, w: 5.78, h: 1.5, fill: INK_SOFT, line: INK_SOFT });
   token(s, { x: x + 0.28, y: y + 0.26, w: 0.4, h: 0.4, label: String(i + 1), fill: TEAL, fontSize: 14 });
   s.addText(head, {
-    x: x + 0.8, y: y + 0.24, w: 4.75, h: 0.44, isTextBox: true, margin: 0,
+    x: x + 0.8, y: y + 0.24, w: 4.75, h: 0.44, isTextBox: true, margin: 0, valign: "top",
     fontFace: H, fontSize: 13.5, bold: true, color: WHITE,
   });
   s.addText(body, {
-    x: x + 0.8, y: y + 0.74, w: 4.75, h: 0.68, isTextBox: true, margin: 0,
+    x: x + 0.8, y: y + 0.74, w: 4.75, h: 0.68, isTextBox: true, margin: 0, valign: "top",
     fontFace: B, fontSize: 11.5, color: MUTED_LT,
   });
 });
 s.addText("Questions?", {
-  x: ML, y: 6.35, w: CW, h: 0.4, isTextBox: true, margin: 0,
+  x: ML, y: 6.35, w: CW, h: 0.4, isTextBox: true, margin: 0, valign: "top",
   fontFace: H, fontSize: 17, bold: true, color: MINT,
 });
 s.addNotes(
