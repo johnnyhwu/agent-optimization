@@ -97,7 +97,7 @@ export default function ServerCheck() {
   const usable = report?.cases?.some((c) => c.id === "chat" && c.result.ok === true);
 
   return (
-    <div className="doc-page">
+    <>
       <PageHeader
         title="Test your server"
         subtitle="Run the whole acceptance checklist against an agent server, including the cases ordinary use never reaches."
@@ -213,6 +213,6 @@ export default function ServerCheck() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -203,6 +203,11 @@ export const api = {
   // of the agent-server contract and it is the file in `docs/` — this hands it
   // over so the UI cannot drift from what a reviewer reads.
   doc: (name) => req("GET", `/docs/${name}`),
+  // What is published, in navigation order. The documentation sidebar is built
+  // from this rather than from a list kept beside it: a document published in
+  // `docs.py` and missing from a hand-written sidebar is a page nobody can
+  // reach and nothing reports.
+  docsIndex: () => req("GET", "/docs"),
   // Returns a page: { items, total, has_more }.
   listEvalSets: (params = {}) => req("GET", `/eval-sets${qs(params)}`),
   getEvalSet: (id) => req("GET", `/eval-sets/${id}`),

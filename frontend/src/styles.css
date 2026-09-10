@@ -46,6 +46,7 @@
   --page-max: 1400px;
   --gutter: var(--space-6);
   --rail-w: 216px;
+  --docs-nav-w: 240px;
   --rail-w-collapsed: 60px;
   /* The sticky top bar's height, as a number anything below it can stick under.
      True by construction rather than by measurement: `.topbar` sets this as its
@@ -1361,23 +1362,95 @@ select { cursor: pointer; }
 .check-case-why { font-size: var(--text-caption); line-height: 1.5; }
 
 /* ---- documentation ----
-   A repository markdown file, rendered. Measured rather than full-width: the
-   contract is prose and tables, and a 1600px line of prose is unreadable no
-   matter how much room there is.
+   A navigation column and the page it points at.
 
-   Contents column second in the source and placed right by the grid, so a
-   narrow window puts it after the thing it indexes rather than in front. */
-.doc-layout {
-  /* The text column is measured, not fluid: the contract is prose and tables,
-     and a 1600px line of prose is unreadable however much room there is. The
-     contents column sits against it rather than at the far edge, so the eye
-     does not cross empty space to reach it. */
-  display: grid; grid-template-columns: minmax(0, 78ch) 220px;
-  gap: var(--space-6); align-items: start; justify-content: start;
+   **One navigation column, not two.** This used to be a measured text column
+   with an "On this page" contents beside it, and adding a topic/page sidebar
+   would have made three columns of navigation on one screen. They do not fit:
+   240 + 78ch + 220 plus gaps needs about 1073px of content width, and a 1280px
+   window — with the rail taken off — has 1016. Keeping both meant hiding the
+   contents below roughly 1460px, which is deleting it for most laptops. So the
+   headings hang off the page they belong to inside the one column, and the
+   prose gets the space back.
+
+   The page's own header lives inside `.docs-content` rather than above it. That
+   is what fixes the break this replaced: `.ui-page-head` is `space-between` and
+   fills `--page-max`, so a button in it landed 325px to the right of the text
+   it belonged to. Header and body now end at the same measure. */
+.docs-shell {
+  display: grid; grid-template-columns: var(--docs-nav-w) minmax(0, 1fr);
+  gap: var(--space-6); align-items: start;
 }
-@media (max-width: 1000px) {
-  .doc-layout { grid-template-columns: minmax(0, 1fr); }
-  .doc-toc { display: none; }
+/* The text column is measured, not fluid: the contract is prose and tables, and
+   a 1600px line of prose is unreadable however much room there is. */
+.docs-content { max-width: 78ch; min-width: 0; }
+/* Sticky to the top bar, not to the window: `.main` is what scrolls (see the
+   app shell above) and `--topbar-h` is what a sticky element below it has to
+   clear. Long documents make this taller than the window, so it scrolls itself
+   rather than pushing the page. */
+.docs-nav {
+  position: sticky; top: var(--topbar-h);
+  max-height: calc(100dvh - var(--topbar-h) - var(--space-6));
+  overflow-y: auto; min-width: 0;
+  font-size: var(--text-caption);
+}
+/* Reset shared by the three lists, minus the indent: each level sets its own
+   below, and a `padding` here would beat a bare class on specificity and
+   flatten the whole tree — silently, since nothing throws and the rows still
+   render. It did, once. */
+.docs-nav ul { list-style: none; margin: 0; }
+.docs-nav-topics {
+  display: flex; flex-direction: column; gap: var(--space-2); padding: 0;
+}
+/* The topic is the heading of its own list, so it is typed as one. It is still a
+   link — it opens the topic's first page — which is why it needs the reset. */
+.docs-nav-topic {
+  display: block; padding: 4px 0;
+  font-size: var(--text-micro); font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted); text-decoration: none;
+}
+.docs-nav-topic:hover { color: var(--text); text-decoration: none; }
+.docs-nav-topic.active { color: var(--text); }
+/* The rule the whole column hangs off: one continuous line down the left of the
+   open topic, so page and heading rows read as belonging to it rather than as a
+   flat list that happens to be indented. */
+.docs-nav-pages {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-top: var(--space-2); padding-left: var(--space-3);
+  border-left: 1px solid var(--border);
+}
+.docs-nav-page, .docs-nav-heading {
+  display: flex; align-items: center; min-height: 24px; padding: 3px 0;
+  color: var(--muted); text-decoration: none;
+}
+.docs-nav-page:hover, .docs-nav-heading:hover {
+  color: var(--text); text-decoration: none;
+}
+.docs-nav-page { font-weight: var(--fw-semibold); }
+.docs-nav-page.active, .docs-nav-heading.active { color: var(--accent); }
+/* The headings of the page you are on, indented under it. Depth 3 indents
+   again, as the contents column used to. */
+.docs-nav-headings {
+  display: flex; flex-direction: column;
+  margin: 2px 0 var(--space-2); padding-left: var(--space-3);
+}
+.docs-nav-h3 { padding-left: var(--space-3); }
+/* Below this the two columns stop fitting side by side, so the navigation
+   becomes a block above the content — and the headings come out of it.
+
+   Stacked, every row of navigation is a row the reader scrolls past to reach
+   what they asked for, and this document's headings alone are 900px of them:
+   the whole first screen would be an index. Topic and pages are four rows and
+   worth that; the headings are not, and the document is right underneath.
+   `max-height` is the guard for a topic with more pages than this one. */
+@media (max-width: 900px) {
+  .docs-shell { grid-template-columns: minmax(0, 1fr); }
+  .docs-nav {
+    position: static; max-height: 45vh;
+    padding-bottom: var(--space-3); border-bottom: 1px solid var(--border);
+  }
+  .docs-nav-headings { display: none; }
 }
 .doc-body h2 {
   margin: var(--space-6) 0 var(--space-3); font-size: var(--text-title);
@@ -1422,22 +1495,6 @@ select { cursor: pointer; }
   text-align: left; vertical-align: top;
 }
 .doc-body th { background: var(--panel); font-weight: var(--fw-semibold); }
-.doc-toc {
-  position: sticky; top: var(--space-4);
-  display: flex; flex-direction: column; gap: 2px;
-  font-size: var(--text-caption);
-}
-.doc-toc-head {
-  font-size: var(--text-micro); color: var(--muted);
-  font-weight: var(--fw-semibold); margin-bottom: var(--space-2);
-}
-.doc-toc-link {
-  color: var(--muted); text-decoration: none; padding: 3px 0;
-  min-height: 24px; display: flex; align-items: center;
-}
-.doc-toc-link:hover { color: var(--text); }
-.doc-toc-h3 { padding-left: var(--space-3); }
-
 .agent-chat-state {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--text-caption);

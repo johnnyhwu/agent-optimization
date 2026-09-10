@@ -18,13 +18,14 @@ merely blocked.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import current_subject
 from app.config import settings
-from app.schemas import DocOut
+from app.schemas import DocIndexEntryOut, DocOut, DocsIndexOut
 
 router = APIRouter(prefix="/docs", tags=["docs"])
 
@@ -48,15 +49,67 @@ def _docs_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "docs"
 
 
+@dataclass(frozen=True)
+class Published:
+    """One document in the whitelist, plus where it sits in the navigation.
+
+    `title` is the document's own — what the page is headed with. `nav_label` is
+    what a sidebar row says, and the two are not the same job: "Agent Server
+    API" heads the page, "API reference" is what you read under the topic that
+    already says "Agent Server".
+    """
+
+    file: str
+    title: str
+    summary: str
+    topic_id: str
+    topic_label: str
+    nav_label: str
+
+
 # The documents the UI may ask for, by the name it uses in its own routes.
+#
+# **Order is the navigation's order**, topics included: the first entry of a
+# topic is the page that topic opens on. Adding a document is a line here and
+# nothing in the frontend — the sidebar is built from this, so a document cannot
+# be published and stay invisible, and a sidebar row cannot point at a 404.
 PUBLISHED = {
-    "agent-server": (
-        "agent-server-api.md",
-        "Agent Server API",
-        "What your agent server must expose to be evaluated, explored and "
-        "optimised by Skill Studio.",
+    "agent-server": Published(
+        file="agent-server-api.md",
+        title="Agent Server API",
+        summary=(
+            "What your agent server must expose to be evaluated, explored and "
+            "optimised by Skill Studio."
+        ),
+        topic_id="agent-server",
+        topic_label="Agent Server",
+        nav_label="API reference",
     ),
 }
+
+
+# Before `/{name}`, which would otherwise match the empty path's sibling shapes
+# first. Reading order here is matching order in FastAPI.
+@router.get("", response_model=DocsIndexOut)
+def list_docs(subject: str = Depends(current_subject)) -> DocsIndexOut:
+    """What is published, in navigation order.
+
+    No file is read: this answers "what is there", and a sidebar that had to
+    read thirteen markdown files to draw itself would be paying a document's
+    cost for a list of names.
+    """
+    return DocsIndexOut(
+        docs=[
+            DocIndexEntryOut(
+                name=name,
+                nav_label=entry.nav_label,
+                title=entry.title,
+                topic_id=entry.topic_id,
+                topic_label=entry.topic_label,
+            )
+            for name, entry in PUBLISHED.items()
+        ]
+    )
 
 
 @router.get("/{name}", response_model=DocOut)
@@ -64,7 +117,7 @@ def get_doc(name: str, subject: str = Depends(current_subject)):
     entry = PUBLISHED.get(name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"no document named {name!r}")
-    relative, title, summary = entry
+    relative, title, summary = entry.file, entry.title, entry.summary
     path = _docs_dir() / relative
     try:
         text = path.read_text("utf-8")
