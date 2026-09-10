@@ -133,3 +133,53 @@ def test_every_index_entry_carries_a_topic_and_a_short_label():
         assert entry.topic_id
         assert entry.topic_label
         assert entry.nav_label
+
+
+# --- the path this index sits on -------------------------------------------
+# `GET /docs` is also where FastAPI puts Swagger UI by default, and this app
+# re-adds Swagger by hand (`main.py`) because the built-in one is
+# unauthenticated. Adding the index at `/docs` therefore quietly took a path
+# that was already spoken for: routers are included before those handlers, and
+# Starlette matches in registration order, so the hand-written Swagger route
+# stopped being reachable. Nothing raised — one route simply won and the other
+# became dead code, which is only visible to someone who opens the API explorer.
+#
+# The first test below is the general form, and the reason it is not a test
+# about `/docs`: any future `@app.get` that lands under a router's prefix fails
+# here rather than in whatever it silently shadowed.
+
+
+def test_no_two_routes_claim_the_same_method_and_path():
+    """A duplicate route is unreachable code, not an error: the first one
+    registered answers and the second never runs."""
+    from collections import Counter
+
+    from app.main import app
+
+    claims = Counter(
+        (method, route.path)
+        for route in app.routes
+        for method in getattr(route, "methods", None) or ()
+    )
+    duplicated = {claim: n for claim, n in claims.items() if n > 1}
+
+    assert not duplicated, f"these paths are claimed twice: {sorted(duplicated)}"
+
+
+def test_the_docs_path_is_the_index_and_the_api_explorer_has_its_own():
+    """The two things that both wanted `/docs`, each on the path it now owns."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+
+    index = client.get("/docs")
+    assert index.status_code == 200
+    assert index.headers["content-type"].startswith("application/json")
+    assert [d["name"] for d in index.json()["docs"]] == list(docs_router.PUBLISHED)
+
+    explorer = client.get("/api-docs")
+    assert explorer.status_code == 200
+    assert explorer.headers["content-type"].startswith("text/html")
+    assert "swagger-ui" in explorer.text

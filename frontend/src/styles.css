@@ -1394,13 +1394,18 @@ select { cursor: pointer; }
   overflow-y: auto; min-width: 0;
   font-size: var(--text-caption);
 }
-/* Reset shared by the three lists, minus the indent: each level sets its own
-   below, and a `padding` here would beat a bare class on specificity and
-   flatten the whole tree — silently, since nothing throws and the rows still
-   render. It did, once. */
-.docs-nav ul { list-style: none; margin: 0; }
+/* Reset shared by the three lists — `list-style` and nothing else.
+   `.docs-nav ul` is (0,1,1) and every level below is a bare class at (0,1,0),
+   so *any* property put here wins against the rule that looks like it owns it,
+   whatever the order in this file. It happened twice: first with `padding`,
+   which flattened the tree, and then — in the change that added the comment
+   warning about `padding` — with `margin`, which silently dropped the gap under
+   every topic. Neither throws and both still render rows, so each level sets
+   its own box below, in full. */
+.docs-nav ul { list-style: none; }
 .docs-nav-topics {
-  display: flex; flex-direction: column; gap: var(--space-2); padding: 0;
+  display: flex; flex-direction: column; gap: var(--space-2);
+  margin: 0; padding: 0;
 }
 /* The topic is the heading of its own list, so it is typed as one. It is still a
    link — it opens the topic's first page — which is why it needs the reset. */
@@ -1417,7 +1422,7 @@ select { cursor: pointer; }
    flat list that happens to be indented. */
 .docs-nav-pages {
   display: flex; flex-direction: column; gap: 2px;
-  margin-top: var(--space-2); padding-left: var(--space-3);
+  margin: var(--space-2) 0 0; padding-left: var(--space-3);
   border-left: 1px solid var(--border);
 }
 .docs-nav-page, .docs-nav-heading {
