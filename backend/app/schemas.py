@@ -965,6 +965,34 @@ class DocOut(BaseModel):
     markdown: str
 
 
+class DocIndexEntryOut(BaseModel):
+    """One published document, as the navigation needs to know it.
+
+    Deliberately not `DocOut` without the markdown: the two are read for
+    different reasons. This one answers "what is there and where does it sit",
+    which is why it carries the topic and a short label — a sidebar row wants
+    "API reference", not the document's own title.
+    """
+
+    name: str
+    nav_label: str
+    title: str
+    topic_id: str
+    topic_label: str
+
+
+class DocsIndexOut(BaseModel):
+    """The published documents, in the order the navigation should show them.
+
+    Flat rather than nested. Grouping is one `topic_id` comparison and the
+    client has to do a merge of its own anyway — it has pages that are not
+    documents — so a nested payload would be a shape assembled here and taken
+    apart there.
+    """
+
+    docs: list[DocIndexEntryOut] = Field(default_factory=list)
+
+
 class CheckOut(BaseModel):
     """One connection check's answer.
 

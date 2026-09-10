@@ -128,7 +128,7 @@ class Settings(BaseSettings):
 
     # Prefix this app is mounted under by a reverse proxy that strips it before
     # forwarding (nginx `proxy_pass …:8000/` under `location /api/`). It does not
-    # change the routes; it makes the generated /docs and /openapi.json URLs
+    # change the routes; it makes the generated /api-docs and /openapi.json URLs
     # carry the prefix, which is otherwise the one thing that breaks behind a
     # stripping proxy.
     root_path: str = ""

@@ -173,17 +173,25 @@ async def health():
 
 
 # --- API docs, behind the same identity check as the API itself -------------
-# In fake mode this is transparent (the header defaults), so browsing /docs
-# during development is unchanged. In keycloak mode it is effectively closed to
-# browsers, since a plain navigation cannot set an Authorization header — that is
-# the intent, and `curl -H "Authorization: Bearer …" …/openapi.json` is the way
-# to read the schema from a deployment.
+# In fake mode this is transparent (the header defaults), so browsing
+# `/api-docs` during development needs nothing. In keycloak mode it is
+# effectively closed to browsers, since a plain navigation cannot set an
+# Authorization header — that is the intent, and
+# `curl -H "Authorization: Bearer …" …/openapi.json` is the way to read the
+# schema from a deployment.
+#
+# **`/api-docs`, not FastAPI's default `/docs`.** `docs.router` owns the `/docs`
+# namespace — `/docs` is the published-document index the UI's sidebar is drawn
+# from and `/docs/{name}` is a document — and it is included above, so a second
+# route at `/docs` never matched: Starlette takes the first one registered, and
+# this one was simply dead. One path, one meaning. `test_docs.py` pins both the
+# collision and this URL.
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi_schema(subject: str = Depends(current_subject)):
     return app.openapi()
 
 
-@app.get("/docs", include_in_schema=False)
+@app.get("/api-docs", include_in_schema=False)
 async def swagger_ui(subject: str = Depends(current_subject)):
     return get_swagger_ui_html(
         openapi_url=f"{app.root_path}/openapi.json", title=f"{app.title} — docs"

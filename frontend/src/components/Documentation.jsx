@@ -1,10 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api.js";
-import Banner, { BannerDetail } from "./ui/Banner.jsx";
+import React, { useEffect, useRef } from "react";
 import PageHeader from "./ui/PageHeader.jsx";
-import Skeleton from "./ui/Skeleton.jsx";
-import { findAnchor, renderDoc } from "../doc_render.js";
-import { href } from "../useHashRoute.js";
+import { findAnchor } from "../doc_render.js";
 
 // The reference documentation, rendered from the repository's own markdown.
 //
@@ -18,6 +14,9 @@ import { href } from "../useHashRoute.js";
 // they were filling in, with a specific question, which is why the route
 // carries an anchor and why this scrolls to it rather than dropping the reader
 // at a table of contents to find the answer a second time.
+//
+// The markdown is fetched and rendered by `DocsSection`, which needs the
+// headings to draw the navigation. This renders what it is handed.
 // The ancestor that actually scrolls. The app shell scrolls its main column
 // rather than the window, so `window.scrollTo` is a no-op here and naming the
 // class would tie this file to the shell's markup.
@@ -28,28 +27,8 @@ function scrollContainer(el) {
   return null;
 }
 
-export default function Documentation({ doc, anchor }) {
-  const [state, setState] = useState({ status: "loading" });
+export default function Documentation({ title, summary, rendered, anchor }) {
   const bodyRef = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-    api
-      .doc(doc)
-      .then((r) => !cancelled && setState({ status: "ready", doc: r }))
-      .catch((e) => !cancelled && setState({ status: "failed", error: e.message }));
-    return () => {
-      cancelled = true;
-    };
-  }, [doc]);
-
-  // `doc` is passed so the document's own fragment links can be rewritten into
-  // full routes — see the `link` renderer in doc_render.js.
-  const rendered = useMemo(
-    () => (state.doc ? renderDoc(state.doc.markdown, doc) : null),
-    [state.doc, doc]
-  );
 
   // After the HTML is in the DOM, not before: the element being scrolled to is
   // created by this render.
@@ -78,59 +57,22 @@ export default function Documentation({ doc, anchor }) {
     scrollContainer(bodyRef.current)?.scrollTo({ top: 0 });
   }, [rendered, anchor]);
 
-  if (state.status === "loading") return <Skeleton variant="text" count={8} />;
-
-  if (state.status === "failed") {
-    return (
-      <Banner tone="error" className="is-block" title="Could not load this document">
-        <BannerDetail>{state.error}</BannerDetail>
-      </Banner>
-    );
-  }
-
   return (
-    <div className="doc-page">
-      <PageHeader
-        title={state.doc.title}
-        subtitle={state.doc.summary}
-        // The one action this page has, and the reason it is here rather than
-        // at the end of the checklist section: somebody who has finished
-        // implementing wants to run it, and should not have to scroll a long
-        // reference document to find out that they can.
-        primary={
-          doc === "agent-server" ? (
-            <a className="ui-btn ui-btn-secondary" href={href.docs("test-server")}>
-              <span className="ui-btn-label">Test your server</span>
-            </a>
-          ) : null
-        }
+    <>
+      {/* No action. It used to carry a link to the contract checker, which is
+          now a page of its own under the same topic — where it is reachable
+          from every page in the section rather than only from this one, and
+          where it stops stretching this header across a width the prose below
+          it does not use. */}
+      <PageHeader title={title} subtitle={summary} />
+      <div
+        ref={bodyRef}
+        className="doc-body"
+        // The markdown is the repository's own file, fetched from this
+        // deployment's API, and `renderDoc` escapes raw HTML on the way
+        // through. See `doc_render.js`.
+        dangerouslySetInnerHTML={{ __html: rendered.html }}
       />
-      <div className="doc-layout">
-        {/* Derived from the document rather than maintained beside it, so the
-            two cannot disagree. Second in the source order and placed to the
-            right by the grid: on a narrow window it belongs after the thing it
-            indexes, not in front of it. */}
-        <div
-          ref={bodyRef}
-          className="doc-body"
-          // The markdown is the repository's own file, fetched from this
-          // deployment's API, and `renderDoc` escapes raw HTML on the way
-          // through. See `doc_render.js`.
-          dangerouslySetInnerHTML={{ __html: rendered.html }}
-        />
-        <nav className="doc-toc" aria-label="On this page">
-          <div className="doc-toc-head">On this page</div>
-          {rendered.headings.map((h) => (
-            <a
-              key={h.id}
-              href={`#/documentation/${doc}#${h.id}`}
-              className={`doc-toc-link doc-toc-h${h.depth}`}
-            >
-              {h.text}
-            </a>
-          ))}
-        </nav>
-      </div>
-    </div>
+    </>
   );
 }

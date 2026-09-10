@@ -7,9 +7,8 @@ import { href, navigate, useHashRoute } from "./useHashRoute.js";
 import EvalSetList from "./components/EvalSetList.jsx";
 import RunHistory from "./components/RunHistory.jsx";
 import RunDetail from "./components/RunDetail.jsx";
-import Documentation from "./components/Documentation.jsx";
+import DocsSection from "./components/DocsSection.jsx";
 import Playground from "./components/Playground.jsx";
-import ServerCheck from "./components/ServerCheck.jsx";
 import OptimizeSection from "./components/optimize/OptimizeSection.jsx";
 import SettingsSection from "./components/settings/SettingsSection.jsx";
 import Breadcrumb from "./components/Breadcrumb.jsx";
@@ -261,24 +260,11 @@ export default function App() {
               <SettingsSection key={subject} route={route} unseen={settingsAttention} />
             )}
 
-            {route.section === "documentation" &&
-              // The checker shares the section because it is the same errand —
-              // "what does my server have to do, and does it?" — and a fourth
-              // rail item for a page visited twice in a project's life would
-              // cost more attention than it returns.
-              (route.doc === "test-server" ? (
-                <ServerCheck />
-              ) : (
-                // Keyed on the anchor as well as the document: arriving at the
-                // same page from a different "?" has to scroll again, and
-                // without the key the effect that scrolls would be looking at
-                // an unchanged document.
-                <Documentation
-                  key={`${route.doc}#${route.anchor}`}
-                  doc={route.doc}
-                  anchor={route.anchor}
-                />
-              ))}
+            {/* Reference material and the contract checker, under one topic
+                with its own navigation. A fourth rail item for either would
+                cost more attention than it returns — see DocsNav for why the
+                section carries a column of its own instead. */}
+            {route.section === "documentation" && <DocsSection route={route} />}
             </ErrorBoundary>
           </div>
         </div>

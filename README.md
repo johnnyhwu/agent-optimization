@@ -885,7 +885,9 @@ Notes:
 ## API surface
 
 Interactive docs are served by the running backend at
-**http://localhost:8000/docs** (OpenAPI schema at `/openapi.json`). The annotated
+**http://localhost:8000/api-docs** (OpenAPI schema at `/openapi.json`). Not
+`/docs` — that path is the API's own index of the published reference documents
+the UI renders, `backend/app/routers/docs.py`. The annotated
 list, with the authorization rule for each endpoint, is spec §9. In brief:
 
 | Group | Endpoints |

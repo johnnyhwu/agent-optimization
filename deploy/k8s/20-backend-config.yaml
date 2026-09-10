@@ -21,7 +21,7 @@ data:
   # Keycloak issues genuinely has no matching audience.
   KEYCLOAK_AUDIENCE: "ai4bi-public"
 
-  # nginx strips /api before forwarding, so the generated /docs and
+  # nginx strips /api before forwarding, so the generated /api-docs and
   # /openapi.json URLs need the prefix put back. Must match the path the
   # frontend proxies on — see 50-ingress.yaml.
   ROOT_PATH: "/api"

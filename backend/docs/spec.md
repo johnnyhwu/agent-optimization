@@ -1306,7 +1306,8 @@ JSON 修復流程，只多一個 `SYNTHESIS_MODEL`。
 
 ## 9. API 全表
 
-互動式文件由執行中的 backend 提供：`/docs`、`/redoc`、`/openapi.json`。
+互動式文件由執行中的 backend 提供：`/api-docs`、`/redoc`、`/openapi.json`。
+（不是 `/docs`——那是 `routers/docs.py` 的已發佈文件索引，UI 的側邊欄由它畫出來。）
 **這三個和其他 API 一樣需要身分**——`AUTH_MODE=fake` 時是透明的（header 有預設值），
 `keycloak` 模式下瀏覽器直接開會 401（一次導覽帶不了 `Authorization` header），
 要讀 schema 用 `curl -H "Authorization: Bearer …" …/openapi.json`。
