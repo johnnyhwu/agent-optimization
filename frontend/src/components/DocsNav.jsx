@@ -1,54 +1,23 @@
 import React from "react";
-import { findAnchor } from "../doc_render.js";
 import { firstPage } from "../docs_nav.js";
 import { href } from "../useHashRoute.js";
+import { HeadingLinks } from "./DocsToc.jsx";
 
 // The documentation section's own navigation: topic → page → heading.
 //
-// **One column, not two.** The obvious shape was a topic/page sidebar on the
-// left and the "On this page" contents on the right, which is what this
-// replaced. It does not fit: the rail, a 240px sidebar, a measured 78ch of prose
-// and a 220px contents column need about 1073px of content width, and a 1280px
-// window has 1016px. Keeping both meant hiding the contents below roughly
-// 1460px — deleting it for most laptops.
-//
-// So the headings hang off the page they belong to. The tree that results reads
-// as one sentence — you are in this topic, on this page, at this heading — and
-// the content column gets the space back.
+// **The third level is here only where a contents column does not fit.** The
+// obvious shape is a topic/page sidebar on the left and "On this page" on the
+// right, and on a 1280px window it does not fit: the rail, a 240px sidebar, a
+// measured 78ch of prose and a contents column want about 1450px. So there are
+// two renderings of one set of headings and CSS picks between them — above the
+// breakpoint `DocsToc` draws them in a column of its own and `.docs-nav-headings`
+// is hidden; below it they hang off the page they belong to, here, and the
+// tree reads as one sentence: you are in this topic, on this page, at this
+// heading. The links themselves are `HeadingLinks`, shared with that column so
+// the two cannot disagree.
 //
 // Real anchors throughout, as in `SideRail`: middle-click, copy-link and Back
 // all work without any of our code.
-
-// Which heading is current, if any.
-//
-// From the route, not from a scroll listener. The anchor is already in the
-// address (`useHashRoute.js`), so clicking a heading updates this by navigating
-// — no observer, no scroll state, and nothing that only works in a browser and
-// therefore cannot be tested here.
-function activeHeadingId(headings, anchor) {
-  return anchor ? findAnchor(headings, anchor) : null;
-}
-
-function Headings({ doc, headings, anchor }) {
-  const current = activeHeadingId(headings, anchor);
-  return (
-    <ul className="docs-nav-headings">
-      {headings.map((h) => (
-        <li key={h.id}>
-          <a
-            className={`docs-nav-heading docs-nav-h${h.depth}${
-              h.id === current ? " active" : ""
-            }`}
-            href={href.docs(doc, h.id)}
-            aria-current={h.id === current ? "location" : undefined}
-          >
-            {h.text}
-          </a>
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 export default function DocsNav({ nav, activeTopic, activeDoc, anchor, headings }) {
   return (
@@ -91,10 +60,13 @@ export default function DocsNav({ nav, activeTopic, activeDoc, anchor, headings 
                             appear under it and nowhere else. A tool page has
                             none — it is a form, not a document. */}
                         {here && headings?.length > 0 && (
-                          <Headings
+                          <HeadingLinks
                             doc={page.name}
                             headings={headings}
                             anchor={anchor}
+                            className="docs-nav-headings"
+                            linkClass="docs-nav-heading"
+                            depthClass="docs-nav-h"
                           />
                         )}
                       </li>

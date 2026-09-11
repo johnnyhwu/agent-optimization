@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
+import { prefillAgent } from "../agent_prefill.js";
 import { deriveSkillsUrl, splitHint, TIER_LABELS } from "../agent_endpoints.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 import Button from "./ui/Button.jsx";
@@ -62,16 +63,50 @@ function CaseRow({ item }) {
 export default function ServerCheck() {
   const [chatUrl, setChatUrl] = useState("");
   const [skillsUrl, setSkillsUrl] = useState("");
+  const [authHeader, setAuthHeader] = useState("");
   // Optional, and folded away. Without it this page would be unusable by
   // exactly the people most likely to need it: someone who has just written a
   // server and put it behind their team's gateway. Opening it on a refusal is
   // `EndpointAuthGroup`'s job, which is why the panel is shared with the other
   // two screens rather than repeated here.
   const [apiKey, setApiKey] = useState("");
-  const [authHeader, setAuthHeader] = useState("");
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
+
+  // Opens on the agent this developer already told us about, on the settings
+  // page. The same values the run dialog and the playground open on — the page
+  // whose whole subject is "is my server right" was the one screen that made
+  // somebody retype its address.
+  //
+  // Only into the empty fields, and never the API key: the server does not send
+  // a credential back, and `prefillAgent` names the keys that may travel rather
+  // than copying the response.
+  //
+  // A failure is silent on purpose. The checklist works perfectly well with the
+  // fields typed by hand, and a red banner over a form that is merely
+  // un-prefilled reads as a page that has broken.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .runConfigDefaults()
+      .then((r) => {
+        if (cancelled) return;
+        // Each field decided against its *current* value rather than against
+        // the empty string this effect was created with: the response can
+        // easily land after somebody has started typing into the autofocused
+        // URL box, and the one thing a convenience must not do is take that
+        // back.
+        const fill = (key) => (v) => prefillAgent({ [key]: v }, r.defaults)[key] || v;
+        setChatUrl(fill("agent_chat_url"));
+        setSkillsUrl(fill("agent_skills_url"));
+        setAuthHeader(fill("agent_auth_header"));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function run() {
     setBusy(true);
