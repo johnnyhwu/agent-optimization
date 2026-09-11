@@ -47,6 +47,7 @@
   --gutter: var(--space-6);
   --rail-w: 216px;
   --docs-nav-w: 240px;
+  --docs-toc-w: 200px;
   --rail-w-collapsed: 60px;
   /* The sticky top bar's height, as a number anything below it can stick under.
      True by construction rather than by measurement: `.topbar` sets this as its
@@ -1362,16 +1363,22 @@ select { cursor: pointer; }
 .check-case-why { font-size: var(--text-caption); line-height: 1.5; }
 
 /* ---- documentation ----
-   A navigation column and the page it points at.
+   A navigation column, the page it points at, and — where there is room — the
+   page's own contents beside it.
 
-   **One navigation column, not two.** This used to be a measured text column
-   with an "On this page" contents beside it, and adding a topic/page sidebar
-   would have made three columns of navigation on one screen. They do not fit:
-   240 + 78ch + 220 plus gaps needs about 1073px of content width, and a 1280px
-   window — with the rail taken off — has 1016. Keeping both meant hiding the
-   contents below roughly 1460px, which is deleting it for most laptops. So the
-   headings hang off the page they belong to inside the one column, and the
-   prose gets the space back.
+   **The third column is conditional, and it is the only one that is.** The
+   arithmetic is what it always was: 240 + 78ch + 200 plus two 24px gaps wants
+   about 1130px, and a 1280px window has 1016 once the rail and the page gutters
+   are taken off. That is why an unconditional contents column was removed. It is
+   back above 1440px, which is the first width where the sum fits with the prose
+   still at its full 78ch — measured, not chosen: at 1440 the middle track gets
+   673px against the ~655px that 78ch of Inter asks for, and at 1400 it gets 648,
+   which is the measure paying for the column. `.docs-nav-headings` is hidden in
+   the same breath — one set of headings on screen at any width, never two and
+   never none.
+
+   Below the breakpoint the headings hang off the page they belong to in the
+   navigation column, exactly as before, and the prose keeps the space.
 
    The page's own header lives inside `.docs-content` rather than above it. That
    is what fixes the break this replaced: `.ui-page-head` is `space-between` and
@@ -1441,6 +1448,45 @@ select { cursor: pointer; }
   margin: 2px 0 var(--space-2); padding-left: var(--space-3);
 }
 .docs-nav-h3 { padding-left: var(--space-3); }
+/* ---- the page's own contents, in a column of its own ----
+   Hidden by default and shown by the breakpoint below, rather than the other way
+   round: every width that cannot afford it — including the stacked layout under
+   900px — is then handled by saying nothing. Same sticky geometry as
+   `.docs-nav`: `.main` is what scrolls, so it clears `--topbar-h` and scrolls
+   itself rather than pushing the page. */
+.docs-toc {
+  display: none;
+  position: sticky; top: var(--topbar-h);
+  max-height: calc(100dvh - var(--topbar-h) - var(--space-6));
+  overflow-y: auto; min-width: 0;
+  font-size: var(--text-caption);
+  padding-left: var(--space-3); border-left: 1px solid var(--border);
+}
+.docs-toc-title {
+  padding: 4px 0; margin-bottom: 2px;
+  font-size: var(--text-micro); font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
+}
+.docs-toc-list { display: flex; flex-direction: column; list-style: none; margin: 0; padding: 0; }
+.docs-toc-link {
+  display: flex; align-items: center; min-height: 24px; padding: 3px 0;
+  color: var(--muted); text-decoration: none;
+}
+.docs-toc-link:hover { color: var(--text); text-decoration: none; }
+.docs-toc-link.active { color: var(--accent); }
+.docs-toc-h3 { padding-left: var(--space-3); }
+/* The first width where all three columns fit with the prose still at 78ch.
+   Below it the contents column comes out of the measure, and a contract full of
+   wide tables and code blocks is the last document to take that from. The two
+   rules are one decision — the column appears exactly where the navigation's
+   third level goes away — so they are written together. */
+@media (min-width: 1440px) {
+  .docs-shell.has-toc {
+    grid-template-columns: var(--docs-nav-w) minmax(0, 1fr) var(--docs-toc-w);
+  }
+  .docs-toc { display: block; }
+  .docs-nav-headings { display: none; }
+}
 /* Below this the two columns stop fitting side by side, so the navigation
    becomes a block above the content — and the headings come out of it.
 

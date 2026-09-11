@@ -6,6 +6,7 @@ import { href, replace } from "../useHashRoute.js";
 import Banner, { BannerDetail } from "./ui/Banner.jsx";
 import Documentation from "./Documentation.jsx";
 import DocsNav from "./DocsNav.jsx";
+import DocsToc from "./DocsToc.jsx";
 import ServerCheck from "./ServerCheck.jsx";
 import Skeleton from "./ui/Skeleton.jsx";
 
@@ -84,8 +85,14 @@ export default function DocsSection({ route }) {
   }
   if (index.status === "loading") return <Skeleton variant="text" count={8} />;
 
+  // The contents column exists only for a document that has headings — a tool
+  // page is a form, and an empty third column would still take its width out of
+  // the prose. `has-toc` is what opens the grid's third track, so the two
+  // decisions are one.
+  const toc = isDoc && rendered?.headings?.length > 0 ? rendered.headings : null;
+
   return (
-    <div className="docs-shell">
+    <div className={`docs-shell${toc ? " has-toc" : ""}`}>
       <DocsNav
         nav={nav}
         activeTopic={here?.topic}
@@ -110,9 +117,15 @@ export default function DocsSection({ route }) {
             summary={doc.doc.summary}
             rendered={rendered}
             anchor={route.anchor}
+            // The markdown this page was rendered from, for the Copy button in
+            // its header. Already here — it is what `renderDoc` above was given
+            // — so the copy is the file itself rather than anything this code
+            // reconstructed from the HTML.
+            markdown={doc.doc.markdown}
           />
         )}
       </div>
+      {toc && <DocsToc doc={route.doc} headings={toc} anchor={route.anchor} />}
     </div>
   );
 }

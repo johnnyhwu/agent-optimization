@@ -17,6 +17,7 @@ import AgentEndpointsFields, { EndpointGroup } from "../AgentEndpointsFields.jsx
 import { useDebounced } from "../../useDebounced.js";
 import { counts, makeSplit } from "../../optimize_split.js";
 import { gateFor, probeMatches } from "../../agent_endpoints.js";
+import { prefillAgent } from "../../agent_prefill.js";
 import * as undoStack from "../../optimize_split_history.js";
 import { routingReviewWarnings } from "../../optimize_routing_warnings.js";
 import { analystCallsPerStep, estimateRun, explainRun } from "../../optimize_cost.js";
@@ -574,6 +575,22 @@ export default function Wizard({ sessionBlocked = null }) {
     if (draft.hyper && typeof draft.hyper === "object") setHyper(draft.hyper);
     if (typeof draft.stepIndex === "number") setStepIndex(draft.stepIndex);
   }, []);
+
+  // The agent fields open on the developer's own, from the settings page —
+  // `/optimization/defaults` has been returning them (this deployment's, with
+  // the caller's laid over) since before this wizard existed, and the first
+  // step was reading none of it.
+  //
+  // After the draft, and harmless either way: `prefillAgent` only writes into a
+  // field that is still empty, so a restored draft wins without this having to
+  // know whether one happened. Once, because the second pass would be filling
+  // fields somebody has since cleared on purpose.
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (prefilled.current || !defaults?.defaults) return;
+    prefilled.current = true;
+    setConfig((c) => prefillAgent(c, defaults.defaults));
+  }, [defaults]);
 
   // Saved on every change rather than on step transitions: a session can end
   // while somebody is halfway through typing, and the step they were on is

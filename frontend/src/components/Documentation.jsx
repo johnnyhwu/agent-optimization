@@ -1,5 +1,9 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import PageHeader from "./ui/PageHeader.jsx";
+import Button from "./ui/Button.jsx";
+import { IconCheck, IconCopy } from "./icons.jsx";
+import { useToast } from "./Toast.jsx";
+import { COPY_OK, copyText } from "../clipboard.js";
 import { findAnchor } from "../doc_render.js";
 
 // The reference documentation, rendered from the repository's own markdown.
@@ -27,8 +31,10 @@ function scrollContainer(el) {
   return null;
 }
 
-export default function Documentation({ title, summary, rendered, anchor }) {
+export default function Documentation({ title, summary, rendered, anchor, markdown }) {
   const bodyRef = useRef(null);
+  const toast = useToast();
+  const [copied, setCopied] = useState(false);
 
   // After the HTML is in the DOM, not before: the element being scrolled to is
   // created by this render.
@@ -57,14 +63,46 @@ export default function Documentation({ title, summary, rendered, anchor }) {
     scrollContainer(bodyRef.current)?.scrollTo({ top: 0 });
   }, [rendered, anchor]);
 
+  // Answered in two places, as the format examples' copy button is: the label
+  // flip is where the eyes already are, and the toast is the only one of the two
+  // that can report a failure — there is no label state for "this browser will
+  // never let me".
+  //
+  // `copyText` rather than `navigator.clipboard`: most deployments of this are
+  // reached over plain http, where the clipboard API does not exist at all, and
+  // it carries the selection-based fallback that does work there.
+  async function copy() {
+    if ((await copyText(markdown)) === COPY_OK) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+      toast.success("Page copied as Markdown");
+      return;
+    }
+    toast.error("Could not reach the clipboard — select the text and copy it instead.");
+  }
+
   return (
     <>
-      {/* No action. It used to carry a link to the contract checker, which is
-          now a page of its own under the same topic — where it is reachable
-          from every page in the section rather than only from this one, and
-          where it stops stretching this header across a width the prose below
-          it does not use. */}
-      <PageHeader title={title} subtitle={summary} />
+      {/* The one action a reference page has: the document, as the file it is.
+          What is copied is the markdown the backend served — the repository's
+          own file, byte for byte — and not this page's HTML or anything derived
+          back out of it, because the thing somebody wants in their editor or
+          their prompt is the source everybody else implements against. */}
+      <PageHeader
+        title={title}
+        subtitle={summary}
+        primary={
+          markdown ? (
+            <Button
+              variant="secondary"
+              icon={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+              onClick={copy}
+            >
+              {copied ? "Copied" : "Copy page"}
+            </Button>
+          ) : undefined
+        }
+      />
       <div
         ref={bodyRef}
         className="doc-body"
