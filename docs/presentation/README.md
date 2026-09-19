@@ -1,6 +1,6 @@
 # Skill Studio 內部分享簡報
 
-29 頁，25–30 分鐘。`skill-studio.html` 是本體，用瀏覽器開就能播，**不需要任何伺服器、不連外網**
+30 頁，25–30 分鐘。`skill-studio.html` 是本體，用瀏覽器開就能播，**不需要任何伺服器、不連外網**
 （字體全用系統內建，論文圖在同層的 `fig/`）。
 
 | 檔案 | 用途 |
@@ -59,8 +59,8 @@ python3 build_standalone.py
 | 1–2 | 封面、agenda | |
 | 3–12 | Part 1：那個迴圈的四個斷點，以及 Skill Studio 各自怎麼補；系統全貌；成效與邊界 | 8 min |
 | 13 | Part 2：切去瀏覽器實機 demo | 5 min |
-| 14–27 | Part 3：SkillOpt 演算法逐格拆解、實驗結果、我們的 routing mode 為什麼偏離論文 | 8 min |
-| 28–29 | Part 4：探索中的下一步、收尾 | 2 min |
+| 14–28 | Part 3：SkillOpt 演算法逐格拆解、它到底學出什麼、實驗結果、我們的 routing mode 為什麼偏離論文 | 8 min |
+| 29–30 | Part 4：探索中的下一步、收尾 | 2 min |
 
 第 18–23 頁是同一張管線圖輪流點亮其中一格（`.pipe` 的 `data-stage`），改圖只要改
 HTML 最下面那個 `<template id="tpl-pipe">` 一處。
@@ -76,5 +76,8 @@ HTML 最下面那個 `<template id="tpl-pipe">` 一處。
 - agent server 端要做的兩件事：`backend/docs/agent-server-api.md`
 - SkillOpt 演算法的中文說法：<https://datasciocean.com/paper-intro/skillopt/>
 
-`fig/` 裡的 `table4.png`（遷移）、`table5.png`（優化器強度）、`table6.png`（成本）目前沒有被用到 ——
-第 26 頁改成用數字講、只留一張看得清楚的圖。如果現場想秀原表，把它們換進去即可。
+`fig/` 裡有四張目前沒被用到的備用圖：`table4.png`（遷移）、`table5.png`（優化器強度）、
+`table6.png`（成本）—— 第 27 頁改成用數字講、只留一張看得清楚的圖；以及 `table3.png`
+（論文的 component ablation：learning-rate 形式、rejected buffer、epoch 層級 slow / meta update
+各自拿掉會掉多少分）。如果現場有人追問「這些機制真的每一個都有用嗎」，`table3.png` 就是答案，
+可以臨時貼到第 24 頁去。

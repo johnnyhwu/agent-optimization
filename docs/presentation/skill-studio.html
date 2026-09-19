@@ -912,6 +912,33 @@ meta skill 是另一個乾淨的元學習例子：優化器寫給自己的筆記
 
 <!-- ══════════ 25 ══════════ -->
 <section class="slide" data-part="3" data-notes="
+這頁回答在場一定有人在想的那個問題：講了這麼多機制，它到底學出什麼東西？
+答案是這種東西 —— 六個 benchmark 各一條，從最終的 best_skill.md 裡抽出來的代表性規則。
+念一兩條就好，SpreadsheetBench 那條最好懂：
+『先檢查活頁簿的結構與公式，然後把算好的靜態值寫進整個目標範圍，不要指望 Excel 自己重算。』
+這正是一個資深工程師會在 code review 裡講的那種話 —— 具體、可操作、是一條普遍規則而不是某一題的答案。
+這也是為什麼前面那四個排序準則長那樣：它們就是在逼優化器寫出這種句子。
+可以順便對照我們自己的經驗：這種規則我們的 agent developer 也寫得出來，只是要花三天到兩週才收斂到這個程度。">
+  <h1>所以它到底學出什麼東西？</h1>
+  <div class="content"><div class="col" style="justify-content:center">
+    <figure style="flex:none"><img src="fig/figure4.png" alt="各基準測試學出來的代表性規則" style="width:100%;height:auto">
+    <figcaption>圖 4 —— 六個基準測試各一條，從最終 <span class="mono">best_skill.md</span> 中抽出的代表性規則。（來源：原始論文）</figcaption></figure>
+    <div class="content" style="margin-top:22px;gap:26px;flex:none">
+      <div class="col card" style="flex:1"><h3 class="acc">具體可操作</h3>
+        <div class="small" style="margin-top:4px">講的是「怎麼做」，不是「要小心」</div></div>
+      <div class="col card" style="flex:1"><h3 class="acc">是普遍規則</h3>
+        <div class="small" style="margin-top:4px">適用於這一類任務，而不是某一題的答案</div></div>
+      <div class="col card" style="flex:1"><h3 class="acc">針對已知的失敗模式</h3>
+        <div class="small" style="margin-top:4px">每一條背後都是一批被判錯的軌跡</div></div>
+    </div>
+    <div class="note" style="margin-top:18px;padding-top:12px">
+      這種規則我們的 agent developer 本來就寫得出來 —— 只是要花<b>三天到兩週</b>才收斂到這個程度。
+    </div>
+  </div></div>
+</section>
+
+<!-- ══════════ 26 ══════════ -->
+<section class="slide" data-part="3" data-notes="
 52 個（模型、基準測試、執行環境）組合，每一個都是最佳或並列最佳，勝過 TextGrad、GEPA、EvoSkill 這些基準。
 提升幅度取決於執行環境，三個數字念一下就好。
 Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，還有大量空間不在底層模型的能力上，
@@ -943,7 +970,7 @@ Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，�
   </div>
 </section>
 
-<!-- ══════════ 26 ══════════ -->
+<!-- ══════════ 27 ══════════ -->
 <section class="slide" data-part="3" data-notes="
 三件事快速帶過，每一件 20 秒。
 成本：每提升一分的 token 數，短的工具呼叫任務跟長上下文任務差了快 40 倍。
@@ -983,7 +1010,7 @@ Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，�
   </div>
 </section>
 
-<!-- ══════════ 27 ══════════ -->
+<!-- ══════════ 28 ══════════ -->
 <section class="slide" data-part="3" data-notes="
 這頁是我們自己的判斷，不是論文的內容 —— 值得花一點時間。
 背景：routing mode 一開始就是把同一套演算法指到另一個欄位，那就是這頁記錄的錯誤。
@@ -1023,7 +1050,7 @@ Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，�
   </div>
 </section>
 
-<!-- ══════════ 28 ══════════ -->
+<!-- ══════════ 29 ══════════ -->
 <section class="slide" data-part="4" data-notes="
 兩個方向都是我們自己跑下來看到的問題，不是為了列論文而列。
 第一個：SkillOpt 的效率其實不算好。一次十幾個小時、燒掉的 token 不少，
@@ -1068,7 +1095,7 @@ SkillZip 的角度很有意思 —— 免評估，靠找出可重用的結構來
   </div>
 </section>
 
-<!-- ══════════ 29 ══════════ -->
+<!-- ══════════ 30 ══════════ -->
 <section class="slide" data-part="4" data-notes="
 收尾三句，然後開放 Q&A。
 如果有人想自己試：repo 裡 SEED=1 ./scripts/dev.sh 一行就起得來，七個 seam 預設全 fake，
