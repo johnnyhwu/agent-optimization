@@ -1,6 +1,7 @@
 # Skill Studio 內部分享簡報
 
-30 頁，25–30 分鐘。`skill-studio.html` 是本體，用瀏覽器開就能播，**不需要任何伺服器、不連外網**
+30 頁，25–30 分鐘，**投影片內容是英文**（講者備忘維持中文）。
+`skill-studio.html` 是本體，用瀏覽器開就能播，**不需要任何伺服器、不連外網**
 （字體全用系統內建，論文圖在同層的 `fig/`）。
 
 | 檔案 | 用途 |
@@ -33,11 +34,11 @@
 
 | 檔名 | 第幾頁 | 建議截什麼 |
 |---|---|---|
-| `assets/shot-01-run-config.png` | 4 | run history 裡點開某個 run 的唯讀設定面板 |
-| `assets/shot-02-diagnosis.png` | 5 | 錯題的三欄檢視，嫌疑 span 標著 high / med / low |
-| `assets/shot-03-playground.png` | 6 | Playground：skill 編輯器 + 四個階段的進度 |
-| `assets/shot-04-shortlist.png` | 7 | shortlist 轉 eval set 的對話框（unverified 標記、Draft from trace）|
-| `assets/shot-05-optimize-chart.png` | 8 | 優化 run 的逐 step 圖表，或某個 step 的並排 diff |
+| `assets/shot-01-run-config.png` | 4 | run history 裡點開某個 run 的唯讀設定面板（endpoints / models / timeout / concurrency）|
+| `assets/shot-02-diagnosis.png` | 5 | 錯題的三欄檢視：answer、diagnosis，以及標著 high / med / low 的 span 列表 |
+| `assets/shot-03-playground.png` | 6 | Playground：skill 檔案編輯器，旁邊是 Agent → Judge → Trace → Diagnosis 的階段進度 |
+| `assets/shot-04-shortlist.png` | 7 | shortlist 轉 eval set 的對話框：unverified 標記、Draft from trace、可勾選複製的既有 set |
+| `assets/shot-05-optimize-chart.png` | 8 | 優化 run 的逐 step 訓練 / 驗證折線圖，或某個 step 的並排 skill diff |
 
 截圖用 **16:9 左右的比例**最不會被裁到；框大約是 520×450，太窄或太高的圖會被縮得很小。
 
@@ -46,6 +47,21 @@
 ```bash
 python3 build_standalone.py
 ```
+
+## 在手機上看
+
+投影片是 1280×720 的橫向版面，所以**手機直立拿的時候會自動把整頁轉 90 度**填滿螢幕 ——
+把手機打橫，每一頁就是正的。手機上用點的翻頁：**點右邊往前、點最上面那一條（直立時）或最左邊
+四分之一（橫拿時）往回**；按鍵提示列在直立時會自動隱藏。
+
+要在手機上開，有兩條路：
+
+1. **Artifact 連結**（最方便）—— 把 `skill-studio-standalone.html` 發布成 claude.ai 的私人
+   artifact，用手機瀏覽器開那個連結就是一份會動的投影片。之後補了截圖要重新發布到同一個網址。
+2. **PDF** —— 見下一節。手機原生就打得開，也最適合會議前寄給自己。
+
+⚠️ 把 HTML 當成「檔案」傳到手機上（聊天室附件、雲端硬碟預覽）通常**不會**執行 JavaScript，
+會看到一片空白。要嘛用上面的連結，要嘛用 PDF。
 
 ## 存成 PDF
 

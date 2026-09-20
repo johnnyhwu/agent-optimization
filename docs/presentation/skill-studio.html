@@ -21,7 +21,7 @@
 html,body{height:100%;background:#E8E8E3;font-family:var(--sans);color:var(--ink);
   -webkit-font-smoothing:antialiased;overflow:hidden}
 #stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-#deck{width:1280px;height:720px;position:relative;transform-origin:center center;
+#deck{width:1280px;height:720px;flex:none;position:relative;transform-origin:center center;
   background:var(--bg);box-shadow:0 2px 24px rgba(0,0,0,.10)}
 .slide{position:absolute;inset:0;padding:52px 68px 44px;display:none;flex-direction:column;background:var(--bg)}
 .slide.on{display:flex}
@@ -94,6 +94,7 @@ figcaption{font-size:13.5px;color:var(--faint);margin-top:10px;line-height:1.5}
 #hud{position:fixed;left:50%;transform:translateX(-50%);bottom:10px;display:flex;gap:14px;align-items:center;
   font-size:12px;color:#8A8A83;font-family:var(--mono);pointer-events:none;opacity:1;transition:opacity .45s}
 #hud.hide{opacity:0}
+body.portrait #hud{display:none}  /* phone held upright: the key hints are useless */
 #timer{display:none}
 #timer.on{display:block}
 #overview{position:fixed;inset:0;background:rgba(250,250,248,.985);padding:40px 56px;overflow:auto;display:none}
@@ -131,14 +132,14 @@ figcaption{font-size:13.5px;color:var(--faint);margin-top:10px;line-height:1.5}
 開場一句：這個系統是我們在開發內部 agent 的過程中，被自己的痛點逼出來的。
 不是先有系統再找問題，是先有四個每天都在痛的地方。
 時間分配先講清楚：前面 8 分鐘講痛點、中間 5 分鐘實機 demo、後面 8 分鐘講演算法。">
-  <div class="eyebrow">內部分享</div>
+  <div class="eyebrow">INTERNAL SHARING</div>
   <h1 style="font-size:58px">Skill Studio</h1>
-  <div class="sub" style="font-size:23px;max-width:760px">
-    把 agent 的 skill 變成<b>可以量、可以試、可以練</b>的東西。
+  <div class="sub" style="font-size:23px;max-width:800px">
+    Where an agent's skills get <b>measured, tried and trained</b>.
   </div>
-  <div class="small" style="margin-top:44px;max-width:700px">
-    受詞永遠是 skill：量（Evaluation）、試（Playground）、練（Optimize）。<br>
-    名字跟部門既有的 Skill Marketplace 配對 —— 工作室做，市集賣。
+  <div class="small" style="margin-top:44px;max-width:720px">
+    The object is always a skill: measure it (Evaluation), try it (Playground), train it (Optimize).<br>
+    The name pairs with the department's existing Skill Marketplace — the studio makes them, the market sells them.
   </div>
 </section>
 
@@ -147,36 +148,36 @@ figcaption{font-size:13.5px;color:var(--faint);margin-top:10px;line-height:1.5}
 講完 agenda 就直接進第一部分，不要在這頁停超過 20 秒。
 如果聽眾裡有人沒碰過 agent 開發，補一句：我們的 agent 是 stateless 的，
 每題都重新開始，先挑一份 skill（開發者寫的 playbook），再一路 tool calling 到答案。">
-  <h1>今天講三件事</h1>
+  <h1>Three things today</h1>
   <div class="content"><div class="col" style="justify-content:center">
     <table>
       <tr><td style="width:52px" class="hl mono">01</td>
-          <td><b>痛點</b><div class="small" style="margin-top:4px">我們每天在跑的那個迴圈，斷在哪四個地方；Skill Studio 各自怎麼補</div></td>
+          <td><b>The pain</b><div class="small" style="margin-top:4px">The loop we run every day, the four places it breaks, and what Skill Studio does about each one</div></td>
           <td style="width:84px;text-align:right;color:var(--faint)" class="mono">8 min</td></tr>
       <tr><td class="hl mono">02</td>
-          <td><b>Demo</b><div class="small" style="margin-top:4px">實機走一遍：跑 eval → 看診斷 → 進 playground → 開一個優化 run</div></td>
+          <td><b>Demo</b><div class="small" style="margin-top:4px">The real thing: run an eval → read a diagnosis → jump to the playground → open an optimization run</div></td>
           <td style="text-align:right;color:var(--faint)" class="mono">5 min</td></tr>
       <tr><td class="hl mono">03</td>
-          <td><b>演算法</b><div class="small" style="margin-top:4px">Optimize 背後的 SkillOpt：把 skill 文件當成可訓練的權重</div></td>
+          <td><b>The algorithm</b><div class="small" style="margin-top:4px">SkillOpt, the thing behind Optimize: treating a skill file as a trainable weight</div></td>
           <td style="text-align:right;color:var(--faint)" class="mono">8 min</td></tr>
       <tr><td class="mono" style="color:var(--faint)">+</td>
-          <td><b>我們正在探索的下一步</b><div class="small" style="margin-top:4px">更便宜的優化、以及越練越長的 skill 怎麼瘦身</div></td>
+          <td><b>What we're exploring next</b><div class="small" style="margin-top:4px">Cheaper optimization, and what to do about skills that keep growing</div></td>
           <td style="text-align:right;color:var(--faint)" class="mono">2 min</td></tr>
     </table>
-    <div class="note" style="margin-top:28px">問題隨時打斷都可以；比較大的題目我留到最後一起談。</div>
+    <div class="note" style="margin-top:28px">Interrupt any time; I'll keep the bigger questions for the end.</div>
   </div></div>
 </section>
 
 <!-- ══════════ 3 ══════════ -->
 <section class="slide" data-part="1" data-notes="
 這張是整個第一部分的地圖，後面四頁的左上角都會對應回這四個號碼。
-重點的一句話：這四件事不是四個零散的需求，是同一條迴圈上的四個斷點。
+重點的一句話：這四件事不是四個零散的需求，是同一條迴圈上的四個斷點（four breaks on one loop）。
 Langfuse 那句話一定要講 —— 在場可能有人是 Langfuse 的支持者，
 我們沒有要取代它，trace 到今天都還是存在 Langfuse、從 Langfuse 讀。
 我們補的是它沒有、而且我們也改不了它 source code 去補的那一段。">
-  <h1>我們每天在跑的，其實是<span class="q">同一個迴圈</span></h1>
+  <h1>We run the <span class="q">same loop</span> every day</h1>
   <div class="content"><div class="col" style="justify-content:center">
-  <svg viewBox="0 0 1060 400" style="width:100%;height:auto;max-height:400px" font-family="var(--sans)">
+  <svg viewBox="0 0 1060 400" style="width:100%;height:auto;max-height:400px">
     <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#9A9A93"/></marker></defs>
     <g stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#ar)">
@@ -186,70 +187,71 @@ Langfuse 那句話一定要講 —— 在場可能有人是 Langfuse 的支持�
     <g>
       <rect x="60" y="24" width="345" height="104" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <circle cx="90" cy="54" r="13" fill="#2B5CE6"/><text x="90" y="59" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">1</text>
-      <text x="113" y="59" font-size="18" font-weight="700" fill="#1A1A1A">設定 config、跑一輪 eval</text>
-      <text x="82" y="88" font-size="15" fill="#B4521E">斷點：</text><text x="127" y="88" font-size="15" fill="#6B6B66">每個 run 的設定，跑完就沒了</text>
-      <text x="82" y="110" font-size="15" fill="#6B6B66">下次要重現，只能憑印象再填一次</text>
+      <text x="113" y="59" font-size="18" font-weight="700" fill="#1A1A1A">Configure it, run an eval</text>
+      <text x="82" y="88" font-size="15" fill="#B4521E">Breaks:</text><text x="140" y="88" font-size="15" fill="#6B6B66">the config is gone when the run ends</text>
+      <text x="82" y="110" font-size="15" fill="#6B6B66">reproducing it means typing it from memory</text>
     </g>
     <g>
       <rect x="655" y="24" width="345" height="104" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <circle cx="685" cy="54" r="13" fill="#2B5CE6"/><text x="685" y="59" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">2</text>
-      <text x="708" y="59" font-size="18" font-weight="700" fill="#1A1A1A">讀 trace，找出錯在哪一步</text>
-      <text x="677" y="88" font-size="15" fill="#B4521E">斷點：</text><text x="722" y="88" font-size="15" fill="#6B6B66">一天十題，每題十幾個 span</text>
-      <text x="677" y="110" font-size="15" fill="#6B6B66">全部人工逐個翻</text>
+      <text x="708" y="59" font-size="18" font-weight="700" fill="#1A1A1A">Read the trace, find the step</text>
+      <text x="677" y="88" font-size="15" fill="#B4521E">Breaks:</text><text x="735" y="88" font-size="15" fill="#6B6B66">ten questions a day, a dozen spans</text>
+      <text x="677" y="110" font-size="15" fill="#6B6B66">each — all opened by hand</text>
     </g>
     <g>
       <rect x="655" y="272" width="345" height="104" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <circle cx="685" cy="302" r="13" fill="#2B5CE6"/><text x="685" y="307" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">3</text>
-      <text x="708" y="307" font-size="18" font-weight="700" fill="#1A1A1A">改 skill，驗證那個假設</text>
-      <text x="677" y="336" font-size="15" fill="#B4521E">斷點：</text><text x="722" y="336" font-size="15" fill="#6B6B66">terminal 與 Langfuse 之間來回切</text>
-      <text x="677" y="358" font-size="15" fill="#6B6B66">而且只測得了單次 LLM call</text>
+      <text x="708" y="307" font-size="18" font-weight="700" fill="#1A1A1A">Edit the skill, test the hunch</text>
+      <text x="677" y="336" font-size="15" fill="#B4521E">Breaks:</text><text x="735" y="336" font-size="15" fill="#6B6B66">terminal ↔ Langfuse, back and forth</text>
+      <text x="677" y="358" font-size="15" fill="#6B6B66">and only one LLM call is testable</text>
     </g>
     <g>
       <rect x="60" y="272" width="345" height="104" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <circle cx="90" cy="302" r="13" fill="#2B5CE6"/><text x="90" y="307" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">4</text>
-      <text x="113" y="307" font-size="18" font-weight="700" fill="#1A1A1A">順手想到的新題目</text>
-      <text x="82" y="336" font-size="15" fill="#B4521E">斷點：</text><text x="127" y="336" font-size="15" fill="#6B6B66">要留下來得手抄回上傳檔</text>
-      <text x="82" y="358" font-size="15" fill="#6B6B66">於是大多數就沒留</text>
+      <text x="113" y="307" font-size="18" font-weight="700" fill="#1A1A1A">A good new question occurs to you</text>
+      <text x="82" y="336" font-size="15" fill="#B4521E">Breaks:</text><text x="140" y="336" font-size="15" fill="#6B6B66">keeping it means copying it by hand</text>
+      <text x="82" y="358" font-size="15" fill="#6B6B66">into the upload file — so most are lost</text>
     </g>
     <g text-anchor="middle">
-      <text x="530" y="178" font-size="15" fill="#9A9A93" letter-spacing="1">而整條迴圈本身</text>
-      <text x="530" y="218" font-size="27" font-weight="700" fill="#B4521E">3 天 ～ 2 週</text>
-      <text x="530" y="248" font-size="15" fill="#6B6B66">一個新 topic 從 0% 爬到 90% 以上</text>
+      <text x="530" y="178" font-size="15" fill="#9A9A93" letter-spacing="1">and the loop itself takes</text>
+      <text x="530" y="218" font-size="27" font-weight="700" fill="#B4521E">3 days – 2 weeks</text>
+      <text x="530" y="248" font-size="15" fill="#6B6B66">to take a new topic from 0% to above 90%</text>
     </g>
   </svg>
   </div></div>
   <div class="note" style="margin-top:8px">
-    <b>Langfuse 沒有不好</b>，它到今天都還是我們 trace 的資料骨幹 —— span 的 input / output / token 都還是從它讀。
-    缺的是它沒有、而且我們也改不了它 source code 去補的那一段：錯誤定位的分析引擎、疊在 span 上的自訂資訊、以及 skill 的自動優化。
+    <b>Nothing is wrong with Langfuse.</b> It is still the backbone our traces live in — span input / output / tokens are read from it to this day.
+    What's missing is the part it doesn't have and we can't add to its source code: the error-localization engine,
+    per-span information of our own laid over the trace, and automatic skill optimization.
   </div>
 </section>
 
 <!-- ══════════ 4 ══════════ -->
 <section class="slide" data-part="1" data-tick="1" data-notes="
 這個痛點最小，但它是最好講的開場，因為每個人都中過。
-關鍵字：run 是一份『完整紀錄』而不是『對環境的 delta』。
+關鍵字：run 是 a complete record, not a delta against the environment.
 為什麼重要 —— 環境變數之後會被別人改，如果 run 只存 delta，三個月後你根本不知道它當初跑的是什麼。
 所以空白欄位在啟動那一刻就解析成實際值寫進去。">
-  <h1>斷點 <span class="q">1</span>：每個 run 的 config，設完就消失</h1>
+  <h1>Break <span class="q">1</span>: the run config is gone when the run ends</h1>
   <div class="content">
     <div class="col" style="flex:.92">
-      <div class="label pain">過去</div>
+      <div class="label pain">BEFORE</div>
       <ul>
-        <li class="tight">本地起好 agent server，再去設一次 config，跑完 —— 設定就散了</li>
-        <li class="tight">下次想重現同一個 run，只能憑印象再填一次</li>
-        <li class="tight">兩次分數不一樣，是 skill 變了還是 endpoint / model / timeout 變了？說不清楚</li>
+        <li class="tight">Start the agent server locally, configure once, run — and the settings scatter</li>
+        <li class="tight">Want to reproduce that run tomorrow? Type it in again from memory</li>
+        <li class="tight">Two runs disagree: was it the skill, or the endpoint / model / timeout? No way to say</li>
       </ul>
-      <div class="label fix" style="margin-top:26px">Skill Studio</div>
+      <div class="label fix" style="margin-top:26px">SKILL STUDIO</div>
       <ul>
-        <li class="tight">一個 run 記下<b>觸發它的完整設定</b>：endpoints、models、timeout、concurrency</li>
-        <li class="tight">空白欄位在<b>啟動當下</b>就解析成環境的實際值 —— run 是一份完整紀錄，不是對環境的 delta</li>
-        <li class="tight">run history 每一列都點得開那份唯讀設定</li>
+        <li class="tight">A run records <b>the exact settings it was triggered with</b>: endpoints, models, timeouts, concurrency</li>
+        <li class="tight">Blank fields are resolved to the environment's values <b>at start time</b> — a run is a complete record, not a delta against an environment that may since have changed</li>
+        <li class="tight">Every row in the run history opens that read-only config</li>
       </ul>
-      <div class="note">金鑰只進不出：填得進去，但任何 API 都讀不回來。</div>
+      <div class="note">Credentials go in and never come out: you can type a key, no API reads one back.</div>
     </div>
     <div class="col" style="flex:1.08">
       <div class="shot"><img src="assets/shot-01-run-config.png" alt=""
-        data-ph-t="Run 設定" data-ph-d="run history 裡點開某個 run 的唯讀設定面板，看得到 endpoint / model / timeout / concurrency"></div>
+        data-ph-t="SCREENSHOT" data-ph-d="The read-only config panel opened from a row in the run history — endpoints, models, timeout, concurrency"></div>
     </div>
   </div>
 </section>
@@ -259,33 +261,33 @@ Langfuse 那句話一定要講 —— 在場可能有人是 Langfuse 的支持�
 這是整個系統最早、也是價值最高的一個功能。
 原本的 eval server 已經能告訴你『這題錯了』，開發者要的是『為什麼錯、錯在哪一步』。
 做法：把開發者寫的『理想推理流程的白話描述』跟實際 trace 一起丟給 LLM，問它兩者在哪裡分岔。
-為什麼刻意保守要講 —— 整個功能壓在一個假設上：錯誤可以歸因到單一 span。
-這個假設常常是錯的（compounding error、好幾條都對的路徑、錯在 tool 不在 skill）。
-所以我們讓它給線索不給判決：可以有多個嫌疑、confidence 只有三檔、還有 caveat 可以說『這題不該怪任何單一 span』。
-過度自信會把人帶去錯的方向，而且帶著假的權威。">
-  <h1>斷點 <span class="q">2</span>：答錯了，還要自己翻 trace 找錯在哪</h1>
+講到 a clue, not a verdict 那句要停一下：
+整個功能壓在一個假設上 —— 錯誤可以歸因到單一 span，而這個假設常常是錯的
+（compounding error、好幾條都對的路徑、錯在 tool 不在 skill）。
+所以我們讓它給線索不給判決。過度自信會把人帶去錯的方向，而且帶著假的權威。">
+  <h1>Break <span class="q">2</span>: you still have to read the trace yourself</h1>
   <div class="content">
     <div class="col" style="flex:.92">
-      <div class="label pain">過去</div>
+      <div class="label pain">BEFORE</div>
       <ul>
-        <li class="tight">判錯只告訴你「這題錯了」，不告訴你「錯在第幾步」</li>
-        <li class="tight">一天查十題、每題十幾個 span，逐個點開來看</li>
+        <li class="tight">A verdict tells you <b>that</b> the question failed, not <b>where</b> it went off the rails</li>
+        <li class="tight">Ten questions a day, a dozen spans each, opened one at a time</li>
       </ul>
-      <div class="label fix" style="margin-top:26px">Skill Studio</div>
+      <div class="label fix" style="margin-top:26px">SKILL STUDIO</div>
       <ul>
-        <li class="tight">把<b>理想推理流程的白話描述</b>和<b>實際 trace</b> 一起交給 LLM，問：兩者在哪裡分岔</li>
-        <li class="tight">UI 直接跳到最可疑的 span，附上 input / output / token</li>
-        <li class="tight">診斷只算一次就落庫，之後打開是讀資料庫，不重燒 token</li>
+        <li class="tight">Hand an LLM the developer's <b>plain-language description of how the question should have been answered</b> and the trace of what actually happened — ask where the two diverge</li>
+        <li class="tight">The UI jumps straight to the top suspect span, with its input, output and token counts</li>
+        <li class="tight">Generated once and stored; opening it later reads the database, not the model</li>
       </ul>
       <div class="note">
-        <b>給線索，不給判決。</b>嫌疑可以有好幾個、confidence 只有 high / med / low 三檔、
-        還留了一個 caveat 欄位可以說「這題根本不該歸給單一 span」——
-        因為「錯誤可歸因到單一 span」這個假設，本來就常常不成立。
+        <b>A clue, not a verdict.</b> Several suspects are allowed, confidence is high / med / low rather than a fake
+        percentage, and a <span class="mono">caveat</span> field lets the model say "this isn't attributable to one span at all" —
+        because that assumption is often wrong.
       </div>
     </div>
     <div class="col" style="flex:1.08">
       <div class="shot"><img src="assets/shot-02-diagnosis.png" alt=""
-        data-ph-t="診斷三欄檢視" data-ph-d="左邊題目列表、中間 Answer / Diagnosis / Trace、右邊 span 細節，嫌疑 span 標著 high / med / low"></div>
+        data-ph-t="SCREENSHOT" data-ph-d="The three-column view of a failed question: answer, diagnosis, and the span list with suspects marked high / med / low"></div>
     </div>
   </div>
 </section>
@@ -294,34 +296,35 @@ Langfuse 那句話一定要講 —— 在場可能有人是 Langfuse 的支持�
 <section class="slide" data-part="1" data-tick="3" data-notes="
 承上：診斷告訴你『哪裡』錯，下一個念頭一定是『如果 skill 改成這樣講，應該就會對』。
 在 playground 之前，驗證這個假設的唯一方法是改 eval set、跑一整輪。太貴了。
-Playground 就是那條便宜的路：一題、一份可編輯的 skill 副本、一個按鈕。
+Playground 就是那條便宜的路：one question, one editable skill, one button.
 override 是 per-request 的，不寫回 agent server。
 誠實的那句一定要講：平台不保證 agent 真的吃了你的 override。
-我們沒有假裝有檢查，而是在 UI 上直說；證據是那段文字會出現在第一個 span 的 system message，
-而 span 檢視看得到。Optimize 那邊不一樣，它會在花一小時之前實際驗證。">
-  <h1>斷點 <span class="q">3</span>：想到怎麼改 skill，卻沒有便宜的方法驗證</h1>
+我們沒有假裝有檢查，而是在 UI 上直說；證據是那段文字會出現在第一個 span 的 system message。
+Optimize 那邊不一樣，它會在花一小時之前實際驗證。">
+  <h1>Break <span class="q">3</span>: no cheap way to test the fix you just thought of</h1>
   <div class="content">
     <div class="col" style="flex:.92">
-      <div class="label pain">過去</div>
+      <div class="label pain">BEFORE</div>
       <ul>
-        <li class="tight">唯一的路：改 eval set → 跑一整輪 → 自己用眼睛看結果對不對</li>
-        <li class="tight">Langfuse 上只測得了<b>單次 LLM call</b>，測不了一整串 tool calling</li>
-        <li class="tight">於是在 terminal 和 Langfuse 之間來回切，非常麻煩</li>
+        <li class="tight">The only route: edit the eval set, run the whole thing, read the answers yourself</li>
+        <li class="tight">Langfuse tests <b>a single LLM call</b> — not a chain of tool calls</li>
+        <li class="tight">So you live between the terminal and Langfuse, switching back and forth</li>
       </ul>
-      <div class="label fix" style="margin-top:22px">Skill Studio · Playground</div>
+      <div class="label fix" style="margin-top:22px">SKILL STUDIO · PLAYGROUND</div>
       <ul>
-        <li class="tight">一題、一份<b>可編輯的 skill 副本</b>、一個按鈕：跑完整 trajectory 並自動判分</li>
-        <li class="tight">從錯題一鍵「Try this in the playground」，題目與兩個 ground truth 一起帶過去</li>
-        <li class="tight">送出前比對 skill 版本，基準變了會先問你要重載還是照送</li>
+        <li class="tight">One question, <b>an editable copy of the skill files</b>, one button — full trajectory, judged automatically</li>
+        <li class="tight">From a failed question, <i>"Try this in the playground"</i> carries the question and both ground-truth fields over</li>
+        <li class="tight">Before each send it re-reads the agent's version: if the skill moved underneath you, it asks first</li>
       </ul>
       <div class="note">
-        平台<b>不保證</b> agent 真的吃了你的 override —— UI 直說這件事，而不是假裝有檢查。
-        證據是那段文字會出現在第一個 span 的 system message。（Optimize 會在花掉一小時前實際驗證，見後面。）
+        The platform <b>does not verify</b> that the agent honoured your override — the UI says so rather than implying a check
+        that doesn't exist. The evidence is that the injected text shows up in the trace's first span.
+        (An optimization run does check, before it spends an hour.)
       </div>
     </div>
     <div class="col" style="flex:1.08">
       <div class="shot"><img src="assets/shot-03-playground.png" alt=""
-        data-ph-t="Playground" data-ph-d="左邊 attempt 列表、中間題目與 skill 編輯器、右邊 Agent → Judge → Trace → Diagnosis 的階段進度"></div>
+        data-ph-t="SCREENSHOT" data-ph-d="The playground: the skill file editor beside the Agent → Judge → Trace → Diagnosis phase steps"></div>
     </div>
   </div>
 </section>
@@ -330,31 +333,31 @@ override 是 per-request 的，不寫回 agent server。
 <section class="slide" data-part="1" data-tick="4" data-notes="
 這個痛點很小但很煩：在 playground 問的題目，通常正好是 eval set 沒有的那種 —— 那正是它被拿來問的原因。
 Draft from trace 是省最多時間的地方：thinking process 本來要人自己寫，現在 LLM 讀 trace 先寫一版草稿。
-unverified 那一點值得停兩秒：預填的 expected answer 如果照單全收，那題等於斷言 agent 已經是對的，
-它會永遠通過，永遠抓不到答案變壞。所以我們把它標成未驗證，逼你看一眼。">
-  <h1>斷點 <span class="q">4</span>：順手想到的好題目，很難留下來</h1>
+unverified 那一點值得停兩秒：預填的 expected answer 如果照單全收，
+那題等於斷言 agent 已經是對的，它會永遠通過，永遠抓不到答案變壞。所以我們把它標成未驗證，逼你看一眼。">
+  <h1>Break <span class="q">4</span>: the good question you just thought of gets lost</h1>
   <div class="content">
     <div class="col" style="flex:.92">
-      <div class="label pain">過去</div>
+      <div class="label pain">BEFORE</div>
       <ul>
-        <li class="tight">測試中想到的題目，往往正是現有 eval set 沒有的那種</li>
-        <li class="tight">要留下來得手抄回上傳檔，還要自己補一段 thinking process</li>
-        <li class="tight">於是大多數就沒留</li>
+        <li class="tight">A question asked while testing is usually one the eval set doesn't have — that's why it got asked</li>
+        <li class="tight">Keeping it means copying it back into the upload file and writing a reasoning description by hand</li>
+        <li class="tight">So most of them are never kept</li>
       </ul>
-      <div class="label fix" style="margin-top:26px">Skill Studio · Shortlist</div>
+      <div class="label fix" style="margin-top:26px">SKILL STUDIO · SHORTLIST</div>
       <ul>
-        <li class="tight">任何一題一鍵進 shortlist，存在瀏覽器裡，backend 重啟也還在</li>
-        <li class="tight"><b>Draft from trace</b>：LLM 讀 trace，把 agent 實際做了什麼寫成 thinking process 草稿，人只要改</li>
-        <li class="tight">直接開成新的 eval set；可以勾選既有 set 的題目一起複製進來</li>
+        <li class="tight">One click puts a question on the shortlist — it lives in the browser and survives a backend restart</li>
+        <li class="tight"><b>Draft from trace</b>: an LLM reads the trace and writes the reasoning process as a first draft; you only edit</li>
+        <li class="tight">Turn the shortlist into a new eval set, optionally copying questions from existing sets in</li>
       </ul>
       <div class="note">
-        預填的 expected answer 標記為 <b>unverified</b> —— 照單全收等於斷言「agent 現在已經是對的」，
-        那題就會永遠通過，永遠抓不到答案變壞。
+        The prefilled expected answer is marked <b>unverified</b> — kept as-is, that question asserts the agent is already
+        right, so it will always pass and can never catch the answer going bad.
       </div>
     </div>
     <div class="col" style="flex:1.08">
       <div class="shot"><img src="assets/shot-04-shortlist.png" alt=""
-        data-ph-t="Shortlist → 新 eval set" data-ph-d="shortlist 的 review 對話框：unverified 標記、Draft from trace 按鈕、可勾選要一起複製的既有 eval set"></div>
+        data-ph-t="SCREENSHOT" data-ph-d="The shortlist review dialog: the unverified marker, the Draft from trace button, and the existing eval sets to copy in"></div>
     </div>
   </div>
 </section>
@@ -363,31 +366,31 @@ unverified 那一點值得停兩秒：預填的 expected answer 如果照單全�
 <section class="slide" data-part="1" data-notes="
 前面四個是流程上的摩擦，這一個是本質上的慢。
 3 天到 2 週，而且中間就是人一輪一輪手動改、重跑、看結果。
-一句可以引起共鳴的話：而且說實話，沒有人喜歡調 prompt。
-Optimize 的用語要刻意對齊深度學習：epoch、step、learning rate、validation gate —— 
+一句可以引起共鳴的話：and nobody enjoys tuning prompts.
+Optimize 的用語要刻意對齊深度學習：epoch、step、learning rate、validation gate ——
 這是給工程師聽眾的，他們一聽就知道每個詞在做什麼。
 zip 不自動寫回是刻意的，下一頁的限制那張會再講一次。">
-  <h1>然後是最大的一個：<span class="q">迴圈本身太慢</span></h1>
+  <h1>And the big one: <span class="q">the loop itself is slow</span></h1>
   <div class="content">
     <div class="col" style="flex:.92">
-      <div class="label pain">過去</div>
+      <div class="label pain">BEFORE</div>
       <ul>
-        <li class="tight">接到新 topic、讀完 domain knowledge 之後，從 0% 爬到 90% 以上：<b>短則 3 天，長則 1～2 週</b></li>
-        <li class="tight">中間就是人一輪一輪手動改 skill、重跑、看結果</li>
-        <li class="tight">而且說實話 —— 沒有人喜歡調 prompt</li>
+        <li class="tight">A new topic, once the domain knowledge is understood: <b>3 days at best, 1–2 weeks at worst</b> to climb from 0% past 90%</li>
+        <li class="tight">All of it is a person editing the skill, re-running, reading results, round after round</li>
+        <li class="tight">And frankly — nobody enjoys tuning prompts</li>
       </ul>
-      <div class="label fix" style="margin-top:26px">Skill Studio · Optimize</div>
+      <div class="label fix" style="margin-top:26px">SKILL STUDIO · OPTIMIZE</div>
       <ul>
-        <li class="tight">像訓練模型一樣訓練一份 skill：<b>epoch / step / learning rate / validation gate</b></li>
-        <li class="tight">兩種模式：<b>isolated</b> 練 skill 的 body，<b>routing</b> 練 skill 的 description</li>
-        <li class="tight">逐 step 的圖表與 diff：每一步量到什麼、analyst 看到哪些失敗、對 skill 做了什麼</li>
-        <li class="tight">產出是一包 zip，<b>人工</b>放回 agent server</li>
+        <li class="tight">Train a skill the way you would train a model: <b>epochs, steps, a learning rate, a validation gate</b></li>
+        <li class="tight">Two modes: <b>isolated</b> trains the skill body, <b>routing</b> trains the skill description</li>
+        <li class="tight">A chart per step, plus what that step measured and a side-by-side diff of what it did to the skill</li>
+        <li class="tight">The output is a zip you put back on the agent server <b>yourself</b></li>
       </ul>
-      <div class="note">演算法就是後面第三部分要拆的 SkillOpt。</div>
+      <div class="note">The algorithm is SkillOpt — that's Part 3.</div>
     </div>
     <div class="col" style="flex:1.08">
       <div class="shot"><img src="assets/shot-05-optimize-chart.png" alt=""
-        data-ph-t="Optimization run" data-ph-d="逐 step 的訓練 / 驗證分數折線圖，加上某一個 step 的 skill 並排 diff"></div>
+        data-ph-t="SCREENSHOT" data-ph-d="An optimization run: the per-step training / validation score chart, or one step's side-by-side skill diff"></div>
     </div>
   </div>
 </section>
@@ -398,22 +401,20 @@ zip 不自動寫回是刻意的，下一頁的限制那張會再講一次。">
 一、七個 seam：每個外部相依都是一個 Python Protocol，各有 fake 跟 real 兩種實作，
 各自獨立切換、預設全 fake。所以整個系統在一台只有 Docker 的機器上就跑得起來，
 也可以一次只把一個真實服務接上來。這對 demo 跟對新人上手都很關鍵。
-二、分工：Langfuse 擁有 trace，我們擁有 Langfuse 表達不了的東西。
+二、分工：Langfuse owns traces; we own everything Langfuse has no concept of.
 span 的 input/output/token 是看的時候才去 Langfuse 讀，從來不複製進我們的資料庫。
 兩邊靠 correlation id 對起來 —— 這是整個錯誤定位的前提。">
-  <h1>系統全貌：<span class="q">Langfuse 擁有 trace，我們擁有它表達不了的東西</span></h1>
+  <h1><span class="q">Langfuse owns traces</span>; we own what it has no concept of</h1>
   <div class="content"><div class="col" style="justify-content:center">
   <svg viewBox="0 0 1060 400" style="width:100%;height:auto;max-height:400px">
     <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#9A9A93"/></marker>
       <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#2B5CE6"/></marker></defs>
-    <!-- browser -->
     <rect x="14" y="150" width="120" height="66" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
-    <text x="74" y="180" font-size="16" font-weight="700" text-anchor="middle" fill="#1A1A1A">瀏覽器</text>
+    <text x="74" y="180" font-size="16" font-weight="700" text-anchor="middle" fill="#1A1A1A">Browser</text>
     <text x="74" y="200" font-size="13" text-anchor="middle" fill="#9A9A93">React · SSE</text>
     <path d="M136,183 L172,183" stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#ar2)"/>
-    <!-- platform -->
     <rect x="178" y="18" width="486" height="364" rx="6" fill="#fff" stroke="#1A1A1A" stroke-width="1.5"/>
     <text x="196" y="44" font-size="15" font-weight="700" fill="#1A1A1A">Skill Studio</text>
     <text x="656" y="44" font-size="12.5" text-anchor="end" fill="#9A9A93">FastAPI · Postgres · Docker</text>
@@ -426,8 +427,8 @@ span 的 input/output/token 是看的時候才去 Langfuse 讀，從來不複製
       <text x="575" y="83" fill="#2B5CE6">Optimize</text>
     </g>
     <rect x="196" y="110" width="450" height="36" rx="4" fill="#F2F2EE" stroke="#E3E3DE" stroke-width="1.2"/>
-    <text x="421" y="133" font-size="14.5" text-anchor="middle" fill="#1A1A1A">Orchestrator（背景 asyncio task · 逐題 SSE 回報）</text>
-    <text x="196" y="172" font-size="12" fill="#9A9A93">七個可抽換的 seam：各有 fake / real 兩種實作，獨立切換，預設全 fake</text>
+    <text x="421" y="133" font-size="14.5" text-anchor="middle" fill="#1A1A1A">Orchestrator — background asyncio task, live SSE per question</text>
+    <text x="196" y="172" font-size="12" fill="#9A9A93">Seven swappable seams: each has a fake and a real implementation, switched independently, all fake by default</text>
     <g font-size="12.5" text-anchor="middle" fill="#6B6B66">
       <rect x="196" y="182" width="107" height="30" rx="4" fill="#fff" stroke="#E3E3DE"/><text x="249" y="201">Agent</text>
       <rect x="310" y="182" width="107" height="30" rx="4" fill="#fff" stroke="#E3E3DE"/><text x="363" y="201">Judge</text>
@@ -438,24 +439,23 @@ span 的 input/output/token 是看的時候才去 Langfuse 讀，從來不複製
       <rect x="424" y="218" width="107" height="30" rx="4" fill="#fff" stroke="#E3E3DE"/><text x="477" y="237">Optimizer</text>
     </g>
     <rect x="196" y="268" width="450" height="96" rx="4" fill="#F2F2EE" stroke="#E3E3DE" stroke-width="1.2"/>
-    <text x="212" y="292" font-size="14.5" font-weight="700" fill="#1A1A1A">Postgres —— Langfuse 沒有概念的那些東西</text>
-    <text x="212" y="316" font-size="13.5" fill="#6B6B66">eval set · 跨 run 穩定的 question id · run 與它的完整設定</text>
-    <text x="212" y="338" font-size="13.5" fill="#6B6B66">judge 的 verdict · LLM 診斷 · 優化 run 的每一個 step</text>
-    <text x="212" y="357" font-size="13" fill="#9A9A93">span 的 input / output / token 一律不落庫</text>
-    <!-- externals -->
+    <text x="212" y="292" font-size="14.5" font-weight="700" fill="#1A1A1A">Postgres — what Langfuse cannot express</text>
+    <text x="212" y="316" font-size="13.5" fill="#6B6B66">eval sets · stable question ids · runs and their full config</text>
+    <text x="212" y="338" font-size="13.5" fill="#6B6B66">judge verdicts · LLM diagnoses · every step of an optimization run</text>
+    <text x="212" y="357" font-size="13" fill="#9A9A93">span input / output / tokens are never copied in here</text>
     <g>
       <rect x="712" y="40" width="334" height="52" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <text x="730" y="62" font-size="15" font-weight="700" fill="#1A1A1A">Agent Server</text>
-      <text x="730" y="82" font-size="13" fill="#9A9A93">OpenAI chat completions + 兩個平台欄位</text>
+      <text x="730" y="82" font-size="13" fill="#9A9A93">OpenAI chat completions + two platform fields</text>
       <rect x="712" y="150" width="334" height="76" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <text x="730" y="172" font-size="15" font-weight="700" fill="#1A1A1A">Langfuse</text>
-      <text x="730" y="192" font-size="13" fill="#9A9A93">trace 與 span 的唯一真相</text>
-      <text x="730" y="212" font-size="13" fill="#9A9A93">看的時候才讀，從不複製進我們的庫</text>
+      <text x="730" y="192" font-size="13" fill="#9A9A93">the single source of truth for traces and spans</text>
+      <text x="730" y="212" font-size="13" fill="#9A9A93">fetched live at view time, never copied into our DB</text>
       <rect x="712" y="242" width="334" height="52" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
       <text x="730" y="264" font-size="15" font-weight="700" fill="#1A1A1A">LLM endpoints</text>
       <text x="730" y="284" font-size="13" fill="#9A9A93">judge · diagnosis · synthesis · optimizer</text>
       <rect x="712" y="310" width="334" height="46" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
-      <text x="730" y="338" font-size="15" font-weight="700" fill="#1A1A1A">Keycloak<tspan font-size="13" font-weight="400" fill="#9A9A93">　OIDC，可關</tspan></text>
+      <text x="730" y="338" font-size="15" font-weight="700" fill="#1A1A1A">Keycloak<tspan font-size="13" font-weight="400" fill="#9A9A93">　OIDC, optional</tspan></text>
     </g>
     <g stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#ar2)">
       <path d="M668,190 C690,190 690,66 706,66"/>
@@ -465,12 +465,12 @@ span 的 input/output/token 是看的時候才去 Langfuse 讀，從來不複製
     </g>
     <path d="M730,96 L730,144" stroke="#2B5CE6" stroke-width="1.5" fill="none" marker-end="url(#ar3)" stroke-dasharray="4 3"/>
     <text x="746" y="113" font-size="13.5" font-weight="700" fill="#2B5CE6">correlation id</text>
-    <text x="746" y="133" font-size="12.5" fill="#2B5CE6">我們指定 id，agent 拿它當 Langfuse 的 trace id</text>
+    <text x="746" y="133" font-size="12.5" fill="#2B5CE6">we generate it, the agent uses it as its Langfuse trace id</text>
   </svg>
   </div></div>
   <div class="note" style="margin-top:6px">
-    七個 seam <b>預設全部是 fake</b>，所以這整套在一台只有 Docker 的機器上就能完整跑起來，
-    也可以一次只把一個真實服務接上來。
+    All seven seams are <b>fake by default</b>, so the whole thing runs on a machine with nothing but Docker —
+    and you can bring up one real service at a time.
   </div>
 </section>
 
@@ -479,36 +479,36 @@ span 的 input/output/token 是看的時候才去 Langfuse 讀，從來不複製
 這頁是講給『我也想把我的 agent 接上來』的人聽的，可以講快一點，但不要跳過 —— 它能擋掉一半的 Q&A。
 最重要的是 correlation id：我們在呼叫前產生一個 id 放在 metadata，agent server 必須拿它當 Langfuse 的 trace id。
 沒有這個，平台就找不到自己剛剛造成的那條 trace，錯誤定位整個不能運作。這是唯一一件要在我們 repo 之外改的事。
-skills 是替換不是 patch —— 只有替換才能表達『刪掉一個檔案』，所以空物件跟沒給是兩種不同的請求，
-空物件的意思是『完全不帶 skill 回答這題』。">
-  <h1>別的 team 要接上來，只需要做兩件事</h1>
+skills is a replacement, not a patch —— 只有替換才能表達『刪掉一個檔案』，
+所以空物件跟沒給是兩種不同的請求，空物件的意思是『完全不帶 skill 回答這題』。">
+  <h1>To plug your agent in, you implement two things</h1>
   <div class="content"><div class="col">
-    <pre><span class="k">POST</span> {chat endpoint}   <span class="c">一般的 OpenAI chat completions；平台專屬的欄位全部收在一個 key 底下</span>
-{
+    <pre><span class="k">POST</span> {chat endpoint}   <span class="c">an ordinary OpenAI chat completions call — everything</span>
+{                      <span class="c">platform-specific rides in one extra top-level key</span>
   "messages": [...],
   <span class="k">"skill_studio"</span>: {
-    "trace_data": { "trace_id": "…" },  <span class="c">← 請用它當 Langfuse 的 trace id（必要）</span>
-    "timeout_s": 120,                   <span class="c">← 這一次呼叫的預算，取代 server 自己寫死的上限</span>
-    "skills": { "billing/SKILL.md": "…" } <span class="c">← 只對這一次呼叫生效的完整檔案集（選用）</span>
+    "trace_data": { "trace_id": "…" },     <span class="c">← use this as the Langfuse trace id (required)</span>
+    "timeout_s": 120,                      <span class="c">← this call's budget, replaces your hard-coded limit</span>
+    "skills": { "billing/SKILL.md": "…" }  <span class="c">← the whole file set, for this call only (optional)</span>
   }
 }
-
-<span class="k">GET</span>  {skills endpoint}  <span class="c">→ {"skills": {相對路徑: 全文}, "version": "…"}（選用）</span>
-                      <span class="c">沒有它，evaluation 照跑；playground、skill 覆蓋率警告與優化功能沒有</span></pre>
-    <div class="content" style="margin-top:22px;gap:26px">
+<span class="k">GET</span>  {skills endpoint}  <span class="c">→ {"skills": {relative path: text}, "version": "…"}   (optional)</span>
+                       <span class="c">without it, evaluation still runs — the playground, the coverage</span>
+                       <span class="c">warning and optimization go without</span></pre>
+    <div class="content" style="margin-top:18px;gap:26px;flex:none">
       <div class="col card">
-        <h3 class="acc">correlation id 是整個設計的樞紐</h3>
-        <div class="small">呼叫前我們產生一個 id 放進 metadata，agent server 必須拿它當 Langfuse trace id。
-        沒有它，平台找不到自己剛剛造成的那條 trace，<b>錯誤定位整個不能運作</b>。
-        這是唯一一件必須在本系統之外改的事。</div>
+        <h3 class="acc">The correlation id is the linchpin</h3>
+        <div class="small">We generate an id before the call and pass it in the metadata; your server must use it as its
+        Langfuse trace id. Without it the platform cannot find the trace it just caused, and
+        <b>error localization cannot work at all</b>. This is the one change required outside our repo.</div>
       </div>
       <div class="col card">
-        <h3 class="acc">skills 是「替換」不是「patch」</h3>
-        <div class="small">只有替換才能表達「刪掉一個檔案」。所以 <span class="mono">{}</span> 和「沒給這個 key」
-        是兩種<b>不同</b>的請求 —— 前者的意思是「完全不帶任何 skill 回答這題」。</div>
+        <h3 class="acc">skills <i>replaces</i>, it does not patch</h3>
+        <div class="small">Only replacement can express deleting a file. Which is why <span class="mono">{}</span> and an absent key are
+        <b>different</b> requests — the first one means "answer with no skills at all".</div>
       </div>
     </div>
-    <div class="note">完整契約寫在 <span class="mono">backend/docs/agent-server-api.md</span>，app 裡的 Documentation 也讀得到。</div>
+    <div class="note">Full contract: <span class="mono">backend/docs/agent-server-api.md</span>, also readable inside the app under Documentation.</div>
   </div></div>
 </section>
 
@@ -516,28 +516,28 @@ skills 是替換不是 patch —— 只有替換才能表達『刪掉一個檔�
 <section class="slide" data-part="1" data-notes="
 這頁講實際效果，數字要講得保守而具體。
 重點不是『準確率提高多少』，是『人的時間從哪裡挪到哪裡』。
-十幾個小時那句話最有畫面：下班前按下去，隔天早上來看結果。
+十幾個小時那句話最有畫面：press it before you leave, read it in the morning.
 人不必守著它 —— 可取消、可續跑，backend 重啟是 interrupted 不是 failed，簽入一次就接著跑。">
-  <h1>目前的成效</h1>
+  <h1>Where it stands today</h1>
   <div class="content" style="gap:26px">
     <div class="col card" style="flex:1">
-      <div class="label pain" style="margin-bottom:10px">過去</div>
-      <div style="font-size:30px;font-weight:700;line-height:1.3">3 天 ～ 2 週</div>
-      <div class="small" style="margin-top:10px">人一輪一輪手動改 skill、重跑、看結果，直到準確率爬上 90%。
-      整段時間 agent developer 幾乎被綁住。</div>
+      <div class="label pain" style="margin-bottom:10px">BEFORE</div>
+      <div style="font-size:30px;font-weight:700;line-height:1.3">3 days – 2 weeks</div>
+      <div class="small" style="margin-top:10px">A person editing the skill, re-running, reading results, round after round,
+      until the pass rate climbs past 90%. The agent developer is tied up for all of it.</div>
     </div>
     <div class="col card" style="flex:1;border-color:var(--accent)">
-      <div class="label fix" style="margin-bottom:10px">現在（isolated mode）</div>
-      <div style="font-size:30px;font-weight:700;line-height:1.3" class="acc">一個晚上</div>
-      <div class="small" style="margin-top:10px">一次優化跑十幾個小時 —— <b>下班前按下去，隔天早上看結果</b>。
-      人的時間從「調 prompt」挪到「review 結果」。</div>
+      <div class="label fix" style="margin-bottom:10px">NOW (ISOLATED MODE)</div>
+      <div style="font-size:30px;font-weight:700;line-height:1.3" class="acc">overnight</div>
+      <div class="small" style="margin-top:10px">A run takes a dozen hours or so — <b>press it before you leave, read it in the morning</b>.
+      The person's time moves from tuning prompts to reviewing what came out.</div>
     </div>
     <div class="col" style="flex:1.25">
-      <div class="label">已經在用的地方</div>
+      <div class="label">IN USE</div>
       <ul>
-        <li class="tight"><b>BOD</b> 與 <b>PPD</b> 的多個 topic，都實際縮短了調 skill 的時間</li>
-        <li class="tight">run 可取消、可續跑；backend 重啟是 <span class="mono">interrupted</span> 而不是 <span class="mono">failed</span>，簽入一次就接著跑完</li>
-        <li class="tight">四個提前結束條件（驗證達標、連續 N 步沒有新高、系統錯誤率超標…），不會白燒一整晚</li>
+        <li class="tight">Several <b>BOD</b> and <b>PPD</b> topics, where it measurably cut the time spent tuning skills</li>
+        <li class="tight">Runs cancel and resume; a backend restart leaves a run <span class="mono">interrupted</span>, not <span class="mono">failed</span> — sign in again and press Resume</li>
+        <li class="tight">Four early-stop conditions (validation target hit, N steps without a new best, system error rate too high…) so a bad night doesn't burn to the end</li>
       </ul>
     </div>
   </div>
@@ -549,26 +549,26 @@ skills 是替換不是 patch —— 只有替換才能表達『刪掉一個檔�
 答案很明確：不是。optimizer 缺內部 domain knowledge 的時候，準確率就是卡在 80% 左右，
 最後那一段還是要人補 —— 而人補的時候，他手上有一份已經被驗證過的 skill，而不是一張白紙。
 右邊這幾條限制主動講出來，比被問出來好。
-特別是答案硬編：這是這類系統最大的風險，我們有三層防線但沒有假裝它不存在。">
-  <h1>但 agent developer <span class="q">沒有</span>被取代</h1>
+特別是答案硬編（answer hard-coding）：這是這類系統最大的風險，我們有三層防線但沒有假裝它不存在。">
+  <h1>The agent developer is <span class="q">not</span> replaced</h1>
   <div class="content" style="gap:30px">
     <div class="col" style="flex:1.05">
-      <div class="label">角色改變</div>
+      <div class="label">THE ROLE CHANGES</div>
       <ul>
-        <li>從「<b>調 prompt 的人</b>」變成「<b>review skill、跑最後一哩路的人</b>」</li>
-        <li>optimizer 缺台積內部的 domain knowledge 時，準確率就是卡在 <b>~80%</b>，最後那一段要人補</li>
-        <li>差別在於：人接手的時候，手上是一份<b>已經通過驗證</b>的 skill，而不是一張白紙</li>
+        <li>From "<b>the person who tunes prompts</b>" to "<b>the person who reviews a skill and runs the last mile</b>"</li>
+        <li>Where the optimizer lacks TSMC-internal domain knowledge, accuracy simply stalls around <b>80%</b> — a person closes the rest</li>
+        <li>The difference: they start from a skill that has <b>already passed validation</b>, not from a blank page</li>
       </ul>
-      <div class="note">所以不能放手給它跑完就算 —— 「按下去、隔天看」之後，還是要有人讀那份 diff。</div>
+      <div class="note">So you can't press the button and walk away for good — someone still has to read that diff in the morning.</div>
     </div>
     <div class="col" style="flex:1">
-      <div class="label">我們知道、也寫在 spec 裡的邊界</div>
+      <div class="label">LIMITS WE KNOW ABOUT, AND WROTE DOWN</div>
       <ul>
-        <li class="dash tight">skill <b>不會</b>自動寫回 agent server：產出是 zip，人工放回</li>
-        <li class="dash tight">答案硬編有三層防線：analyst prompt 明令禁止、held-out 驗證切分、diff 上的逐字比對告警</li>
-        <li class="dash tight">slow update 與 meta skill 已接線，但<b>預設關閉</b></li>
-        <li class="dash tight">診斷的<b>準確度本身還沒被量化驗證</b> —— 那正是要不要投入下一階段的判斷依據</li>
-        <li class="dash tight">錯誤不一定歸得到單一 span；錯在 tool 或 base model 的情況，改 skill 救不了</li>
+        <li class="dash tight">Skills are <b>never</b> written back to the agent server: the output is a zip, installed by hand</li>
+        <li class="dash tight">Answer hard-coding has three defences: the analyst prompt forbids it, the validation split is held out, and the diff flags verbatim matches</li>
+        <li class="dash tight">Slow update and meta skill are wired up but ship <b>disabled</b></li>
+        <li class="dash tight">Diagnosis <b>accuracy itself is unmeasured</b> — that's the evidence we need before investing in the next stage</li>
+        <li class="dash tight">Not every error belongs to one span, and an error in a tool or the base model cannot be fixed by editing a skill</li>
       </ul>
     </div>
   </div>
@@ -578,17 +578,17 @@ skills 是替換不是 patch —— 只有替換才能表達『刪掉一個檔�
 <section class="slide section-slide" data-part="2" data-notes="
 切到瀏覽器。五分鐘，照右邊的順序走，不要臨時發散。
 如果某一步卡住（例如 agent server 慢），直接說『這步平常大概十秒』然後跳到下一步，不要現場 debug。">
-  <div class="eyebrow">Part 2</div>
+  <div class="eyebrow">PART 2</div>
   <h1 style="font-size:64px">Demo</h1>
-  <div class="sub" style="font-size:21px">實際跑一遍，大約 5 分鐘</div>
+  <div class="sub" style="font-size:21px">The real thing, about 5 minutes</div>
   <div class="content" style="flex:none;margin-top:38px">
-    <div class="col" style="flex:none;max-width:720px">
+    <div class="col" style="flex:none;max-width:760px">
       <ul>
-        <li class="tight">跑一個 eval run —— 每一題從第一秒就在列表上，跑到哪裡即時看得到</li>
-        <li class="tight">點一題錯的 —— 診斷直接跳到嫌疑 span，看它的 input / output / token</li>
-        <li class="tight">一鍵帶到 Playground —— 改 skill、再打一次，在第一個 span 裡看到改過的字</li>
-        <li class="tight">把這題加進 shortlist —— Draft from trace，開成新的 eval set</li>
-        <li class="tight">打開一個優化 run —— 逐 step 的圖表、analyst 看到什麼、對 skill 做了什麼</li>
+        <li class="tight">Run an eval — every question is listed from the first second, filling in live</li>
+        <li class="tight">Open a failed one — the diagnosis jumps to the suspect span; read its input, output, tokens</li>
+        <li class="tight">Carry it into the playground — edit the skill, ask again, find the edited text in the first span</li>
+        <li class="tight">Shortlist it — draft the reasoning from the trace, turn it into a new eval set</li>
+        <li class="tight">Open an optimization run — the per-step chart, what the analysts saw, what changed in the skill</li>
       </ul>
     </div>
   </div>
@@ -596,53 +596,53 @@ skills 是替換不是 patch —— 只有替換才能表達『刪掉一個檔�
 
 <!-- ══════════ 14 ══════════ -->
 <section class="slide section-slide" data-part="3" data-notes="
-進入重頭戲。一句話定調：所有的『學習』都發生在一份文字檔裡，模型本身完全沒有被碰過。
+進入重頭戲。一句話定調：all the learning happens in a text file, the model is never touched.
 提一下出處：微軟的論文，我們的實作是 vendored 自 microsoft/SkillOpt，
 只有兩件事換成我們自己的 —— 打我們的 target agent、用我們的 LLM judge 評分。
 反向傳播、聚合、learning rate 裁切、validation gate 都是原本的。">
-  <div class="eyebrow">Part 3</div>
-  <h1 style="font-size:46px;max-width:900px">SkillOpt：把 skill 文件<br>當成<span class="q">可訓練的權重</span></h1>
-  <div class="sub" style="font-size:20px;margin-top:20px">模型完全不動 —— 所有的「學習」都發生在一份文字檔裡。</div>
+  <div class="eyebrow">PART 3</div>
+  <h1 style="font-size:46px;max-width:940px">SkillOpt: treating a skill file<br>as a <span class="q">trainable weight</span></h1>
+  <div class="sub" style="font-size:20px;margin-top:20px">The model is never touched — all of the learning happens in one text file.</div>
   <div class="small" style="margin-top:40px">
-    論文：<span class="mono">arXiv:2605.23904</span>（Microsoft）　·　
-    我們的實作 vendored 自 <span class="mono">microsoft/SkillOpt</span>，只有兩件事換成自己的：
-    打我們的 agent 取得回答、用我們的 LLM judge 評分。
+    Paper: <span class="mono">arXiv:2605.23904</span> (Microsoft)　·　
+    our implementation is vendored from <span class="mono">microsoft/SkillOpt</span>, with only two things swapped for ours:
+    calling our agent for an answer, and scoring it with our LLM judge.
   </div>
 </section>
 
 <!-- ══════════ 15 ══════════ -->
 <section class="slide" data-part="3" data-notes="
 先破題：為什麼不是大家最直覺的那個做法 —— 讓模型自己反思、自己改 prompt。
-三個實務問題裡，第三個最值得強調：它是發生在純文字上的災難性遺忘。
+三個實務問題裡，第三個最值得強調：catastrophic forgetting, in plain text instead of in weights.
 上一次學到的教訓，會被這一次的補丁默默覆蓋掉，而且你不會收到任何通知。
 SkillOpt 的回答不是再打一個補丁，而是換框架：受控、有界、通過驗證才保留，沒幫助就回滾。">
-  <h1>為什麼不是「讓模型自己反思、自己改 prompt」</h1>
+  <h1>Why not just let the model rewrite its own prompt?</h1>
   <div class="content" style="gap:32px">
     <div class="col">
-      <div class="label pain">常見做法</div>
+      <div class="label pain">THE USUAL APPROACH</div>
       <ul>
-        <li>模型針對上一次的失敗反思，當場改寫 prompt / 技能文件</li>
-        <li>Dynamic Cheatsheet、Agentic Context Engineering 這類 test-time 的情境整理方法，走的都是這條路</li>
+        <li>The model reflects on its most recent failure and rewrites the skill document on the spot</li>
+        <li>Test-time context-curation methods — Dynamic Cheatsheet, Agentic Context Engineering — all work this way</li>
       </ul>
-      <div class="label pain" style="margin-top:26px">三個實務問題</div>
+      <div class="label pain" style="margin-top:26px">THREE PROBLEMS IN PRACTICE</div>
       <ul>
-        <li class="tight">對<b>最近一次失敗</b>過擬合 —— 一次網路延遲、一個措辭奇怪的輸入，都會被當成規律</li>
-        <li class="tight">補丁越塞越肥，文件不斷膨脹</li>
-        <li class="tight">悄悄抹掉先前學到的教訓 —— <b>發生在純文字上的災難性遺忘</b></li>
+        <li class="tight">It <b>overfits to whatever error just happened</b> — a network hiccup, one oddly worded input, taken as a pattern</li>
+        <li class="tight">The document bloats with one-off patches</li>
+        <li class="tight">It quietly erases lessons learned earlier — <b>catastrophic forgetting, in plain text instead of in weights</b></li>
       </ul>
     </div>
     <div class="col">
-      <div class="label fix">SkillOpt 的回答</div>
+      <div class="label fix">WHAT SKILLOPT DOES INSTEAD</div>
       <div class="card" style="flex:none">
-        <div class="body">不繼續打補丁，而是把整個問題<b>重新框定</b>：</div>
+        <div class="body">It stops patching and <b>reframes the problem</b>:</div>
         <ul style="margin-top:14px">
-          <li class="tight">技能文件不是「任人手動修改的檔案」，而是<b>深度學習優化器眼中的一個權重張量</b></li>
-          <li class="tight">外部的、有版本紀錄的、可訓練的狀態</li>
-          <li class="tight">用<b>受控且有界</b>的步驟更新</li>
-          <li class="tight"><b>通過驗證才保留，沒幫助就回滾</b></li>
+          <li class="tight">The skill file is not a document someone edits by hand — it is <b>what a deep-learning optimizer sees as a weight tensor</b></li>
+          <li class="tight">External, versioned, trainable state</li>
+          <li class="tight">Updated in <b>bounded, controlled</b> steps</li>
+          <li class="tight"><b>Kept only if it passes validation; rolled back if it doesn't help</b></li>
         </ul>
       </div>
-      <div class="note">目標模型本身一個參數都沒有改變。</div>
+      <div class="note">Not one parameter of the target model changes.</div>
     </div>
   </div>
 </section>
@@ -652,17 +652,18 @@ SkillOpt 的回答不是再打一個補丁，而是換框架：受控、有界�
 這張是後面所有東西的地圖。對工程師聽眾來說，這一張表講完，後面五個機制就都有位置可以掛。
 講法：右邊每一個機制存在的目的，都是為了讓左邊那一欄真的能在文字空間裡運作起來。
 如果時間緊，這頁可以講久一點、後面每格講短一點 —— 因為有了這張表，細節自己會對號入座。">
-  <h1>全場的地圖：一張深度學習的對照表</h1>
+  <h1>The map for everything that follows</h1>
   <div class="content"><div class="col" style="justify-content:center">
     <table style="font-size:19px">
-      <tr><th style="width:34%">深度學習</th><th style="width:33%">SkillOpt 的文字空間對應</th><th>它防的是什麼</th></tr>
-      <tr><td>參數 <span class="mono">W</span></td><td class="hl">技能文件 <span class="mono">best_skill.md</span></td><td class="small">300～2,000 token 的一份 Markdown</td></tr>
-      <tr><td>梯度</td><td class="hl">基於 minibatch 產生的修改建議</td><td class="small">對單一軌跡的雜訊過擬合</td></tr>
-      <tr><td>學習率</td><td class="hl">編輯預算 <span class="mono">L t</span></td><td class="small">一步邁太大、拆掉已經運作的部分</td></tr>
-      <tr><td>驗證集 checkpoint</td><td class="hl"><span class="mono">D_sel</span> 盲測守門 + 嚴格淘汰</td><td class="small">「看起來合理」但其實沒有幫助的修改</td></tr>
-      <tr><td>動量 / EMA</td><td class="hl">逐 epoch 的慢速更新</td><td class="small">短期補丁一點一點侵蝕長期的教訓</td></tr>
+      <tr><th style="width:30%">Deep learning</th><th style="width:36%">Its text-space equivalent</th><th>What it guards against</th></tr>
+      <tr><td>Parameters <span class="mono">W</span></td><td class="hl">The skill file <span class="mono">best_skill.md</span></td><td class="small">300–2,000 tokens of Markdown</td></tr>
+      <tr><td>Gradient</td><td class="hl">Edit proposals from a minibatch</td><td class="small">Overfitting to the noise in one trajectory</td></tr>
+      <tr><td>Learning rate</td><td class="hl">The edit budget <span class="mono">L t</span></td><td class="small">Stepping too far and tearing out what already works</td></tr>
+      <tr><td>Validation checkpoint</td><td class="hl">The blind <span class="mono">D_sel</span> gate, strict elimination</td><td class="small">Edits that look reasonable but don't actually help</td></tr>
+      <tr><td>Momentum / EMA</td><td class="hl">The epoch-wise slow update</td><td class="small">Short-term patches eroding long-term lessons</td></tr>
     </table>
-    <div class="note" style="margin-top:28px">下面每一個機制存在的理由，都是為了讓左邊那一欄，<b>真的能在文字空間裡運作起來</b>。</div>
+    <div class="note" style="margin-top:28px">Every mechanism below exists for one reason: to make the left-hand column
+    <b>actually work in text space</b>.</div>
   </div></div>
 </section>
 
@@ -673,27 +674,28 @@ SkillOpt 的回答不是再打一個補丁，而是換框架：受控、有界�
 優化器模型完全不碰任務，只讀軌跡跟分數、提出修改，而且只在離線階段運作。
 訓練一結束，優化器那一側的 API 花費就整個消失，上線的只有凍結模型加一份小小的文字檔。
 這也是為什麼它適合我們：正式環境不會因此變慢、也不會變貴。">
-  <h1>兩個模型，各司其職</h1>
+  <h1>Two models, cleanly separated</h1>
   <div class="content" style="gap:30px">
     <div class="col" style="flex:1">
       <div class="card" style="flex:none;margin-bottom:16px">
-        <h3>目標模型 <span class="mono">M</span> —— 實際做事的那一方</h3>
-        <div class="small" style="margin-top:6px">回答問題、呼叫工具、寫程式。權重與原生 system prompt <b>全程凍結</b>。
-        唯一會變的，是被塞進它工作區、或附加在前面的那份 skill。</div>
+        <h3>Target model <span class="mono">M</span> — the one doing the work</h3>
+        <div class="small" style="margin-top:6px">Answers questions, calls tools, writes code. Its weights and its native system prompt stay
+        <b>frozen throughout</b>. The only thing that changes between rounds is the skill file handed to it.</div>
       </div>
       <div class="card" style="flex:none">
-        <h3>優化器模型 <span class="mono">O</span> —— 完全不碰任務</h3>
-        <div class="small" style="margin-top:6px">通常是更強的前沿模型，<b>只在離線訓練階段運作</b>。
-        讀目標模型的軌跡與分數，然後提出具體的修改：加這條規則、刪那句過時指令、換掉這段模糊措辭。</div>
+        <h3>Optimizer model <span class="mono">O</span> — never touches the task</h3>
+        <div class="small" style="margin-top:6px">Usually a stronger frontier model, and it runs <b>only during offline training</b>.
+        It reads the target's trajectories and scores, then proposes concrete edits: add this heuristic,
+        delete that stale instruction, replace this vague wording.</div>
       </div>
       <div class="note">
-        分開的後果：訓練一結束，優化器那一側的 API 花費就<b>整個消失</b>。
-        上線的只有凍結的模型，加一份小小的文字檔 —— <b>部署成本為零</b>。
+        The consequence of separating them: when training ends, the optimizer's API spend <b>disappears entirely</b>.
+        What ships is the frozen model plus a small text file — <b>deployment cost is zero</b>.
       </div>
     </div>
     <div class="col" style="flex:1.1">
-      <figure><img src="fig/figure1.png" alt="SkillOpt 總覽圖">
-      <figcaption>圖 1 —— SkillOpt 總覽：被接受的修改併入部署用的技能檔案，被拒絕的則成為後續步驟的負面回饋。（來源：原始論文）</figcaption></figure>
+      <figure><img src="fig/figure1.png" alt="SkillOpt overview">
+      <figcaption>Figure 1 — Overview of SkillOpt. Accepted edits are folded into the deployed skill file; rejected edits become negative feedback for later steps. (Source: original paper.)</figcaption></figure>
     </div>
   </div>
 </section>
@@ -701,13 +703,13 @@ SkillOpt 的回答不是再打一個補丁，而是換框架：受控、有界�
 <!-- ══════════ 18 ══════════ -->
 <section class="slide" data-part="3" data-notes="
 先給全景，再一格一格拆。告訴聽眾：接下來五頁都是同一張圖，只是輪流把其中一格點亮，不用擔心迷路。
-整段的核心句：每一步都是『先收證據、再動手、然後必須通過一個它沒看過的考試才算數』。">
-  <h1>一個 step，就是這五格</h1>
+整段的核心句：gather evidence, then act, then earn it on an exam the optimizer has never seen.">
+  <h1>One step is these five stages</h1>
   <div class="content"><div class="col" style="justify-content:center">
     <div class="pipe" data-stage="all"></div>
     <div class="note" style="margin-top:26px">
-      接下來五頁都是同一張圖，只是輪流把其中一格點亮。
-      整段可以用一句話概括：<b>先收證據，再動手，然後必須通過一場它沒看過的考試才算數。</b>
+      The next five slides are this same diagram with one stage lit at a time. The whole thing in one sentence:
+      <b>gather the evidence, then act, then earn it on an exam the optimizer has never seen.</b>
     </div>
   </div></div>
 </section>
@@ -716,25 +718,25 @@ SkillOpt 的回答不是再打一個補丁，而是換框架：受控、有界�
 <section class="slide" data-part="3" data-notes="
 40 是刻意的大批次。如果只對一條失敗軌跡反應，優化器會對造成那次失敗的特定雜訊過擬合 ——
 一次網路延遲、一個措辭特別奇怪的輸入 —— 而不是找出真正反覆出現的模式。
-40 個樣本才有足夠的統計份量，分辨『系統性的弱點』跟『單一的偶發狀況』。
+40 個樣本才有足夠的統計份量，分辨 a systematic weakness 跟 a one-off incident。
 分池也要講：失敗池找的是修復，成功池找的是強化 —— 那些已經在發揮作用、但沒被寫進文件的好習慣。
 沒被記錄下來，下一次未必還能靠運氣重現。">
-  <h1><span class="q">1</span>　Rollout：動手之前，先收證據</h1>
+  <h1><span class="q">1</span>　Rollout: gather the evidence first</h1>
   <div class="content"><div class="col">
     <div class="pipe" data-stage="1"></div>
     <div class="content" style="margin-top:28px;gap:30px">
       <div class="col">
-        <div class="label">為什麼是一批 40，而不是逐題反應</div>
+        <div class="label">WHY A BATCH OF 40, NOT ONE FAILURE AT A TIME</div>
         <ul>
-          <li class="tight">只對<b>一條</b>失敗軌跡反應，會對那次失敗的特定雜訊過擬合 —— 一次網路延遲、一個措辭特別奇怪的輸入</li>
-          <li class="tight">40 個樣本才有足夠的統計份量，分辨「<b>系統性的弱點</b>」與「<b>單一的偶發狀況</b>」</li>
+          <li class="tight">React to <b>one</b> failed trajectory and you overfit to the noise that caused it — a network hiccup, one oddly worded input</li>
+          <li class="tight">40 samples carry enough statistical weight to separate <b>a systematic weakness</b> from <b>a one-off incident</b></li>
         </ul>
       </div>
       <div class="col">
-        <div class="label">為什麼要分成兩個池</div>
+        <div class="label">WHY SPLIT INTO TWO POOLS</div>
         <ul>
-          <li class="tight"><b>失敗池</b>：找可以糾正的修復 —— 什麼壞掉了、怎麼補</li>
-          <li class="tight"><b>成功池</b>：找強化 —— 那些已經在發揮作用、但還沒被寫進文件的好習慣。沒記下來，下次未必還能靠運氣重現</li>
+          <li class="tight"><b>Failure pool</b> — mined for corrective fixes: what broke, and how to patch it</li>
+          <li class="tight"><b>Success pool</b> — mined for reinforcement: good habits already working but not yet written into the skill. Unrecorded, they may not reproduce next time</li>
         </ul>
       </div>
     </div>
@@ -748,24 +750,24 @@ SkillOpt 的回答不是再打一個補丁，而是換框架：受控、有界�
 8 剛好小到留在上下文限制內，又大到足以逼模型橫向比較，找出跨任務共同出現的失敗模式。
 形狀正好是 MapReduce：每個 minibatch 獨立分析（Map），建議之後再彙整（Reduce）。
 patch 是原子操作、精確定位在某個目標字串上 —— 這點下一頁講合併的時候會用到。">
-  <h1><span class="q">2</span>　以 MapReduce 的方式，並行診斷</h1>
+  <h1><span class="q">2</span>　Parallel diagnosis, MapReduce-style</h1>
   <div class="content"><div class="col">
     <div class="pipe" data-stage="2"></div>
     <div class="content" style="margin-top:28px;gap:30px">
       <div class="col">
-        <div class="label">為什麼 minibatch 大小是 8</div>
+        <div class="label">WHY THE MINIBATCH IS 8</div>
         <ul>
-          <li class="tight">是 <b>1</b>：重現我們剛剛才避開的單軌過擬合</li>
-          <li class="tight">是<b>一整池</b>（二十幾條）：超出有用的上下文範圍，還會招致 lost-in-the-middle</li>
-          <li class="tight">是 <b>8</b>：小到留在上下文限制內，大到足以逼模型「橫向比較」，找出<b>跨任務</b>共同出現的失敗模式</li>
+          <li class="tight"><b>1</b> reproduces the single-trajectory overfitting we just avoided</li>
+          <li class="tight"><b>A whole pool</b> (~20) blows past the useful context window and invites lost-in-the-middle</li>
+          <li class="tight"><b>8</b> is small enough to fit and large enough to force the model to compare across trajectories and find failures that recur <b>across tasks</b></li>
         </ul>
       </div>
       <div class="col">
-        <div class="label">分析師的合約</div>
+        <div class="label">THE ANALYST'S CONTRACT</div>
         <ul>
-          <li class="tight"><span class="mono">analyst_error.md</span> 讀 8 個失敗軌跡 + 目前的技能文件 → 回傳共同失敗模式 + 一份 patch</li>
-          <li class="tight"><span class="mono">analyst_success.md</span> 做對稱的事，並對已經涵蓋的內容保持保守</li>
-          <li class="tight">patch 是<b>原子操作</b>：<span class="mono">append</span> / <span class="mono">insert_after</span> / <span class="mono">replace</span> / <span class="mono">delete</span>，每一項都精確定位在文件中的某個目標字串</li>
+          <li class="tight"><span class="mono">analyst_error.md</span> gets 8 failed trajectories plus the current skill → returns the shared failure pattern and a patch</li>
+          <li class="tight"><span class="mono">analyst_success.md</span> does the symmetric job, staying conservative about what is already covered</li>
+          <li class="tight">A patch is <b>atomic operations</b> — <span class="mono">append</span> / <span class="mono">insert_after</span> / <span class="mono">replace</span> / <span class="mono">delete</span> — each anchored to an exact target string in the file</li>
         </ul>
       </div>
     </div>
@@ -777,28 +779,28 @@ patch 是原子操作、精確定位在某個目標字串上 —— 這點下一
 並行的代價是：回來的是好幾份可能重疊、有時互相矛盾的清單，必須收斂成一份。
 兩階段：池內的樹狀合併，然後跨池合併。
 support_count 是很實用的一個設計：幾個獨立的分析師提出了等價的建議，就是這個模式有多常出現的粗略指標。
-跨池的規則毫不含糊：修復失敗永遠優先。同一個位置上，失敗池的版本保留，沒有例外。
+跨池的規則毫不含糊：fixing failures always wins。同一個位置上，失敗池的版本保留，沒有例外。
 修好壞掉的東西，優先級嚴格高於強化已經運作良好的東西。">
-  <h1><span class="q">3</span>　合併，但不失去脈絡</h1>
+  <h1><span class="q">3</span>　Merge, without losing the context</h1>
   <div class="content"><div class="col">
     <div class="pipe" data-stage="3"></div>
     <div class="content" style="margin-top:28px;gap:30px">
       <div class="col">
-        <div class="label">池內：樹狀合併（tree reduce）</div>
+        <div class="label">WITHIN A POOL: TREE REDUCE</div>
         <ul>
-          <li class="tight">提案超過 8 份就每批最多 8 份兩兩合併，直到每個池只剩一份統一的清單</li>
-          <li class="tight">重複的建議收斂成<b>措辭最通用</b>的一版，並附上 <span class="mono">support_count</span> —— 有幾個獨立的分析師提出了等價建議</li>
-          <li class="tight">想改同一個位置、但方式互不相容的提案，在這一步就解決掉，不留到之後衝突</li>
+          <li class="tight">More than 8 proposals? Merge them in batches of at most 8, pairwise, until each pool holds one unified list</li>
+          <li class="tight">Duplicates collapse into the <b>most general</b> wording, carrying a <span class="mono">support_count</span> — how many independent analysts asked for the equivalent edit</li>
+          <li class="tight">Proposals targeting the same location in incompatible ways are resolved here, not left to collide later</li>
         </ul>
       </div>
       <div class="col">
-        <div class="label">跨池：一條毫不含糊的規則</div>
+        <div class="label">ACROSS POOLS: ONE UNAMBIGUOUS RULE</div>
         <div class="card" style="flex:none;border-color:var(--accent)">
-          <h3 class="acc">修復失敗，永遠優先</h3>
-          <div class="small" style="margin-top:6px">如果成功池的修改與失敗池的修改鎖定同一個位置，
-          <b>失敗池的版本保留，沒有例外</b>；只有不衝突的成功面修改才活得到下一階段。</div>
+          <h3 class="acc">Fixing failures always wins</h3>
+          <div class="small" style="margin-top:6px">If a success-pool edit and a failure-pool edit target the same location,
+          <b>the failure-pool version is kept, no exceptions</b>; only non-conflicting success-side edits survive.</div>
         </div>
-        <div class="note">修好壞掉的東西，優先級<b>嚴格高於</b>強化已經運作良好的東西。</div>
+        <div class="note">Fixing something broken is treated as <b>strictly higher priority</b> than reinforcing something already working.</div>
       </div>
     </div>
   </div></div>
@@ -808,30 +810,30 @@ support_count 是很實用的一個設計：幾個獨立的分析師提出了等
 <section class="slide" data-part="3" data-notes="
 這是學習率在文字空間的直接對應，也是最好懂的一個類比。
 一次套用太多修改，就跟梯度下降踩了太大的步伐一樣：文件會陷入不穩定，丟失先前辛苦累積的教訓。
-餘弦衰減的意思：前期文件大部分還是空的，大幅度的結構性修改是安全而且有用的（探索）；
-後期文件已經有實質內容，就只該讓小幅度的用詞微調通過（鞏固）。
+餘弦衰減的意思：前期文件大部分還是空的，大幅度的結構性修改是安全而且有用的（explore）；
+後期文件已經有實質內容，就只該讓小幅度的用詞微調通過（consolidate）。
 ranking 的四個準則照著念就好，重點是第一個直接掛在 support_count 上 —— 修好越多條軌跡的排越前面。">
-  <h1><span class="q">4</span>　文字版的學習率：編輯預算</h1>
+  <h1><span class="q">4</span>　The learning rate, in text: the edit budget</h1>
   <div class="content"><div class="col">
     <div class="pipe" data-stage="4"></div>
     <div class="content" style="margin-top:28px;gap:30px">
       <div class="col">
-        <div class="label">餘弦衰減的預算 <span class="mono">L t</span>　4 → 2</div>
+        <div class="label">A COSINE-DECAYED BUDGET <span class="mono">L t</span>　4 → 2</div>
         <ul>
-          <li class="tight">一次套用太多修改，就跟梯度下降踩了太大的步伐一樣 —— 文件陷入不穩定，丟失先前累積的教訓</li>
-          <li class="tight"><b>前期</b>文件大部分還空著，大幅度的結構性修改是安全的（探索）</li>
-          <li class="tight"><b>後期</b>文件已經有實質內容，只該讓小幅度的用詞微調通過（鞏固）</li>
+          <li class="tight">Applying too many edits at once is like taking too large a step in gradient descent — the file destabilizes and loses hard-won lessons</li>
+          <li class="tight"><b>Early on</b> the document is mostly empty, so large structural edits are safe and useful (explore)</li>
+          <li class="tight"><b>Later</b> it has real content, so only small wording refinements should get through (consolidate)</li>
         </ul>
       </div>
       <div class="col">
-        <div class="label">誰能擠進這個預算：四個排序準則</div>
+        <div class="label">WHAT GETS INTO THE BUDGET: FOUR CRITERIA</div>
         <ul>
-          <li class="tight">能<b>修好幾條軌跡</b>（直接掛在 <span class="mono">support_count</span> 上）</li>
-          <li class="tight">是否真的<b>補上一個缺口</b>，而不是重述文件裡已經有的話</li>
-          <li class="tight">是否讀起來像一條<b>普遍適用的規則</b>，而不是寫死某個任務的細節</li>
-          <li class="tight">是否<b>具體可操作</b>，而不是空泛的建議</li>
+          <li class="tight">How many trajectories it would fix (tied directly to <span class="mono">support_count</span>)</li>
+          <li class="tight">Whether it <b>fills a real gap</b> rather than restating what the document already says</li>
+          <li class="tight">Whether it reads like a <b>generally applicable rule</b> rather than hard-coding one task's details</li>
+          <li class="tight">Whether it is <b>concrete and actionable</b> rather than vague advice</li>
         </ul>
-        <div class="note">只有排名前 <span class="mono">L t</span> 名的修改，才進得了候選技能。</div>
+        <div class="note">Only the top <span class="mono">L t</span> edits make it into the candidate skill.</div>
       </div>
     </div>
   </div></div>
@@ -841,34 +843,33 @@ ranking 的四個準則照著念就好，重點是第一個直接掛在 support_
 <section class="slide" data-part="3" data-notes="
 這是整套設計裡最重要的一項工程紀律，直接借用標準 ML 實務：資料隔離。
 優化器永遠只看得到訓練集的軌跡，完全看不到 D_sel。
-接受規則是『嚴格大於』—— 平手不算。這條門檻堵住的正是迭代式提示詞編輯最常見的失敗模式：
+接受規則是 strictly greater —— 平手不算。這條門檻堵住的正是迭代式提示詞編輯最常見的失敗模式：
 一連串各自看起來都合理的修改，加起來只是增加雜訊跟讓文件膨脹。
-被拒絕的修改不浪費：連同它想修什麼、掉了幾分，一起注入下一步的 prompt，
-意思是『我們試過了，它傷分數，別再提一樣的建議』。
+被拒絕的修改不浪費：連同它想修什麼、掉了幾分，一起注入下一步的 prompt。
 最後那個工程保險很值得講，因為在場的都是工程師：LLM 偶爾會幻覺出一個文件裡根本沒有的目標字串，
 那一項就標成 skip、記進日誌，不會讓整條管線崩潰。">
-  <h1><span class="q">5</span>　真正做決定的，是守門員</h1>
+  <h1><span class="q">5</span>　The gate is what actually decides</h1>
   <div class="content"><div class="col">
     <div class="pipe" data-stage="5"></div>
     <div class="content" style="margin-top:26px;gap:30px">
       <div class="col">
-        <div class="label">資料隔離 + 嚴格的接受規則</div>
+        <div class="label">DATA ISOLATION + A STRICT ACCEPTANCE RULE</div>
         <ul>
-          <li class="tight">優化器<b>只</b>看得到訓練集 <span class="mono">D_tr</span> 的軌跡，完全看不到 <span class="mono">D_sel</span></li>
-          <li class="tight">候選技能必須在 <span class="mono">D_sel</span> 上獨立打分，而且<b>嚴格大於</b>目前的分數 —— <b>平手不算</b></li>
-          <li class="tight">這條門檻堵住的，正是一連串各自看起來都合理、加起來卻只是增加雜訊與膨脹的修改</li>
+          <li class="tight">The optimizer <b>only</b> ever sees trajectories from <span class="mono">D_tr</span>. It never sees <span class="mono">D_sel</span> at all</li>
+          <li class="tight">Every candidate is blind-scored on <span class="mono">D_sel</span>, and must be <b>strictly greater</b> than the current skill — <b>a tie doesn't count</b></li>
+          <li class="tight">That bar closes off the classic failure: a string of individually plausible edits that together only add noise and bloat</li>
         </ul>
       </div>
       <div class="col">
-        <div class="label">被拒絕的修改不會浪費</div>
+        <div class="label">A REJECTED EDIT ISN'T WASTED</div>
         <ul>
-          <li class="tight">連同它想修的失敗模式、掉了幾分，一起記進<b>被拒修改緩衝區</b></li>
-          <li class="tight">下一個步驟的分析師與排序器會讀到：「這個我們試過，它傷了驗證分數 —— 別再提」</li>
+          <li class="tight">It is logged with the failure pattern it targeted and how far the score dropped, into a short-lived <b>rejected-edit buffer</b></li>
+          <li class="tight">The next step's analyst and ranking calls read it: "we tried this, it hurt the validation score — don't propose it again"</li>
         </ul>
         <div class="note">
-          <b>工程保險：</b>優化器偶爾會幻覺出一個文件裡根本不存在的目標字串。
-          那一項會被標成 <span class="mono">skip</span> 記進 <span class="mono">edit_apply_report.json</span>，
-          同批其他修改照常套用 —— 不讓整條管線崩潰。
+          <b>Engineering insurance:</b> the optimizer occasionally hallucinates a target string that isn't in the file.
+          That edit is marked <span class="mono">skip</span> in <span class="mono">edit_apply_report.json</span> and the rest of the batch applies
+          as normal — the pipeline never crashes over it.
         </div>
       </div>
     </div>
@@ -880,32 +881,32 @@ ranking 的四個準則照著念就好，重點是第一個直接掛在 support_
 逐步的修改在設計上本來就是短視的 —— 每一步都只針對最近這批 40 題反應。
 所以加了第二層比較慢的控制迴圈，每個 epoch 才跑一次。
 慢速更新：抽 20 題，讓舊 skill 跟新 skill 跑同一份固定的考卷，這是受控的 A/B，不是單純比原始分數。
-四種狀態裡『退步』最重要 —— 它是最清楚的訊號，說明最近這些各自都通過了驗證的修改，加起來卻讓某些東西更糟。
+四種狀態裡 regressions 最重要 —— 它是最清楚的訊號，說明最近這些各自都通過了驗證的修改，加起來卻讓某些東西更糟。
 結果寫進一個受保護的區塊，一般的 step 級修改在這個 epoch 剩下的時間裡碰不到它。這就是動量。
 meta skill 是另一個乾淨的元學習例子：優化器寫給自己的筆記，目標模型永遠看不到，
 所以部署出去的 skill 一個 token 都不會變胖。
 最後補一句我們自己的狀態：這兩項我們已經接線，但預設是關掉的。">
-  <h1>每個 epoch 結束時的宏觀調控</h1>
+  <h1>The macro control loop, once per epoch</h1>
   <div class="content" style="gap:30px">
     <div class="col" style="flex:1.06">
-      <div class="label">慢速更新 —— 受保護的 epoch 層級記憶</div>
+      <div class="label">SLOW UPDATE — PROTECTED EPOCH-LEVEL MEMORY</div>
       <ul>
-        <li class="tight">抽 20 題，讓<b>上個 epoch 的舊 skill</b> 與<b>這個 epoch 的新 skill</b> 跑同一份固定考卷：受控的 A/B，不是比原始分數</li>
-        <li class="tight">分成進步 / <b>退步</b> / 持續失敗 / 穩定成功；退步最重要 —— 它說明最近這些<b>各自都通過驗證</b>的修改，加起來卻讓某些東西更糟</li>
-        <li class="tight">結論寫進 <span class="mono">&lt;!-- SLOW_UPDATE_START --&gt;</span> 標記的<b>受保護區塊</b>，一般 step 碰不到它 —— 這就是動量</li>
-        <li class="tight">即使是它，也一樣要過 <span class="mono">D_sel</span> 守門，沒幫助就回滾</li>
+        <li class="tight">Draw 20 tasks and re-run both <b>last epoch's skill</b> and <b>this epoch's skill</b> on the same fixed exam: a controlled A/B, not a raw score comparison</li>
+        <li class="tight">Sort into improvements / <b>regressions</b> / persistent failures / stable successes. Regressions matter most — they show that edits which <b>each passed their own gate</b> made something worse together</li>
+        <li class="tight">The conclusion goes into a <b>protected block</b> fenced by <span class="mono">&lt;!-- SLOW_UPDATE_START --&gt;</span>, which ordinary step-level edits may not touch — that is the momentum</li>
+        <li class="tight">Even this isn't trusted: it passes the same <span class="mono">D_sel</span> gate or gets rolled back</li>
       </ul>
-      <div class="label" style="margin-top:20px">元技能 —— 教優化器學會優化</div>
+      <div class="label" style="margin-top:20px">META SKILL — TEACHING THE OPTIMIZER TO OPTIMIZE</div>
       <ul>
-        <li class="tight">優化器寫給<b>自己</b>的筆記：在這個領域裡，哪類修改容易過、哪類容易被拒</li>
-        <li class="tight">只加在<b>優化器</b>下個 epoch 的 system prompt 前面，目標模型永遠看不到</li>
-        <li class="tight">所以部署出去的 skill <b>一個 token 都不會變胖</b></li>
+        <li class="tight">A document the optimizer writes for <b>itself</b>: which kinds of edits pass in this domain, and which get rejected</li>
+        <li class="tight">Prepended to the <b>optimizer's own</b> system prompt next epoch; the target model never sees it</li>
+        <li class="tight">So the deployed skill gains <b>not a single token</b></li>
       </ul>
-      <div class="note"><b>我們的狀態：</b>這兩項已經接線，但<b>預設關閉</b>。</div>
+      <div class="note"><b>Where we stand:</b> both are wired up, and both ship <b>disabled</b>.</div>
     </div>
     <div class="col" style="flex:.94">
-      <figure><img src="fig/figure2.png" alt="SkillOpt 完整管線圖">
-      <figcaption>圖 2 —— 完整管線：一批 rollout 如何流經 minibatch 反思、合併、在預算限制下的排序，以及真正寫入硬碟之前的驗證。（來源：原始論文）</figcaption></figure>
+      <figure><img src="fig/figure2.png" alt="The full SkillOpt pipeline">
+      <figcaption>Figure 2 — The full pipeline: how one rollout batch flows through minibatch reflection, merging, budget-capped ranking, and validation before anything is written to disk. (Source: original paper.)</figcaption></figure>
     </div>
   </div>
 </section>
@@ -918,21 +919,21 @@ meta skill 是另一個乾淨的元學習例子：優化器寫給自己的筆記
 『先檢查活頁簿的結構與公式，然後把算好的靜態值寫進整個目標範圍，不要指望 Excel 自己重算。』
 這正是一個資深工程師會在 code review 裡講的那種話 —— 具體、可操作、是一條普遍規則而不是某一題的答案。
 這也是為什麼前面那四個排序準則長那樣：它們就是在逼優化器寫出這種句子。
-可以順便對照我們自己的經驗：這種規則我們的 agent developer 也寫得出來，只是要花三天到兩週才收斂到這個程度。">
-  <h1>所以它到底學出什麼東西？</h1>
+最後那句對照我們自己的經驗，一定要講。">
+  <h1>So what does it actually learn?</h1>
   <div class="content"><div class="col" style="justify-content:center">
-    <figure style="flex:none"><img src="fig/figure4.png" alt="各基準測試學出來的代表性規則" style="width:100%;height:auto">
-    <figcaption>圖 4 —— 六個基準測試各一條，從最終 <span class="mono">best_skill.md</span> 中抽出的代表性規則。（來源：原始論文）</figcaption></figure>
+    <figure style="flex:none"><img src="fig/figure4.png" alt="Representative learned rules, one per benchmark" style="width:100%;height:auto">
+    <figcaption>Figure 4 — One representative rule per benchmark, taken from the final <span class="mono">best_skill.md</span>. (Source: original paper.)</figcaption></figure>
     <div class="content" style="margin-top:22px;gap:26px;flex:none">
-      <div class="col card" style="flex:1"><h3 class="acc">具體可操作</h3>
-        <div class="small" style="margin-top:4px">講的是「怎麼做」，不是「要小心」</div></div>
-      <div class="col card" style="flex:1"><h3 class="acc">是普遍規則</h3>
-        <div class="small" style="margin-top:4px">適用於這一類任務，而不是某一題的答案</div></div>
-      <div class="col card" style="flex:1"><h3 class="acc">針對已知的失敗模式</h3>
-        <div class="small" style="margin-top:4px">每一條背後都是一批被判錯的軌跡</div></div>
+      <div class="col card" style="flex:1"><h3 class="acc">Concrete and actionable</h3>
+        <div class="small" style="margin-top:4px">It says what to do, not what to be careful about</div></div>
+      <div class="col card" style="flex:1"><h3 class="acc">A general rule</h3>
+        <div class="small" style="margin-top:4px">It holds for this class of task, not for one question</div></div>
+      <div class="col card" style="flex:1"><h3 class="acc">Aimed at a known failure</h3>
+        <div class="small" style="margin-top:4px">Behind each one is a batch of trajectories that were judged wrong</div></div>
     </div>
     <div class="note" style="margin-top:18px;padding-top:12px">
-      這種規則我們的 agent developer 本來就寫得出來 —— 只是要花<b>三天到兩週</b>才收斂到這個程度。
+      Our own developers write rules like these already — it just takes them <b>three days to two weeks</b> to converge on them.
     </div>
   </div></div>
 </section>
@@ -945,27 +946,27 @@ Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，�
 而在於周邊的操作流程被講清楚了多少 —— 這正好就是我們在做的事。
 1 到 4 次被接受的修改這件事要停一下：驗證守門把絕大多數提出的修改都擋下來了，
 這種選擇性正是這種謹慎系統應該有的樣子。">
-  <h1>這套真的有效嗎</h1>
+  <h1>Does it actually work?</h1>
   <div class="content" style="gap:28px">
     <div class="col" style="flex:1.5">
-      <figure><img src="fig/table1.png" alt="SkillOpt 主要結果表">
-      <figcaption>表 1 —— 保留測試切分上的主要結果，對照無技能基準線與其他提示詞優化方法。（來源：原始論文）</figcaption></figure>
+      <figure><img src="fig/table1.png" alt="SkillOpt main results">
+      <figcaption>Table 1 — Main results on held-out test splits, against a no-skill baseline and several prompt-optimization baselines. (Source: original paper.)</figcaption></figure>
     </div>
     <div class="col" style="flex:.85">
-      <div class="label">52 個組合，全部最佳或並列最佳</div>
+      <div class="label">52 COMBINATIONS, BEST OR TIED-BEST IN ALL OF THEM</div>
       <table style="font-size:17px">
-        <tr><td>直接對話</td><td class="hl" style="text-align:right">+23.5</td></tr>
-        <tr><td>Codex（操作工具）</td><td class="hl" style="text-align:right">+24.8</td></tr>
+        <tr><td>Direct chat</td><td class="hl" style="text-align:right">+23.5</td></tr>
+        <tr><td>Codex (tool-operating)</td><td class="hl" style="text-align:right">+24.8</td></tr>
         <tr><td>Claude Code</td><td class="hl" style="text-align:right">+19.1</td></tr>
       </table>
-      <div class="small" style="margin-top:16px">全面勝過 TextGrad、GEPA、EvoSkill 這些基準方法。</div>
+      <div class="small" style="margin-top:16px">Ahead of TextGrad, GEPA and EvoSkill across the board.</div>
       <div class="card" style="flex:none;margin-top:20px;border-color:var(--accent)">
-        <h3 class="acc">1 ～ 4 次</h3>
-        <div class="small" style="margin-top:4px">全部六個基準測試中，最終的技能檔案<b>只需要一到四次被接受的修改</b> ——
-        守門把絕大多數提案都擋了下來。</div>
+        <h3 class="acc">1 to 4</h3>
+        <div class="small" style="margin-top:4px">Across all six benchmarks, the final skill file needed only
+        <b>one to four accepted edits</b> — the gate rejected the vast majority of proposals.</div>
       </div>
-      <div class="note">Codex 那個數字最值得玩味：操作工具的 agent 身上還有大量空間，
-      不在底層模型的能力，而在<b>周邊的操作流程被講清楚了多少</b>。</div>
+      <div class="note">The Codex number is the interesting one: for tool-operating agents there is a lot of headroom that
+      isn't in the base model at all, but in <b>how clearly the surrounding procedure is written down</b>.</div>
     </div>
   </div>
 </section>
@@ -979,33 +980,34 @@ Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，�
 甚至超過直接在那個環境訓練出來的 80.4。這強烈暗示優化器萃取到的是真正通用的東西。
 守門有效：驗證集的最高點跟測試集的最高點高度重合，代表它挑出來的是泛化最好的版本，不是過擬合的版本。
 如果時間不夠，這頁只講中間那個遷移的數字。">
-  <h1>成本、遷移，以及守門真的挑得出贏家</h1>
+  <h1>Cost, transfer, and whether the gate picks winners</h1>
   <div class="content" style="gap:30px">
     <div class="col" style="flex:1;justify-content:center">
       <div class="card" style="flex:none;margin-bottom:14px">
-        <h3>成本：每提升一分要燒多少 token</h3>
-        <div class="body" style="margin-top:8px">短、以工具呼叫為主　<b class="acc">0.6 – 1.1M</b><br>
-        長上下文　<b class="acc">38 – 46M</b></div>
-        <div class="small" style="margin-top:8px">差快 40 倍 —— 這是「這個任務值不值得跑這套」的實際依據。（表 6）</div>
+        <h3>Cost: training tokens per point gained</h3>
+        <div class="body" style="margin-top:8px">Short, tool-calling tasks　<b class="acc">0.6 – 1.1M</b><br>
+        Long-context tasks　<b class="acc">38 – 46M</b></div>
+        <div class="small" style="margin-top:8px">Nearly 40× apart — which is the practical basis for deciding whether a given task is worth running this on. (Table 6)</div>
       </div>
       <div class="card" style="flex:none;margin-bottom:14px;border-color:var(--accent)">
-        <h3>遷移：學到的是通用的東西</h3>
-        <div class="body" style="margin-top:8px">在 Codex 環境訓練的技能，直接丟進 Claude Code：
+        <h3>Transfer: what it learns is general</h3>
+        <div class="body" style="margin-top:8px">A skill trained in Codex, dropped into Claude Code:
         <b class="acc">22.1 → 81.8</b></div>
-        <div class="small" style="margin-top:8px">沒有任何進一步優化，甚至<b>超過</b>直接在該環境訓練出來的 80.4。
-        三個遷移軸向（模型規模、執行環境、基準測試）沒有一欄低於目標自己的無技能基準線。（表 4）</div>
+        <div class="small" style="margin-top:8px">With no further optimization — and <b>above</b> the 80.4 of a skill trained in that harness directly.
+        Across all three transfer axes, no transferred cell fell below the target's own no-skill baseline. (Table 4)</div>
       </div>
       <div class="card" style="flex:none">
-        <h3>優化器一定要前沿等級嗎</h3>
-        <div class="small" style="margin-top:6px">把「教練」降級成跟目標模型同一個（小得多的）模型 —— 自己優化自己 ——
-        有界更新加驗證守門，仍能拿回 <b class="acc">56 – 74%</b> 的收益。（表 5）</div>
+        <h3>Does the optimizer have to be frontier-grade?</h3>
+        <div class="small" style="margin-top:6px">Demote the coach to the same (much smaller) model as the target — self-coaching —
+        and bounded updates plus the validation gate still recover <b class="acc">56 – 74%</b> of the gain. (Table 5)</div>
       </div>
     </div>
     <div class="col" style="flex:1.12">
-      <div class="label">守門挑的是泛化，不是過擬合</div>
-      <figure><img src="fig/figure3.png" alt="訓練趨勢折線圖">
-      <figcaption>圖 3 —— 三個基準測試隨 epoch 的表現：<b>驗證分數（橘）的最高點，與測試分數（綠）的最高點高度重合</b> ——
-      守門真正挑出來的是泛化最好的版本，而不是恰好在訓練批次上表現亮眼的那個。（來源：原始論文）</figcaption></figure>
+      <div class="label">THE GATE SELECTS FOR GENERALIZATION, NOT OVERFIT</div>
+      <figure><img src="fig/figure3.png" alt="Performance trends across epoch checkpoints">
+      <figcaption>Figure 3 — Performance across epoch checkpoints on three benchmarks:
+      <b>the peak of the validation score (orange) lines up with the peak of the test score (green)</b> —
+      the gate really is selecting the version that generalizes, not the one that happened to shine on the training batch. (Source: original paper.)</figcaption></figure>
     </div>
   </div>
 </section>
@@ -1019,33 +1021,34 @@ Codex 那個數字最值得玩味：它暗示在操作工具的 agent 身上，�
 一整個訓練批次塞得進一個 prompt，比舊的八條軌跡還短。
 順帶一提：routing 不送 gold answer，所以答案外洩的面在這條路上是直接消失，不只是被擋住。
 最後強調：isolated 完全沒有動，仍然是論文的演算法。偏離的只有 routing，而且是被真實的震盪逼出來的。">
-  <h1>我們的 <span class="q">routing mode</span> 為什麼刻意偏離論文</h1>
+  <h1>Why our <span class="q">routing mode</span> leaves the paper's algorithm</h1>
   <div class="content" style="gap:28px">
     <div class="col" style="flex:.92">
       <table style="font-size:16px">
         <tr><th></th><th>isolated</th><th>routing</th></tr>
-        <tr><td class="small">被優化的參數</td><td>skill 的 <b>body</b><div class="small">數千字</div></td><td>skill 的 <b>description</b><div class="small">一行 YAML</div></td></tr>
-        <tr><td class="small">一次編輯</td><td><span class="mono">append</span> 到某一節</td><td><span class="mono">replace</span> 整行</td></tr>
-        <tr><td class="small">用什麼評分</td><td>judge 對答案的判定</td><td>agent 有沒有剛好開啟被標記的 skill</td></tr>
-        <tr><td class="small">一個 run 的目標</td><td>一個</td><td>多個，一起移動</td></tr>
+        <tr><td class="small">The parameter</td><td>a skill's <b>body</b><div class="small">thousands of words</div></td><td>a skill's <b>description</b><div class="small">one line of YAML</div></td></tr>
+        <tr><td class="small">One edit</td><td><span class="mono">append</span> to a section</td><td><span class="mono">replace</span> of the whole line</td></tr>
+        <tr><td class="small">Graded on</td><td>the judge's verdict on the answer</td><td>whether the agent opened exactly the tagged skills</td></tr>
+        <tr><td class="small">Targets per run</td><td>one</td><td>several, moved together</td></tr>
       </table>
-      <div class="note"><b>症狀：</b>照原演算法跑，routing run 的分數會一直動、從來不收斂。</div>
+      <div class="note"><b>The symptom:</b> run the paper's algorithm here and the score moves every step and never settles.</div>
     </div>
     <div class="col" style="flex:1.08">
-      <div class="label">三個論證</div>
+      <div class="label">THREE ARGUMENTS</div>
       <ul>
-        <li class="tight"><b>編輯互斥，merge 救不了。</b>兩個 minibatch 各自 <span class="mono">replace</span> 同一行，
-        本質上互斥；而 merge 拿到的是編輯、<b>不是背後的題目</b> —— 能決定的證據在上一階段就被丟掉了。
-        <span class="acc">→ 整批只做一次 analyst 呼叫，把選擇留在有證據的地方。</span></li>
-        <li class="tight"><b>失敗與成功是同一個決策邊界的兩面。</b>分開問，失敗分析師會提收窄（看不見收窄弄壞了什麼）、
-        成功分析師會提放寬（看不見誤觸的那些）—— 這就是一台震盪產生器。
-        <span class="acc">→ 一起送，當成一個受約束的問題：涵蓋這些、排除那些。</span></li>
-        <li class="tight"><b>軌跡對 routing 不構成證據。</b>路由決策發生在 agent 動作<b>之前</b>，完整觀測只有
-        <span class="mono">(題目, 被標記的 skill, agent 實際開啟的 skill)</span>。工具目錄、對話、答案全都付了錢卻無法影響編輯。
-        <span class="acc">→ 一整個訓練批次塞得進一個 prompt，比舊的八條軌跡還短 —— 前兩點因此才付得起。</span></li>
+        <li class="tight"><b>Edits collide, and merge cannot reconcile them.</b> Two minibatches each <span class="mono">replace</span> the same line —
+        mutually exclusive by construction — and merge is handed the edits <b>without the questions behind them</b>.
+        The evidence that would decide it was discarded one stage earlier.
+        <span class="acc">→ One analyst call over the whole batch, so the choice is made where the evidence is.</span></li>
+        <li class="tight"><b>Failures and successes are two sides of one boundary.</b> Asked separately, the failure analyst proposes a narrowing
+        (blind to what it breaks) and the success analyst proposes a widening (blind to the misfires). That is an oscillation generator.
+        <span class="acc">→ Send both to one analyst as a single constrained problem: cover these, exclude those.</span></li>
+        <li class="tight"><b>The trajectory is not evidence about routing.</b> The decision happens <b>before</b> the agent acts; the complete observation is
+        <span class="mono">(question, skills it was tagged for, skills the agent opened)</span>. The tool catalogue, the conversation and the answer are all paid for and cannot inform the edit.
+        <span class="acc">→ A whole training batch now fits in one prompt, shorter than one of the old eight-trajectory ones — which is what makes the first two affordable.</span></li>
       </ul>
-      <div class="note"><span class="mono">isolated</span> 完全沒有動，仍然是論文的演算法。
-      偏離的只有 routing，而且是被真實的震盪逼出來的。順帶一提：routing 不送 gold answer，答案外洩的面在這條路上直接消失。</div>
+      <div class="note"><span class="mono">isolated</span> is untouched and is still the paper's algorithm.
+      Only routing departs — and it was forced there by a real oscillation, not a preference.</div>
     </div>
   </div>
 </section>
@@ -1059,37 +1062,39 @@ SkillOpt-Lite 跟 NPO 是直接命中這題的；Skill Self-Play 跟 SkillWiki �
 一個講怎麼自動生出訓練任務，一個講 domain knowledge 怎麼有來源地進到 skill 裡。
 第二個：我們的 skill 普遍偏長，而且新的 domain knowledge 會一直加進來，只會越來越長。
 SkillZip 的角度很有意思 —— 免評估，靠找出可重用的結構來壓，而不是再跑一輪昂貴的驗證。">
-  <h1>正在探索的下一步</h1>
+  <h1>What we're exploring next</h1>
   <div class="content" style="gap:32px">
     <div class="col">
-      <div class="label fix">一、同樣的效果，更低的訓練成本</div>
-      <div class="small" style="margin-bottom:14px">一次十幾小時、燒掉不少 token，最後被接受的修改卻只有一兩次 —— 效率還有很大空間。</div>
+      <div class="label fix">1 · SAME RESULT, LESS TRAINING COST</div>
+      <div class="small" style="margin-bottom:14px">A dozen hours and a lot of tokens per run, for one or two accepted edits at the end.
+      There is a great deal of headroom here.</div>
       <ul>
         <li class="tight"><b>SkillOpt-Lite</b>　<span class="mono">2607.03451</span><br>
-          <span class="small">把 skill 優化形式化成 zeroth-order optimization，砍到「每個元件都有理由」的最小管線；
-          LiveMath 在 GPT-5.5 <b>+8.8</b>、GPT-5.4-nano <b>+25.4</b>，比完整 SkillOpt 更快也更好</span></li>
+          <span class="small">Formalizes skill optimization as zeroth-order optimization and cuts it down to a minimal pipeline where every
+          component is justified; LiveMath <b>+8.8</b> on GPT-5.5 and <b>+25.4</b> on GPT-5.4-nano, faster than and ahead of full SkillOpt</span></li>
         <li class="tight"><b>Naive Prompt Optimization (NPO)</b>　<span class="mono">2608.27266</span><br>
-          <span class="small">單一 lineage、teacher 直接讀最近幾版 prompt 與 rollout 寫下一版；
-          用<b>更少的 rollout</b> 打平甚至贏過 GEPA，質疑候選池與 beam search 是否必要</span></li>
+          <span class="small">A single lineage: a teacher reads the most recent prompts with their rollouts and writes the next one.
+          Matches or beats GEPA with <b>fewer rollouts</b>, questioning whether candidate pools and beam search are needed at all</span></li>
       </ul>
       <div class="small" style="margin-top:6px;color:var(--faint)">
-        相鄰方向（不是同一題，但會影響我們怎麼餵它）：<br>
-        <b>Skill Self-Play</b> <span class="mono">2607.22529</span> —— proposer / solver / skill controller 共演化，處理「任務多樣性 vs 驗證可靠度」<br>
-        <b>SkillWiki</b> <span class="mono">2606.16523</span> —— skill 的來源追溯與治理，回應「domain knowledge 怎麼有憑有據地進到 skill 裡」
+        Adjacent, not the same question — but they shape what we feed it:<br>
+        <b>Skill Self-Play</b> <span class="mono">2607.22529</span> — proposer / solver / skill controller co-evolving, against task diversity vs. verification reliability<br>
+        <b>SkillWiki</b> <span class="mono">2606.16523</span> — provenance and governance for skills: how domain knowledge gets in, with its sources attached
       </div>
     </div>
     <div class="col">
-      <div class="label fix">二、練出來的 skill 越來越長，怎麼瘦身</div>
-      <div class="small" style="margin-bottom:14px">SkillOpt 訓練出來的 skill 普遍偏長，而新的 domain knowledge 只會一直加進來。</div>
+      <div class="label fix">2 · TRAINED SKILLS KEEP GETTING LONGER</div>
+      <div class="small" style="margin-bottom:14px">SkillOpt's output runs long, and new domain knowledge only ever gets added.</div>
       <ul>
         <li class="tight"><b>SkillZip</b>　<span class="mono">2608.11079</span><br>
-          <span class="small">自我演化的 agent 會不斷把成功程序與失敗修補<b>append</b> 上去，
-          於是同一條要求被好幾個分支、例子與警告重複陳述，共同的動作序列被複製而不是被重用。
-          SkillZip 的做法是<b>免評估</b>地壓縮：找出這份 skill 最短的、忠實的結構性解釋</span></li>
+          <span class="small">Self-evolving agents accumulate skills by <b>appending</b> successful procedures and failure fixes, so over time the same
+          requirement is restated across several branches, examples and warnings, and common action sequences are copied rather than reused.
+          SkillZip compresses <b>without evaluation</b>: it finds the shortest faithful structural explanation of the skill</span></li>
       </ul>
       <div class="note">
-        為什麼「免評估」對我們特別有價值：我們最貴的東西就是 rollout。
-        任何需要再跑一輪驗證才能決定砍哪一段的方法，成本都會疊在已經十幾個小時的訓練上面。
+        Why "evaluation-free" matters to us specifically: rollouts are the expensive thing we have.
+        Any method that needs another round of validation to decide what to cut stacks that cost on top of an already
+        twelve-hour training run.
       </div>
     </div>
   </div>
@@ -1100,32 +1105,32 @@ SkillZip 的角度很有意思 —— 免評估，靠找出可重用的結構來
 收尾三句，然後開放 Q&A。
 如果有人想自己試：repo 裡 SEED=1 ./scripts/dev.sh 一行就起得來，七個 seam 預設全 fake，
 不需要接任何真實服務就能把整個流程走一遍。">
-  <h1>三句話收尾</h1>
+  <h1>Three sentences to close</h1>
   <div class="content"><div class="col" style="justify-content:center">
     <table style="font-size:19px">
-      <tr><td class="hl mono" style="width:54px">01</td><td><b>迴圈上的每一個斷點，都值得補。</b>
-        <div class="small" style="margin-top:4px">config 留不住、trace 要人翻、假設沒法便宜驗證、好題目留不下來 ——
-        每一個單獨看都很小，加起來就是開發速度。</div></td></tr>
-      <tr><td class="hl mono">02</td><td><b>skill 可以當成權重來訓練。</b>
-        <div class="small" style="margin-top:4px">成批的證據取代單一軼事、有界的步伐取代不受約束的重寫、
-        真正盲測的驗證切分取代「這個改動看起來有幫助」。模型一個參數都不用動。</div></td></tr>
-      <tr><td class="hl mono">03</td><td><b>optimizer 不取代人，人做最後一哩路。</b>
-        <div class="small" style="margin-top:4px">它把 3 天～2 週壓成一個晚上，然後把一份已經通過驗證的 skill 交到你手上 ——
-        剩下那 10%、需要台積內部 domain knowledge 的部分，還是人的工作。</div></td></tr>
+      <tr><td class="hl mono" style="width:54px">01</td><td><b>Every break in the loop is worth repairing.</b>
+        <div class="small" style="margin-top:4px">A config that doesn't persist, a trace read by hand, a hunch with no cheap test, a good question that gets lost —
+        each one is small on its own. Together they are your development speed.</div></td></tr>
+      <tr><td class="hl mono">02</td><td><b>A skill can be trained like a weight.</b>
+        <div class="small" style="margin-top:4px">Batched evidence instead of single anecdotes, bounded steps instead of unconstrained rewrites,
+        a genuinely blind validation split instead of "this edit looks like it helps". Without touching a single model parameter.</div></td></tr>
+      <tr><td class="hl mono">03</td><td><b>The optimizer doesn't replace people; people run the last mile.</b>
+        <div class="small" style="margin-top:4px">It compresses three days to two weeks into one night, and hands you a skill that has already passed validation.
+        The remaining 10% — the part that needs TSMC-internal domain knowledge — is still a person's job.</div></td></tr>
     </table>
     <div class="note" style="margin-top:28px">
-      想自己試：<span class="mono">SEED=1 ./scripts/dev.sh</span> 一行就起得來，七個 seam 預設全 fake，不必接任何真實服務。<br>
-      設計與實作紀錄：<span class="mono">backend/docs/spec.md</span>　·　
-      routing 的三個論證：<span class="mono">backend/docs/routing-optimization.md</span>　·　
-      SkillOpt 論文中文長文：<span class="mono">datasciocean.com/paper-intro/skillopt/</span>
+      Try it yourself: <span class="mono">SEED=1 ./scripts/dev.sh</span> brings the whole thing up; all seven seams are fake by default, so nothing external is needed.<br>
+      Design and implementation record: <span class="mono">backend/docs/spec.md</span>　·　
+      the three routing arguments: <span class="mono">backend/docs/routing-optimization.md</span>　·　
+      a long-form walkthrough of the paper: <span class="mono">datasciocean.com/paper-intro/skillopt/</span>
     </div>
   </div></div>
 </section>
 
 </div></div>
 
-<div id="hud"><span id="timer">00:00</span><span>O 總覽　S 備忘　T 計時　P 列印</span></div>
-<div id="overview"><h2>總覽 —— 點一下跳頁（Esc 關閉）</h2><div id="ovgrid"></div></div>
+<div id="hud"><span id="timer">00:00</span><span>O overview　S notes　T timer　P print</span></div>
+<div id="overview"><h2>OVERVIEW — click to jump (Esc to close)</h2><div id="ovgrid"></div></div>
 <div id="notes"><div class="hd">SPEAKER NOTES</div><div id="notes-body"></div></div>
 
 <template id="tpl-pipe">
@@ -1137,53 +1142,53 @@ SkillZip 的角度很有意思 —— 免評估，靠找出可重用的結構來
   <g class="stage s1">
     <rect x="20" y="10" width="186" height="132" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
     <circle cx="44" cy="38" r="13" fill="#2B5CE6"/><text x="44" y="43" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">1</text>
-    <text x="64" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Rollout · 分池</text>
-    <text x="36" y="80" font-size="13.5" fill="#6B6B66">目前的 skill 跑一批</text>
-    <text x="36" y="100" font-size="13.5" fill="#6B6B66"><tspan font-weight="700" fill="#1A1A1A">40 題</tspan>（刻意的大批次）</text>
-    <text x="36" y="124" font-size="13.5" fill="#6B6B66">分成 失敗池 / 成功池</text>
+    <text x="64" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Rollout · split</text>
+    <text x="36" y="80" font-size="13.5" fill="#6B6B66">the current skill runs</text>
+    <text x="36" y="100" font-size="13.5" fill="#6B6B66"><tspan font-weight="700" fill="#1A1A1A">40 tasks</tspan> — a large batch</text>
+    <text x="36" y="124" font-size="13.5" fill="#6B6B66">split: failure / success</text>
     <path d="M208,76 L221,76" stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#pa)"/>
   </g>
   <g class="stage s2">
     <rect x="224" y="10" width="186" height="132" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
     <circle cx="248" cy="38" r="13" fill="#2B5CE6"/><text x="248" y="43" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">2</text>
-    <text x="268" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Minibatch 反思</text>
-    <text x="240" y="80" font-size="13.5" fill="#6B6B66">每 <tspan font-weight="700" fill="#1A1A1A">8</tspan> 條一組，各自</text>
-    <text x="240" y="100" font-size="13.5" fill="#6B6B66">獨立分析並提出 patch</text>
-    <text x="240" y="124" font-size="13.5" fill="#6B6B66">最多 16 個呼叫並行</text>
+    <text x="268" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Reflection</text>
+    <text x="240" y="80" font-size="13.5" fill="#6B6B66">groups of <tspan font-weight="700" fill="#1A1A1A">8</tspan>, analysed</text>
+    <text x="240" y="100" font-size="13.5" fill="#6B6B66">independently into patches</text>
+    <text x="240" y="124" font-size="13.5" fill="#6B6B66">up to 16 calls in parallel</text>
     <path d="M412,76 L425,76" stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#pa)"/>
   </g>
   <g class="stage s3">
     <rect x="428" y="10" width="186" height="132" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
     <circle cx="452" cy="38" r="13" fill="#2B5CE6"/><text x="452" y="43" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">3</text>
-    <text x="472" y="43" font-size="16" font-weight="700" fill="#1A1A1A">階層式合併</text>
-    <text x="444" y="80" font-size="13.5" fill="#6B6B66">池內樹狀合併，記錄</text>
-    <text x="444" y="100" font-size="13.5" fill="#6B6B66">support_count</text>
-    <text x="444" y="124" font-size="13.5" fill="#6B6B66">跨池：<tspan font-weight="700" fill="#1A1A1A">修復失敗優先</tspan></text>
+    <text x="472" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Hierarchical merge</text>
+    <text x="444" y="80" font-size="13.5" fill="#6B6B66">tree reduce within a pool,</text>
+    <text x="444" y="100" font-size="13.5" fill="#6B6B66">recording support_count</text>
+    <text x="444" y="124" font-size="13.5" fill="#6B6B66"><tspan font-weight="700" fill="#1A1A1A">failures win</tspan> across pools</text>
     <path d="M616,76 L629,76" stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#pa)"/>
   </g>
   <g class="stage s4">
     <rect x="632" y="10" width="186" height="132" rx="5" fill="#fff" stroke="#E3E3DE" stroke-width="1.5"/>
     <circle cx="656" cy="38" r="13" fill="#2B5CE6"/><text x="656" y="43" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">4</text>
-    <text x="676" y="43" font-size="16" font-weight="700" fill="#1A1A1A">排序 · 編輯預算</text>
-    <text x="648" y="80" font-size="13.5" fill="#6B6B66">四個準則排序候選</text>
-    <text x="648" y="100" font-size="13.5" fill="#6B6B66">只取前 <tspan font-weight="700" fill="#1A1A1A">Lt</tspan> 個</text>
-    <text x="648" y="124" font-size="13.5" fill="#6B6B66">餘弦衰減 4 → 2</text>
+    <text x="676" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Rank · edit budget</text>
+    <text x="648" y="80" font-size="13.5" fill="#6B6B66">four criteria, in order</text>
+    <text x="648" y="100" font-size="13.5" fill="#6B6B66">top <tspan font-weight="700" fill="#1A1A1A">Lt</tspan> edits only</text>
+    <text x="648" y="124" font-size="13.5" fill="#6B6B66">cosine decay 4 → 2</text>
     <path d="M820,76 L833,76" stroke="#9A9A93" stroke-width="1.5" fill="none" marker-end="url(#pa)"/>
   </g>
   <g class="stage s5">
     <rect x="836" y="10" width="186" height="132" rx="5" fill="#fff" stroke="#2B5CE6" stroke-width="1.5"/>
     <circle cx="860" cy="38" r="13" fill="#2B5CE6"/><text x="860" y="43" font-size="14" fill="#fff" text-anchor="middle" font-weight="700">5</text>
-    <text x="880" y="43" font-size="16" font-weight="700" fill="#1A1A1A">驗證守門</text>
-    <text x="852" y="80" font-size="13.5" fill="#6B6B66">在沒看過的 D_sel</text>
-    <text x="852" y="100" font-size="13.5" fill="#6B6B66">上盲測打分</text>
-    <text x="852" y="124" font-size="13.5" fill="#6B6B66"><tspan font-weight="700" fill="#1A1A1A">嚴格大於</tspan>才算通過</text>
+    <text x="880" y="43" font-size="16" font-weight="700" fill="#1A1A1A">Validation gate</text>
+    <text x="852" y="80" font-size="13.5" fill="#6B6B66">blind-scored on D_sel,</text>
+    <text x="852" y="100" font-size="13.5" fill="#6B6B66">which it has never seen</text>
+    <text x="852" y="124" font-size="13.5" fill="#6B6B66"><tspan font-weight="700" fill="#1A1A1A">strictly greater</tspan> to pass</text>
     <path d="M929,142 L929,156" stroke="#9A9A93" stroke-width="1.5" fill="none"/>
-    <text x="929" y="176" font-size="13.5" fill="#2B5CE6" text-anchor="middle" font-weight="700">通過 → 寫進 best_skill.md</text>
-    <text x="929" y="196" font-size="13.5" fill="#B4521E" text-anchor="middle">沒通過 → 整步丟棄</text>
+    <text x="929" y="176" font-size="13.5" fill="#2B5CE6" text-anchor="middle" font-weight="700">pass → written to best_skill.md</text>
+    <text x="929" y="196" font-size="13.5" fill="#B4521E" text-anchor="middle">fail → the whole step is discarded</text>
   </g>
   <path d="M929,204 L929,236 L320,236 L320,146" stroke="#B4521E" stroke-width="1.3" fill="none"
         stroke-dasharray="4 3" marker-end="url(#pb)" opacity=".75"/>
-  <text x="624" y="230" font-size="13" fill="#B4521E" text-anchor="middle" opacity=".9">被拒絕的修改 → rejected buffer → 注入下一步的分析與排序</text>
+  <text x="624" y="230" font-size="13" fill="#B4521E" text-anchor="middle" opacity=".9">rejected edits → rejected-edit buffer → injected into the next step's analysis and ranking</text>
 </svg>
 </template>
 
@@ -1191,13 +1196,13 @@ SkillZip 的角度很有意思 —— 免評估，靠找出可重用的結構來
 (function(){
 var deck=document.getElementById('deck');
 var slides=[].slice.call(deck.querySelectorAll('.slide'));
-var PARTS={"":"Skill Studio","1":"1 · 痛點與解法","2":"2 · Demo","3":"3 · SkillOpt","4":"4 · 下一步"};
+var PARTS={"":"Skill Studio","1":"1 · The pain","2":"2 · Demo","3":"3 · SkillOpt","4":"4 · What's next"};
 
 // --- screenshot placeholders -------------------------------------------
 function placeholder(img){
   if(!img.parentNode) return;
   var d=document.createElement('div'); d.className='ph';
-  var t=document.createElement('div'); t.className='t'; t.textContent='系統截圖';
+  var t=document.createElement('div'); t.className='t'; t.textContent=img.getAttribute('data-ph-t')||'SCREENSHOT';
   var s=document.createElement('div'); s.className='d'; s.textContent=img.getAttribute('data-ph-d')||'';
   var f=document.createElement('div'); f.className='f'; f.textContent=img.getAttribute('src');
   d.appendChild(t); d.appendChild(s); d.appendChild(f);
@@ -1234,9 +1239,13 @@ function show(n,push){
   renderNotes();
   [].forEach.call(document.querySelectorAll('.ov'),function(o,i){o.classList.toggle('cur',i===cur);});
 }
+var portrait=false;
 function fit(){
-  var k=Math.min(window.innerWidth/1280,window.innerHeight/720);
-  deck.style.transform='scale('+k+')';
+  var w=window.innerWidth,h=window.innerHeight;
+  portrait = h > w * 1.05;               // phone held upright: turn the slide sideways
+  var k = portrait ? Math.min(h/1280,w/720) : Math.min(w/1280,h/720);
+  deck.style.transform='scale('+k+')'+(portrait?' rotate(90deg)':'');
+  document.body.classList.toggle('portrait',portrait);
 }
 window.addEventListener('resize',fit); fit();
 
@@ -1245,7 +1254,7 @@ var ov=document.getElementById('overview'),grid=document.getElementById('ovgrid'
 slides.forEach(function(s,i){
   var h=s.querySelector('h1'); var d=document.createElement('div'); d.className='ov';
   d.innerHTML='<span class="n">'+String(i+1).padStart(2,'0')+'</span><span>'+
-    (h?h.textContent.trim():(s.querySelector('.eyebrow')?'—— '+s.querySelector('.eyebrow').textContent:'封面'))+'</span>';
+    (h?h.textContent.trim():(s.querySelector('.eyebrow')?'— '+s.querySelector('.eyebrow').textContent:'Cover'))+'</span>';
   d.onclick=function(){show(i);ov.classList.remove('on');};
   grid.appendChild(d);
 });
@@ -1294,7 +1303,10 @@ document.addEventListener('keydown',function(e){
 });
 document.addEventListener('click',function(e){
   if(ov.classList.contains('on')||notes.contains(e.target)) return;
-  show(e.clientX < window.innerWidth*0.25 ? cur-1 : cur+1);
+  // rotated 90deg: the slide's left edge is at the top of the screen
+  var back = portrait ? (e.clientY < window.innerHeight*0.25)
+                      : (e.clientX < window.innerWidth*0.25);
+  show(back ? cur-1 : cur+1);
 });
 
 poke();
