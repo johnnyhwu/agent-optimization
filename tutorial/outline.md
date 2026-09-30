@@ -27,7 +27,7 @@
 
 | 篇編號 | 標題 | 一句話摘要 | repo 涵蓋狀態 | 進度 |
 |---|---|---|---|---|
-| 00-1-01 | 一個請求的一生 | 按下按鈕之後，請求依序經過瀏覽器、nginx、後端、DB，再原路回來；每一站在做什麼 | 有做（`frontend/nginx.conf.template` → `backend/app/main.py` → `backend/app/db.py`） | 未開始 |
+| 00-1-01 | 一個請求的一生 | 按下按鈕之後，請求依序經過瀏覽器、nginx、後端、DB，再原路回來；每一站在做什麼 | 有做（`frontend/nginx.conf.template` → `backend/app/main.py` → `backend/app/db.py`） | 討論中 |
 | 00-1-02 | 整合練習：用 curl 追一個請求 | 用 curl 手動走過每一層，親眼看到每一站的輸入與輸出 | 有做（`docker-compose.yml` 可起整套） | 未開始 |
 
 ---
